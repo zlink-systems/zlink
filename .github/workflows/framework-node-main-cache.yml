@@ -1,0 +1,15 @@
+name: Framework node main dependency cache
+
+# Path filters on this main-only entry point do not suppress merge-queue checks.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/package-lock.json"
+
+permissions:
+  contents: read
+
+jobs:
+  warm-cache:
+    uses: ./.github/workflows/framework-node.yml

@@ -34,7 +34,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     private final AtomicReference<CompletableFuture<Void>> closeStage = new AtomicReference<>();
     // Named child queues are C2 state: clearing this map and completing its
     // queues must happen as one state-lane turn when Spot shutdown is wired.
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final ZLinkStateLane stateLane;
     private final Map<String, ZLinkSerialExecutionQueue> timerQueues = new LinkedHashMap<>();
     private final Map<String, ZLinkActorSerialExecutor> actorQueues = new LinkedHashMap<>();
 
@@ -59,6 +59,23 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
             Executor serialExecutor,
             ZLinkUserSpotExecutionMode executionMode,
             boolean instanceSpot) {
+        this(
+                spotQueue,
+                infrastructureQueue,
+                serialExecutor,
+                executionMode,
+                instanceSpot,
+                new ZLinkStateLane());
+    }
+
+    ZLinkSpotSerialExecutor(
+            ZLinkSerialExecutionQueue spotQueue,
+            ZLinkSerialExecutionQueue infrastructureQueue,
+            Executor serialExecutor,
+            ZLinkUserSpotExecutionMode executionMode,
+            boolean instanceSpot,
+            ZLinkStateLane stateLane) {
+        this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
         this.spotQueue = Objects.requireNonNull(spotQueue, "spotQueue");
         this.infrastructureQueue =
                 Objects.requireNonNull(infrastructureQueue, "infrastructureQueue");
@@ -468,7 +485,8 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                                                         restored -> {
                                                             if (!restored)
                                                                 throw new IllegalStateException(
-                                                                        "relocation target staging seal was lost");
+                                                                        "relocation target staging"
+                                                                                + " seal was lost");
                                                         }));
     }
 

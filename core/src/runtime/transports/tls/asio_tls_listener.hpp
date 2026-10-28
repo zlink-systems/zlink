@@ -13,6 +13,7 @@
 
 #include "utils/fd.hpp"
 #include "core/own.hpp"
+#include "transports/asio/asio_listener_accept_policy.hpp"
 #include "utils/stdint.hpp"
 #include "core/io_object.hpp"
 #include "transports/tcp/tcp_address.hpp"
@@ -96,8 +97,8 @@ class asio_tls_listener_t ZLINK_FINAL : public own_t, public io_object_t
     //  Number of outstanding async_accept operations.
     size_t _accepting_count;
 
-    //  True once the bound endpoint has been released
-    bool _terminating;
+    //  Endpoint release and ownership termination share one lifecycle state.
+    asio_listener_state_t _state;
 
     //  Linger value saved from process_term
     int _linger;

@@ -152,8 +152,9 @@ This decision applies to the framework surface only. **The Node binding keeps it
 — the binding does not depend on the framework runtime to deliver completions.
 
 **The synchronous blocking terminator cannot be called from a runtime execution context (F2-a).**
-Blocking on a handler turn, Spot turn, or state lane would wait for completion while holding the
-gate and deadlock. By the same principle as [State Ownership And Lanes §5](06-state-ownership-and-lanes.en.md#completion-before-return)
+It fails with `InvalidOperation` in every runtime execution context (handler turn, Spot turn, state
+lane), regardless of whether it holds a gate. Blocking while holding a gate waits for completion and
+deadlocks; blocking without a gate still occupies a runtime execution resource until completion. By the same principle as [State Ownership And Lanes §5](06-state-ownership-and-lanes.en.md#completion-before-return)
 (completion before return) and [handler turn §2](02-handler-turn-and-execution-gate.en.md), calling a
 synchronous terminator from a runtime execution context fails immediately with `InvalidOperation`. The
 synchronous terminator is for application threads (main, tests, scripts).
@@ -387,7 +388,9 @@ flowchart LR
 
 The request timeout covers outbound admission and the reply wait as a whole; a global object
 request also covers the current Ready authority resolve and the handler. A source only passes the
-remaining time, after subtracting what earlier stages used, to the next stage. The time limit of
+remaining time, after subtracting what earlier stages used, to the next stage. The reference is one absolute
+deadline fixed on the monotonic clock when the request enters, and time spent waiting for a selector or operation
+owner turn is also taken out of that deadline. No stage starts a new timeout. The time limit of
 outbound admission is the remaining request timeout, and it is not combined with a socket send
 timeout. When a timeout or cancellation ends the caller's wait, that does not mean the request was
 not sent — a request that ended before admission can still be sent later by a resubmission the
@@ -396,7 +399,7 @@ binding already started, and its reply is discarded because the correlation is c
 and uses the same request timeout. If the deadline is reached before any binding operation starts, the result is
 still `DeadlineExceeded`.
 
-How a request sent within the same handler turn releases and reacquires the gate while
+In a scope with a gate, how a request sent within the same handler turn releases and reacquires the gate while
 waiting is defined by
 [Handler Turn And Execution Gate 「4. Waiting And Returning Within The Same Turn」](02-handler-turn-and-execution-gate.en.md#4-waiting-and-returning-within-the-same-turn).
 
@@ -478,6 +481,62 @@ sequenceDiagram
     P->>P: atomically take the registered entry
     P-->>S: deliver completion in a new execution turn
 ```
+
+<a id="101-pending-entry-and-deadline-index"></a>
+### 10.1 Pending Entry and Deadline Index
+
+**One Framework logical request has one pending entry.** Reply, remote error, timeout, caller
+cancellation, and shutdown all compete for the terminal through one atomic take of this entry. The
+typed caller receiver is registered in this entry's dispatcher slot. There is no separate outer slot
+that ends the caller wait plus a second Framework pending entry, each cancelled on its own. Native
+operation lifetime and late-reply observation after the caller wait ends follow the binding contract,
+and no Framework pending entry is kept until the deadline for that purpose.
+
+**The deadline is a value of the entry.** No timer object (timer callback, timeout task, or
+cancellation source with its own deadline) is created per request. The same holds for route resolve,
+readiness waits, and admission (HWM) waits — they read the same absolute deadline
+([§9](#9-request-completion--the-completion-race-and-timeout-budget)) from the entry, and expiry is decided by the
+operation owner's deadline index.
+
+The state splits in two.
+
+| State | Class | Ownership and rule |
+|---|---|---|
+| terminal authority table | C1 — atomic take only | Taken where the completion notification arrives, and leaves pending there. No round trip to the owner turn. Whether a request is pending is decided by this table alone. |
+| deadline index and visit cursor | C2 — operation owner's state lane | A visiting reference used to find expiry candidates. It holds no terminal authority, and remaining in the index never means the request is pending. Registration and close acceptance are serialized by the operation owner together with the terminal authority table. |
+
+The two tables are different components; "C2 wins" in
+[State Ownership and Lanes "4"](06-state-ownership-and-lanes.en.md#4-state-classifications-and-how-to-tell-them-apart) is a rule
+within one component. The same completion fact is not stored again as a completed flag.
+
+**An index reference to a completed entry is cleaned at the next management visit.** A completed entry
+does not wait for its original deadline or remaining rounds; it becomes a visit target of its slot within
+one index rotation from completion (the default index is 256 slots of 1 ms, one rotation 256 ms). If the
+visit cannot finish within the time budget, the cursor is kept and the next management turn continues it.
+No owner turn or separate queue is created per completion only to clean the index. The dispatcher slot is
+kept until the callback returns, and after that a reference left in the index holds no caller
+continuation, result payload, or cancellation callback. An implementation that removes the entry from the
+index immediately also satisfies this rule.
+
+**One index decides the next management visit.** Let L be the reference time of the preceding
+management visit and R the rotation duration. The next visit is the earlier of L+R and the earliest
+absolute deadline at or before L+R among unfinished entries remaining in the index; if there is no
+candidate, it is L+R. When the index holds no entry, no next visit is scheduled; the next
+registration schedules it. Candidates are determined by this absolute time window rather than a slot's stored
+rounds, accounting for cursor and round progress over skipped time — visiting every slot that holds only
+entries with rounds remaining would create owner turns in proportion to the request count and to time.
+An implementation that scans a single table returns the earlier of a lower bound no later than the real
+earliest deadline and L+R. There is no second index for the earliest deadline, whether inside or outside
+the deadline-index object; the next visit is computed from the entries, slots and visit cursor of that
+same index. When an earlier visit appears, the
+existing wait is woken and brought forward, and a visit that is already due is not pushed back by a fixed
+floor. The management work uses the owner turn only at that time and creates no management turns in
+proportion to the request count. [Messaging Hot Path "4.2"](08-messaging-hot-path.en.md#42-management-work-per-receive-turn) defines how the I0
+wait bound is composed.
+
+**Index quantization never decides a timeout before the deadline.** When a late management visit makes a
+reply and a timeout race, the one taken first from the terminal authority table is the result. There is
+no second expiry check that re-reads the clock per reply.
 
 ## 11. The Execution Turn of the Completion Callback (Implementation)
 

@@ -1,3 +1,4 @@
+const { createRelayHost } = require('./fixtures/relay-host');
 const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -1503,7 +1504,7 @@ test('remote actor session binding uses a non-correlated command over the actor 
     meshName: 'actor.route'
   };
   const routed = [];
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'actor.route' }]
     })
@@ -1526,7 +1527,7 @@ test('remote actor session binding uses a non-correlated command over the actor 
     return { ok: true, response: { acknowledged: true } };
   })(), identityRequestReply, identityRequestReply, entry);
 
-  await host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
+  await hostRelay.actorPackets.confirmRemoteSessionBinding(
     actorRef,
     'session-node',
     'session-rid'
@@ -1552,7 +1553,7 @@ test('one-way remote actor session bind completes only after its route send is s
     objectGeneration: 3n,
     meshName: 'actor.route'
   };
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'actor.route' }]
     })
@@ -1578,7 +1579,7 @@ test('one-way remote actor session bind completes only after its route send is s
   };
   let completed = false;
 
-  const binding = host.boundSessionRelay.actorPackets
+  const binding = hostRelay.actorPackets
     .confirmRemoteSessionBinding(actorRef, 'session-node', 'session-rid', undefined, {
       waitForAcknowledgement: false
     })
@@ -1605,7 +1606,7 @@ test('acknowledged remote actor session bind nack surfaces the remote failure cl
     objectGeneration: 3n,
     meshName: 'actor.route'
   };
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'actor.route' }]
     })
@@ -1631,7 +1632,7 @@ test('acknowledged remote actor session bind nack surfaces the remote failure cl
   }))(), identityRequestReply, identityRequestReply, entry);
 
   await assert.rejects(
-    host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
+    hostRelay.actorPackets.confirmRemoteSessionBinding(
       actorRef,
       'session-node',
       'session-rid'
@@ -1655,7 +1656,7 @@ test('acknowledged remote actor session bind nack surfaces the remote failure cl
   //  classification and falls back to RequestFailed.
   replyErrorKind = undefined;
   await assert.rejects(
-    host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
+    hostRelay.actorPackets.confirmRemoteSessionBinding(
       actorRef,
       'session-node',
       'session-rid'
@@ -1714,7 +1715,7 @@ test('fire-and-forget remote actor session bind propagates its first send failur
     objectGeneration: 3n,
     meshName: 'actor.route'
   };
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'actor.route' }]
     })
@@ -1739,7 +1740,7 @@ test('fire-and-forget remote actor session bind propagates its first send failur
   };
 
   await assert.rejects(
-    host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
+    hostRelay.actorPackets.confirmRemoteSessionBinding(
       actorRef,
       'session-node',
       'session-rid',
@@ -2902,7 +2903,7 @@ test('runtime host remote bound session send submits a routed Session command', 
 });
 
 test('runtime host remote bound session receiver forwards through actor remote target', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const routeCalls = [];
@@ -2941,7 +2942,7 @@ test('runtime host remote bound session receiver forwards through actor remote t
   });
 
   let completed = false;
-  const received = host.boundSessionRelay.boundSessions
+  const received = hostRelay.boundSessions
     .receiveRemoteBoundSessionSend({
       packetName: '__zlink.actor.bound_session.send',
       actorId: 'actor-hop',
@@ -2971,7 +2972,7 @@ test('runtime host remote bound session receiver forwards through actor remote t
 test('runtime host remote bound session receiver delivers to local stream before forwarding', async () => {
   const actorRef = { nodeRid: 'session-node', actorId: 'actor-local-hop', generation: 1n };
   const routeCalls = [];
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   host.routeTransport.requestRawToSpot = async (remoteAddress, request, options) => {
@@ -2999,7 +3000,7 @@ test('runtime host remote bound session receiver delivers to local stream before
     }
   });
 
-  await host.boundSessionRelay.boundSessions.receiveRemoteBoundSessionSend({
+  await hostRelay.boundSessions.receiveRemoteBoundSessionSend({
     packetName: '__zlink.actor.bound_session.send',
     actorId: 'actor-local-hop',
     message: { hello: 'local' },
@@ -3016,7 +3017,7 @@ test('runtime host remote bound session receiver delivers to local stream before
 });
 
 test('remote bound session receiver completes a stale best-effort delivery without forwarding', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   host.setActorManager({
@@ -3028,7 +3029,7 @@ test('remote bound session receiver completes a stale best-effort delivery witho
   });
 
   assert.deepEqual(
-    await host.boundSessionRelay.boundSessions.receiveRemoteBoundSessionSend({
+    await hostRelay.boundSessions.receiveRemoteBoundSessionSend({
       packetName: '__zlink.actor.bound_session.send',
       actorId: 'actor-disconnected',
       message: { hello: 'stale-session' },
@@ -3118,7 +3119,7 @@ test('routed target push refreshes a bound session to the transferred actor ref 
     acceptedHighWater: 9n
   };
   const staleSourceRef = { ...sourceRef, ownershipGeneration: 1n };
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const stream = recordingStream('session-transfer', 'session-a');
@@ -3127,7 +3128,7 @@ test('routed target push refreshes a bound session to the transferred actor ref 
   const refreshed = [];
   const rebound = [];
   const packetTargets = [];
-  host.boundSessionRelay.actorPackets.updateRemoteActorPacketTarget = (actorId, target) => {
+  hostRelay.actorPackets.updateRemoteActorPacketTarget = (actorId, target) => {
     packetTargets.push({ actorId, target });
   };
   const commitActorRoute = host.streamBindingRuntime.commitActorRoute.bind(
@@ -3150,21 +3151,21 @@ test('routed target push refreshes a bound session to the transferred actor ref 
     sessionRid: 'session-a',
     bindingGeneration: 7n
   });
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
     serviceSessionRelocationRoute(seal, {
       targetNodeRid: 'actor-b',
       targetAuthorityOwnerGeneration: 2n
     })
   );
-  await host.boundSessionRelay.boundSessions.receiveRoutedBoundSession(
+  await hostRelay.boundSessions.receiveRoutedBoundSession(
     'actor-transfer',
     { marker: 'stale-source-before-target-push' },
     'Notify',
     new Map(),
     staleSourceRef
   );
-  await host.boundSessionRelay.boundSessions.receiveRoutedBoundSession(
+  await hostRelay.boundSessions.receiveRoutedBoundSession(
     'actor-transfer',
     { marker: 'after-transfer' },
     'Notify',
@@ -3177,7 +3178,7 @@ test('routed target push refreshes a bound session to the transferred actor ref 
       spotKind: framework.ZLinkSpotKind.User
     }
   );
-  await host.boundSessionRelay.boundSessions.receiveRoutedBoundSession(
+  await hostRelay.boundSessions.receiveRoutedBoundSession(
     'actor-transfer',
     { marker: 'stale-source' },
     'Notify',
@@ -3216,7 +3217,7 @@ test('same actor route update preserves the active session while routed traffic 
     bindingGeneration: 7n,
     acceptedHighWater: 9n
   };
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -3224,7 +3225,7 @@ test('same actor route update preserves the active session while routed traffic 
   );
   const boundActor = await context.actors.bind(actorRef);
   let packetTarget;
-  host.boundSessionRelay.actorPackets.updateRemoteActorPacketTarget = (_actorId, target) => {
+  hostRelay.actorPackets.updateRemoteActorPacketTarget = (_actorId, target) => {
     packetTarget = target;
   };
 
@@ -3236,14 +3237,14 @@ test('same actor route update preserves the active session while routed traffic 
     sessionRid: 'session-a',
     bindingGeneration: 7n
   });
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
     serviceSessionRelocationRoute(seal, {
       targetNodeRid: 'actor-a',
       targetAuthorityOwnerGeneration: 2n
     })
   );
-  await host.boundSessionRelay.boundSessions.receiveRoutedBoundSession(
+  await hostRelay.boundSessions.receiveRoutedBoundSession(
     actorRef.actorId,
     { marker: 'same-node-route-refresh' },
     'Notify',
@@ -3296,7 +3297,7 @@ test('internal route refresh preserves object generation while explicit bind can
 });
 
 test('one-way transferred actor route handler settles only after the local route replacement', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -3331,10 +3332,10 @@ test('one-way transferred actor route handler settles only after the local route
     sessionRid: 'session-a',
     bindingGeneration: 7n
   });
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
 
   let settled = false;
-  const pending = host.boundSessionRelay.boundSessions
+  const pending = hostRelay.boundSessions
     .receiveServiceWireSessionRelocationRoute(
       serviceSessionRelocationRoute(seal, {
         targetNodeRid: 'actor-b',
@@ -3358,7 +3359,7 @@ test('one-way transferred actor route handler settles only after the local route
 });
 
 test('command 42 seal is exact and idempotent while command 43 echoes its immutable fence', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -3383,9 +3384,9 @@ test('command 42 seal is exact and idempotent while command 43 echoes its immuta
     bindingGeneration: 17n
   });
   const first =
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   const retry =
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   assert.deepEqual(first, {
     sealResult: 'sealed',
     relocation: seal.relocation,
@@ -3395,7 +3396,7 @@ test('command 42 seal is exact and idempotent while command 43 echoes its immuta
   });
   assert.deepEqual(retry, first);
   await assert.rejects(
-    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal({
+    hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal({
       ...seal,
       actor: { ...seal.actor, authorityOwnerGeneration: 11n }
     }),
@@ -3409,7 +3410,7 @@ test('command 42 seal is exact and idempotent while command 43 echoes its immuta
     },
     { action: 'abort' }
   );
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(unknownAbort);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(unknownAbort);
   assert.equal(
     await host.streamBindingRuntime.validateActorRouteSeal(
       'actor-seal',
@@ -3419,8 +3420,8 @@ test('command 42 seal is exact and idempotent while command 43 echoes its immuta
   );
 
   const abort = serviceSessionRelocationRoute(seal, { action: 'abort' });
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(abort);
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(abort);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(abort);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(abort);
   assert.equal(
     await host.streamBindingRuntime.validateActorRouteSeal(
       'actor-seal',
@@ -3430,7 +3431,7 @@ test('command 42 seal is exact and idempotent while command 43 echoes its immuta
   );
 
   const nextSeal = { ...seal, relocation: { high: 7n, low: 11n } };
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(nextSeal);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(nextSeal);
   assert.equal(
     await host.streamBindingRuntime.validateActorRouteSeal(
       'actor-seal',
@@ -3441,7 +3442,7 @@ test('command 42 seal is exact and idempotent while command 43 echoes its immuta
 });
 
 test('M1 actorJoin command 42 waits for every pre-seal accepted Actor frame to finish', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   let releaseRelay;
@@ -3478,7 +3479,7 @@ test('M1 actorJoin command 42 waits for every pre-seal accepted Actor frame to f
   await relayDidStart;
 
   let sealSettled = false;
-  const sealing = host.boundSessionRelay.boundSessions
+  const sealing = hostRelay.boundSessions
     .receiveServiceWireSessionRelocationSeal(serviceSessionRelocationSeal(actor.actorId))
     .then((value) => {
       sealSettled = true;
@@ -4206,7 +4207,7 @@ test('Session relocation seal timeout uses the configured Location option', asyn
       builder.configureLocations().sessionRelocationSealTimeoutMs(10);
     })
   );
-  const host = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  const { host, relay: hostRelay } = createRelayHost({ registration });
   let releaseFrame;
   host.streamBindingRuntime = new framework.ZLinkStreamBindingRuntime({
     messageFactory: binaryMessageFactory(),
@@ -4241,7 +4242,7 @@ test('Session relocation seal timeout uses the configured Location option', asyn
   const keepAlive = setTimeout(() => {}, 1_000);
   try {
     await assert.rejects(
-      host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
+      hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
         serviceSessionRelocationSeal(actor.actorId)
       ),
       (error) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
@@ -4290,7 +4291,7 @@ test('command 42 sender deadline terminates even while RouteMesh submit is pendi
 
 test('service-wire command 42 accepts one-way ingress before matching abort delivers it', async () => {
   const socket = new FakeStreamSocket();
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -4307,13 +4308,13 @@ test('service-wire command 42 accepts one-way ingress before matching abort deli
   });
   const seal = serviceSessionRelocationSeal('actor-service-abort');
   const first =
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   const retry =
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   assert.deepEqual(retry, first);
   assert.deepEqual(first.actor, seal.actor);
   await assert.rejects(
-    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal({
+    hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal({
       ...seal,
       actor: { ...seal.actor, authorityOwnerGeneration: 12n }
     }),
@@ -4326,7 +4327,7 @@ test('service-wire command 42 accepts one-way ingress before matching abort deli
     await relaying;
     assert.equal(socket.boundActorSends.length, 0);
 
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
       relocation: { ...seal.relocation, low: 10n },
       coordinator: seal.coordinator,
       senderRole: 'source',
@@ -4345,13 +4346,13 @@ test('service-wire command 42 accepts one-way ingress before matching abort deli
       session: seal.session,
       route: { action: 'abort', currentAuthorityOwnerGeneration: 11n }
     };
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(abort);
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(abort);
     await waitForCondition(
       () => socket.boundActorSends.length === 1,
       'accepted relay delivery after abort'
     );
     assert.equal(socket.boundActorSends.length, 1);
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(abort);
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(abort);
     assert.equal(socket.boundActorSends.length, 1);
   } finally {
     context.exitDispatch();
@@ -4360,7 +4361,7 @@ test('service-wire command 42 accepts one-way ingress before matching abort deli
 
 test('one-way service-wire command 44 switches the route after relay admission', async () => {
   const socket = new FakeStreamSocket();
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -4376,7 +4377,7 @@ test('one-way service-wire command 44 switches the route after relay admission',
     acceptedHighWater: 41n
   });
   const seal = serviceSessionRelocationSeal('actor-service-commit');
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   const commit = serviceSessionRelocationRoute(seal);
 
   context.enterDispatch(serviceRelayDispatchHeader('HeldUntilCommit'));
@@ -4384,7 +4385,7 @@ test('one-way service-wire command 44 switches the route after relay admission',
     const relaying = actor.relay(serviceRelayMessage('{"commit":true}'));
     await relaying;
     assert.equal(socket.boundActorSends.length, 0);
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
     assert.equal(
       String((await host.streamBindingRuntime.find(actor.actorId)).ref.nodeRid),
       'target'
@@ -4395,10 +4396,10 @@ test('one-way service-wire command 44 switches the route after relay admission',
     );
     assert.equal(socket.boundActorSends.length, 1);
 
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
     assert.equal(socket.boundActorSends.length, 1);
     await assert.rejects(
-      host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
+      hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
         ...commit,
         route: { ...commit.route, targetNodeGeneration: 5n }
       }),
@@ -4627,7 +4628,7 @@ test('M1 actorJoin actual command 36 reaches the current Session binding during 
     4n,
     1n
   );
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -4658,7 +4659,7 @@ test('M1 actorJoin actual command 36 reaches the current Session binding during 
       bindingGeneration: 1n
     }
   };
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   const delivered = [];
   const bindingResult = await serviceRuntime.bindSession(
     'session',
@@ -4745,22 +4746,22 @@ test('M1 actorJoin actual command 36 reaches the current Session binding during 
     targetNodeRid: 'target',
     targetAuthorityOwnerGeneration: 12n
   });
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
     ...commit,
     relocation: { ...commit.relocation, low: commit.relocation.low + 1n }
   });
   assert.deepEqual(delivered, [0, 0, 0, 1, 2, 3, 3]);
 
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
   assert.deepEqual(delivered, [0, 0, 0, 1, 2, 3, 3]);
   await assert.rejects(
-    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
+    hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
       ...commit,
       route: { ...commit.route, targetNodeGeneration: 5n }
     }),
     (error) => error instanceof ServiceWireProtocolError && /different bytes/.test(error.message)
   );
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
   // Session-Actor binding section 3 item 3 and section 8.1: after the route
   // change the Session owner admits by binding identity alone. The producer
   // peer and the header's route fields are not a second admission decision.
@@ -5101,10 +5102,10 @@ test('relocation target binding republish delivers the post-Join bound-session p
 
   const actorId = 'actor-lifecycle-callback-push';
   const socket = new FakeStreamSocket();
-  const sessionHost = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: sessionHost, relay: sessionHostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
-  const targetHost = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: targetHost, relay: targetHostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = sessionHost.streamBindingRuntime.createSessionContext(
@@ -5152,7 +5153,7 @@ test('relocation target binding republish delivers the post-Join bound-session p
       };
     }
   };
-  targetHost.boundSessionRelay.boundSessions.resolveRemoteBoundSessionTarget = (
+  targetHostRelay.boundSessions.resolveRemoteBoundSessionTarget = (
     sessionNodeRid,
     sessionRid
   ) => {
@@ -5175,10 +5176,10 @@ test('relocation target binding republish delivers the post-Join bound-session p
   ) => {
     assert.equal(packetName, '__zlink.actor.bound_session.send');
     remoteSubmissions += 1;
-    return await sessionHost.boundSessionRelay.boundSessions.receiveRemoteBoundSessionSend(payload);
+    return await sessionHostRelay.boundSessions.receiveRemoteBoundSessionSend(payload);
   };
 
-  await sessionHost.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  await sessionHostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
 
   let postJoinPush;
   class CallbackSpot {
@@ -5284,13 +5285,13 @@ test('relocation target binding republish delivers the post-Join bound-session p
     targetNodeRid: 'target',
     targetAuthorityOwnerGeneration: 12n
   });
-  await sessionHost.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
+  await sessionHostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
     commit
   );
   assert.equal(deliveredApplicationFrameCount(), 1);
 
   const deliveryBeforeDuplicate = deliveredApplicationFrameCount();
-  await sessionHost.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
+  await sessionHostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
     commit
   );
   assert.equal(deliveredApplicationFrameCount(), 1);
@@ -5327,7 +5328,7 @@ test('M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact term
       ownerLeaseGeneration: 14n
     }
   };
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -5397,14 +5398,14 @@ test('M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact term
     }),
     boundSessionRelocation: {
       receiveSeal: (value, signal, onInstalled) =>
-        host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
+        hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
           value,
           signal,
           onInstalled
         ),
       receiveRoute: (value) =>
-        host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),
-      clear: () => host.boundSessionRelay.boundSessions.clearServiceWireSessionRelocations()
+        hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),
+      clear: () => hostRelay.boundSessions.clearServiceWireSessionRelocations()
     }
   });
   const dispatch = async (sourceNodeRid, bytes) =>
@@ -5684,7 +5685,7 @@ test('concurrent identical abort terminals reopen once after push submits during
 
 test('service-wire relocation single-flights concurrent commands and rejects conflicting bytes before mutation', async () => {
   const socket = new FakeStreamSocket();
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -5701,11 +5702,11 @@ test('service-wire relocation single-flights concurrent commands and rejects con
   });
   const seal = serviceSessionRelocationSeal('actor-service-single-flight');
   const firstSeal =
-    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+    hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   const identicalSeal =
-    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+    hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   const conflictingSeal =
-    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal({
+    hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal({
       ...seal,
       actor: { ...seal.actor, authorityOwnerGeneration: seal.actor.authorityOwnerGeneration + 1n }
     });
@@ -5720,9 +5721,9 @@ test('service-wire relocation single-flights concurrent commands and rejects con
     targetAuthorityOwnerGeneration: 12n
   });
   const applying =
-    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
+    hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
   await assert.rejects(
-    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
+    hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
       relocation: seal.relocation,
       coordinator: seal.coordinator,
       senderRole: 'source',
@@ -5741,7 +5742,7 @@ test('service-wire relocation single-flights concurrent commands and rejects con
 
 test('failed one-way command 44 route publication keeps prior relay admission complete', async () => {
   const socket = new FakeStreamSocket();
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -5757,7 +5758,7 @@ test('failed one-way command 44 route publication keeps prior relay admission co
     acceptedHighWater: 41n
   });
   const seal = serviceSessionRelocationSeal('actor-service-rebind-failure');
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   const commit = serviceSessionRelocationRoute(seal, {
     targetNodeRid: 'target',
     targetAuthorityOwnerGeneration: 12n
@@ -5772,7 +5773,7 @@ test('failed one-way command 44 route publication keeps prior relay admission co
       throw new Error('injected route publication failure');
     };
     await assert.rejects(
-      host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit),
+      hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit),
       /injected route publication failure/
     );
     assert.equal(await host.streamBindingRuntime.find(actor.actorId), undefined);
@@ -5786,7 +5787,7 @@ test('failed one-way command 44 route publication keeps prior relay admission co
     assert.equal(socket.boundActorSends.length, 0);
 
     actor.updateRef = updateRef;
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(commit);
     assert.equal(await host.streamBindingRuntime.find(actor.actorId), undefined);
     assert.equal(socket.boundActors.length, 1, 'a terminal duplicate cannot retry the native bind');
     assert.equal(socket.boundActorSends.length, 0);
@@ -5797,7 +5798,7 @@ test('failed one-way command 44 route publication keeps prior relay admission co
 
 test('command 44 without command 42 is a one-way no-op and preserves the active route', async () => {
   const socket = new FakeStreamSocket();
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -5818,7 +5819,7 @@ test('command 44 without command 42 is a one-way no-op and preserves the active 
     targetAuthorityOwnerGeneration: 12n
   });
   const result =
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route);
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route);
   assert.equal(result, undefined);
   assert.equal(
     String((await host.streamBindingRuntime.find('actor-service-no-seal')).ref.nodeRid),
@@ -5826,13 +5827,13 @@ test('command 44 without command 42 is a one-way no-op and preserves the active 
   );
   assert.equal(socket.boundActors.length, 1);
   assert.equal(
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route),
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route),
     undefined
   );
 });
 
 test('command 42 exact fences reject stale bindings and command 44 exact retry is idempotent', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -5874,7 +5875,7 @@ test('command 42 exact fences reject stale bindings and command 44 exact retry i
     { ...seal, session: { ...seal.session, sessionRid: 'session-b' } }
   ]) {
     await assert.rejects(
-      host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(stale),
+      hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(stale),
       (error) => error instanceof framework.ZLinkRemoteBoundSessionFenceError
     );
     assert.equal(
@@ -5883,17 +5884,17 @@ test('command 42 exact fences reject stale bindings and command 44 exact retry i
     );
   }
 
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   const route = serviceSessionRelocationRoute(seal, {
     targetNodeRid: 'actor-target',
     targetAuthorityOwnerGeneration: 11n
   });
   assert.equal(
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route),
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route),
     undefined
   );
   assert.equal(
-    await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route),
+    await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route),
     undefined
   );
   assert.equal(
@@ -5901,7 +5902,7 @@ test('command 42 exact fences reject stale bindings and command 44 exact retry i
     'actor-target'
   );
   await assert.rejects(
-    host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
+    hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute({
       ...route,
       route: { ...route.route, targetNodeGeneration: 5n }
     }),
@@ -5914,7 +5915,7 @@ test('command 42 exact fences reject stale bindings and command 44 exact retry i
 });
 
 test('command 44 route apply does not require an ActorRef diagnostic high-water copy', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   const context = host.streamBindingRuntime.createSessionContext(
@@ -5936,13 +5937,13 @@ test('command 44 route apply does not require an ActorRef diagnostic high-water 
     sessionRid: 'session-a',
     bindingGeneration: 17n
   });
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   const route = serviceSessionRelocationRoute(seal, {
     targetNodeRid: 'actor-target',
     targetAuthorityOwnerGeneration: 11n
   });
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route);
-  await host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route);
+  await hostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(route);
 
   assert.equal(
     String((await host.streamBindingRuntime.find('actor-fence-copy')).ref.nodeRid),
@@ -6052,7 +6053,7 @@ test('runtime host routed bound session receiver forwards through actor remote t
 });
 
 test('runtime host actor packet target prefers stored remote room target', () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   host.spotNodeRuntime = {
@@ -6081,7 +6082,7 @@ test('runtime host actor packet target prefers stored remote room target', () =>
     }
   });
 
-  const target = host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-remote-room');
+  const target = hostRelay.actorPackets.actorPacketTargetForState('actor-remote-room');
   assert.equal(target.routerChannelId, 'room.route');
   assert.equal(target.targetNodeRid, 'room-owner-node');
   assert.equal(String(target.spotId), 'room-spot');
@@ -6337,7 +6338,7 @@ test('remote actor packet route failure is submitted once and stays Unavailable'
 //  spot id: that fabricated route has no complete Ready authority fence and
 //  the next request fails the fence check instead of re-resolving.
 test('runtime host joined Spot route invalidates a stale entry target instead of fabricating a room route', () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   host.spotNodeRuntime = {
@@ -6366,12 +6367,12 @@ test('runtime host joined Spot route invalidates a stale entry target instead of
     }
   });
 
-  const target = host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-remote-room');
+  const target = hostRelay.actorPackets.actorPacketTargetForState('actor-remote-room');
   assert.equal(target, undefined);
 });
 
 test('runtime host actor packet target requires a Ready spot mesh snapshot when route mesh also exists', () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'spot.control' }],
       spotNodes: {
@@ -6399,7 +6400,7 @@ test('runtime host actor packet target requires a Ready spot mesh snapshot when 
   });
 
   assert.equal(
-    host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-remote-room'),
+    hostRelay.actorPackets.actorPacketTargetForState('actor-remote-room'),
     undefined
   );
   state.remoteActorPacketTarget = {
@@ -6414,7 +6415,7 @@ test('runtime host actor packet target requires a Ready spot mesh snapshot when 
     ownerLeaseGeneration: 11n,
     authorityStoreVersion: 'spot-ready'
   };
-  const target = host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-remote-room');
+  const target = hostRelay.actorPackets.actorPacketTargetForState('actor-remote-room');
   assert.strictEqual(target, state.remoteActorPacketTarget);
   assert.equal(target.routerChannelId, 'spot.service');
   assert.equal(String(target.targetNodeRid), 'play-node');
@@ -6923,7 +6924,7 @@ test('target Actor reentry clears the binding so the arriving relocation install
   assert.equal(state.boundSessionBindingGeneration, 0n);
 });
 test('runtime host actor packet target lets local joined actors use native gateway', () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
   host.spotNodeRuntime = {
@@ -6947,7 +6948,7 @@ test('runtime host actor packet target lets local joined actors use native gatew
   });
 
   assert.equal(
-    host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-local-room'),
+    hostRelay.actorPackets.actorPacketTargetForState('actor-local-room'),
     undefined
   );
 });
@@ -7560,7 +7561,7 @@ test('service-wire relocation replaces a learned source packet route before the 
     meshName: 'play.route'
   };
   const stream = recordingStream('session', 'session-owner');
-  const sessionHost = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: sessionHost, relay: sessionHostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'play.route' }]
     })
@@ -7610,7 +7611,7 @@ test('service-wire relocation replaces a learned source packet route before the 
     boundSession: targetBinding,
     remoteBoundSessionTarget: targetBinding
   };
-  const targetHost = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: targetHost, relay: targetHostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'play.route' }]
     })
@@ -7647,7 +7648,7 @@ test('service-wire relocation replaces a learned source packet route before the 
       const header = streamProtocol.decodeStreamHeader(Buffer.from(parts[0].data()));
       assert.equal(header.name, 'PlaceMarkReq');
       targetRequestSequences.push(header.requestSeq);
-      await targetHost.boundSessionRelay.boundSessions.sendActorResponse(
+      await targetHostRelay.boundSessions.sendActorResponse(
         targetActor,
         header.name,
         header.requestSeq,
@@ -7666,7 +7667,7 @@ test('service-wire relocation replaces a learned source packet route before the 
   ) => {
     assert.equal(targetNodeRid, 'session-owner');
     assert.equal(packetName, framework.ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET);
-    await sessionHost.boundSessionRelay.boundSessions.receiveRemoteBoundSessionResponse(payload);
+    await sessionHostRelay.boundSessions.receiveRemoteBoundSessionResponse(payload);
     return { status: ZLinkSubmitStatus.Submitted };
   };
 
@@ -7728,7 +7729,7 @@ test('service-wire relocation replaces a learned source packet route before the 
         )
       ];
     }
-    const reply = await targetHost.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(
+    const reply = await targetHostRelay.actorPackets.receiveRemoteActorPacketRelay(
       payload,
       {
         meshName: 'play.route',
@@ -7771,7 +7772,7 @@ test('service-wire relocation replaces a learned source packet route before the 
     session: { ...sealTemplate.session, sessionRid: 'session-owner' }
   };
   const sealed =
-    await sessionHost.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
+    await sessionHostRelay.boundSessions.receiveServiceWireSessionRelocationSeal(seal);
   const commit = {
     relocation: seal.relocation,
     coordinator: seal.coordinator,
@@ -7787,10 +7788,10 @@ test('service-wire relocation replaces a learned source packet route before the 
       targetNodeGeneration: 4n
     }
   };
-  await sessionHost.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
+  await sessionHostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
     commit
   );
-  await sessionHost.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
+  await sessionHostRelay.boundSessions.receiveServiceWireSessionRelocationRoute(
     commit
   );
   relocated = true;
@@ -7810,7 +7811,7 @@ test('service-wire relocation replaces a learned source packet route before the 
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(stream.writes.length, 1, 'the original request correlation must complete once');
 
-  sessionHost.boundSessionRelay.actorPackets.clearRemoteActorPacketTarget(actorId);
+  sessionHostRelay.actorPackets.clearRemoteActorPacketTarget(actorId);
   await sessionHost.streamBindingRuntime.commitActorRoute({
     ...sourceRef,
     ownershipGeneration: 13n,
@@ -8420,7 +8421,7 @@ test('stream binding runtime can remove actor binding during actor destroy clean
 
 test('runtime host completes relayed actor request on captured stream after actor binding cleanup', async () => {
   const stream = recordingStream('session-relay-cleanup', 'session-node');
-  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: runtime, relay: runtimeRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       discovery: { registries: ['tcp://127.0.0.1:19000'] },
       routeChannels: ['spot.service']
@@ -8451,7 +8452,7 @@ test('runtime host completes relayed actor request on captured stream after acto
   };
 
   const payload = zlink.Message.from(Buffer.from(JSON.stringify({ value: 'ping' })));
-  await runtime.boundSessionRelay.actorPackets.relayRemoteActorPacket(
+  await runtimeRelay.actorPackets.relayRemoteActorPacket(
     actor,
     {
       kind: streamProtocol.ZLinkStreamMessageKind.Request,
@@ -8499,7 +8500,7 @@ test('worker promise continuation resumes through the captured handler turn', as
 test('runtime host awaits routed actor disconnect notification before session cleanup completes', async () => {
   let releaseSend;
   let sendStarted = false;
-  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+  const { host: runtime, relay: runtimeRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration({
       discovery: { registries: ['tcp://127.0.0.1:19000'] },
       routeChannels: ['spot.service']
@@ -8513,7 +8514,7 @@ test('runtime host awaits routed actor disconnect notification before session cl
   })(), identityRequestReply, identityRequestReply, entry);
 
   let disconnectCompleted = false;
-  const disconnecting = runtime.boundSessionRelay.actorPackets
+  const disconnecting = runtimeRelay.actorPackets
     .notifyRemoteActorDisconnected('actor-disconnect-await', {
       routerChannelId: 'spot.service',
       targetNodeRid: 'play-node',

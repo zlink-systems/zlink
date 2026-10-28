@@ -99,3 +99,22 @@ bool zlink_has (const char *capability_)
 #endif
     return false;
 }
+
+zlink_config_result_t zlink_socket_connection_attempts_snapshot (void *s_,
+                                                                 zlink_connection_attempt_t *rows_,
+                                                                 size_t capacity_,
+                                                                 size_t *count_,
+                                                                 char *bytes_,
+                                                                 size_t bytes_capacity_,
+                                                                 size_t *required_)
+{
+    socket_handle_t handle = as_socket_handle (s_);
+    if (!handle.socket)
+        return zlink::config_result_internal::from_errno (errno);
+    if (!count_ || !required_ || (!rows_ && capacity_) || (!bytes_ && bytes_capacity_)) {
+        errno = EFAULT;
+        return ZLINK_CONFIG_INVALID_HANDLE;
+    }
+    return zlink::config_result_internal::from_rc (handle.socket->connection_attempts_snapshot (
+      rows_, capacity_, count_, bytes_, bytes_capacity_, required_));
+}

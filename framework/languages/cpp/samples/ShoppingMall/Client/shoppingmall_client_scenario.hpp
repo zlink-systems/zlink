@@ -90,7 +90,7 @@ class shoppingmall_client_scenario_t
         auto confirmed = wait_for_status (api_a, success.order_id, order_status_t::confirmed);
         ensure (confirmed.reservation_id.has_value (), "reservation id");
         ensure (confirmed.payment_id.has_value (), "payment id");
-        ensure (confirmed.amount == decimal_t ("120.00"), "amount");
+        ensure (confirmed.amount == 120.0, "amount");
         ensure (confirmed.currency.value_or ("") == "USD", "currency");
 
         auto duplicate = api_b.post ("/orders/start")

@@ -6,8 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkHandlerActivatorTest {
@@ -59,34 +57,40 @@ final class ZLinkHandlerActivatorTest {
     }
 
     @Test
-    void mutableServicesBuildsAssignableLookupIndexAtRegistration() throws Exception {
-        ZLinkHandlerActivator.MutableServices services = ZLinkHandlerActivator.services();
+    void mutableServicesResolvesAssignableTypesAfterRegistration() {
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        ZLinkHandlerActivator.MutableServices services =
+                ZLinkHandlerActivator.services(
+                        type -> {
+                            fallbackCalls.incrementAndGet();
+                            return null;
+                        });
         TestRuntimeService service = new TestRuntimeService();
 
         services.add(TestRuntimeService.class, service);
 
-        Field field = ZLinkHandlerActivator.MutableServices.class.getDeclaredField("serviceIndex");
-        field.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        Map<Class<?>, Object> index = (Map<Class<?>, Object>) field.get(services);
-        assertSame(service, index.get(TestRuntimeService.class));
-        assertSame(service, index.get(RuntimeService.class));
-        assertSame(service, index.get(Object.class));
+        assertSame(service, services.findService(TestRuntimeService.class));
+        assertSame(service, services.findService(RuntimeService.class));
+        assertSame(service, services.findService(Object.class));
+        assertEquals(0, fallbackCalls.get());
     }
 
     @Test
-    void mutableServicesPreservesAssignableLookupForInterfaceRegistrations() throws Exception {
-        ZLinkHandlerActivator.MutableServices services = ZLinkHandlerActivator.services();
+    void mutableServicesPreservesAssignableLookupForInterfaceRegistrations() {
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        ZLinkHandlerActivator.MutableServices services =
+                ZLinkHandlerActivator.services(
+                        type -> {
+                            fallbackCalls.incrementAndGet();
+                            return null;
+                        });
         TestRuntimeService service = new TestRuntimeService();
 
         services.add(RuntimeService.class, service);
 
-        Field field = ZLinkHandlerActivator.MutableServices.class.getDeclaredField("serviceIndex");
-        field.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        Map<Class<?>, Object> index = (Map<Class<?>, Object>) field.get(services);
-        assertSame(service, index.get(RuntimeService.class));
-        assertSame(service, index.get(Object.class));
+        assertSame(service, services.findService(RuntimeService.class));
+        assertSame(service, services.findService(Object.class));
+        assertEquals(0, fallbackCalls.get());
     }
 
     @Test

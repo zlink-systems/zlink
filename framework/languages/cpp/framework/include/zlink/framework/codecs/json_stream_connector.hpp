@@ -18,29 +18,45 @@ namespace zlink::stream_connector::codecs
 template <typename T> struct codec_traits
 {
     static constexpr codec_t codec = codec_t::json;
+    static constexpr bool default_json_profile = true;
+
+    static bool try_decode_message_pack (const std::vector<std::uint8_t> &payload,
+                                         T &value,
+                                         std::string *error = nullptr)
+    {
+        const auto json = nlohmann::json::from_msgpack (payload, true, false);
+        if (json.is_discarded ())
+            return zlink::detail::json_profile::fail (error, "Invalid MessagePack payload");
+        return zlink::detail::json_profile::from_value (json, value, error);
+    }
+
+#if ZLINK_HAS_EXCEPTIONS
 
     static std::vector<std::uint8_t> encode (const T &value)
     {
-        const auto text = zlink::detail::json_profile::dump (nlohmann::json (value));
-        return {text.begin (), text.end ()};
+        std::vector<std::uint8_t> bytes;
+        zlink::detail::json_profile::byte_output out (bytes);
+        out.reserve (zlink::detail::json_profile::initial_output_capacity);
+        std::string error;
+        if (!zlink::detail::json_profile::write_value (value, out, &error))
+            throw std::invalid_argument (error);
+        return bytes;
     }
 
     static T decode (const std::vector<std::uint8_t> &payload)
     {
-#if ZLINK_HAS_EXCEPTIONS
-        return zlink::detail::json_profile::parse (payload.begin (), payload.end ())
-          .template get<T> ();
-#else
-        const auto parsed =
-          zlink::detail::json_profile::try_parse (payload.begin (), payload.end ());
-        return parsed ? parsed->template get<T> () : T{};
-#endif
+        return zlink::detail::json_profile::decode<T> (payload.begin (), payload.end ());
     }
 
     static T decode_message_pack (const std::vector<std::uint8_t> &payload)
     {
-        return nlohmann::json::from_msgpack (payload).template get<T> ();
+        T value{};
+        std::string error;
+        if (!try_decode_message_pack (payload, value, &error))
+            throw std::invalid_argument (error);
+        return value;
     }
+#endif
 };
 
 template <typename T>
@@ -96,18 +112,38 @@ template <typename T>
 namespace zlink::stream_connector
 {
 
-template <typename T> std::vector<std::uint8_t> to_stream_payload (const T &value)
+template <typename T>
+    requires (!requires { codecs::codec_traits<T>::default_json_profile; })
+std::vector<std::uint8_t> to_stream_payload (const T &value)
 {
     return codecs::codec_traits<T>::encode (value);
 }
 
 template <typename T>
+    requires requires { codecs::codec_traits<T>::default_json_profile; }
+bool from_stream_payload (codec_t codec, const std::vector<std::uint8_t> &payload, T &value)
+{
+    if (codec == codec_t::raw)
+        return true;
+    if (codec == codec_t::message_pack)
+        return codecs::codec_traits<T>::try_decode_message_pack (payload, value);
+    auto decoded = zlink::detail::json_profile::try_decode<T> (payload.begin (), payload.end ());
+    if (!decoded)
+        return false;
+    value = std::move (*decoded);
+    return true;
+}
+
+template <typename T>
+    requires (!requires { codecs::codec_traits<T>::default_json_profile; })
 void from_stream_payload (codec_t codec, const std::vector<std::uint8_t> &payload, T &value)
 {
     codecs::decode_payload (codec, payload, value);
 }
 
-template <typename T> void from_stream_payload (const std::vector<std::uint8_t> &payload, T &value)
+template <typename T>
+    requires (!requires { codecs::codec_traits<T>::default_json_profile; })
+void from_stream_payload (const std::vector<std::uint8_t> &payload, T &value)
 {
     value = codecs::codec_traits<T>::decode (payload);
 }

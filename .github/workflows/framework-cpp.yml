@@ -40,8 +40,11 @@ on:
 #      - "scripts/local-package/cpp/**"
 #      - "scripts/local-package/sync-version.py"
   workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only;
-  # ordinary PRs and main pushes still start CI by hand.
+  # main dependency pushes use the companion cache workflow.
   push:
     branches:
       - "mergify/merge-queue/**"
@@ -58,6 +61,9 @@ env:
   APT_CACHE_DIR: ${{ github.workspace }}/.cache/framework-cpp/apt
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.cache/framework-cpp/vcpkg-installed
   ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/.artifacts/framework-cpp-ci
+  SCCACHE_DIR: ${{ github.workspace }}/.cache/framework-cpp/sccache
+  SCCACHE_CACHE_SIZE: 2G
+  SCCACHE_GHA_ENABLED: "false"
   # GitHub-hosted runners have 4 cores; the self-hosted build PC has 20 shared by
   # up to six concurrent jobs.
   BUILD_PARALLEL: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
@@ -67,14 +73,14 @@ jobs:
     name: Framework C++ unit and contract tests
     # A repository variable holding a JSON label list (for example
     # ["self-hosted","linux","x64"]) moves this job to a self-hosted runner;
-    # without it the job stays on the GitHub-hosted image. Only Mergify branch
-    # pushes and manual runs start this workflow, so fork code never reaches it.
+    # without it the job stays on the GitHub-hosted image. Mergify branches,
+    # manual runs and main cache warming never run untrusted fork code.
     runs-on: ${{ vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v5
 
       - name: Cache apt packages
-        uses: actions/cache@v4
+        uses: ./.github/actions/main-cache
         with:
           path: ${{ env.APT_CACHE_DIR }}
           key: framework-cpp-apt-${{ runner.os }}-24.04-${{ runner.arch }}-v1
@@ -111,7 +117,7 @@ jobs:
 
       - name: Cache Framework C++ vcpkg dependencies
         id: linux-vcpkg-cache
-        uses: actions/cache@v4
+        uses: ./.github/actions/main-cache
         with:
           path: ${{ env.VCPKG_INSTALLED_DIR }}
           key: framework-cpp-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg.outputs.revision }}-${{ hashFiles('framework/languages/cpp/vcpkg.json') }}-v2
@@ -152,15 +158,30 @@ jobs:
             --core-prefix \
             "${ZLINK_LOCAL_PACKAGE_ROOT}/install/zlink-core/${core_version}"
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: v0.19.0
+
+      - name: Cache Framework C++ compiler outputs
+        uses: ./.github/actions/main-cache
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: framework-cpp-sccache-${{ runner.os }}-${{ runner.arch }}-ubuntu24-gcc-sccache019-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: framework-cpp-sccache-${{ runner.os }}-${{ runner.arch }}-ubuntu24-gcc-sccache019-v1-
+
       - name: Configure and build Framework C++ tests
         working-directory: framework/languages/cpp
         run: |
           set -euo pipefail
           cmake --preset linux-ninja-release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \
             -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
             -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
           cmake --build --preset linux-ninja-release --parallel "${BUILD_PARALLEL}"
+          sccache --show-stats
 
       - name: Run Framework C++ unit and contract tests
         working-directory: framework/languages/cpp
@@ -173,6 +194,8 @@ jobs:
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
+    # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
+    if: ${{ !startsWith(github.ref_name, 'mergify/merge-queue/') }}
     # Same rule as the Linux job, with its own variable.
     runs-on: ${{ vars.ZLINK_CPP_WINDOWS_RUNNER && fromJSON(vars.ZLINK_CPP_WINDOWS_RUNNER) || 'windows-2022' }}
     env:
@@ -220,7 +243,7 @@ jobs:
 
       - name: Cache Framework C++ dependencies
         id: vcpkg-cache
-        uses: actions/cache@v4
+        uses: ./.github/actions/main-cache
         with:
           path: ${{ env.VCPKG_INSTALLED_DIR }}
           key: framework-cpp-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg.outputs.revision }}-${{ hashFiles('framework/languages/cpp/vcpkg.json') }}-v1
@@ -262,10 +285,30 @@ jobs:
           .\scripts\local-package\cpp\build-windows.ps1 `
             -CorePrefix "${{ steps.core.outputs.prefix }}"
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: v0.19.0
+
+      - name: Cache Framework C++ compiler outputs
+        uses: ./.github/actions/main-cache
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: framework-cpp-sccache-${{ runner.os }}-${{ runner.arch }}-msvc2022-sccache019-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: framework-cpp-sccache-${{ runner.os }}-${{ runner.arch }}-msvc2022-sccache019-v1-
+
+      # build-windows.ps1 owns the Visual Studio configuration. Its generator
+      # ignores CMAKE_<LANG>_COMPILER_LAUNCHER, so use the MSBuild compiler hook.
+      - name: Enable MSVC compiler cache
+        uses: ./.github/actions/msvc-sccache
+
       - name: Configure and build Framework C++ tests
         shell: pwsh
         run: |
           $buildDir = Join-Path $env:RUNNER_TEMP "framework-cpp-windows-build"
+          # A self-hosted runner keeps RUNNER_TEMP between jobs; a cache from another
+          # source or vcpkg root makes configure fail. sccache keeps the compile reuse.
+          if (Test-Path -LiteralPath $buildDir) { Remove-Item -LiteralPath $buildDir -Recurse -Force }
           .\framework\languages\cpp\build-windows.ps1 `
             -BuildDir $buildDir `
             -LocalPackageRoot $env:ZLINK_LOCAL_PACKAGE_ROOT `
@@ -274,6 +317,9 @@ jobs:
             -Configuration Release `
             -Parallel $env:BUILD_PARALLEL `
             -IncludeTests
+          if ($LASTEXITCODE -ne 0) { throw "Framework C++ build failed: $LASTEXITCODE" }
+          sccache --show-stats
+          if ($LASTEXITCODE -ne 0) { throw "sccache statistics failed: $LASTEXITCODE" }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "FRAMEWORK_CPP_BUILD_DIR=$buildDir"
 
       - name: Verify Framework C++ tests are registered
