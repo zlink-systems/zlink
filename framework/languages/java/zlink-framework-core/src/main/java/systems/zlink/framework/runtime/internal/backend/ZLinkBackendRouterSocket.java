@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BiConsumer;
 
 public interface ZLinkBackendRouterSocket
         extends ZLinkBackendConnectableSocket, ZLinkBackendReceiveSocket {
@@ -52,4 +53,16 @@ public interface ZLinkBackendRouterSocket
             List<Message> parts,
             Duration timeout,
             CompletableFuture<Void> requestAdmission);
+
+    /** Reports to an existing logical request entry without registering another one. */
+    default CompletionStage<?> requestTo(
+            RoutingId routingId,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission,
+            BiConsumer<ZLinkBackendReceived, Throwable> terminal) {
+        var reply = request(routingId, parts, timeout, requestAdmission);
+        reply.whenComplete(terminal);
+        return reply;
+    }
 }

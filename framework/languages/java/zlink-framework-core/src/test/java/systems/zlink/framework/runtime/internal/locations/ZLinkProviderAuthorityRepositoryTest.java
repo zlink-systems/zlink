@@ -4,8 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -40,14 +38,11 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 
 import java.io.IOException;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -56,7 +51,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.regex.Pattern;
-import java.util.stream.IntStream;
 
 final class ZLinkProviderAuthorityRepositoryTest {
     @Test
@@ -2422,76 +2416,93 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
-    void aggregateMarkerRoundTripPreservesCompletionCounters() throws ReflectiveOperationException {
-        var request =
-                new ZLinkAggregatePrepareRequest(
-                        new UUID(0, 9),
-                        7,
-                        List.of(participant("actor:a"), participant("spot:b")),
-                        new byte[32],
-                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b")),
-                        4,
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        new ZLinkLocationOwnerToken("owner-b", 12));
-        Method encode =
-                ZLinkProviderAuthorityRepository.class.getDeclaredMethod(
-                        "encodeAggregate", byte.class, ZLinkAggregatePrepareRequest.class);
-        encode.setAccessible(true);
-        byte[] encoded = (byte[]) encode.invoke(null, (byte) 2, request);
-
-        Method decode =
-                ZLinkProviderAuthorityRepository.class.getDeclaredMethod(
-                        "decodeAggregate", byte[].class);
-        decode.setAccessible(true);
-        Object decoded = decode.invoke(null, encoded);
-        Method decodedId = decoded.getClass().getDeclaredMethod("aggregateId");
-        decodedId.setAccessible(true);
-
-        assertEquals(request.aggregateId(), decodedId.invoke(decoded));
+    void aggregateMarkerRoundTripPreservesCompletionCounters() {
+        var fixture = preparedFixture(2, new UUID(0, 9), 7);
+        var prepared =
+                assertInstanceOf(
+                        ZLinkAggregatePrepared.class,
+                        fixture.repository()
+                                .prepareAggregate(fixture.request(), () -> false)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(fixture.request().aggregateId(), prepared.fence().aggregateId());
+        assertEquals(7, prepared.fence().aggregateGeneration());
+        var repeated =
+                assertInstanceOf(
+                        ZLinkAggregateAlreadyPrepared.class,
+                        fixture.repository()
+                                .prepareAggregate(fixture.request(), () -> false)
+                                .toCompletableFuture()
+                                .join());
+        assertEquals(prepared.fence(), repeated.fence());
     }
 
     @Test
-    void stagingMarkerStoresMetadataInsteadOfParticipantPayloads()
-            throws ReflectiveOperationException {
-        var participants =
-                IntStream.range(0, 2050)
-                        .mapToObj(index -> participant("authority-%04d".formatted(index)))
-                        .toList();
-        var request =
-                new ZLinkAggregatePrepareRequest(
-                        new UUID(0, 10),
-                        8,
-                        participants,
-                        new byte[32],
-                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b")),
-                        4,
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        new ZLinkLocationOwnerToken("owner-b", 12));
-
-        Method encode =
-                ZLinkProviderAuthorityRepository.class.getDeclaredMethod(
-                        "encodeAggregate", byte.class, ZLinkAggregatePrepareRequest.class);
-        encode.setAccessible(true);
-        byte[] encoded = (byte[]) encode.invoke(null, (byte) 0, request);
-
-        assertTrue(encoded.length < 1024);
-
-        Method decode =
-                ZLinkProviderAuthorityRepository.class.getDeclaredMethod(
-                        "decodeAggregate", byte[].class);
-        decode.setAccessible(true);
-        Object decoded = decode.invoke(null, encoded);
-        Method state = decoded.getClass().getDeclaredMethod("state");
-        Method participantCount = decoded.getClass().getDeclaredMethod("participantCount");
-        state.setAccessible(true);
-        participantCount.setAccessible(true);
-
-        assertEquals((byte) 0, state.invoke(decoded));
-        assertEquals(2050, participantCount.invoke(decoded));
+    void stagingMarkerStoresMetadataInsteadOfParticipantPayloads() {
+        var fixture = preparedFixture(2050, new UUID(0, 10), 8);
+        try (var paused =
+                new PausedParticipantStore(
+                        fixture.store(),
+                        authorityKey(fixture.request().participants().get(0).authorityKey()))) {
+            paused.start(fixture.request());
+            var staged =
+                    assertInstanceOf(
+                            ZLinkStoreReadFound.class,
+                            fixture.store()
+                                    .read(aggregateKey(fixture.request()), () -> false)
+                                    .toCompletableFuture()
+                                    .join());
+            assertTrue(staged.value().bytes().length < 1024);
+            assertTrue(paused.entered);
+            var prepared =
+                    assertInstanceOf(
+                            ZLinkAggregatePrepared.class,
+                            fixture.repository()
+                                    .prepareAggregate(fixture.request(), () -> false)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(fixture.request().aggregateId(), prepared.fence().aggregateId());
+            // Every participant is installed, rather than merely counting the input list.
+            for (var participant : fixture.request().participants()) {
+                var visible =
+                        assertInstanceOf(
+                                ZLinkAuthoritySnapshot.class,
+                                fixture.repository()
+                                        .read(participant.authorityKey(), () -> false)
+                                        .toCompletableFuture()
+                                        .join());
+                var stored =
+                        assertInstanceOf(
+                                ZLinkStoreReadFound.class,
+                                fixture.store()
+                                        .read(authorityKey(participant.authorityKey()), () -> false)
+                                        .toCompletableFuture()
+                                        .join());
+                assertEquals(participant.expectedStoreVersion(), visible.storeVersion());
+                assertFalse(stored.value().version().value().equals(visible.storeVersion()));
+            }
+            var original = fixture.request();
+            var truncated =
+                    new ZLinkAggregatePrepareRequest(
+                            original.aggregateId(),
+                            original.aggregateGeneration(),
+                            original.participants().subList(0, 2049),
+                            original.inventoryDigest(),
+                            original.targetDescriptor(),
+                            original.targetDescriptorLifecycleGeneration(),
+                            original.capacityBundle(),
+                            original.targetOwner());
+            assertInstanceOf(
+                    ZLinkAggregateConflict.class,
+                    fixture.repository()
+                            .prepareAggregate(truncated, () -> false)
+                            .toCompletableFuture()
+                            .join());
+        }
     }
 
     @Test
-    void ownerCleanupContinuesAfterTheFirstProviderScanPage() throws ReflectiveOperationException {
+    void ownerCleanupContinuesAfterTheFirstProviderScanPage() {
         var store = new ZLinkInMemoryProviderLocationStore();
         var encodedAuthority = encodedAuthorityRecord();
         var mutations =
@@ -2524,7 +2535,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
-    void rollbackDoesNotRemoveAnExistingParticipantMarker() throws ReflectiveOperationException {
+    void rollbackDoesNotRemoveAnExistingParticipantMarker() {
         String authorityAContractKey = ZLinkAuthorityKeyCodec.actor("authority-a");
         String authorityBContractKey = ZLinkAuthorityKeyCodec.actor("authority-b");
         var delegate = new ZLinkInMemoryProviderLocationStore();
@@ -2569,54 +2580,46 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         new ZLinkLocationOwnerToken(
                                 owner.token().ownerId(), owner.token().leaseGeneration()));
 
-        Object marker = aggregateParticipantMarker(request, participantA, 0);
-        delegate.write(
-                        new ZLinkStoreWriteRequest(
-                                List.of(),
-                                List.of(
-                                        new ZLinkStorePut(
-                                                authorityA, encodedAuthorityRecord(marker), null))),
-                        () -> false)
-                .toCompletableFuture()
-                .join();
-        delegate.write(
-                        new ZLinkStoreWriteRequest(
-                                List.of(),
-                                List.of(
-                                        new ZLinkStorePut(
-                                                aggregateKey(request),
-                                                encodedAggregateStaging(request),
-                                                null))),
-                        () -> false)
-                .toCompletableFuture()
-                .join();
+        try (var paused = new PausedParticipantStore(delegate, authorityB)) {
+            paused.start(request);
+            byte[] installed =
+                    assertInstanceOf(
+                                    ZLinkStoreReadFound.class,
+                                    delegate.read(authorityA, () -> false)
+                                            .toCompletableFuture()
+                                            .join())
+                            .value()
+                            .bytes();
+            var repository = new ZLinkProviderAuthorityRepository(store);
+            var result =
+                    repository.prepareAggregate(request, () -> false).toCompletableFuture().join();
 
-        var repository = new ZLinkProviderAuthorityRepository(store);
-        var result = repository.prepareAggregate(request, () -> false).toCompletableFuture().join();
-
-        assertTrue(
-                store.failingWrites > 0,
-                () -> "participant write was not intercepted; result=" + result);
-        assertEquals(
-                ZLinkAggregateConflict.class,
-                result.getClass(),
-                () -> "unexpected prepare result: " + result);
-        var decoded =
-                decodeAuthority(
-                        ((ZLinkStoreReadFound)
-                                        delegate.read(authorityA, () -> false)
-                                                .toCompletableFuture()
-                                                .join())
-                                .value()
-                                .bytes());
-        Method aggregate = decoded.getClass().getDeclaredMethod("aggregate");
-        aggregate.setAccessible(true);
-        assertNotNull(aggregate.invoke(decoded));
+            assertTrue(
+                    store.failingWrites > 0,
+                    () -> "participant write was not intercepted; result=" + result);
+            assertEquals(
+                    ZLinkAggregateConflict.class,
+                    result.getClass(),
+                    () -> "unexpected prepare result: " + result);
+            var retained =
+                    assertInstanceOf(
+                            ZLinkStoreReadFound.class,
+                            delegate.read(authorityA, () -> false).toCompletableFuture().join());
+            assertArrayEquals(installed, retained.value().bytes());
+            var visible =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            repository
+                                    .read(authorityAContractKey, () -> false)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(versionA, visible.storeVersion());
+            assertFalse(retained.value().version().value().equals(visible.storeVersion()));
+        }
     }
 
     @Test
-    void aggregatePrepareAdoptsPeerMarkerAfterAuthorityCounterCasConflict()
-            throws ReflectiveOperationException {
+    void aggregatePrepareAdoptsPeerMarkerAfterAuthorityCounterCasConflict() {
         String authorityContractKey = ZLinkAuthorityKeyCodec.actor("authority-counter-race");
         var delegate = new ZLinkInMemoryProviderLocationStore();
         var store = new CounterContentionStore(delegate);
@@ -2678,12 +2681,16 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         delegate.read(aggregateKey(request), () -> false)
                                 .toCompletableFuture()
                                 .join();
-        assertEquals((byte) 1, stateOf(aggregate.value().bytes()));
+        assertInstanceOf(
+                ZLinkAggregateAlreadyPrepared.class,
+                new ZLinkProviderAuthorityRepository(store)
+                        .prepareAggregate(request, () -> false)
+                        .toCompletableFuture()
+                        .join());
     }
 
     @Test
-    void aggregatePrepareReentersAfterIndependentAuthorityCounterContention()
-            throws ReflectiveOperationException {
+    void aggregatePrepareReentersAfterIndependentAuthorityCounterContention() {
         String authorityContractKey = ZLinkAuthorityKeyCodec.actor("authority-counter-only-race");
         var delegate = new ZLinkInMemoryProviderLocationStore();
         ZLinkStoreKey authority = authorityKey(authorityContractKey);
@@ -2744,12 +2751,16 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         delegate.read(aggregateKey(request), () -> false)
                                 .toCompletableFuture()
                                 .join();
-        assertEquals((byte) 1, stateOf(aggregate.value().bytes()));
+        assertInstanceOf(
+                ZLinkAggregateAlreadyPrepared.class,
+                new ZLinkProviderAuthorityRepository(store)
+                        .prepareAggregate(request, () -> false)
+                        .toCompletableFuture()
+                        .join());
     }
 
     @Test
-    void aggregatePreparePropagatesCounterExhaustionFromReentry()
-            throws ReflectiveOperationException {
+    void aggregatePreparePropagatesCounterExhaustionFromReentry() {
         String authorityContractKey = ZLinkAuthorityKeyCodec.actor("authority-counter-exhausted");
         var delegate = new ZLinkInMemoryProviderLocationStore();
         ZLinkStoreKey authority = authorityKey(authorityContractKey);
@@ -2807,8 +2818,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
-    void adoptedAggregatePrepareClearsInstalledMarkersBeforePropagatingReentryTerminal()
-            throws ReflectiveOperationException {
+    void adoptedAggregatePrepareClearsInstalledMarkersBeforePropagatingReentryTerminal() {
         String authorityAContractKey = ZLinkAuthorityKeyCodec.actor("authority-adopted-a");
         String authorityBContractKey = ZLinkAuthorityKeyCodec.actor("authority-adopted-b");
         var delegate = new ZLinkInMemoryProviderLocationStore();
@@ -2866,37 +2876,34 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         1,
                         ZLinkPlacementCapacityBundle.actor(2),
                         owner.token());
-        delegate.write(
-                        new ZLinkStoreWriteRequest(
-                                List.of(),
-                                List.of(
-                                        new ZLinkStorePut(
-                                                aggregateKey(request),
-                                                encodedAggregateStaging(request),
-                                                null))),
-                        () -> false)
-                .toCompletableFuture()
-                .join();
+        try (var paused = new PausedParticipantStore(delegate, authorityA)) {
+            paused.start(request);
+            var result =
+                    new ZLinkProviderAuthorityRepository(store)
+                            .prepareAggregate(request, () -> false)
+                            .toCompletableFuture()
+                            .join();
 
-        var result =
-                new ZLinkProviderAuthorityRepository(store)
-                        .prepareAggregate(request, () -> false)
-                        .toCompletableFuture()
-                        .join();
-
-        assertInstanceOf(ZLinkAggregateGenerationExhausted.class, result);
-        var currentA =
-                (ZLinkStoreReadFound)
-                        delegate.read(authorityA, () -> false).toCompletableFuture().join();
-        Object decodedA = decodeAuthority(currentA.value().bytes());
-        Method aggregate = decodedA.getClass().getDeclaredMethod("aggregate");
-        aggregate.setAccessible(true);
-        assertNull(aggregate.invoke(decodedA), "prepare left an installed participant marker");
+            assertInstanceOf(ZLinkAggregateGenerationExhausted.class, result);
+            var currentA =
+                    (ZLinkStoreReadFound)
+                            delegate.read(authorityA, () -> false).toCompletableFuture().join();
+            var visibleA =
+                    assertInstanceOf(
+                            ZLinkAuthoritySnapshot.class,
+                            new ZLinkProviderAuthorityRepository(delegate)
+                                    .read(authorityAContractKey, () -> false)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(
+                    currentA.value().version().value(),
+                    visibleA.storeVersion(),
+                    "prepare left an installed participant marker");
+        }
     }
 
     @Test
-    void aggregatePrepareStillConflictsWhenParticipantFenceChangesDuringCounterContention()
-            throws ReflectiveOperationException {
+    void aggregatePrepareStillConflictsWhenParticipantFenceChangesDuringCounterContention() {
         String authorityContractKey = ZLinkAuthorityKeyCodec.actor("authority-fence-race");
         var delegate = new ZLinkInMemoryProviderLocationStore();
         ZLinkStoreKey authority = authorityKey(authorityContractKey);
@@ -2954,7 +2961,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
-    void aggregateCommitRetriesAConditionalWriteConflict() throws ReflectiveOperationException {
+    void aggregateCommitRetriesAConditionalWriteConflict() {
         var delegate = new ZLinkInMemoryProviderLocationStore();
         var store = new FailingParticipantStore(delegate, null, true);
         var owner =
@@ -2987,8 +2994,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                                 List.of(
                                                         new ZLinkStorePut(
                                                                 authorityKey,
-                                                                encodedAuthorityRecord(
-                                                                        null, basePayload),
+                                                                encodedAuthorityRecord(basePayload),
                                                                 null))),
                                         () -> false)
                                 .toCompletableFuture()
@@ -3039,36 +3045,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         relocationRequest.targetDescriptorLifecycleGeneration(),
                         relocationRequest.capacityBundle(),
                         relocationRequest.targetOwner());
-        // A PREPARED aggregate holds its target capacity reservation (Location runtime §6.1).
-        seedPendingActorReservation(delegate, request.targetDescriptor());
-        Object marker = aggregateParticipantMarker(request, participant, 0);
-        delegate.write(
-                        new ZLinkStoreWriteRequest(
-                                List.of(),
-                                List.of(
-                                        new ZLinkStorePut(
-                                                authorityKey,
-                                                encodedAuthorityRecord(marker, basePayload),
-                                                null))),
-                        () -> false)
-                .toCompletableFuture()
-                .join();
-        new ZLinkAggregateInventoryStore(store)
-                .store(request, () -> false)
-                .toCompletableFuture()
-                .join();
-        delegate.write(
-                        new ZLinkStoreWriteRequest(
-                                List.of(),
-                                List.of(
-                                        new ZLinkStorePut(
-                                                aggregateKey(request),
-                                                encodedAggregate((byte) 1, request),
-                                                null))),
-                        () -> false)
-                .toCompletableFuture()
-                .join();
-
+        publishAggregateTarget(delegate, owner.token(), 2);
+        var repository = new ZLinkProviderAuthorityRepository(store);
+        assertInstanceOf(
+                ZLinkAggregatePrepared.class,
+                repository.prepareAggregate(request, () -> false).toCompletableFuture().join());
         var result =
                 new ZLinkProviderAuthorityRepository(store)
                         .commitAggregate(
@@ -3079,15 +3060,24 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .join();
 
         assertEquals(ZLinkAggregateCommitResult.COMMITTED, result);
-        var committed =
-                (systems.zlink.framework.locationprovider.ZLinkStoreReadFound)
-                        delegate.read(aggregateKey(request), () -> false)
+        assertEquals(1, store.failingCommits);
+        assertEquals(
+                ZLinkAggregateCommitResult.ALREADY_COMMITTED,
+                repository
+                        .commitAggregate(
+                                new ZLinkAggregateFence(
+                                        request.aggregateId(), request.aggregateGeneration()),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
+        var visible =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        repository
+                                .read(authorityAContractKey, () -> false)
                                 .toCompletableFuture()
-                                .join();
-        Method state =
-                decodeAggregate(committed.value().bytes()).getClass().getDeclaredMethod("state");
-        state.setAccessible(true);
-        assertEquals((byte) 2, state.invoke(decodeAggregate(committed.value().bytes())));
+                                .join());
+        assertArrayEquals(canonicalPayload, visible.payload());
     }
 
     @Test
@@ -3241,8 +3231,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
         }
     }
 
-    private static byte[] encodedAuthorityRecord() throws ReflectiveOperationException {
-        return encodedAuthorityRecord(null);
+    private static byte[] encodedAuthorityRecord() {
+        return encodedAuthorityRecord(new byte[] {1, 2, 3});
     }
 
     private static ZLinkObjectReservationRequest capacityRequest(
@@ -3377,6 +3367,26 @@ final class ZLinkProviderAuthorityRepositoryTest {
 
     private static ZLinkMeshNodeDescriptor capacityDescriptor(
             ZLinkLocationOwnerToken owner, String meshName, RoutingId nodeRid, int limit) {
+        return capacityDescriptor(
+                owner,
+                meshName,
+                nodeRid,
+                limit,
+                List.of(
+                        new ZLinkObjectCapability(
+                                ZLinkPlacementObjectKind.USER_SPOT,
+                                "room",
+                                ZLinkObjectMaintenancePolicyKind.DISABLED,
+                                false,
+                                limit)));
+    }
+
+    private static ZLinkMeshNodeDescriptor capacityDescriptor(
+            ZLinkLocationOwnerToken owner,
+            String meshName,
+            RoutingId nodeRid,
+            int limit,
+            List<ZLinkObjectCapability> capabilities) {
         return new ZLinkMeshNodeDescriptor(
                 meshName,
                 nodeRid,
@@ -3385,13 +3395,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 "tcp://127.0.0.1:7100",
                 Map.of(),
                 1,
-                List.of(
-                        new ZLinkObjectCapability(
-                                ZLinkPlacementObjectKind.USER_SPOT,
-                                "room",
-                                ZLinkObjectMaintenancePolicyKind.DISABLED,
-                                false,
-                                limit)),
+                capabilities,
                 ZLinkMeshNodeObjectRole.SERVER,
                 Optional.of("capacity-node-entry-00000000-0000-4000-8000-000000000001"),
                 100,
@@ -3427,76 +3431,183 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .status());
     }
 
-    private static void seedPendingActorReservation(
-            ZLinkLocationStore provider, ZLinkMeshNodeDescriptorKey target)
-            throws ReflectiveOperationException {
-        Method capacityKey =
-                ZLinkProviderAuthorityRepository.class.getDeclaredMethod(
-                        "capacityKey", ZLinkMeshNodeDescriptorKey.class);
-        capacityKey.setAccessible(true);
-        provider.write(
-                        new ZLinkStoreWriteRequest(
-                                List.of(),
-                                List.of(
-                                        new ZLinkStorePut(
-                                                (ZLinkStoreKey) capacityKey.invoke(null, target),
-                                                ("{\"active\":{\"actors\":0,\"spots\":0,"
-                                                                + "\"spotTypes\":{}},\"pending\":{\"actors\":1,"
-                                                                + "\"spots\":0,\"spotTypes\":{}}}")
-                                                        .getBytes(
-                                                                java.nio.charset.StandardCharsets
-                                                                        .UTF_8),
-                                                null))),
-                        () -> false)
+    private static byte[] encodedAuthorityRecord(byte[] payload) {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(store);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                repository
+                                        .claimOwnerLease("owner-a", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        var descriptor =
+                capacityDescriptor(
+                        owner,
+                        "game",
+                        RoutingId.from("node-a"),
+                        2,
+                        List.of(
+                                new ZLinkObjectCapability(
+                                        ZLinkPlacementObjectKind.ACTOR,
+                                        "actor",
+                                        ZLinkObjectMaintenancePolicyKind.DISABLED,
+                                        false,
+                                        0)));
+        repository
+                .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture()
                 .join();
+        var key = ZLinkAuthorityKeyCodec.actor("seed");
+        var reservation =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                repository
+                                        .reserve(
+                                                new ZLinkObjectReservationRequest(
+                                                        ZLinkPlacementObjectKind.ACTOR,
+                                                        key,
+                                                        "actor",
+                                                        "inline:test",
+                                                        new byte[32],
+                                                        1,
+                                                        new ZLinkMeshNodeDescriptorKey(
+                                                                "game", RoutingId.from("node-a")),
+                                                        1,
+                                                        owner,
+                                                        new byte[] {0},
+                                                        ZLinkPlacementCapacityBundle.actor(1)),
+                                                () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .reservation();
+        assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                repository
+                        .commit(reservation, payload, null, () -> false)
+                        .toCompletableFuture()
+                        .join());
+        return assertInstanceOf(
+                        ZLinkStoreReadFound.class,
+                        store.read(authorityKey(key), () -> false).toCompletableFuture().join())
+                .value()
+                .bytes();
     }
 
-    private static byte[] encodedAuthorityRecord(Object aggregate)
-            throws ReflectiveOperationException {
-        return encodedAuthorityRecord(aggregate, new byte[] {1, 2, 3});
-    }
+    private record AggregateFixture(
+            ZLinkLocationStore store,
+            ZLinkProviderAuthorityRepository repository,
+            ZLinkAggregatePrepareRequest request) {}
 
-    private static byte[] encodedAuthorityRecord(Object aggregate, byte[] payload)
-            throws ReflectiveOperationException {
-        Class<?> authorityRecord =
-                Arrays.stream(ZLinkProviderAuthorityRepository.class.getDeclaredClasses())
-                        .filter(type -> type.getSimpleName().equals("AuthorityRecord"))
-                        .findFirst()
-                        .orElseThrow();
-        Constructor<?> constructor =
-                Arrays.stream(authorityRecord.getDeclaredConstructors())
-                        .filter(value -> value.getParameterCount() == 9)
-                        .findFirst()
-                        .orElseThrow();
-        constructor.setAccessible(true);
-        var allocation =
-                new ZLinkPlacementAllocation(
-                        ZLinkPlacementAllocationState.ACTIVE,
-                        ZLinkPlacementObjectKind.ACTOR,
-                        "actor",
+    private static AggregateFixture preparedFixture(int count, UUID id, long generation) {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                new ZLinkProviderOwnerLeaseRepository(store)
+                                        .claim("owner-a", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        publishAggregateTarget(store, owner, count + 1);
+        byte[] seed = encodedAuthorityRecord();
+        var participants = new ArrayList<ZLinkAggregateParticipant>();
+        for (int index = 0; index < count; index++) {
+            String key = ZLinkAuthorityKeyCodec.actor("authority-%04d".formatted(index));
+            var stored =
+                    assertInstanceOf(
+                            systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied.class,
+                            store.write(
+                                            new ZLinkStoreWriteRequest(
+                                                    List.of(),
+                                                    List.of(
+                                                            new ZLinkStorePut(
+                                                                    authorityKey(key),
+                                                                    seed,
+                                                                    null))),
+                                            () -> false)
+                                    .toCompletableFuture()
+                                    .join());
+            participants.add(
+                    new ZLinkAggregateParticipant(
+                            key,
+                            1,
+                            1,
+                            stored.putVersions().get(authorityKey(key)).value(),
+                            ZLinkAuthorityGenerationTransition.PRESERVE,
+                            new byte[] {11},
+                            new byte[] {12}));
+        }
+        return new AggregateFixture(
+                store,
+                new ZLinkProviderAuthorityRepository(store),
+                new ZLinkAggregatePrepareRequest(
+                        id,
+                        generation,
+                        participants,
+                        new byte[32],
                         new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-a")),
                         1,
-                        ZLinkPlacementCapacityBundle.actor(1));
-        Object record =
-                constructor.newInstance(
-                        payload,
-                        1L,
-                        1L,
-                        "owner-a",
-                        1L,
-                        allocation,
-                        Optional.empty(),
-                        aggregate,
-                        null);
-        Method encode =
-                ZLinkProviderAuthorityRepository.class.getDeclaredMethod("encode", authorityRecord);
-        encode.setAccessible(true);
-        return (byte[]) encode.invoke(null, record);
+                        ZLinkPlacementCapacityBundle.actor(count),
+                        owner));
     }
 
-    private static ZLinkAggregateParticipant participant(String key) {
-        return participant(key, "version-1", new byte[] {1}, new byte[] {2});
+    private static final class PausedParticipantStore implements ZLinkLocationStore, AutoCloseable {
+        private final ZLinkLocationStore delegate;
+        private final ZLinkStoreKey pauseKey;
+        private final CompletableFuture<ZLinkStoreWriteResult> release = new CompletableFuture<>();
+        private CompletableFuture<ZLinkAggregatePrepareResult> prepare;
+        private boolean entered;
+
+        private PausedParticipantStore(ZLinkLocationStore delegate, ZLinkStoreKey pauseKey) {
+            this.delegate = delegate;
+            this.pauseKey = pauseKey;
+        }
+
+        private void start(ZLinkAggregatePrepareRequest request) {
+            prepare =
+                    new ZLinkProviderAuthorityRepository(this)
+                            .prepareAggregate(request, () -> false)
+                            .toCompletableFuture();
+            assertTrue(entered, "prepare did not reach the participant write boundary");
+            assertFalse(prepare.isDone());
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            return delegate.read(key, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            if (!entered
+                    && request.mutations().stream()
+                            .anyMatch(
+                                    mutation ->
+                                            mutation instanceof ZLinkStorePut put
+                                                    && put.key().equals(pauseKey))) {
+                entered = true;
+                return release;
+            }
+            return delegate.write(request, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+            return delegate.scan(request, cancellation);
+        }
+
+        @Override
+        public void close() {
+            release.complete(
+                    new systems.zlink.framework.locationprovider.ZLinkStoreWriteConflict(
+                            Instant.now()));
+            if (prepare != null) prepare.join();
+        }
     }
 
     private static ZLinkAggregateParticipant participant(
@@ -3509,75 +3620,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 ZLinkAuthorityGenerationTransition.PRESERVE,
                 authorityPayload,
                 membershipMutation);
-    }
-
-    private static Object aggregateParticipantMarker(
-            ZLinkAggregatePrepareRequest request, ZLinkAggregateParticipant participant, int index)
-            throws ReflectiveOperationException {
-        Class<?> marker =
-                Arrays.stream(ZLinkProviderAuthorityRepository.class.getDeclaredClasses())
-                        .filter(type -> type.getSimpleName().equals("AggregateParticipantMarker"))
-                        .findFirst()
-                        .orElseThrow();
-        Constructor<?> constructor = marker.getDeclaredConstructors()[0];
-        constructor.setAccessible(true);
-        Method sha256 =
-                ZLinkAggregateInventoryStore.class.getDeclaredMethod("sha256", byte[].class);
-        sha256.setAccessible(true);
-        return constructor.newInstance(
-                request.aggregateId(),
-                request.aggregateGeneration(),
-                index,
-                participant.expectedStoreVersion(),
-                participant.ownerTransition(),
-                1L,
-                sha256.invoke(null, participant.authorityPayload()),
-                sha256.invoke(null, participant.membershipMutation()));
-    }
-
-    private static byte[] encodedAggregateStaging(ZLinkAggregatePrepareRequest request)
-            throws ReflectiveOperationException {
-        return encodedAggregate((byte) 0, request);
-    }
-
-    private static byte[] encodedAggregate(byte state, ZLinkAggregatePrepareRequest request)
-            throws ReflectiveOperationException {
-        Method encode =
-                ZLinkProviderAuthorityRepository.class.getDeclaredMethod(
-                        "encodeAggregate", byte.class, ZLinkAggregatePrepareRequest.class);
-        encode.setAccessible(true);
-        return (byte[]) encode.invoke(null, state, request);
-    }
-
-    private static byte[] encodedCommittedAggregate(ZLinkAggregatePrepareRequest request)
-            throws ReflectiveOperationException {
-        Method encode =
-                ZLinkProviderAuthorityRepository.class.getDeclaredMethod(
-                        "encodeAggregate", byte.class, ZLinkAggregatePrepareRequest.class);
-        encode.setAccessible(true);
-        return (byte[]) encode.invoke(null, (byte) 2, request);
-    }
-
-    private static Object decodeAuthority(byte[] bytes) throws ReflectiveOperationException {
-        Method decode =
-                ZLinkProviderAuthorityRepository.class.getDeclaredMethod("decode", byte[].class);
-        decode.setAccessible(true);
-        return decode.invoke(null, bytes);
-    }
-
-    private static Object decodeAggregate(byte[] bytes) throws ReflectiveOperationException {
-        Method decode =
-                ZLinkProviderAuthorityRepository.class.getDeclaredMethod(
-                        "decodeAggregate", byte[].class);
-        decode.setAccessible(true);
-        return decode.invoke(null, bytes);
-    }
-
-    private static byte stateOf(byte[] bytes) throws ReflectiveOperationException {
-        Object aggregate = decodeAggregate(bytes);
-        Method state = aggregate.getClass().getDeclaredMethod("state");
-        state.setAccessible(true);
-        return (byte) state.invoke(aggregate);
     }
 
     // Mirrors the production ZLinkProviderAuthorityRepository.authorityKey()
@@ -3669,6 +3711,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         private final ZLinkStoreKey failingKey;
         private boolean failCommitOnce;
         private int failingWrites;
+        private int failingCommits;
 
         private FailingParticipantStore(ZLinkLocationStore delegate, String failingAuthority) {
             this(delegate, failingAuthority, false);
@@ -3713,6 +3756,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 if (writesFailingParticipant) {
                     failingWrites++;
                 }
+                if (writesCommittedAggregate) failingCommits++;
                 failCommitOnce = false;
                 return CompletableFuture.completedFuture(
                         new systems.zlink.framework.locationprovider.ZLinkStoreWriteConflict(

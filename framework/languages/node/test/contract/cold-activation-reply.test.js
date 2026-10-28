@@ -1,3 +1,4 @@
+const { OperationCancelledError } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { RequestResult } = require('@zlink-systems/zlink');
@@ -401,7 +402,7 @@ for (const winner of ['timeout', 'cancellation', 'disconnect', 'close']) {
     await new Promise((resolve) => setImmediate(resolve));
     if (winner === 'timeout')
       p.source.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
-    if (winner === 'cancellation') p.source.runtime.operations.cancel(pending.id);
+    if (winner === 'cancellation') p.source.runtime.cancelPendingOperations(new OperationCancelledError(pending.id));
     if (winner === 'disconnect') p.source.disconnect('target');
     if (winner === 'close') p.source.runtime.close();
     await rejected;

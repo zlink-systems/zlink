@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
 
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
+#include "runtime/diagnostics/runtime_metrics.hpp"
 
 #include <algorithm>
 #include <condition_variable>
@@ -39,17 +40,13 @@ class runtime_observer_state_t final
   public:
     using callback_t = std::function<void (const observed_status_t<TStatus> &)>;
 
-    runtime_observer_state_t (std::size_t terminal_capacity, callback_t callback) :
+    runtime_observer_state_t (std::size_t terminal_capacity,
+                              callback_t callback,
+                              std::shared_ptr<detail::monitoring_runtime_state_t> monitoring = {}) :
+        _monitoring (std::move (monitoring)),
         _terminal_capacity (std::max<std::size_t> (1, terminal_capacity)),
         _callback (std::move (callback))
     {
-        auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
-        if (!dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ())) {
-            const auto meter = provider->GetMeter ("zlink.framework");
-            if (meter)
-                _overflow =
-                  meter->CreateDoubleCounter ("zlink.observability.events.overflow", "", "{event}");
-        }
     }
 
     ~runtime_observer_state_t () { close (); }
@@ -143,8 +140,9 @@ class runtime_observer_state_t final
             release_terminal_source_locked (_terminal_fifo.front ().source_key);
             _terminal_fifo.pop_front ();
             increment_runtime_observation_loss (_loss.discarded_terminal_count);
-            if (_overflow)
-                _overflow->Add (1, {{"source", "runtime_status"}});
+            runtime::runtime_metrics_t (_monitoring)
+              .counter ("zlink.observability.events.overflow", "{event}", 1,
+                        {{"source", "runtime_status"}});
         }
 
         ++_retained_terminal_count_by_source[source_key];
@@ -252,7 +250,7 @@ class runtime_observer_state_t final
         _idle.notify_all ();
     }
 
-    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<double>> _overflow;
+    std::shared_ptr<detail::monitoring_runtime_state_t> _monitoring;
     std::size_t _terminal_capacity;
     callback_t _callback;
     std::mutex _mutex;

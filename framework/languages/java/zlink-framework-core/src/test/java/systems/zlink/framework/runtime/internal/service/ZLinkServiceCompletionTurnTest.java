@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 
 import java.time.Duration;
@@ -115,7 +116,8 @@ final class ZLinkServiceCompletionTurnTest {
     @Test
     void mappedServiceResultReusesTheRegisteredCompletionTurn() throws Exception {
         try (var registry = new ZLinkServiceOperationRegistry()) {
-            var operation = registry.<String>register(Duration.ofHours(1));
+            var operation =
+                    ZLinkCompletionBridge.await(registry.<String>register(Duration.ofHours(1)));
             var mapped = operation.thenApply(value -> "mapped " + value);
             var caller = ZLinkSerialExecutionQueue.manageCurrent(mapped);
             var observed = new CountDownLatch(1);
@@ -154,8 +156,9 @@ final class ZLinkServiceCompletionTurnTest {
         var entered = new CountDownLatch(1);
         var observed = new CountDownLatch(1);
         try (var registry = new ZLinkServiceOperationRegistry()) {
-            var first = registry.<String>register(Duration.ofHours(1));
-            var second = registry.<String>register(Duration.ofHours(1));
+            var first = ZLinkCompletionBridge.await(registry.<String>register(Duration.ofHours(1)));
+            var second =
+                    ZLinkCompletionBridge.await(registry.<String>register(Duration.ofHours(1)));
             var firstCallback =
                     first.thenRun(
                             () -> {

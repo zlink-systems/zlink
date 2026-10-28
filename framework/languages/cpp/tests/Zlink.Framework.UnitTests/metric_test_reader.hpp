@@ -35,18 +35,25 @@ class reader_t final : public sdk::MetricReader
 class provider_t
 {
   public:
-    provider_t () :
+    explicit provider_t (bool install_global = true) :
         _previous (opentelemetry::metrics::Provider::GetMeterProvider ()),
         _provider (std::make_shared<sdk::MeterProvider> ()),
         reader (std::make_shared<reader_t> ())
     {
         _provider->AddMetricReader (reader);
-        opentelemetry::metrics::Provider::SetMeterProvider (
-          opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider> (
-            std::static_pointer_cast<opentelemetry::metrics::MeterProvider> (_provider)));
+        if (install_global)
+            opentelemetry::metrics::Provider::SetMeterProvider (
+              opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider> (
+                std::static_pointer_cast<opentelemetry::metrics::MeterProvider> (_provider)));
     }
 
     ~provider_t () { opentelemetry::metrics::Provider::SetMeterProvider (_previous); }
+
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider> api () const
+    {
+        return opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider> (
+          std::static_pointer_cast<opentelemetry::metrics::MeterProvider> (_provider));
+    }
 
     std::vector<sdk::MetricData> collect ()
     {

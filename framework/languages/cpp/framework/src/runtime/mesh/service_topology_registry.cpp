@@ -104,7 +104,9 @@ bool discovery_expectation_matches (const service_node_descriptor_t &expected,
 service_topology_registry_t::service_topology_registry_t (
   service_node_descriptor_t local,
   std::vector<std::string> metric_channel_names,
-  service_liveness_registry_t *liveness_owner) :
+  service_liveness_registry_t *liveness_owner,
+  metric_provider_t provider) :
+    _metric_provider (provider),
     _topology (std::make_shared<std::shared_ptr<const topology_state_t>> (
       std::make_shared<const topology_state_t> (std::move (local)))),
     _liveness_owner (liveness_owner),
@@ -120,8 +122,7 @@ service_topology_registry_t::service_topology_registry_t (
     _metric_channel_names.erase (
       std::unique (_metric_channel_names.begin (), _metric_channel_names.end ()),
       _metric_channel_names.end ());
-    const auto meter =
-      opentelemetry::metrics::Provider::GetMeterProvider ()->GetMeter ("zlink.framework");
+    const auto meter = provider->GetMeter ("zlink.framework");
     if (meter)
         _selection_failures = meter->CreateDoubleCounter (
           "zlink.mesh_node.channel.selection_failures", "", "{failure}");
