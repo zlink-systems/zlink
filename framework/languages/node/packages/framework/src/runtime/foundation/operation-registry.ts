@@ -55,7 +55,9 @@ export class OperationRegistry<T, Context = unknown> {
    * A lower bound of the earliest pending deadline. Completed entries only
    * leave it early; a full expiry pass replaces it with the exact value.
    */
-  private earliestDeadlineMs = Number.POSITIVE_INFINITY;
+  // Materialized as undefined and set in the constructor: a double-initialized
+  // field makes V8 box every number later read from it on each registration.
+  private earliestDeadlineMs: number = undefined as unknown as number;
   private scanEarliestDeadlineMs = Number.POSITIVE_INFINITY;
   private closed = false;
   private pendingCount = 0;
@@ -63,7 +65,9 @@ export class OperationRegistry<T, Context = unknown> {
   constructor(
     private readonly clock: OperationClock = systemClock,
     private readonly onPendingChanged?: () => void
-  ) {}
+  ) {
+    this.earliestDeadlineMs = Number.POSITIVE_INFINITY;
+  }
 
   register(
     timeoutMs: number,
