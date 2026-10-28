@@ -63,7 +63,7 @@ class import_room_http_handler_t
                 line.pop_back ();
             if (line.empty ())
                 continue;
-            const auto message = nlohmann::json::parse (line).get<post_chat_t> ();
+            const auto message = zlink::message_t::from (line).parse_json<post_chat_t> ();
             co_await _routes.send_to_spot (room_id, message).async ();
             ++imported;
         }

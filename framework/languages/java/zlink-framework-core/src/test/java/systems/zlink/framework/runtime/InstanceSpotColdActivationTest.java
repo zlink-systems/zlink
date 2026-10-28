@@ -4,8 +4,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.runtime.locations.*;
@@ -45,30 +47,41 @@ final class InstanceSpotColdActivationTest {
 
     @Test
     void initializationEndsAtActivationDeadline() throws Exception {
+        checkActivationDeadline(DeadlinePhase.INITIALIZATION);
+    }
+
+    @Test
+    void recoveryDeadlineBeforeInitializationIsTimedOut() throws Exception {
+        checkActivationDeadline(DeadlinePhase.RECOVERY);
+    }
+
+    @Test
+    void validatorDeadlineBeforeInitializationIsTimedOut() throws Exception {
+        checkActivationDeadline(DeadlinePhase.VALIDATOR);
+    }
+
+    @Test
+    void providerCancellationBeforeDeadlineIsNotActivationTimeout() throws Exception {
+        checkActivationDeadline(DeadlinePhase.CALLER_CANCELLATION);
+    }
+
+    private enum DeadlinePhase {
+        INITIALIZATION,
+        RECOVERY,
+        VALIDATOR,
+        CALLER_CANCELLATION
+    }
+
+    private void checkActivationDeadline(DeadlinePhase phase) throws Exception {
         entered = new CompletableFuture<>();
         release = new CompletableFuture<>();
-        var dropped = new CompletableFuture<String>();
+        initialized = new AtomicInteger();
         String spotId = "initialization-deadline-" + UUID.randomUUID();
-        var logger =
-                java.util.logging.Logger.getLogger(
-                        "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer");
-        var listener =
-                new java.util.logging.Handler() {
-                    public void publish(java.util.logging.LogRecord record) {
-                        if (record.getMessage().contains(spotId)
-                                && record.getMessage().contains("phase=dropped"))
-                            dropped.complete(record.getMessage());
-                    }
-
-                    public void flush() {}
-
-                    public void close() {}
-                };
-        logger.addHandler(listener);
+        var store = new ActivationDeadlineStore(spotId, phase);
         var options = new DefaultZLinkFrameworkOptions();
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
-        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addLocationStore(store);
         options.addRelocationStore(new InMemoryRelocationStore());
         options.addRouteMesh("cold-test")
                 .listen("inproc://init-deadline-" + UUID.randomUUID())
@@ -77,35 +90,252 @@ final class InstanceSpotColdActivationTest {
                 .server()
                 .addInstanceSpotFactory(
                         "cold", WaitingInstance.class, factory -> factory.disableRelocation());
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ActivationDeadlineBackend(store))) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            try (var probe =
-                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
-                            .install()) {
+            try (var flow =
+                            new ActivationDropObservation(
+                                    spotId, phase == DeadlinePhase.INITIALIZATION);
+                    var probe =
+                            systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                                    .install();
+                    var sender = Executors.newVirtualThreadPerTaskExecutor()) {
+                var submitted =
+                        sender.submit(
+                                () ->
+                                        runtime.route()
+                                                .sendToSpot(spotId, new Initial("first"))
+                                                .instanceSpot("cold")
+                                                .submit()
+                                                .toCompletableFuture()
+                                                .get(5, TimeUnit.SECONDS));
                 try {
-                    runtime.route()
-                            .sendToSpot(spotId, new Initial("first"))
-                            .instanceSpot("cold")
-                            .submit()
-                            .toCompletableFuture()
-                            .get(5, TimeUnit.SECONDS);
-                    entered.get(5, TimeUnit.SECONDS);
-                    String event = dropped.get(2, TimeUnit.SECONDS);
-                    assertTrue(event.contains("reason=activation_timeout"), event);
-                    assertTrue(event.contains("error_type=ZLinkFrameworkException"), event);
-                    assertEquals(
-                            "timed_out",
-                            probe.only("zlink.instance_spot.activations").tags().get("outcome"));
+                    ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope = null;
+                    if (phase == DeadlinePhase.INITIALIZATION) entered.get(5, TimeUnit.SECONDS);
+                    else if (phase == DeadlinePhase.RECOVERY)
+                        envelope = store.recoveryEntered.get(5, TimeUnit.SECONDS);
+                    else envelope = store.validatorEntered.get(5, TimeUnit.SECONDS);
+                    long terminalUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+                    if (phase == DeadlinePhase.RECOVERY || phase == DeadlinePhase.VALIDATOR) {
+                        while (System.currentTimeMillis() < envelope.deadlineUnixMs()) {
+                            assertTrue(
+                                    System.nanoTime() < terminalUntil,
+                                    "The original activation deadline must expire");
+                            Thread.sleep(1);
+                        }
+                    }
+                    store.resume.complete(null);
+                    if (phase == DeadlinePhase.INITIALIZATION || phase == DeadlinePhase.RECOVERY) {
+                        // The activation owner records this result before telemetry delivery.
+                        while (probe.count("zlink.instance_spot.activations") == 0) {
+                            assertTrue(
+                                    System.nanoTime() < terminalUntil,
+                                    "Activation owner must record its terminal outcome");
+                            Thread.sleep(1);
+                        }
+                        assertEquals(
+                                "timed_out",
+                                probe.only("zlink.instance_spot.activations")
+                                        .tags()
+                                        .get("outcome"));
+                    }
+                    assertEquals(phase == DeadlinePhase.INITIALIZATION ? 1 : 0, initialized.get());
                     assertFalse(
                             release.isDone(),
-                            "Initialization remains suspended at the terminal deadline.");
+                            "Initialization is not released before the terminal result");
+                    if (phase != DeadlinePhase.INITIALIZATION) {
+                        String event = flow.dropped.get(2, TimeUnit.SECONDS);
+                        if (phase == DeadlinePhase.CALLER_CANCELLATION) {
+                            // Provider-specific failure is a Store failure (provider SPI §6).
+                            assertTrue(
+                                    event.contains("error_type=ZLinkLocationStoreFailureException"),
+                                    event);
+                            assertFalse(event.contains("reason=activation_timeout"), event);
+                        } else {
+                            assertTrue(event.contains("reason=activation_timeout"), event);
+                            assertTrue(event.contains("error_type=ZLinkFrameworkException"), event);
+                        }
+                    }
                 } finally {
+                    store.resume.complete(null);
+                    flow.resume.complete(null);
                     release.complete(null);
                 }
+                submitted.get(5, TimeUnit.SECONDS);
             }
-        } finally {
+        }
+    }
+
+    /** Holds the existing provider boundary; the runtime clock and scheduler remain real. */
+    private static final class ActivationDeadlineStore
+            implements systems.zlink.framework.locationprovider.ZLinkLocationStore {
+        private final ZLinkInMemoryLocationStore delegate = new ZLinkInMemoryLocationStore();
+        private final String authorityKey;
+        private final DeadlinePhase phase;
+        private final java.util.concurrent.atomic.AtomicBoolean recoveryHeld =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        private final CompletableFuture<ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope>
+                validatorEntered = new CompletableFuture<>();
+        private final CompletableFuture<ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope>
+                recoveryEntered = new CompletableFuture<>();
+        private final CompletableFuture<Void> resume = new CompletableFuture<>();
+        private volatile ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope;
+
+        ActivationDeadlineStore(String spotId, DeadlinePhase phase) {
+            authorityKey = "authority\0spot\0" + spotId;
+            this.phase = phase;
+        }
+
+        public CompletionStage<systems.zlink.framework.locationprovider.ZLinkStoreReadResult> read(
+                systems.zlink.framework.locationprovider.ZLinkStoreKey key,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            if (phase == DeadlinePhase.CALLER_CANCELLATION
+                    && envelope != null
+                    && key.value().equals(authorityKey)) {
+                assertFalse(
+                        cancellation.isCancellationRequested(),
+                        "Caller cancellation must precede the activation deadline");
+                throw new CancellationException("caller cancelled before activation deadline");
+            }
+            // An expired read throws synchronously in the real in-memory provider.
+            return delegate.read(key, cancellation);
+        }
+
+        public CompletionStage<systems.zlink.framework.locationprovider.ZLinkStoreWriteResult>
+                write(
+                        systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest request,
+                        systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+                                cancellation) {
+            return delegate.write(request, cancellation);
+        }
+
+        public CompletionStage<systems.zlink.framework.locationprovider.ZLinkStoreScanResult> scan(
+                systems.zlink.framework.locationprovider.ZLinkStoreScanRequest request,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            var result = delegate.scan(request, cancellation);
+            if (phase == DeadlinePhase.RECOVERY
+                    && envelope != null
+                    && request.prefix().equals("mesh-node\0cold-test\0")
+                    && recoveryHeld.compareAndSet(false, true)) {
+                return result.thenCompose(
+                        page -> {
+                            recoveryEntered.complete(envelope);
+                            return resume.thenApply(ignored -> page);
+                        });
+            }
+            return result;
+        }
+    }
+
+    /** Observes existing backend registration without accessing runtime private members. */
+    private static final class ActivationDeadlineBackend implements ZLinkBackendAdapterProvider {
+        private final ZLinkJavaBackendAdapterFactory delegate =
+                new ZLinkJavaBackendAdapterFactory();
+        private final ActivationDeadlineStore store;
+
+        ActivationDeadlineBackend(ActivationDeadlineStore store) {
+            this.store = store;
+        }
+
+        public ZLinkChannelBackendAdapter createChannelAdapter(ZLinkBackendAdapterOptions options) {
+            return delegate.createChannelAdapter(options);
+        }
+
+        public ZLinkSpotBackendAdapter createSpotAdapter(ZLinkBackendAdapterOptions options) {
+            return delegate.createSpotAdapter(options);
+        }
+
+        public ZLinkStreamBackendAdapter createStreamAdapter(ZLinkBackendAdapterOptions options) {
+            return delegate.createStreamAdapter(options);
+        }
+
+        public ZLinkMonitoringBackendAdapter createMonitoringAdapter(
+                ZLinkBackendAdapterOptions options) {
+            return delegate.createMonitoringAdapter(options);
+        }
+
+        @SuppressWarnings("unchecked")
+        public ZLinkMeshBackendAdapter createMeshAdapter(ZLinkBackendAdapterOptions options) {
+            var adapter = delegate.createMeshAdapter(options);
+            return (context, name) -> {
+                var node = adapter.createMeshNode(context, name);
+                return (ZLinkInternalMeshNode)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ZLinkInternalMeshNode.class.getClassLoader(),
+                                new Class<?>[] {ZLinkInternalMeshNode.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName()
+                                            .equals("setInstanceSpotActivationValidator")) {
+                                        var original =
+                                                (java.util.function.Function<
+                                                                ZLinkInstanceActivationRecoveryCodec
+                                                                        .RecoveryEnvelope,
+                                                                CompletionStage<
+                                                                        ZLinkAuthorityReadResult>>)
+                                                        arguments[0];
+                                        arguments[0] =
+                                                (java.util.function.Function<
+                                                                ZLinkInstanceActivationRecoveryCodec
+                                                                        .RecoveryEnvelope,
+                                                                CompletionStage<
+                                                                        ZLinkAuthorityReadResult>>)
+                                                        envelope -> {
+                                                            store.envelope = envelope;
+                                                            store.validatorEntered.complete(
+                                                                    envelope);
+                                                            if (store.phase
+                                                                            == DeadlinePhase
+                                                                                    .VALIDATOR
+                                                                    || store.phase
+                                                                            == DeadlinePhase
+                                                                                    .CALLER_CANCELLATION) {
+                                                                store.resume.join();
+                                                            }
+                                                            return original.apply(envelope);
+                                                        };
+                                    }
+                                    try {
+                                        // The Method belongs to the existing backend interface.
+                                        return method.invoke(node, arguments);
+                                    } catch (java.lang.reflect.InvocationTargetException failure) {
+                                        throw failure.getCause();
+                                    }
+                                });
+            };
+        }
+    }
+
+    private static final class ActivationDropObservation implements AutoCloseable {
+        private final CompletableFuture<String> dropped = new CompletableFuture<>();
+        private final CompletableFuture<Void> resume = new CompletableFuture<>();
+        private final java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(
+                        "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer");
+        private final java.util.logging.Handler listener;
+
+        ActivationDropObservation(String spotId, boolean holdDelivery) {
+            listener =
+                    new java.util.logging.Handler() {
+                        public void publish(java.util.logging.LogRecord record) {
+                            if (record.getMessage().contains(spotId)
+                                    && record.getMessage().contains("phase=dropped")) {
+                                if (holdDelivery) resume.join();
+                                dropped.complete(record.getMessage());
+                            }
+                        }
+
+                        public void flush() {}
+
+                        public void close() {}
+                    };
+            logger.addHandler(listener);
+        }
+
+        public void close() {
+            resume.complete(null);
             logger.removeHandler(listener);
         }
     }
@@ -122,6 +352,7 @@ final class InstanceSpotColdActivationTest {
         }
 
         public CompletionStage<Void> onInitialize() {
+            initialized.incrementAndGet();
             entered.complete(null);
             return release;
         }

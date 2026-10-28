@@ -152,8 +152,9 @@ This decision applies to the framework surface only. **The Node binding keeps it
 — the binding does not depend on the framework runtime to deliver completions.
 
 **The synchronous blocking terminator cannot be called from a runtime execution context (F2-a).**
-Blocking on a handler turn, Spot turn, or state lane would wait for completion while holding the
-gate and deadlock. By the same principle as [State Ownership And Lanes §5](06-state-ownership-and-lanes.en.md#completion-before-return)
+It fails with `InvalidOperation` in every runtime execution context (handler turn, Spot turn, state
+lane), regardless of whether it holds a gate. Blocking while holding a gate waits for completion and
+deadlocks; blocking without a gate still occupies a runtime execution resource until completion. By the same principle as [State Ownership And Lanes §5](06-state-ownership-and-lanes.en.md#completion-before-return)
 (completion before return) and [handler turn §2](02-handler-turn-and-execution-gate.en.md), calling a
 synchronous terminator from a runtime execution context fails immediately with `InvalidOperation`. The
 synchronous terminator is for application threads (main, tests, scripts).
@@ -396,7 +397,7 @@ binding already started, and its reply is discarded because the correlation is c
 and uses the same request timeout. If the deadline is reached before any binding operation starts, the result is
 still `DeadlineExceeded`.
 
-How a request sent within the same handler turn releases and reacquires the gate while
+In a scope with a gate, how a request sent within the same handler turn releases and reacquires the gate while
 waiting is defined by
 [Handler Turn And Execution Gate 「4. Waiting And Returning Within The Same Turn」](02-handler-turn-and-execution-gate.en.md#4-waiting-and-returning-within-the-same-turn).
 
