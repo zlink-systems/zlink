@@ -135,6 +135,9 @@ public sealed class RawPortCloseFailureTests
                 TimeProvider.System,
                 errors,
                 runner,
+                typeof(ZLinkClientServerClientRuntime)
+                    .GetField("_requestDeadlines", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(runtime),
             ],
             null
         )!;

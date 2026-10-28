@@ -55,15 +55,29 @@ internal sealed class ZLinkMeshCompletionTable
         return pending;
     }
 
+    internal void ReserveDispatcher()
+    {
+        lock (_gate)
+        {
+            ThrowIfClosed();
+            _outstandingOperations++;
+        }
+    }
+
+    private void ThrowIfClosed()
+    {
+        if (_closed)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "The mesh completion table is closed."
+            );
+    }
+
     private void Add(PendingCompletion pending)
     {
         lock (_gate)
         {
-            if (_closed)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.ShuttingDown,
-                    "The mesh completion table is closed."
-                );
+            ThrowIfClosed();
             // The dispatcher node exists before the operation becomes visible
             // in the pending table, preserving registration-before-submit.
             if (!_pending.TryAdd(pending.CorrelationId, pending))
@@ -135,7 +149,7 @@ internal sealed class ZLinkMeshCompletionTable
             _pending.Remove(correlationId, out pending);
         if (pending is null)
             return false;
-        ReleaseReservation(pending, null);
+        ReleaseReservation(null);
         return true;
     }
 
@@ -227,7 +241,7 @@ internal sealed class ZLinkMeshCompletionTable
         ZLinkCompletionDispatcher.Post(expected);
     }
 
-    private void ReleaseReservation(PendingCompletion pending, Exception? failure)
+    internal void ReleaseReservation(Exception? failure)
     {
         TaskCompletionSource? drained = null;
         lock (_gate)
@@ -268,8 +282,7 @@ internal sealed class ZLinkMeshCompletionTable
 
         internal abstract void PrepareFailure(RequestResult result);
 
-        internal override void Completed(Exception? failure) =>
-            Owner.ReleaseReservation(this, failure);
+        internal override void Completed(Exception? failure) => Owner.ReleaseReservation(failure);
     }
 
     internal sealed class PendingSend : PendingCompletion, IValueTaskSource
