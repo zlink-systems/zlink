@@ -223,10 +223,7 @@ public sealed class MeshChannelSelectionHotPathTests
         const int iterations = 1024;
         var synchronousBytes = PerCallAllocation.MinWindow(() => select("worker"), iterations);
         var requestBytes = PerCallAllocation.MinWindow(
-            () =>
-                wait("worker", terminal, cancellation.Token)
-                    .GetAwaiter()
-                    .GetResult(),
+            () => wait("worker", terminal, cancellation.Token).GetAwaiter().GetResult(),
             iterations
         );
 
