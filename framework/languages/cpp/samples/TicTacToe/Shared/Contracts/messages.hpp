@@ -5,6 +5,7 @@
 
 #include <array>
 #include <nlohmann/json.hpp>
+#include <zlink/json_profile.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -223,308 +224,217 @@ struct game_state_notify_t
     tictactoe_state_t state;
 };
 
-inline void to_json (nlohmann::json &json, const authenticate_req_t &value)
-{
-    json = {{"accessToken", value.access_token}};
 }
 
-inline void from_json (const nlohmann::json &json, authenticate_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::authenticate_req_t>
 {
-    value.access_token = json.value ("accessToken", "");
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "accessToken", &zlink::samples::tictactoe::authenticate_req_t::access_token)};
+};
 
-inline void to_json (nlohmann::json &json, const player_info_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::player_info_t>
 {
-    json = {{"actorId", value.actor_id},
-            {"displayName", value.display_name},
-            {"level", value.level},
-            {"wins", value.wins}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("actorId", &zlink::samples::tictactoe::player_info_t::actor_id),
+      zlink::json::field ("displayName", &zlink::samples::tictactoe::player_info_t::display_name),
+      zlink::json::field ("level", &zlink::samples::tictactoe::player_info_t::level),
+      zlink::json::field ("wins", &zlink::samples::tictactoe::player_info_t::wins)};
+};
 
-inline void from_json (const nlohmann::json &json, player_info_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::player_actor_create_req_t>
 {
-    value.actor_id = json.value ("actorId", "");
-    value.display_name = json.value ("displayName", "");
-    value.level = json.value ("level", 0);
-    value.wins = json.value ("wins", 0);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("player", &zlink::samples::tictactoe::player_actor_create_req_t::player)};
+};
 
-inline void to_json (nlohmann::json &json, const player_actor_create_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::play_node_info_t>
 {
-    json = {{"player", value.player}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "streamEndpoint", &zlink::samples::tictactoe::play_node_info_t::stream_endpoint)};
+};
 
-inline void from_json (const nlohmann::json &json, player_actor_create_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::authenticate_player_req_t>
 {
-    value.player = json.value ("player", player_info_t{});
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "accessToken", &zlink::samples::tictactoe::authenticate_player_req_t::access_token)};
+};
 
-inline void to_json (nlohmann::json &json, const play_node_info_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::authenticate_player_res_t>
 {
-    json = {{"streamEndpoint", value.stream_endpoint}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("player", &zlink::samples::tictactoe::authenticate_player_res_t::player)};
+};
 
-inline void from_json (const nlohmann::json &json, play_node_info_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::tictactoe_game_create_req_t>
 {
-    value.stream_endpoint = json.value ("streamEndpoint", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("gameName",
+                          &zlink::samples::tictactoe::tictactoe_game_create_req_t::game_name),
+      zlink::json::field ("requiredLevel",
+                          &zlink::samples::tictactoe::tictactoe_game_create_req_t::required_level)};
+};
 
-inline void to_json (nlohmann::json &json, const authenticate_player_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::create_game_http_req_t>
 {
-    json = {{"accessToken", value.access_token}};
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "gameName", &zlink::samples::tictactoe::create_game_http_req_t::game_name)};
+};
 
-inline void from_json (const nlohmann::json &json, authenticate_player_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::join_game_msg_t>
 {
-    value.access_token = json.value ("accessToken", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId", &zlink::samples::tictactoe::join_game_msg_t::room_id)};
+};
 
-inline void to_json (nlohmann::json &json, const authenticate_player_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::tictactoe_game_join_req_t>
 {
-    json = {{"player", value.player}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId", &zlink::samples::tictactoe::tictactoe_game_join_req_t::room_id),
+      zlink::json::field ("player", &zlink::samples::tictactoe::tictactoe_game_join_req_t::player)};
+};
 
-inline void from_json (const nlohmann::json &json, authenticate_player_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::place_mark_req_t>
 {
-    value.player = json.value ("player", player_info_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("cell", &zlink::samples::tictactoe::place_mark_req_t::cell)};
+};
 
-inline void to_json (nlohmann::json &json, const tictactoe_game_create_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::tictactoe_state_t>
 {
-    json = {{"gameName", value.game_name}, {"requiredLevel", value.required_level}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId", &zlink::samples::tictactoe::tictactoe_state_t::room_id),
+      zlink::json::field ("board", &zlink::samples::tictactoe::tictactoe_state_t::board),
+      zlink::json::field ("status", &zlink::samples::tictactoe::tictactoe_state_t::status),
+      zlink::json::field ("nextTurn", &zlink::samples::tictactoe::tictactoe_state_t::next_turn),
+      zlink::json::field ("winner", &zlink::samples::tictactoe::tictactoe_state_t::winner),
+      zlink::json::field ("xActorId", &zlink::samples::tictactoe::tictactoe_state_t::x_actor_id),
+      zlink::json::field ("oActorId", &zlink::samples::tictactoe::tictactoe_state_t::o_actor_id),
+      zlink::json::field ("lastMoveActorId",
+                          &zlink::samples::tictactoe::tictactoe_state_t::last_move_actor_id),
+      zlink::json::field ("lastMoveCell",
+                          &zlink::samples::tictactoe::tictactoe_state_t::last_move_cell)};
+};
 
-inline void from_json (const nlohmann::json &json, tictactoe_game_create_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::tictactoe_game_join_res_t>
 {
-    value.game_name = json.value ("gameName", "");
-    value.required_level = json.value ("requiredLevel", 0);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("state", &zlink::samples::tictactoe::tictactoe_game_join_res_t::state)};
+};
 
-inline void to_json (nlohmann::json &json, const create_game_http_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::authenticate_res_t>
 {
-    write_nullable (json, "gameName", value.game_name);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("player", &zlink::samples::tictactoe::authenticate_res_t::player)};
+};
 
-inline void from_json (const nlohmann::json &json, create_game_http_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::create_game_http_res_t>
 {
-    value.game_name = read_nullable<std::string> (json, "gameName");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId", &zlink::samples::tictactoe::create_game_http_res_t::room_id),
+      zlink::json::field ("gameName",
+                          &zlink::samples::tictactoe::create_game_http_res_t::game_name),
+      zlink::json::field ("playEndpoints",
+                          &zlink::samples::tictactoe::create_game_http_res_t::play_endpoints),
+      zlink::json::field ("playNodes",
+                          &zlink::samples::tictactoe::create_game_http_res_t::play_nodes),
+      zlink::json::field ("requiredLevel",
+                          &zlink::samples::tictactoe::create_game_http_res_t::required_level)};
+};
 
-inline void to_json (nlohmann::json &json, const join_game_msg_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::join_game_notify_t>
 {
-    json = {{"roomId", value.room_id}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("state", &zlink::samples::tictactoe::join_game_notify_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, join_game_msg_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::join_game_failed_notify_t>
 {
-    value.room_id = json.value ("roomId", "");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId", &zlink::samples::tictactoe::join_game_failed_notify_t::room_id),
+      zlink::json::field ("error", &zlink::samples::tictactoe::join_game_failed_notify_t::error)};
+};
 
-inline void to_json (nlohmann::json &json, const tictactoe_game_join_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::place_mark_res_t>
 {
-    json = {{"roomId", value.room_id}, {"player", value.player}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("state", &zlink::samples::tictactoe::place_mark_res_t::state)};
+};
 
-inline void from_json (const nlohmann::json &json, tictactoe_game_join_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::player_joined_notify_t>
 {
-    value.room_id = json.value ("roomId", "");
-    value.player = json.value ("player", player_info_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId", &zlink::samples::tictactoe::player_joined_notify_t::room_id),
+      zlink::json::field ("actorId", &zlink::samples::tictactoe::player_joined_notify_t::actor_id),
+      zlink::json::field ("displayName",
+                          &zlink::samples::tictactoe::player_joined_notify_t::display_name),
+      zlink::json::field ("level", &zlink::samples::tictactoe::player_joined_notify_t::level),
+      zlink::json::field ("mark", &zlink::samples::tictactoe::player_joined_notify_t::mark),
+      zlink::json::field ("state", &zlink::samples::tictactoe::player_joined_notify_t::state)};
+};
 
-inline void to_json (nlohmann::json &json, const place_mark_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::observe_milestone_req_t>
 {
-    json = {{"cell", value.cell}};
-}
+    static constexpr auto fields = std::tuple{};
+};
 
-inline void from_json (const nlohmann::json &json, place_mark_req_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::observe_milestone_res_t>
 {
-    value.cell = json.value ("cell", 0);
-}
+    static constexpr auto fields = std::tuple{zlink::json::field (
+      "subscribed", &zlink::samples::tictactoe::observe_milestone_res_t::subscribed)};
+};
 
-inline void to_json (nlohmann::json &json, const tictactoe_state_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::leave_game_msg_t>
 {
-    json = {{"roomId", value.room_id},
-            {"board", value.board},
-            {"status", value.status},
-            {"nextTurn", value.next_turn}};
-    write_nullable (json, "winner", value.winner);
-    write_nullable (json, "xActorId", value.x_actor_id);
-    write_nullable (json, "oActorId", value.o_actor_id);
-    write_nullable (json, "lastMoveActorId", value.last_move_actor_id);
-    write_nullable (json, "lastMoveCell", value.last_move_cell);
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId", &zlink::samples::tictactoe::leave_game_msg_t::room_id)};
+};
 
-inline void from_json (const nlohmann::json &json, tictactoe_state_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::player_win_milestone_event_t>
 {
-    value.room_id = json.value ("roomId", "");
-    value.board = json.value ("board", ".........");
-    value.status = json.value ("status", "");
-    value.next_turn = json.value ("nextTurn", "");
-    value.winner = read_nullable<std::string> (json, "winner");
-    value.x_actor_id = read_nullable<std::string> (json, "xActorId");
-    value.o_actor_id = read_nullable<std::string> (json, "oActorId");
-    value.last_move_actor_id = read_nullable<std::string> (json, "lastMoveActorId");
-    value.last_move_cell = read_nullable<int> (json, "lastMoveCell");
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId",
+                          &zlink::samples::tictactoe::player_win_milestone_event_t::room_id),
+      zlink::json::field ("actorId",
+                          &zlink::samples::tictactoe::player_win_milestone_event_t::actor_id),
+      zlink::json::field ("displayName",
+                          &zlink::samples::tictactoe::player_win_milestone_event_t::display_name),
+      zlink::json::field ("wins", &zlink::samples::tictactoe::player_win_milestone_event_t::wins)};
+};
 
-inline void to_json (nlohmann::json &json, const tictactoe_game_join_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::win_milestone_notify_t>
 {
-    json = {{"state", value.state}};
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("roomId", &zlink::samples::tictactoe::win_milestone_notify_t::room_id),
+      zlink::json::field ("actorId", &zlink::samples::tictactoe::win_milestone_notify_t::actor_id),
+      zlink::json::field ("displayName",
+                          &zlink::samples::tictactoe::win_milestone_notify_t::display_name),
+      zlink::json::field ("wins", &zlink::samples::tictactoe::win_milestone_notify_t::wins)};
+};
 
-inline void from_json (const nlohmann::json &json, tictactoe_game_join_res_t &value)
+template <> struct zlink::json::dto_traits<zlink::samples::tictactoe::game_state_notify_t>
 {
-    value.state = json.value ("state", tictactoe_state_t{});
-}
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("state", &zlink::samples::tictactoe::game_state_notify_t::state)};
+};
 
-inline void to_json (nlohmann::json &json, const authenticate_res_t &value)
+namespace zlink::samples::tictactoe
 {
-    json = {{"player", value.player}};
-}
-
-inline void from_json (const nlohmann::json &json, authenticate_res_t &value)
-{
-    value.player = json.value ("player", player_info_t{});
-}
-
-inline void to_json (nlohmann::json &json, const create_game_http_res_t &value)
-{
-    json = {{"roomId", value.room_id},
-            {"gameName", value.game_name},
-            {"playEndpoints", value.play_endpoints},
-            {"playNodes", value.play_nodes},
-            {"requiredLevel", value.required_level}};
-}
-
-inline void from_json (const nlohmann::json &json, create_game_http_res_t &value)
-{
-    value.room_id = json.value ("roomId", "");
-    value.game_name = json.value ("gameName", "");
-    value.play_endpoints = json.value ("playEndpoints", std::vector<std::string>{});
-    value.play_nodes = json.value ("playNodes", std::vector<play_node_info_t>{});
-    value.required_level = json.value ("requiredLevel", 0);
-}
-
-inline void to_json (nlohmann::json &json, const join_game_notify_t &value)
-{
-    json = {{"state", value.state}};
-}
-
-inline void from_json (const nlohmann::json &json, join_game_notify_t &value)
-{
-    value.state = json.value ("state", tictactoe_state_t{});
-}
-
-inline void to_json (nlohmann::json &json, const join_game_failed_notify_t &value)
-{
-    json = {{"roomId", value.room_id}, {"error", value.error}};
-}
-
-inline void from_json (const nlohmann::json &json, join_game_failed_notify_t &value)
-{
-    value.room_id = json.value ("roomId", "");
-    value.error = json.value ("error", "");
-}
-
-inline void to_json (nlohmann::json &json, const place_mark_res_t &value)
-{
-    json = {{"state", value.state}};
-}
-
-inline void from_json (const nlohmann::json &json, place_mark_res_t &value)
-{
-    value.state = json.value ("state", tictactoe_state_t{});
-}
-
-inline void to_json (nlohmann::json &json, const player_joined_notify_t &value)
-{
-    json = {{"roomId", value.room_id},
-            {"actorId", value.actor_id},
-            {"displayName", value.display_name},
-            {"level", value.level},
-            {"mark", value.mark},
-            {"state", value.state}};
-}
-
-inline void from_json (const nlohmann::json &json, player_joined_notify_t &value)
-{
-    value.room_id = json.value ("roomId", "");
-    value.actor_id = json.value ("actorId", "");
-    value.display_name = json.value ("displayName", "");
-    value.level = json.value ("level", 0);
-    value.mark = json.value ("mark", "");
-    value.state = json.value ("state", tictactoe_state_t{});
-}
-
-inline void to_json (nlohmann::json &json, const observe_milestone_req_t &)
-{
-    json = nlohmann::json::object ();
-}
-
-inline void from_json (const nlohmann::json &, observe_milestone_req_t &)
-{
-}
-
-inline void to_json (nlohmann::json &json, const observe_milestone_res_t &value)
-{
-    json = {{"subscribed", value.subscribed}};
-}
-
-inline void from_json (const nlohmann::json &json, observe_milestone_res_t &value)
-{
-    value.subscribed = json.value ("subscribed", false);
-}
-
-inline void to_json (nlohmann::json &json, const leave_game_msg_t &value)
-{
-    json = {{"roomId", value.room_id}};
-}
-
-inline void from_json (const nlohmann::json &json, leave_game_msg_t &value)
-{
-    value.room_id = json.value ("roomId", "");
-}
-
-inline void to_json (nlohmann::json &json, const player_win_milestone_event_t &value)
-{
-    json = {{"roomId", value.room_id},
-            {"actorId", value.actor_id},
-            {"displayName", value.display_name},
-            {"wins", value.wins}};
-}
-
-inline void from_json (const nlohmann::json &json, player_win_milestone_event_t &value)
-{
-    value.room_id = json.value ("roomId", "");
-    value.actor_id = json.value ("actorId", "");
-    value.display_name = json.value ("displayName", "");
-    value.wins = json.value ("wins", 0);
-}
-
-inline void to_json (nlohmann::json &json, const win_milestone_notify_t &value)
-{
-    json = {{"roomId", value.room_id},
-            {"actorId", value.actor_id},
-            {"displayName", value.display_name},
-            {"wins", value.wins}};
-}
-
-inline void from_json (const nlohmann::json &json, win_milestone_notify_t &value)
-{
-    value.room_id = json.value ("roomId", "");
-    value.actor_id = json.value ("actorId", "");
-    value.display_name = json.value ("displayName", "");
-    value.wins = json.value ("wins", 0);
-}
-
-inline void to_json (nlohmann::json &json, const game_state_notify_t &value)
-{
-    json = {{"state", value.state}};
-}
-
-inline void from_json (const nlohmann::json &json, game_state_notify_t &value)
-{
-    value.state = json.value ("state", tictactoe_state_t{});
-}
 
 } // namespace zlink::samples::tictactoe
+
+// Explicit JSON state-store conversion shares the typed messaging profile.
+namespace zlink::samples::tictactoe
+{
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void to_json (nlohmann::json &out, const T &value)
+{
+    out = zlink::detail::json_profile::encode_value (value);
+}
+template <typename T>
+    requires zlink::detail::json_profile::has_dto<T>
+void from_json (const nlohmann::json &in, T &value)
+{
+    value = zlink::detail::json_profile::decode_value<T> (in);
+}
+}
