@@ -25,6 +25,7 @@ fi
 source "$SCRIPT_DIR/../redis-common.sh"
 source "$SCRIPT_DIR/../sample-build-common.sh"
 zlink_cpp_sample_prepare_build
+zlink_cpp_sample_log_step "build"
 cmake --build "$BUILD_DIR" --parallel 2 --target \
   sample_cpp_framework_tictactoe_play \
   sample_cpp_framework_tictactoe_api \
@@ -32,7 +33,7 @@ cmake --build "$BUILD_DIR" --parallel 2 --target \
   $(zlink_cpp_sample_framework_test_targets \
     test_cpp_framework_sample_parity \
     zlink_cpp_framework_mesh_node_vertical_test \
-    test_cpp_framework_actor_gateway) >/dev/null
+    test_cpp_framework_actor_gateway)
 
 PLAY_BIN="$BIN_DIR/sample_cpp_framework_tictactoe_play"
 API_BIN="$BIN_DIR/sample_cpp_framework_tictactoe_api"
@@ -201,6 +202,7 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run the TicTacToe sample." >&2
   exit 1
 fi
+zlink_cpp_sample_log_step "Redis start"
 zlink_redis_start_scoped_assign REDIS_CONTAINER redis_port \
   "zlink-redis-cpp-sample-tictactoe" "redis:7-alpine"
 TICTACTOE_CPP_REDIS_ENDPOINT="127.0.0.1:${redis_port}"
@@ -262,7 +264,9 @@ start_server() {
   # marker that the runner must verify.
   stdbuf -oL -eL "$binary" "$@" >"$LOG_DIR/${name}.stdout.log" \
     2>"$LOG_DIR/${name}.trace.log" &
-  PIDS+=("$!")
+  local pid=$!
+  PIDS+=("$pid")
+  zlink_cpp_sample_log_step "process start: $name pid=$pid"
 }
 
 # Start Play first so both RouteMesh server endpoints exist before API creates
@@ -317,6 +321,7 @@ LIFECYCLE_COMPLETION_FILE="$RUN_DIR/lifecycle-complete"
   >"$LOG_DIR/client.stdout.log" 2>"$LOG_DIR/client.trace.log" &
 CLIENT_PID=$!
 PIDS+=("$CLIENT_PID")
+zlink_cpp_sample_log_step "process start: client pid=$CLIENT_PID"
 
 wait_log_count 1 "tictactoe-lifecycle actor-bound actor=player-x" "$LOG_DIR"/play-*.stdout.log
 wait_log_count 1 "tictactoe-lifecycle leave-completed actor=player-x" "$LOG_DIR"/play-*.stdout.log
@@ -329,6 +334,8 @@ set +e
 wait "$CLIENT_PID"
 CLIENT_STATUS=$?
 set -e
+zlink_cpp_sample_log_step "process exit: client status=$CLIENT_STATUS"
+zlink_cpp_sample_remove_pid "$CLIENT_PID"
 if [[ "$CLIENT_STATUS" -ne 0 ]]; then
   for log in "$LOG_DIR"/*.log; do
     [[ -f "$log" ]] && cat "$log" >&2
