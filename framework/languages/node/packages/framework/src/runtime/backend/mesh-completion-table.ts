@@ -58,12 +58,15 @@ export class ZLinkMeshCompletionTable {
   ) {
     const slots: CompletionSlot[] = [];
     // Instrument indexed reads only when requested; normal tables retain a plain array.
-    this.slots = internalOptions === undefined ? slots : new Proxy(slots, {
-      get(target, key, receiver) {
-        if (typeof key === 'string' && /^\d+$/.test(key)) internalOptions.onSlotVisit();
-        return Reflect.get(target, key, receiver);
-      }
-    });
+    this.slots =
+      internalOptions === undefined
+        ? slots
+        : new Proxy(slots, {
+            get(target, key, receiver) {
+              if (typeof key === 'string' && /^\d+$/.test(key)) internalOptions.onSlotVisit();
+              return Reflect.get(target, key, receiver);
+            }
+          });
     this.prepareSlots();
   }
 
