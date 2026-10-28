@@ -19,6 +19,8 @@ dependencies {
     compileOnlyApi("io.micrometer:micrometer-core:1.15.8")
     testImplementation("io.micrometer:micrometer-core:1.15.8")
     testImplementation(project(":zlink-framework-testkit"))
+    testImplementation(project(":zlink-framework-codec-protobuf"))
+    testImplementation("com.google.protobuf:protobuf-java:4.30.2")
     testImplementation(project(":zlink-framework-locations-redis"))
 }
 

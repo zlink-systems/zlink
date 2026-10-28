@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -195,6 +197,92 @@ final class ZLinkHandlerInstanceOwnerTest {
 
         assertEquals(2, creates.get());
         assertEquals(2, destroys.get());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false", "true"})
+    void failedOwnerReleasesStayOwnedAndSuccessfulReleasesAreNotRepeated(
+            boolean failFirstScopeClose) {
+        var destroyFailure = new IllegalStateException("first destroy failed");
+        var closeFailure = new IllegalStateException("first scope close failed");
+        var destroyCalls = new AtomicInteger();
+        var closeCalls = new AtomicInteger();
+        var handler = new TestHandler();
+        var activator =
+                new ZLinkHandlerActivator() {
+                    @Override
+                    public Object create(Class<?> type) {
+                        return handler;
+                    }
+
+                    @Override
+                    public Activation openActivation() {
+                        return new Activation() {
+                            @Override
+                            public Object create(Class<?> type) {
+                                return handler;
+                            }
+
+                            @Override
+                            public void destroy(Object instance) {
+                                assertSame(handler, instance);
+                                if (destroyCalls.incrementAndGet() == 1) throw destroyFailure;
+                            }
+
+                            @Override
+                            public void close() {
+                                if (closeCalls.incrementAndGet() == 1 && failFirstScopeClose)
+                                    throw closeFailure;
+                            }
+                        };
+                    }
+                };
+        var owner = new ZLinkHandlerInstanceOwner(activator);
+        assertSame(handler, owner.instance(TestHandler.class));
+        RuntimeException observed = assertThrows(RuntimeException.class, owner::close);
+        assertSame(destroyFailure, observed);
+        assertEquals(1, destroyCalls.get());
+        assertEquals(1, closeCalls.get());
+        assertEquals(failFirstScopeClose ? 1 : 0, destroyFailure.getSuppressed().length);
+        if (failFirstScopeClose) assertSame(closeFailure, destroyFailure.getSuppressed()[0]);
+        assertThrows(IllegalStateException.class, () -> owner.instance(TestHandler.class));
+
+        owner.close();
+        assertEquals(2, destroyCalls.get());
+        assertEquals(failFirstScopeClose ? 2 : 1, closeCalls.get());
+        owner.close();
+        assertEquals(2, destroyCalls.get());
+        assertEquals(failFirstScopeClose ? 2 : 1, closeCalls.get());
+    }
+
+    @Test
+    void retryDoesNotDestroyOtherSuccessfullyReleasedInstancesAgain() {
+        var first = new TestHandler();
+        var second = new Object();
+        var firstCalls = new AtomicInteger();
+        var secondCalls = new AtomicInteger();
+        var activator =
+                new ZLinkHandlerActivator() {
+                    @Override
+                    public Object create(Class<?> type) {
+                        return type == TestHandler.class ? first : second;
+                    }
+
+                    @Override
+                    public void destroy(Object instance) {
+                        if (instance == first && firstCalls.incrementAndGet() == 1)
+                            throw new IllegalStateException("first destroy failed");
+                        if (instance == second) secondCalls.incrementAndGet();
+                    }
+                };
+        var owner = new ZLinkHandlerInstanceOwner(activator);
+        owner.instance(TestHandler.class);
+        owner.instance(Object.class);
+        assertThrows(IllegalStateException.class, owner::close);
+        owner.close();
+        owner.close();
+        assertEquals(2, firstCalls.get());
+        assertEquals(1, secondCalls.get());
     }
 
     private static final class TestHandler {}

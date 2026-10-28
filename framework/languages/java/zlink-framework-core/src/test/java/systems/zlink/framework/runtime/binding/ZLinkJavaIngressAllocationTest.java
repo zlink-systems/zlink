@@ -26,6 +26,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -38,6 +39,7 @@ public final class ZLinkJavaIngressAllocationTest {
     private static final int PAYLOAD_BYTES = 1024;
     private static final int WARMUP = 200;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
+    private static volatile Object observedAllocation;
 
     @Test
     void ingressAllocatesOnlyItsRecordAndLaneInvocation() throws Exception {
@@ -91,6 +93,8 @@ public final class ZLinkJavaIngressAllocationTest {
             long managementDurations = 0;
             long closeIterators = 0;
             long sourceTurns = 0;
+            long portOptionals = 0;
+            long controlOptionals = 0;
             try (var events = new RecordingFile(recordingPath)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
@@ -105,6 +109,7 @@ public final class ZLinkJavaIngressAllocationTest {
                                     ZLinkServiceTopologyRegistry.class.getName() + "$$Lambda")
                             || allocated.equals("systems.zlink.contracts.messaging.Received")
                             || allocated.equals("java.time.Duration")
+                            || allocated.equals(Optional.class.getName())
                             || allocated.endsWith("$Itr")
                             || allocated.endsWith("$ListItr")
                             || allocated.endsWith("$KeyIterator"))) continue;
@@ -113,9 +118,14 @@ public final class ZLinkJavaIngressAllocationTest {
                     boolean receive = false;
                     boolean bytes = false;
                     String firstFrameworkMethod = null;
+                    String firstApplicationOwner = null;
                     for (var frame : stack.getFrames()) {
                         var method = frame.getMethod();
                         String owner = method.getType().getName();
+                        if (firstApplicationOwner == null
+                                && !owner.startsWith("java.")
+                                && !owner.startsWith("jdk.")
+                                && !owner.startsWith("sun.")) firstApplicationOwner = owner;
                         if (firstFrameworkMethod == null
                                 && owner.startsWith("systems.zlink.framework."))
                             firstFrameworkMethod = method.getName();
@@ -124,6 +134,13 @@ public final class ZLinkJavaIngressAllocationTest {
                         if (owner.equals(ZLinkJavaRawMeshNode.class.getName())) {
                             bytes |= method.getName().equals("retainedBytes");
                         }
+                    }
+                    if (allocated.equals(Optional.class.getName())) {
+                        if (ZLinkJavaRawServicePort.class.getName().equals(firstApplicationOwner))
+                            portOptionals++;
+                        if (ZLinkJavaIngressAllocationTest.class
+                                .getName()
+                                .equals(firstApplicationOwner)) controlOptionals++;
                     }
                     if (receive) {
                         if (allocated.equals("systems.zlink.contracts.messaging.Received"))
@@ -166,6 +183,10 @@ public final class ZLinkJavaIngressAllocationTest {
             assertTrue(
                     records >= REQUESTS,
                     "include all requests and any ordinary management records");
+            System.out.printf(
+                    "portOptionals=%d controlOptionals=%d%n", portOptionals, controlOptionals);
+            assertEquals(REQUESTS, controlOptionals, "record every control Optional allocation");
+            assertEquals(0, portOptionals, "a claimed record needs no additional presence wrapper");
             assertTrue(attempts >= records, "include no-data claims in the lane-call baseline");
             // A native record needs one Framework owner; each claim needs one lane invocation.
             // Object sizes, alignment, binding allocations and JDK container layouts are excluded.
@@ -253,6 +274,9 @@ public final class ZLinkJavaIngressAllocationTest {
                 recording.enable("jdk.ObjectAllocationOutsideTLAB").withStackTrace();
                 recording.enable("jdk.DataLoss");
                 recording.start();
+                for (int index = 0; index < REQUESTS; index++) {
+                    observedAllocation = Optional.of(sourceId);
+                }
                 requests(source, targetId, REQUESTS);
                 recording.stop();
                 recording.dump(recordingPath);
