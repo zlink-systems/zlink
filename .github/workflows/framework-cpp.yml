@@ -194,6 +194,8 @@ jobs:
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
+    # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
+    if: ${{ !startsWith(github.ref_name, 'mergify/merge-queue/') }}
     # Same rule as the Linux job, with its own variable.
     runs-on: ${{ vars.ZLINK_CPP_WINDOWS_RUNNER && fromJSON(vars.ZLINK_CPP_WINDOWS_RUNNER) || 'windows-2022' }}
     env:

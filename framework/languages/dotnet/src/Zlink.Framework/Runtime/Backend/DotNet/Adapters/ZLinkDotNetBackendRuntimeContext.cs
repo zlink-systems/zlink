@@ -16,9 +16,15 @@ internal sealed class ZLinkDotNetBackendRuntimeContext : IZLinkBackendRuntimeCon
     private Task? _disposeTask;
 
     public ZLinkDotNetBackendRuntimeContext(ILogger<ZLinkManagedMeshNode>? meshNodeLogger = null)
+        : this(Systems.Zlink.Zlink.CreateContext(), meshNodeLogger) { }
+
+    internal ZLinkDotNetBackendRuntimeContext(
+        IContext context,
+        ILogger<ZLinkManagedMeshNode>? meshNodeLogger = null
+    )
     {
         _meshNodeLogger = meshNodeLogger;
-        _context = Systems.Zlink.Zlink.CreateContext();
+        _context = context;
         try
         {
             _context.Options.Blocky = false;

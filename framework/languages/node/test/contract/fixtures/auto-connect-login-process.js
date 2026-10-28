@@ -34,7 +34,7 @@ async function main() {
     .objects()
     .server()
     .addSpotFactory('lobby', Lobby, (f) => f.disableRelocation());
-  b.addStreamNode('gateway').bind('ws://127.0.0.1:*').registerSession(SessionFactory);
+  b.addStreamNode('gateway').bind('ws://127.0.0.1:0').registerSession(SessionFactory);
   class App {}
   Module({ imports: [n.ZLinkModule.forRoot(b.build())], providers: [Lobby, SessionFactory] })(App);
   console.log('START', process.env.NODE_ENV);
@@ -42,11 +42,11 @@ async function main() {
     logger: false,
     abortOnError: false
   });
-  const endpoint = app.get(n.ZLINK_FRAMEWORK_RUNTIME).getListenerStatus('stream', 'gateway').endpoint;
   let client;
   try {
     console.log('HOST READY');
     spots = app.get(n.ZLINK_SPOT_MANAGER);
+    const { endpoint } = app.get(n.ZLINK_FRAMEWORK_RUNTIME).getListenerStatus('stream', 'gateway');
     client = c.zlinkStreamConnectorFactory.create({ endpoint });
     await client.connect();
     const auth = await client.request({ token: 'demo' }).packetName('AuthenticateReq').submit();

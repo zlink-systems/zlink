@@ -2178,17 +2178,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         created->replacement = replacement;
         detail::session_actor_manager_access_t::bind_native (
           actors,
-          [this, transport_connection = created->transport_connection, rid, replacement,
-           weak = std::weak_ptr<core_session_t> (created)] (
-            actor_ref_t actor, std::uint64_t binding_generation,
-            std::uint16_t actor_slot) -> request_task_t<void> {
-              const auto actor_id = std::string (actor.actor_id ().value ());
+          [this, transport_connection = created->transport_connection, rid,
+           replacement] (actor_ref_t actor, std::uint64_t binding_generation, std::uint16_t,
+                         std::function<void ()> publish) -> request_task_t<void> {
               return bind_actor_session (transport_connection, rid, actor, replacement,
-                                         binding_generation, [this, weak, actor_slot, actor_id] {
-                                             if (const auto current = weak.lock ())
-                                                 _runtime.send_actor_bound (current->stream,
-                                                                            actor_slot, actor_id);
-                                         });
+                                         binding_generation, std::move (publish));
           });
         configure_disconnect (actors, created->transport_connection, rid);
         _runtime.attach_transport_writer (
@@ -3286,17 +3280,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             connection_state->replacement = replacement;
             detail::session_actor_manager_access_t::bind_native (
               session_actors,
-              [this, connection = *connection_state->transport_connection, session_rid, replacement,
-               weak = std::weak_ptr<stream_connection_state_t> (connection_state)] (
-                actor_ref_t actor, std::uint64_t binding_generation,
-                std::uint16_t actor_slot) -> request_task_t<void> {
-                  const auto actor_id = std::string (actor.actor_id ().value ());
-                  return bind_actor_session (
-                    connection, session_rid, actor, replacement, binding_generation,
-                    [this, weak, actor_slot, actor_id] {
-                        if (const auto current = weak.lock ())
-                            _runtime.send_actor_bound (current->stream, actor_slot, actor_id);
-                    });
+              [this, connection = *connection_state->transport_connection, session_rid,
+               replacement] (actor_ref_t actor, std::uint64_t binding_generation, std::uint16_t,
+                             std::function<void ()> publish) -> request_task_t<void> {
+                  return bind_actor_session (connection, session_rid, actor, replacement,
+                                             binding_generation, std::move (publish));
               });
         }
         if (connection_state->transport_connection)

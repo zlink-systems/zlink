@@ -201,7 +201,7 @@ internal static class ZLinkEnvelopeCodec
                     or ZLinkMessageKind.Response
                     or ZLinkMessageKind.Error
                 )
-            && Enum.IsDefined(header.Kind)
+            && IsValidMessageKind(header.Kind)
         )
         {
             var key = new SimpleHeaderKey(
@@ -878,6 +878,12 @@ internal static class ZLinkEnvelopeCodec
             );
     }
 
+    private static bool IsValidMessageKind(ZLinkMessageKind kind) =>
+        kind is >= ZLinkMessageKind.Request and <= ZLinkMessageKind.Error;
+
+    private static bool IsValidFlowOrigin(ZLinkFlowOrigin origin) =>
+        origin is >= ZLinkFlowOrigin.Inbound and <= ZLinkFlowOrigin.Lifecycle;
+
     private static void ValidateProtocolHeader(
         ZLinkEnvelopeHeader header,
         bool validateFlow = true
@@ -936,7 +942,7 @@ internal static class ZLinkEnvelopeCodec
                     $"ZLink envelope metadata exceeds the {ServiceWireConstants.MetadataBytes}-byte limit."
                 );
         }
-        if (!Enum.IsDefined(header.Kind))
+        if (!IsValidMessageKind(header.Kind))
             throw new ZLinkEnvelopeProtocolException(
                 header,
                 "ZLink envelope message kind is invalid."
@@ -964,7 +970,7 @@ internal static class ZLinkEnvelopeCodec
                     "ZLink envelope flow id must be UUIDv7."
                 );
 
-            if (flowOrigin is { } origin && !Enum.IsDefined(origin))
+            if (flowOrigin is { } origin && !IsValidFlowOrigin(origin))
                 throw new ZLinkEnvelopeProtocolException(
                     header,
                     "ZLink envelope flow origin is invalid."
@@ -1035,7 +1041,7 @@ internal static class ZLinkEnvelopeCodec
             header.FlowId is null
             || header.FlowOrigin is not { } origin
             || !ZlinkStreamFlowId.IsValid(header.FlowId)
-            || !Enum.IsDefined(origin)
+            || !IsValidFlowOrigin(origin)
         )
             return (null, null);
 

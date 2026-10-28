@@ -117,9 +117,7 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
         var waiting = new CompletableFuture<Void>();
         ExecutorService executor;
         if (spotPublisher) {
-            var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
-            spotsField.setAccessible(true);
-            var spots = (ZLinkSpotRuntime) spotsField.get(runtime);
+            var spots = (ZLinkSpotRuntime) runtime.spotManager();
             var publishersField = ZLinkSpotRuntime.class.getDeclaredField("publishers");
             publishersField.setAccessible(true);
             var publishers = publishersField.get(spots);

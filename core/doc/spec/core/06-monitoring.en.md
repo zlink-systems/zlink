@@ -247,6 +247,20 @@ call resets or rebases these values, and `zlink_ctx_reset_auto_hwm_budget_metric
 change them. Snapshot consistency between these flow counters and other field groups
 follows the boundary in [§6.3](#63-byte-and-pending-diagnostic-fields).
 
+### 6.5 The `READY` State Bit
+
+`ZLINK_MONITOR_STATE_READY` in `state_flags` means the monitor source has at least one ready logical
+peer. This bit and the `value` of the `CONNECTION_READY` event come from one ready-logical-peer count —
+there is no separate per-socket-type ready value computed only for the snapshot.
+
+- After receiving a `CONNECTION_READY` event with `ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE` set,
+  a subsequent snapshot includes `READY` if the same source has made no not-ready transition between
+  committing that ready transition and evaluating `READY` for the snapshot.
+- `READY` indicates that a logical connection is established. It does not guarantee
+  subscription-message propagation or the start of subscribed-data delivery on SUB, XSUB, or XPUB.
+  Subscription behavior follows [XSUB §2](socket/05-xsub.en.md#2-subscription-behavior); publisher-side
+  subscription events and manual management follow [XPUB §2](socket/04-xpub.en.md#2-subscription-event-flow).
+
 ## 7. Types and Constants
 
 ### 7.1 Event Mask

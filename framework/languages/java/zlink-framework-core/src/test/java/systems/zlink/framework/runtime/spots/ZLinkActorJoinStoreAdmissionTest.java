@@ -72,15 +72,9 @@ final class ZLinkActorJoinStoreAdmissionTest {
                     .submit()
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            var field = framework.getClass().getDeclaredField("spots");
-            field.setAccessible(true);
-            ZLinkSpotRuntime host = (ZLinkSpotRuntime) field.get(framework);
+            ZLinkSpotRuntime host = (ZLinkSpotRuntime) framework.spotManager();
             SpotActivation activation = host.spotLifecycle().spotActivationFor("drain-room-a");
-            var jobsField = host.getClass().getDeclaredField("applicationJobQueue");
-            jobsField.setAccessible(true);
-            var jobs =
-                    (systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue)
-                            jobsField.get(host);
+            var jobs = options.registration().applicationJobQueue();
             var permits =
                     new java.util.ArrayList<
                             systems.zlink.framework.runtime.internal.dispatch

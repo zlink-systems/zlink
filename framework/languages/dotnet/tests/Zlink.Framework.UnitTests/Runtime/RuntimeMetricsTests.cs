@@ -789,8 +789,7 @@ public sealed class RuntimeMetricsTests
 
         Assert.NotNull(storeErrors);
         var enabledBefore = storeErrors.Enabled;
-        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        var allocatedThroughPreviousInterval = allocatedBefore;
+        var allocatedThroughPreviousInterval = GC.GetAllocatedBytesForCurrentThread();
 
         for (var interval = 0; interval < intervalCount; interval++)
         {
@@ -803,15 +802,17 @@ public sealed class RuntimeMetricsTests
         }
 
         var enabledAfter = storeErrors.Enabled;
-        var totalAllocated = allocatedThroughPreviousInterval - allocatedBefore;
+        // The smallest interval: a cost paid on every event, or once every few events, is in
+        // every interval, while a one-time runtime allocation lands in one interval only.
+        var steadyAllocated = allocations.Min();
         var nonzeroIntervals = allocations
             .Select((bytes, index) => (Bytes: bytes, Number: index + 1))
             .Where(interval => interval.Bytes != 0)
             .Select(interval => $"{interval.Number}: {interval.Bytes} B");
 
         Assert.True(
-            totalAllocated == 0,
-            $"Allocated {totalAllocated} B; Instrument.Enabled start={enabledBefore}, end={enabledAfter}; "
+            steadyAllocated == 0,
+            $"Allocated {steadyAllocated} B per interval; Instrument.Enabled start={enabledBefore}, end={enabledAfter}; "
                 + $"nonzero intervals (1-based, {eventsPerInterval} events each): {string.Join(", ", nonzeroIntervals)}"
         );
     }

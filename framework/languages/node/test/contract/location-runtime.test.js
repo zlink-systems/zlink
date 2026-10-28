@@ -748,69 +748,45 @@ test('location lifecycle reclaims tracked Spot and Actor rows after an owner lea
   await runtime.stop();
 });
 
-test('actor reclaim skips a tracked entry replaced while its Store read is pending', async () => {
-  let releaseResolve;
-  const resolvePending = new Promise((resolve) => { releaseResolve = resolve; });
-  const runtime = {
-    ownerId: 'owner-a',
-    currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 2n },
-    async writeActor() { throw new Error('stale actor reclaim must not write'); }
-  };
-  const claims = new ZLinkActorLocationClaims(runtime, {
-    async resolveActor() { await resolvePending; return undefined; }
-  }, 'play');
-  const canonical = internal.ZLinkLocationKeyCodec.encodeActorKey({ meshName: 'play', actorId: 'actor-race' });
-  let oldDeactivated = 0;
-  const old = {
-    row: { meshName: 'play', actorId: 'actor-race', leaseGeneration: 1n }, generation: 1n,
-    deactivate: async () => { oldDeactivated += 1; }
-  };
-  const replacement = {
-    row: { meshName: 'play', actorId: 'actor-race', leaseGeneration: 2n }, generation: 2n
-  };
-  claims.actors.set(canonical, old);
-  const reclaim = claims.reclaimOwnerRows();
-  await new Promise((resolve) => setImmediate(resolve));
-  claims.actors.set(canonical, replacement);
-  releaseResolve();
-  await reclaim;
-
-  assert.equal(claims.actors.get(canonical), replacement);
-  assert.equal(oldDeactivated, 0);
-});
-
-test('Spot reclaim skips a tracked entry replaced while its Store read is pending', async () => {
-  let releaseResolve;
-  const resolvePending = new Promise((resolve) => { releaseResolve = resolve; });
-  const runtime = {
-    ownerId: 'owner-a',
-    currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 2n },
-    async writeSpot() { throw new Error('stale Spot reclaim must not write'); }
-  };
-  const claims = new ZLinkSpotLocationClaims(runtime, undefined, {
-    async resolveSpot() { await resolvePending; return undefined; }
+for (const kind of ['Actor', 'Spot']) {
+  test(`${kind} reclaim skips a tracked entry replaced while its Store read is pending`, async () => {
+    let releaseResolve;
+    const resolvePending = new Promise((resolve) => { releaseResolve = resolve; });
+    const removed = [];
+    let generation = 0n;
+    let oldDeactivated = 0;
+    const runtime = {
+      ownerId: 'owner-a',
+      currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
+      async [`write${kind}`](_row, intent) {
+        assert.equal(intent, internal.ZLinkLocationWriteIntent.NewClaim, 'stale reclaim must not write');
+        return { status: internal.ZLinkLocationWriteStatus.Stored, generation: ++generation, updatedAt: new Date(0) };
+      },
+      async [`remove${kind}`](_key, leaseGeneration) { removed.push(leaseGeneration); }
+    };
+    const store = { async [`resolve${kind}`]() { await resolvePending; return undefined; } };
+    const claims = kind === 'Actor'
+      ? new ZLinkActorLocationClaims(runtime, store, 'play')
+      : new ZLinkSpotLocationClaims(runtime, undefined, store);
+    const claim = (deactivate) => kind === 'Actor'
+      ? claims.claim('Player', 'actor-race', 'node-a', deactivate)
+      : claims.claim('play', 'spot-race', 'Room', 'node-a', framework.ZLinkSpotKind.User, 1n, 1n, deactivate);
+    const release = () => kind === 'Actor'
+      ? claims.release('Player', 'actor-race') : claims.release('play', 'spot-race');
+    await claim(async () => { oldDeactivated++; });
+    const reclaim = claims.reclaimOwnerRows();
+    await new Promise(setImmediate);
+    await release();
+    runtime.currentOwnerToken = { ownerId: 'owner-a', leaseGeneration: 2n };
+    await claim();
+    releaseResolve();
+    await reclaim;
+    assert.equal(generation, 2n);
+    assert.equal(oldDeactivated, 0);
+    await release();
+    assert.deepEqual(removed, [1n, 2n], 'replacement remains tracked under its own owner lease');
   });
-  const canonical = internal.ZLinkLocationKeyCodec.encodeSpotKey({ meshName: 'play', spotId: 'spot-race' });
-  let oldDeactivated = 0;
-  const old = {
-    kind: 'legacy',
-    row: { meshName: 'play', spotId: 'spot-race', leaseGeneration: 1n }, generation: 1n,
-    deactivate: async () => { oldDeactivated += 1; }
-  };
-  const replacement = {
-    kind: 'legacy',
-    row: { meshName: 'play', spotId: 'spot-race', leaseGeneration: 2n }, generation: 2n
-  };
-  claims.spots.set(canonical, old);
-  const reclaim = claims.reclaimOwnerRows();
-  await new Promise((resolve) => setImmediate(resolve));
-  claims.spots.set(canonical, replacement);
-  releaseResolve();
-  await reclaim;
-
-  assert.equal(claims.spots.get(canonical), replacement);
-  assert.equal(oldDeactivated, 0);
-});
+}
 
 test('location runtime bounds fixed routing-id owner lease renewal by the configured timeout', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
@@ -1297,18 +1273,20 @@ test('location runtime applies listPageSize when callers omit a page size', asyn
 });
 
 test('location resolver filters exact actor capacity before weighted placement', async () => {
-  const resolver = resolversFor(new internal.ZLinkInMemoryLocationStore());
-  resolver.liveRows.filter = async rows => rows;
-  resolver.options.stores.locationStore = {
-    async listMeshNodes() {
-      return { items: [
-        placementDescriptor('node-z', 'Player', 1, 0, 0),
-        placementDescriptor('node-a', 'Player', 1, 0, 0),
-        placementDescriptor('node-full', 'Player', 10_000, 1, 0),
-        placementDescriptor('node-other', 'Other', 10_000, 0, 0)
-      ] };
-    }
-  };
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const descriptors = [
+    placementDescriptor('node-z', 'Player', 1, 0, 0),
+    placementDescriptor('node-a', 'Player', 1, 0, 0),
+    placementDescriptor('node-full', 'Player', 10_000, 1, 0),
+    placementDescriptor('node-other', 'Other', 10_000, 0, 0)
+  ];
+  for (const descriptor of descriptors) {
+    const claimed = await store.claimOwnerLease(descriptor.ownerId, 30_000);
+    descriptor.leaseGeneration = claimed.token.leaseGeneration;
+  }
+  const resolver = resolversFor(store, undefined, store, {
+    async listMeshNodes() { return { items: descriptors }; }
+  });
 
   assert.equal(String(await resolver.selectActorPlacement('play', 'Player', 'node-source')), 'node-z');
   assert.equal(String(await resolver.selectActorPlacement('play', 'Player', 'node-source')), 'node-a');
@@ -1321,12 +1299,11 @@ test('descriptor target selection excludes an expired owner and continues with t
   const expired = await ownedPlacementDescriptor(store, 'owner-expired', 'node-expired', 100);
   nowMs += 100;
   const live = await ownedPlacementDescriptor(store, 'owner-live', 'node-live', 100);
-  const resolvers = resolversFor(store);
-  resolvers.options.stores.locationStore = {
+  const resolvers = resolversFor(store, undefined, store, {
     async listMeshNodes() {
       return { items: [expired, live] };
     }
-  };
+  });
 
   assert.equal(
     String(await resolvers.selectActorPlacement('play', 'Player', 'node-source')),
@@ -1342,12 +1319,11 @@ test('descriptor target selection preserves a live owner', async () => {
   const nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
   const store = new internal.ZLinkInMemoryLocationStore(() => new Date(nowMs));
   const live = await ownedPlacementDescriptor(store, 'owner-live', 'node-live', 100);
-  const resolvers = resolversFor(store);
-  resolvers.options.stores.locationStore = {
+  const resolvers = resolversFor(store, undefined, store, {
     async listMeshNodes() {
       return { items: [live] };
     }
-  };
+  });
 
   assert.equal(
     String(await resolvers.selectActorPlacement('play', 'Player', 'node-source')),
@@ -1378,15 +1354,13 @@ test('descriptor target selection rejects a Found owner lease without expiry', a
 
   await assert.rejects(
     () => {
-      const resolvers = resolversFor(store, undefined, corruptLeaseStore);
-      resolvers.options.stores.locationStore = locationStore;
+      const resolvers = resolversFor(store, undefined, corruptLeaseStore, locationStore);
       return resolvers.selectActorPlacement('play', 'Player', 'node-source');
     }
   );
   await assert.rejects(
     () => {
-      const resolvers = resolversFor(store, undefined, corruptLeaseStore);
-      resolvers.options.stores.locationStore = locationStore;
+      const resolvers = resolversFor(store, undefined, corruptLeaseStore, locationStore);
       return resolvers.resolveEntrySpotNode(descriptor.entrySpotId, ['play']);
     }
   );
@@ -2383,15 +2357,13 @@ test('Entry Spot route resolution excludes non-serving nodes during replacement'
     ...placementDescriptor('node-serving', 'Player', 100, 0, 0),
     entrySpotId
   };
-  const resolvers = resolversFor(store);
-  // Keep the two visible descriptors in the same order as a replacement scan.
-  // The resolver must apply the Serving-state fence before selecting a target.
-  resolvers.liveRows.filter = async rows => rows;
-  resolvers.options.stores.locationStore = {
+  draining.leaseGeneration = (await store.claimOwnerLease('node-draining', 30_000)).token.leaseGeneration;
+  serving.leaseGeneration = (await store.claimOwnerLease('node-serving', 30_000)).token.leaseGeneration;
+  const resolvers = resolversFor(store, undefined, store, {
     async listMeshNodes() {
       return { items: [draining, serving] };
     }
-  };
+  });
 
   const route = await resolvers.resolveEntrySpotNode(entrySpotId, ['play']);
   assert.equal(String(route.nodeRid), 'node-serving');
@@ -3469,10 +3441,10 @@ async function lifecycleNode(store, ownerId, nodeRid, entryMeshName = 'play') {
   };
 }
 
-function resolversFor(store, events, ownerLeaseStore = store) {
+function resolversFor(store, events, ownerLeaseStore = store, locationStore = store) {
   return new internal.ZLinkStoreLocationResolvers({
     stores: {
-      locationStore: store,
+      locationStore,
       authorityStore: store,
       peerStore: store,
       spotStore: store,
