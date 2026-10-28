@@ -62,8 +62,12 @@ test('host state publication before channel construction preserves the startup f
     await assert.rejects(host.start(), error => error === failure);
     assert.equal(host[inspectRuntime]().channelRuntimeStarted, false);
     assert.equal(host.isStarted, false);
-    assert.doesNotThrow(() => host.setRuntimeState(framework.ZLinkFrameworkRuntimeState.Draining));
+    let shutdown;
+    assert.doesNotThrow(() => { shutdown = host.shutdown({ deadlineMs: SHUTDOWN_DEADLINE_MS }); });
     assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Draining);
+    const result = await shutdown;
+    assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.Stopped);
+    assert.equal(result.reason, framework.ZLinkFrameworkTerminationReason.None);
   } finally {
     await host.stop();
   }

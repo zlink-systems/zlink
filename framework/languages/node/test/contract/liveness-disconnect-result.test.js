@@ -141,7 +141,7 @@ for (const injectBindingFailure of [false, true]) {
       if (injectBindingFailure) {
         // Physical disconnect failure must preserve the error after admission ends.
         const bindingFailure = new zlink.ConnectError(zlink.ConnectResult.InternalError, 156);
-        const disconnect = t.mock.method(source.raw.router, 'disconnectRid', () => {
+        const disconnect = t.mock.method(source.router, 'disconnectRid', () => {
           assert.equal(source.raw.isPeerRouteReady('expired'), false);
           throw bindingFailure;
         });
