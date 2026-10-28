@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../internal-observation';
 import { encodeActorReply } from '../actors/actor-reply';
 import { ZLinkStreamMessageKind } from '../streams/protocol';
 import {
@@ -414,6 +415,14 @@ interface TerminalSessionRelocationControl {
 
 /** Production host bridge from Retire inventory to remote RouteMesh owners. */
 export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocation {
+  [inspectRuntime]() {
+    return Object.freeze({
+      targetStages: this.targetStages.size,
+      targetAssemblies: this.targetAssemblies.size,
+      pendingReplyRelays: this.pendingReplyRelays.size
+    });
+  }
+
   private readonly targetStages = new Map<string, LocalStage>();
   private readonly terminalTargets = new BoundedReplayMap<string, string>(
     RELOCATION_TARGET_TOMBSTONE_LIMIT

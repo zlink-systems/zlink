@@ -5,12 +5,8 @@ const {
 } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
 
 function target() {
-  const runtime = Object.create(ZLinkHostServiceRelocationRuntime.prototype);
+  const runtime = new ZLinkHostServiceRelocationRuntime({});
   const events = [];
-  runtime.options = {};
-  runtime.terminalTargets = { remember() {} };
-  runtime.targetStages = new Map();
-  runtime.targetAssemblies = new Map();
   runtime.commitTargetReservation = async () => {
     events.push('committed');
     return { storeVersion: { value: '1' } };
