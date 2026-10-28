@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -305,7 +306,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
-            try (var incoming = port.receiveNow(target).orElseThrow()) {
+            try (var incoming = port.receiveNow(target)) {
+                assertNotNull(incoming);
                 Message original = incoming.received().parts().getFirst();
                 // The byte-array control view is lazy and shares the receive owner.
                 original.mutableDataBuffer().put(0, (byte) 7);
@@ -347,7 +349,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
-            try (var incoming = port.receiveNow(target).orElseThrow()) {
+            try (var incoming = port.receiveNow(target)) {
+                assertNotNull(incoming);
                 Message rejected = Message.from(expected);
                 assertThrows(
                         IllegalArgumentException.class,
@@ -412,7 +415,8 @@ final class ZLinkJavaRawServicePortContractTest {
                     .get(2, TimeUnit.SECONDS);
             assertConsumed(sent);
             assertTrue(port.waitForReadable(receiver, Duration.ofSeconds(2)));
-            try (var inbound = port.receiveNow(receiver).orElseThrow()) {
+            try (var inbound = port.receiveNow(receiver)) {
+                assertNotNull(inbound);
                 assertArrayEquals(new byte[] {1, 2, 3}, inbound.frames().getFirst());
             }
 
@@ -460,7 +464,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
-            try (var inbound = port.receiveNow(target).orElseThrow()) {
+            try (var inbound = port.receiveNow(target)) {
+                assertNotNull(inbound);
                 port.reply(
                         target,
                         inbound.source(),
@@ -484,7 +489,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
-            try (var ignored = port.receiveNow(target).orElseThrow()) {
+            try (var ignored = port.receiveNow(target)) {
+                assertNotNull(ignored);
                 // Keep the request unanswered so its accepted async path times out.
             }
             port.waitForReadable(caller, Duration.ofSeconds(2));
@@ -538,7 +544,8 @@ final class ZLinkJavaRawServicePortContractTest {
             assertTrue(
                     Duration.ofNanos(System.nanoTime() - sentAt).compareTo(Duration.ofMillis(250))
                             < 0);
-            try (var inbound = port.receiveNow(left).orElseThrow()) {
+            try (var inbound = port.receiveNow(left)) {
+                assertNotNull(inbound);
                 assertArrayEquals(new byte[] {1}, inbound.frames().getFirst());
             }
         }
@@ -614,19 +621,19 @@ final class ZLinkJavaRawServicePortContractTest {
             first[0] = 9;
             second[0] = 9;
 
-            Optional<ZLinkJavaRawServicePort.Inbound> received = Optional.empty();
-            while (received.isEmpty()) {
+            ZLinkJavaRawServicePort.Inbound received = null;
+            while (received == null) {
                 received = port.receive(left);
                 if (System.nanoTime() >= deadline) {
                     throw new AssertionError("raw multipart receive timed out");
                 }
-                if (received.isEmpty()) {
+                if (received == null) {
                     Thread.sleep(1);
                 }
             }
 
-            assertEquals(rightRid, received.orElseThrow().source());
-            try (var inbound = received.orElseThrow()) {
+            assertEquals(rightRid, received.source());
+            try (var inbound = received) {
                 List<byte[]> retained = inbound.frames();
                 assertArrayEquals(new byte[] {1, 2, 3}, retained.get(0));
                 assertArrayEquals(new byte[] {4, 5, 6}, retained.get(1));
@@ -695,9 +702,11 @@ final class ZLinkJavaRawServicePortContractTest {
             throws Exception {
         int receivedCount = 0;
         while (receivedCount < expected) {
-            if (port.receive(router).isPresent()) {
-                receivedCount++;
-                continue;
+            try (var inbound = port.receive(router)) {
+                if (inbound != null) {
+                    receivedCount++;
+                    continue;
+                }
             }
             if (System.nanoTime() >= deadline) {
                 throw new AssertionError("raw concurrent multipart receive timed out");

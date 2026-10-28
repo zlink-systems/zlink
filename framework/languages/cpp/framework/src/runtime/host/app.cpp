@@ -483,6 +483,7 @@ class app_state_t
         std::optional<std::chrono::system_clock::time_point> deadline_at;
         std::vector<std::shared_ptr<termination_waiter_t>> waiters;
         std::thread worker;
+        std::stop_source cleanup_cancellation;
 
         ~termination_operation_t ()
         {
@@ -1509,10 +1510,20 @@ void app_t::_apply_zlink_framework ()
             spot_runtime.bind_location_lifecycle (location_lifecycle);
             spot_runtime.bind_spot_location_resolver (spot_resolver);
             spot_runtime.bind_drain_flag (_state->draining);
-            spot_runtime.bind_host_phase ([access = _state->status_access] {
+            spot_runtime.bind_host_lifecycle ([access = _state->status_access] {
                 std::shared_lock lock (access->mutex);
-                return access->state ? access->state->runtime_state.load (std::memory_order_acquire)
-                                     : framework_runtime_state_t::stopped;
+                detail::host_lifecycle_snapshot_t snapshot;
+                if (!access->state) {
+                    snapshot.phase = framework_runtime_state_t::stopped;
+                    return snapshot;
+                }
+                snapshot.phase = access->state->runtime_state.load (std::memory_order_acquire);
+                auto &operation = access->state->termination_operation;
+                std::lock_guard operation_lock (operation.mutex);
+                snapshot.shutdown_deadline = operation.deadline_at;
+                if (operation.started)
+                    snapshot.cleanup_cancellation = operation.cleanup_cancellation.get_token ();
+                return snapshot;
             });
             spot_runtime.set_route_client (route_client);
             spot_runtime.bind_service_provider (provider);
@@ -4005,6 +4016,8 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         if (!std::holds_alternative<shutdown_completed_t> (result))
             return;
         result = shutdown_forced_t{reason};
+        if (reason == shutdown_force_reason_t::deadline_exceeded)
+            state.termination_operation.cleanup_cancellation.request_stop ();
         if (!force_state_emitted) {
             force_state_emitted = true;
             emit_state (detail::drain_state_t::force_stopping);
@@ -4135,7 +4148,10 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         try {
             for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
                 auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
-                if (runtime && !runtime->close_all_user_spots (deadline_at)) {
+                if (runtime
+                    && !runtime->close_all_user_spots (
+                      deadline_at, state.termination_operation.deadline_at.value (),
+                      state.termination_operation.cleanup_cancellation)) {
                     spots_closed = false;
                     state.monitoring->diagnostics_logger.error (
                       "Host shutdown Spot teardown did not complete");
@@ -4223,6 +4239,8 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
               lock, deadline_at, [&] { return state.teardown_complete; });
         }
     }
+    if (!teardown_completed)
+        state.termination_operation.cleanup_cancellation.request_stop ();
     if (!teardown_completed && terminal.outcome == termination_outcome_t::stopped) {
         terminal.outcome = termination_outcome_t::force_stopped;
         terminal.reason = termination_reason_t::deadline_exceeded;

@@ -1,5 +1,6 @@
 #pragma once
 #include "contracts.hpp"
+#include <nlohmann/json.hpp>
 #include <fstream>
 #include <filesystem>
 #include <optional>

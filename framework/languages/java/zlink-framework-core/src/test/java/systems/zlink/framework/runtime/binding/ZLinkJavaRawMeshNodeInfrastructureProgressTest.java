@@ -79,9 +79,9 @@ final class ZLinkJavaRawMeshNodeInfrastructureProgressTest {
             paused.options().receiveFlowState(ReceiveFlowState.RUNNING);
             await(
                     () -> {
-                        pausedPort
-                                .receiveNow(paused)
-                                .ifPresent(ZLinkJavaRawServicePort.Inbound::close);
+                        try (var inbound = pausedPort.receiveNow(paused)) {
+                            // Closing a present record releases the receive storage.
+                        }
                         return pending.toCompletableFuture().isDone()
                                 && fill.toCompletableFuture().isDone();
                     });

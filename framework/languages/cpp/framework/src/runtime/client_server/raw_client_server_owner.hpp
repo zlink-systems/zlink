@@ -39,10 +39,35 @@ class dealer_socket_t;
 class poller_t;
 class router_socket_t;
 class socket_monitor_t;
+struct monitor_event_t;
 }
 
 namespace zlink::framework::runtime::client_server
 {
+
+inline void observe_control_submission (detail::backend::raw_send_submission_t submission,
+                                        std::shared_ptr<runtime_failure_collector_t> failures)
+{
+    const auto report = [failures] (const result_t<zlink::submit_result_t> &terminal) {
+        if (!terminal) {
+            failures->report (terminal.error () ? std::make_exception_ptr (*terminal.error ())
+                                                : std::make_exception_ptr (std::runtime_error (
+                                                    "ClientServer control submit failed")));
+        } else if (terminal.value () != zlink::submit_result_t::ok) {
+            failures->report (std::make_exception_ptr (messaging::map_submit_result_exception (
+              terminal.value (), "ClientServer control submit failed")));
+        }
+    };
+    if (submission.state == detail::backend::raw_send_submission_state_t::immediate) {
+        report (*submission.immediate_result);
+        return;
+    }
+    auto pending = std::move (submission.pending_completion);
+    detail::observe_task_terminal (*pending,
+                                   [pending, report] (const auto &terminal) { report (terminal); });
+}
+
+std::uint64_t make_lifecycle_generation ();
 
 /* ClientServer application records ride the cross-language JSON channel
  * envelope ([JSON header, payload]); a completed request either carries the
@@ -53,7 +78,7 @@ struct client_server_request_completion_t
     std::optional<std::string> error_code;
     std::optional<std::string> error_message;
     std::string content_type;
-    std::vector<std::uint8_t> payload;
+    zlink::message_t payload;
 };
 
 enum class client_server_pump_result_t
@@ -91,11 +116,29 @@ struct raw_client_server_server_options_t
 class raw_client_server_server_t
 {
   public:
-    explicit raw_client_server_server_t (raw_client_server_server_options_t options,
-                                         std::shared_ptr<zlink::context_t> context = {});
+    explicit raw_client_server_server_t (
+      raw_client_server_server_options_t options,
+      std::shared_ptr<zlink::context_t> context = {},
+      runtime::offload_executor_t *infrastructure_executor = nullptr);
     ~raw_client_server_server_t () noexcept;
 
     void start ();
+    // The source retains the socket and monitor; this owner retains control/liveness.
+    void start (zlink::router_socket_t &socket);
+    std::optional<zlink::poll_event_flag_t> poll (std::chrono::milliseconds timeout,
+                                                  bool accept_application_receive = true);
+    void signal_activity () noexcept;
+    std::optional<client_server_pump_result_t> consume_control (const zlink::received_t &received);
+    void record_application_activity (const std::vector<received_application_record_t> &records);
+    void observe_monitor_event (const zlink::monitor_event_t &event);
+    // Caller owns the receive state: the manual ingress thread, or an
+    // automatic transport turn already serialized by this raw owner's lane.
+    protocol::client_server_server_admission_t descriptor_owned () const;
+    void update_descriptor_owned (protocol::client_server_server_admission_t descriptor);
+    mesh::service_liveness_tick_t
+    tick_liveness_owned (mesh::service_liveness_registry_t::clock_t::time_point now);
+    std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
+    next_liveness_activity_owned () const;
     void close ();
     std::string endpoint () const;
     protocol::client_server_server_admission_t descriptor () const;
@@ -123,9 +166,18 @@ class raw_client_server_server_t
     task_t<bool> reply (const mesh::service_mailbox_record_t &request,
                         const protocol::application_payload_t &payload);
     task_t<bool> reply (const mesh::service_mailbox_record_t &request,
+                        zlink::message_t body,
+                        std::string content_type);
+    task_t<bool> reply (const mesh::service_mailbox_record_t &request,
                         const framework_exception_t &error);
 
   private:
+    std::size_t
+    drain_monitor_events_owned (mesh::service_liveness_registry_t::clock_t::time_point now);
+    bool record_application_activity_in_owner (const received_application_record_t &received);
+    client_server_pump_result_t
+    process_control_received (detail::backend::raw_received_t received,
+                              mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<client_server_pump_result_t> enqueue_application_record (
       detail::backend::raw_received_t received,
       messaging::envelope_header_t envelope,
@@ -134,8 +186,6 @@ class raw_client_server_server_t
       mesh::service_liveness_registry_t::clock_t::time_point received_at,
       const dispatch_options_t *dispatch_options);
 
-  public:
-  private:
     struct byte_vector_less_t
     {
         bool operator() (const std::vector<std::uint8_t> &left,
@@ -143,8 +193,8 @@ class raw_client_server_server_t
     };
 
     raw_client_server_server_options_t _options;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    std::unique_ptr<runtime::offload_executor_t> _lane_executor;
+    mutable runtime::state_lane_t _lane;
     std::shared_ptr<std::mutex> _socket_mutex = std::make_shared<std::mutex> ();
     std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
@@ -213,6 +263,16 @@ class raw_client_server_client_t
                                          std::map<std::string, std::string> metadata = {});
     request_task_t<client_server_request_completion_t>
     request (const protocol::application_payload_t &payload,
+             std::chrono::milliseconds timeout,
+             std::map<std::string, std::string> metadata = {});
+    task_t<zlink::submit_result_t> send (std::string packet_name,
+                                         std::string content_type,
+                                         zlink::message_t body,
+                                         std::map<std::string, std::string> metadata = {});
+    request_task_t<client_server_request_completion_t>
+    request (std::string packet_name,
+             std::string content_type,
+             zlink::message_t body,
              std::chrono::milliseconds timeout,
              std::map<std::string, std::string> metadata = {});
     std::size_t pending_request_count () const noexcept;

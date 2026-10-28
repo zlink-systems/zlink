@@ -90,8 +90,9 @@ jobs:
           set -euo pipefail
           mkdir -p "${APT_CACHE_DIR}"
           sudo install -d -o _apt -g root -m 0755 "${APT_CACHE_DIR}/partial"
-          sudo apt-get update
-          sudo apt-get \
+          # Self-hosted WSL runners share one dpkg lock; wait for it instead of failing.
+          sudo apt-get -o DPkg::Lock::Timeout=600 update
+          sudo apt-get -o DPkg::Lock::Timeout=600 \
             -o Dir::Cache::archives="${APT_CACHE_DIR}" \
             -o APT::Keep-Downloaded-Packages=true \
             -o Binary::apt::APT::Keep-Downloaded-Packages=true \
