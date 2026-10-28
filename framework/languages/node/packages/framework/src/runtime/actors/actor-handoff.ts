@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../internal-observation';
 import { mapZLinkRequestReply } from '../messaging/request-result';
 import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
 
@@ -304,6 +305,16 @@ function requireExactTargetOwnerFence(
 
 /** Owns packet ordering from relocation start through Message Follow removal. */
 export class ZLinkActorHandoffCoordinator {
+  [inspectRuntime]() {
+    return Object.freeze({
+      replyRouteCount: this.replyRoutes.size,
+      hasMessageFollowRoute: (actorId: string, actorRef: ActorRef) =>
+        this.hasMessageFollowRouteForStaleRef(actorId, actorRef),
+      tenureAuthorityOwnerGeneration: (actorId: string, actorRef: ActorRef) =>
+        this.tenureAuthorityOwnerGeneration(actorId, actorRef)
+    });
+  }
+
   private readonly active = new Map<string, ActiveHandoff>();
   // Each route is stored once: Actor -> native fence -> location owner id.
   // Native ingress has the complete fence except the location owner's text id.
