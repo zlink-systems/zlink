@@ -1,6 +1,8 @@
 #pragma once
 #include "world.hpp"
+#include "test_json.hpp"
 #include <zlink/stream_connector.hpp>
+#include <nlohmann/json.hpp>
 #include <variant>
 
 namespace MyGame::E2E
@@ -132,7 +134,7 @@ class Client
             if (const auto *hand = std::get_if<HandDealt> (&event); hand && !hand->cards.empty ())
                 require (*hand == own, "Another player's private hand was delivered");
             if (const auto *view = std::get_if<TableView> (&event)) {
-                const nlohmann::json public_view = *view;
+                const auto public_view = test_json_board_scenarios::object (*view);
                 for (const auto &seat : public_view.at ("seats"))
                     require (!seat.contains ("cards"), "Public view contains private cards");
             }

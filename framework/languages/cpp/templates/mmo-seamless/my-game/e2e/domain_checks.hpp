@@ -5,6 +5,8 @@
 #include <ranges>
 #include <type_traits>
 
+#include "test_json.hpp"
+
 namespace MyGame::E2E
 {
 class DomainChecks
@@ -177,23 +179,22 @@ class DomainChecks
     }
     void preserves_json_contract ()
     {
-        const auto left = nlohmann::json (PlayerLeft{"player", PlayerLeftReason::left_zone}).dump ();
+        const auto left = test_json_mmo_seamless_domain::encode (PlayerLeft{"player", PlayerLeftReason::left_zone});
         require (left.find ("\"reason\":\"left-zone\"") != std::string::npos,
                  "PlayerLeft reason was not serialized as its kebab-case name");
         const auto out_of_range =
-          nlohmann::json (PlayerLeft{"player", PlayerLeftReason::out_of_range}).dump ();
+          test_json_mmo_seamless_domain::encode (PlayerLeft{"player", PlayerLeftReason::out_of_range});
         require (out_of_range.find ("\"reason\":\"out-of-range\"") != std::string::npos,
                  "OutOfRange reason was not serialized as its kebab-case name");
-        const auto border = nlohmann::json (BorderPresence{
-                               "zone-2", "player", Position{10}, 1,
-                               BorderPresenceKind::moved, std::nullopt}).dump ();
+        const auto border = test_json_mmo_seamless_domain::encode (BorderPresence{
+          "zone-2", "player", Position{10}, 1, BorderPresenceKind::moved, std::nullopt});
         require (border.find ("\"kind\":\"moved\"") != std::string::npos,
                  "Border event kind was not serialized as its string name");
         require (border.find ("\"reason\":null") != std::string::npos,
                  "A nullable border reason was omitted instead of encoded as null");
-        require (nlohmann::json::parse (border).get<BorderPresence> ().reason == std::nullopt,
+        require (test_json_mmo_seamless_domain::decode<BorderPresence> (nlohmann::json::parse (border)).reason == std::nullopt,
                  "A nullable border reason did not round-trip");
-        const auto rejected = nlohmann::json (ActionRejected{"outside-world", 0}).dump ();
+        const auto rejected = test_json_mmo_seamless_domain::encode (ActionRejected{"outside-world", 0});
         require (rejected.find ("\"reason\":\"outside-world\"") != std::string::npos,
                  "ActionRejected reason field name changed");
         require (rejected.find ("\"retryAfterMs\":0") != std::string::npos,

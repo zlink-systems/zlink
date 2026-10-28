@@ -1,5 +1,6 @@
 #pragma once
 #include "server/shared/contracts.hpp"
+#include <zlink/json.hpp>
 #include <algorithm>
 #include <set>
 
@@ -60,6 +61,20 @@ struct DungeonRun
         return std::nullopt;
     }
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (DungeonRun, partyId, runId, members, entered, phase, stage)
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::DungeonRun>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("partyId", &::MyGame::DungeonRun::partyId),
+      zlink::json::field ("runId", &::MyGame::DungeonRun::runId),
+      zlink::json::field ("members", &::MyGame::DungeonRun::members),
+      zlink::json::field ("entered", &::MyGame::DungeonRun::entered),
+      zlink::json::field ("phase", &::MyGame::DungeonRun::phase),
+      zlink::json::field ("stage", &::MyGame::DungeonRun::stage)
+    };
+};
+} // namespace zlink::json
