@@ -321,7 +321,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                     SendFlags.NONE,
                                     systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls
                                             .remainingTimeout(
-                                                    timeout, requestStarted, System.nanoTime()),
+                                                    timeout, requestStarted, System::nanoTime),
                                     requestAdmission);
         } catch (RuntimeException error) {
             closeAll(parts);
