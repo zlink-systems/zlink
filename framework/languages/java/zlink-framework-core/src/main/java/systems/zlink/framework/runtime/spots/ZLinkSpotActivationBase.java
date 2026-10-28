@@ -61,7 +61,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
     private ZLinkBackendActorReceived pendingActorHeader;
     private CompletionStage<Void> closingCallback;
-    private ZLinkSpotCloseCoordinator closeCoordinator;
+    private volatile ZLinkSpotCloseCoordinator closeCoordinator;
 
     final synchronized ZLinkSpotCloseCoordinator closeCoordinator(
             Supplier<ZLinkSpotCloseCoordinator> create) {
@@ -69,6 +69,11 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             closeCoordinator = Objects.requireNonNull(create.get(), "close coordinator");
         }
         return closeCoordinator;
+    }
+
+    final boolean hasCommittedClose() {
+        ZLinkSpotCloseCoordinator coordinator = closeCoordinator;
+        return coordinator != null && coordinator.committed();
     }
 
     final synchronized boolean closeStarted() {

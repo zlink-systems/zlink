@@ -3,10 +3,16 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -34,15 +40,289 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 final class ZLinkDefaultSpotContextTest {
+    private static final int CLOSE_ADMISSION_WAIT_SECONDS = 3;
+
+    private enum CloseOutcome {
+        COMMITTED,
+        CONFLICT,
+        ABORTED
+    }
+
+    private static Stream<Arguments> closingAdmissionCases() {
+        return Stream.of(ZLinkUserSpotExecutionMode.values())
+                .flatMap(
+                        mode ->
+                                Stream.of(false, true)
+                                        .flatMap(
+                                                started ->
+                                                        Stream.of(CloseOutcome.values())
+                                                                .map(
+                                                                        outcome ->
+                                                                                Arguments.of(
+                                                                                        mode,
+                                                                                        started,
+                                                                                        outcome))));
+    }
+
+    @ParameterizedTest
+    @MethodSource("closingAdmissionCases")
+    void joinAdmissionKeepsItsIncarnationCloseOwner(
+            ZLinkUserSpotExecutionMode mode, boolean started, CloseOutcome outcome)
+            throws Exception {
+        var executor = new CloseAdmissionExecutor();
+        var host = new TestHost(executor);
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        var context =
+                new DefaultSpotContext(
+                        host,
+                        null,
+                        null,
+                        RoutingId.from("node-a"),
+                        host.backendSpot,
+                        queue,
+                        mode,
+                        false);
+        systems.zlink.framework.spots.ZLinkSpot<ZLinkActor> spot =
+                new systems.zlink.framework.spots.ZLinkSpot<ZLinkActor>() {
+                    @Override
+                    public systems.zlink.framework.spots.ZLinkSpotContext context() {
+                        return context;
+                    }
+
+                    @Override
+                    public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+                };
+        var activation = new SpotActivation(null, null, spot, host.backendSpot, context);
+        var cas = new CompletableFuture<Boolean>();
+        var casEntered = new CompletableFuture<Void>();
+        var closingEntered = new CompletableFuture<Void>();
+        var releaseClosing = new CompletableFuture<Void>();
+        var closingFailure = new AtomicReference<Throwable>();
+        var calls = new AtomicInteger();
+        var abort = new IllegalStateException("authority commit aborted");
+        var coordinator =
+                new ZLinkSpotCloseCoordinator(
+                        () -> {
+                            casEntered.complete(null);
+                            return cas;
+                        },
+                        List.of(
+                                ZLinkSpotCloseCoordinator.Step.operation(
+                                        queue::commitLifecycleTransition),
+                                ZLinkSpotCloseCoordinator.Step.onClosing(
+                                        () -> {
+                                            closingEntered.complete(null);
+                                            return releaseClosing;
+                                        })),
+                        closingFailure::set);
+        try {
+            var close =
+                    queue.enqueueLifecycleTransition(
+                                    () ->
+                                            activation
+                                                    .closeCoordinator(() -> coordinator)
+                                                    .close()
+                                                    .thenApply(ignored -> null),
+                                    ignored -> CompletableFuture.completedFuture(null),
+                                    () ->
+                                            activation.existingCloseCoordinator() != null
+                                                    && activation
+                                                            .existingCloseCoordinator()
+                                                            .committed(),
+                                    ignored -> false)
+                            .toCompletableFuture();
+            if (started) executor.runUntil(casEntered);
+            // This call synchronously registers the Join on the actual target queue;
+            // completion being pending alone would not prove registration.
+            var join =
+                    context.enqueueJoinLifecycle(
+                                    () -> {
+                                        calls.incrementAndGet();
+                                        return CompletableFuture.completedFuture(null);
+                                    })
+                            .toCompletableFuture();
+            assertFalse(join.isDone());
+            if (!started) executor.runUntil(casEntered);
+            if (outcome == CloseOutcome.ABORTED) cas.completeExceptionally(abort);
+            else cas.complete(outcome == CloseOutcome.COMMITTED);
+            if (outcome == CloseOutcome.COMMITTED) {
+                executor.runUntil(closingEntered);
+                assertTrue(coordinator.committed());
+                assertFalse(close.isDone());
+                assertFalse(join.isDone());
+                var duringClosing =
+                        context.enqueueJoinLifecycle(
+                                        () -> {
+                                            calls.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        })
+                                .toCompletableFuture();
+                assertCloseNotFound(duringClosing);
+            }
+            releaseClosing.complete(null);
+            executor.runUntil(
+                    CompletableFuture.allOf(
+                            close.handle((ignored, failure) -> null),
+                            join.handle((ignored, failure) -> null)));
+            if (outcome == CloseOutcome.ABORTED) {
+                assertSame(
+                        abort,
+                        assertThrows(
+                                        ExecutionException.class,
+                                        () ->
+                                                close.get(
+                                                        CLOSE_ADMISSION_WAIT_SECONDS,
+                                                        TimeUnit.SECONDS))
+                                .getCause());
+            } else close.get(CLOSE_ADMISSION_WAIT_SECONDS, TimeUnit.SECONDS);
+            assertNull(closingFailure.get());
+            if (outcome == CloseOutcome.COMMITTED) {
+                assertCloseNotFound(join);
+                // The lifecycle entry has completed, but this reference still names the old owner.
+                var afterClose =
+                        context.enqueueJoinLifecycle(
+                                        () -> {
+                                            calls.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        })
+                                .toCompletableFuture();
+                executor.runUntil(afterClose.handle((ignored, failure) -> null));
+                assertCloseNotFound(afterClose);
+                assertEquals(0, calls.get());
+            } else {
+                join.get(CLOSE_ADMISSION_WAIT_SECONDS, TimeUnit.SECONDS);
+                assertEquals(1, calls.get());
+                activation.clearUncommittedClose(coordinator);
+                var afterAbort =
+                        context.enqueueJoinLifecycle(
+                                        () -> {
+                                            calls.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        })
+                                .toCompletableFuture();
+                executor.runUntil(afterAbort);
+                afterAbort.get(CLOSE_ADMISSION_WAIT_SECONDS, TimeUnit.SECONDS);
+                assertEquals(2, calls.get());
+                var retryCoordinator =
+                        new ZLinkSpotCloseCoordinator(
+                                () -> CompletableFuture.completedFuture(true),
+                                List.of(
+                                        ZLinkSpotCloseCoordinator.Step.operation(
+                                                queue::commitLifecycleTransition)),
+                                closingFailure::set);
+                var retryClose =
+                        queue.enqueueLifecycleTransition(
+                                        () ->
+                                                activation
+                                                        .closeCoordinator(() -> retryCoordinator)
+                                                        .close()
+                                                        .thenApply(ignored -> null),
+                                        ignored -> CompletableFuture.completedFuture(null),
+                                        retryCoordinator::committed,
+                                        ignored -> false)
+                                .toCompletableFuture();
+                executor.runUntil(retryClose);
+                retryClose.get(CLOSE_ADMISSION_WAIT_SECONDS, TimeUnit.SECONDS);
+                var afterRetryClose =
+                        context.enqueueJoinLifecycle(
+                                        () -> {
+                                            calls.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        })
+                                .toCompletableFuture();
+                executor.runUntil(afterRetryClose.handle((ignored, failure) -> null));
+                assertCloseNotFound(afterRetryClose);
+                assertEquals(2, calls.get());
+                assertNull(closingFailure.get());
+            }
+            var nextContext = host.userContext(mode);
+            systems.zlink.framework.spots.ZLinkSpot<ZLinkActor> nextSpot =
+                    new systems.zlink.framework.spots.ZLinkSpot<ZLinkActor>() {
+                        @Override
+                        public systems.zlink.framework.spots.ZLinkSpotContext context() {
+                            return nextContext;
+                        }
+
+                        @Override
+                        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+                            return CompletableFuture.completedFuture(null);
+                        }
+
+                        @Override
+                        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+                            return CompletableFuture.completedFuture(null);
+                        }
+                    };
+            new SpotActivation(null, null, nextSpot, host.backendSpot, nextContext);
+            var nextJoin =
+                    nextContext
+                            .enqueueJoinLifecycle(
+                                    () -> {
+                                        calls.incrementAndGet();
+                                        return CompletableFuture.completedFuture(null);
+                                    })
+                            .toCompletableFuture();
+            executor.runUntil(nextJoin);
+            nextJoin.get(CLOSE_ADMISSION_WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(outcome == CloseOutcome.COMMITTED ? 1 : 3, calls.get());
+        } finally {
+            cas.complete(false);
+            releaseClosing.complete(null);
+            queue.close();
+        }
+    }
+
+    private static void assertCloseNotFound(CompletableFuture<Void> join) {
+        var failure =
+                assertThrows(
+                        ExecutionException.class,
+                        () -> join.get(CLOSE_ADMISSION_WAIT_SECONDS, TimeUnit.SECONDS));
+        assertEquals(
+                ZLinkFrameworkErrorKind.NOT_FOUND,
+                assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+    }
+
+    private static final class CloseAdmissionExecutor implements Executor {
+        private final LinkedBlockingQueue<Runnable> pending = new LinkedBlockingQueue<>();
+
+        @Override
+        public void execute(Runnable command) {
+            pending.add(command);
+        }
+
+        private void runUntil(CompletableFuture<?> completion) throws Exception {
+            completion.whenComplete((ignored, failure) -> execute(() -> {}));
+            long deadline =
+                    System.nanoTime() + TimeUnit.SECONDS.toNanos(CLOSE_ADMISSION_WAIT_SECONDS);
+            while (!completion.isDone()) {
+                long remaining = deadline - System.nanoTime();
+                assertTrue(remaining > 0, "target gate must make progress");
+                Runnable task = pending.poll(remaining, TimeUnit.NANOSECONDS);
+                assertTrue(task != null, "target gate must have a scheduled turn");
+                task.run();
+            }
+        }
+    }
+
     @Test
     void contextCloseReturnsTheFinalHostResult() throws Exception {
         assertEquals(

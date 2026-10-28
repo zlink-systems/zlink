@@ -437,6 +437,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private final ZLinkSpotTimerRegistry timers;
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final ZLinkSpotSerialExecutor serials;
+    private java.util.function.BooleanSupplier closeCommitted = () -> false;
     private final Map<String, ZLinkSpotTimerRegistry> actorTimers = new ConcurrentHashMap<>();
     private final ZLinkUserSpotExecutionMode executionMode;
     private final ZLinkSpotRelocationCoordinationMode relocationCoordinationMode;
@@ -931,7 +932,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     CompletionStage<Void> enqueueJoinLifecycle(Supplier<CompletionStage<Void>> operation) {
         return serials.enqueueSpotLifecycleAdmission(
                 () -> {
-                    if (host.spotCloseCommitted(this)) {
+                    if (closeCommitted.getAsBoolean()) {
                         return CompletableFuture.failedFuture(
                                 ZLinkFrameworkErrorOrigin.framework(
                                         ZLinkFrameworkErrorKind.NOT_FOUND,
@@ -941,10 +942,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 });
     }
 
-    CompletionStage<Void> enqueueClose(
-            Supplier<CompletionStage<Void>> operation,
-            java.util.function.BooleanSupplier committed) {
-        return serials.enqueueClose(() -> runLifecycleExecution(operation), committed);
+    void bindCloseAdmission(java.util.function.BooleanSupplier committed) {
+        closeCommitted = Objects.requireNonNull(committed, "committed");
+    }
+
+    CompletionStage<Void> enqueueClose(Supplier<CompletionStage<Void>> operation) {
+        return serials.enqueueClose(() -> runLifecycleExecution(operation), closeCommitted);
     }
 
     CompletionStage<Void> commitClose() {
