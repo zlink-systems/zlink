@@ -61,9 +61,8 @@ struct observation_t
     {
         zlink_socket_monitor_open_options_t options = {};
         options.events = ZLINK_EVENT_CONNECTED | ZLINK_EVENT_CONNECTION_READY
-                         | ZLINK_EVENT_DISCONNECTED
-                         | ZLINK_EVENT_SEND_FLOW_PAUSED
-                         | ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL;
+                         | ZLINK_EVENT_DISCONNECTED | ZLINK_EVENT_CONNECT_RETRIED
+                         | ZLINK_EVENT_SEND_FLOW_PAUSED | ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL;
         monitor = zlink_socket_monitor_open (socket_, &options);
         TEST_ASSERT_NOT_NULL (monitor);
         monitors.push_back (monitor);
@@ -447,6 +446,46 @@ void test_close_cancels_pending_inproc_retry_timer ()
     run_disabled_or_cancelled_inproc_retry (
       "inproc://same-socket-reconnect-close", 100, false, true);
 }
+
+// A pending connect must acquire a termination owner even after shutdown has
+// prevented creation of a normal peer (#2899).
+void test_context_shutdown_with_pending_inproc_retry ()
+{
+    void *client = new_router ("client", ZLINK_RID_DUPLICATE_REJECT, 50);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (client, "inproc://same-socket-reconnect-shutdown"));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (get_test_context ()));
+    // Allow any control work to run before the pending connector is closed.
+    msleep (200);
+    test_context_socket_close_zero_linger (client);
+}
+
+void test_context_shutdown_with_scheduled_inproc_retry ()
+{
+    const char *endpoint = "inproc://scheduled-reconnect-shutdown";
+    void *server = new_router ("server", ZLINK_RID_DUPLICATE_REJECT);
+    void *client = new_router ("client", ZLINK_RID_DUPLICATE_REJECT, 50);
+    observation_t client_events (client);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, endpoint));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
+    client_events.wait (ZLINK_EVENT_CONNECTION_READY, 0);
+    test_context_socket_close_zero_linger (server);
+
+    // CONNECT_RETRIED is published after registration on the control runtime.
+    // Observe that registration before shutdown refuses new runtime access.
+    for (;;) {
+        zlink_monitor_event_t event = {};
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_socket_monitor_recv (client_events.monitor, &event, ZLINK_RECV_FLAGS_NONE));
+        if (event.event == ZLINK_EVENT_CONNECT_RETRIED)
+            break;
+    }
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_shutdown (get_test_context ()));
+    msleep (200);
+    test_context_socket_close_zero_linger (client);
+}
 }
 
 int main ()
@@ -468,6 +507,8 @@ int main ()
     RUN_SELECTED (test_reconnect_ivl_zero_discards_inproc_intent);
     RUN_SELECTED (test_disconnect_cancels_pending_inproc_retry);
     RUN_SELECTED (test_close_cancels_pending_inproc_retry_timer);
+    RUN_SELECTED (test_context_shutdown_with_pending_inproc_retry);
+    RUN_SELECTED (test_context_shutdown_with_scheduled_inproc_retry);
 #undef RUN_SELECTED
     return UNITY_END ();
 }
