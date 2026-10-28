@@ -417,7 +417,13 @@ internal abstract partial class ZLinkSpotActivation
                     actor.Context.ActorId,
                     SpotId,
                     ObjectGeneration,
-                    cancellationToken
+                    cancellationToken,
+                    new ActorRef(
+                        actor.Context.ActorId,
+                        actor.Context.ObjectGeneration,
+                        actor.Context.MeshName,
+                        NodeRid
+                    )
                 )
                 .ConfigureAwait(false);
         }
@@ -573,7 +579,13 @@ internal abstract partial class ZLinkSpotActivation
                                     actor.Context.ActorId,
                                     SpotId,
                                     ObjectGeneration,
-                                    writeToken
+                                    writeToken,
+                                    new ActorRef(
+                                        actor.Context.ActorId,
+                                        actor.Context.ObjectGeneration,
+                                        actor.Context.MeshName,
+                                        NodeRid
+                                    )
                                 )
                                 .ConfigureAwait(false);
                             _runtime.LogActorHandoff(

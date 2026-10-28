@@ -35,9 +35,37 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
                     if (closed) {
                         throw new IllegalStateException("handler instance owner is closed");
                     }
-                    if (activation == null) activation = activator.openActivation();
+                    if (activation == null) activation = openActivation(activator);
                     return instances.computeIfAbsent(handlerType, activation::create);
                 });
+    }
+
+    public static ZLinkHandlerActivator.Activation openActivation(ZLinkHandlerActivator activator) {
+        return activator.openActivation();
+    }
+
+    /** Creates a single dispatch handler and releases its scope if creation fails. */
+    public static Object createSingle(
+            ZLinkHandlerActivator.Activation activation, Class<?> handlerType) {
+        try {
+            return activation.create(handlerType);
+        } catch (RuntimeException | Error failure) {
+            RuntimeException cleanupFailure;
+            try {
+                cleanupFailure = release(activation, null, true);
+            } catch (Error closeFailure) {
+                failure.addSuppressed(closeFailure);
+                throw failure;
+            }
+            if (cleanupFailure != null) failure.addSuppressed(cleanupFailure);
+            throw failure;
+        }
+    }
+
+    /** Releases a single dispatch handler once; cleanup failures are terminal. */
+    public static void closeSingle(ZLinkHandlerActivator.Activation activation, Object handler) {
+        RuntimeException failure = release(activation, handler, true);
+        if (failure != null) throw failure;
     }
 
     /**
@@ -53,31 +81,45 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
                             instances.isEmpty() ? List.of() : new ArrayList<>(instances.entrySet());
                     RuntimeException firstFailure = null;
                     for (int index = releases.size() - 1; index >= 0; index--) {
-                        Map.Entry<Class<?>, Object> release = releases.get(index);
-                        try {
-                            activation.destroy(release.getValue());
-                            instances.remove(release.getKey());
-                        } catch (RuntimeException failure) {
-                            firstFailure = addFailure(firstFailure, failure);
-                        }
+                        Map.Entry<Class<?>, Object> entry = releases.get(index);
+                        RuntimeException failure = release(activation, entry.getValue(), false);
+                        if (failure == null) instances.remove(entry.getKey());
+                        else firstFailure = addFailure(firstFailure, failure);
                     }
                     if (activation != null && !activationClosed) {
-                        try {
-                            activation.close();
-                            activationClosed = true;
-                        } catch (RuntimeException failure) {
-                            firstFailure = addFailure(firstFailure, failure);
-                        }
+                        RuntimeException failure = release(activation, null, true);
+                        if (failure == null) activationClosed = true;
+                        else firstFailure = addFailure(firstFailure, failure);
                     }
                     if (firstFailure != null) throw firstFailure;
                     return null;
                 });
     }
 
-    private static RuntimeException addFailure(RuntimeException first, RuntimeException failure) {
-        if (first == null) {
-            return failure;
+    /** The one destroy/close success decision for both ownership shapes. */
+    private static RuntimeException release(
+            ZLinkHandlerActivator.Activation activation, Object handler, boolean closeScope) {
+        Throwable failure = null;
+        if (handler != null) {
+            try {
+                activation.destroy(handler);
+            } catch (RuntimeException | Error destroyFailure) {
+                failure = destroyFailure;
+            }
         }
+        if (closeScope) {
+            try {
+                activation.close();
+            } catch (RuntimeException | Error closeFailure) {
+                failure = addFailure(failure, closeFailure);
+            }
+        }
+        if (failure instanceof Error error) throw error;
+        return (RuntimeException) failure;
+    }
+
+    private static <T extends Throwable> T addFailure(T first, T failure) {
+        if (first == null) return failure;
         first.addSuppressed(failure);
         return first;
     }

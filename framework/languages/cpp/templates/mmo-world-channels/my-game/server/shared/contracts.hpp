@@ -1,4 +1,5 @@
 #pragma once
+#include <zlink/json.hpp>
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <cstdint>
@@ -62,13 +63,11 @@ struct EnterWorldRequest
 {
     static constexpr auto packet_name = "EnterWorldRequest";
     std::string playerId;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (EnterWorldRequest, playerId)
 };
 struct ChangeChannelRequest
 {
     static constexpr auto packet_name = "ChangeChannelRequest";
     std::int64_t channel = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ChangeChannelRequest, channel)
 };
 struct GameRules
 {
@@ -87,43 +86,28 @@ struct EarnRequest
 {
     static constexpr auto packet_name = "EarnRequest";
 };
-inline void to_json (nlohmann::json &j, const EarnRequest &) { j = nlohmann::json::object (); }
-inline void from_json (const nlohmann::json &, EarnRequest &) {}
+
 struct ViewRequest
 {
     static constexpr auto packet_name = "ViewRequest";
 };
-inline void to_json (nlohmann::json &j, const ViewRequest &)
-{
-    j = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, ViewRequest &)
-{
-}
+
 struct ChannelViewRequest
 {
     static constexpr auto packet_name = "ChannelViewRequest";
 };
-inline void to_json (nlohmann::json &j, const ChannelViewRequest &)
-{
-    j = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, ChannelViewRequest &)
-{
-}
+
 struct ChannelView
 {
     static constexpr auto packet_name = "ChannelView";
     std::int64_t channelId = 0;
     std::vector<std::string> playerIds;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ChannelView, channelId, playerIds)
 };
 struct ActionRejected
 {
     static constexpr auto packet_name = "ActionRejected";
     std::string reason;
     std::int32_t retryAfterMs = 0;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (ActionRejected, reason, retryAfterMs)
 };
 struct PlayerView
 {
@@ -133,30 +117,102 @@ struct PlayerView
     std::string nodeId;
     std::int64_t gold = 0;
     bool operator== (const PlayerView &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PlayerView, worldId, channel, nodeId, gold)
 };
 struct SessionInfoRequest
 {
     static constexpr auto packet_name = "SessionInfoRequest";
 };
-inline void to_json (nlohmann::json &j, const SessionInfoRequest &)
-{
-    j = nlohmann::json::object ();
-}
-inline void from_json (const nlohmann::json &, SessionInfoRequest &)
-{
-}
+
 struct SessionInfo
 {
     static constexpr auto packet_name = "SessionInfo";
     std::string sessionId, actorId;
     std::uint64_t objectGeneration = 0;
     bool operator== (const SessionInfo &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (SessionInfo, sessionId, actorId, objectGeneration)
 };
 struct WorldInfo
 {
     std::string worldId, name, sessionEndpoint;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (WorldInfo, worldId, name, sessionEndpoint)
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::EnterWorldRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::EnterWorldRequest::playerId)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ChangeChannelRequest>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("channel", &::MyGame::ChangeChannelRequest::channel)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ChannelView>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("channelId", &::MyGame::ChannelView::channelId),
+      zlink::json::field ("playerIds", &::MyGame::ChannelView::playerIds)
+    };
+};
+
+template <> struct dto_traits<::MyGame::ActionRejected>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("reason", &::MyGame::ActionRejected::reason),
+      zlink::json::field ("retryAfterMs", &::MyGame::ActionRejected::retryAfterMs)
+    };
+};
+
+template <> struct dto_traits<::MyGame::PlayerView>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("worldId", &::MyGame::PlayerView::worldId),
+      zlink::json::field ("channel", &::MyGame::PlayerView::channel),
+      zlink::json::field ("nodeId", &::MyGame::PlayerView::nodeId),
+      zlink::json::field ("gold", &::MyGame::PlayerView::gold)
+    };
+};
+
+template <> struct dto_traits<::MyGame::SessionInfo>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("sessionId", &::MyGame::SessionInfo::sessionId),
+      zlink::json::field ("actorId", &::MyGame::SessionInfo::actorId),
+      zlink::json::field ("objectGeneration", &::MyGame::SessionInfo::objectGeneration)
+    };
+};
+
+template <> struct dto_traits<::MyGame::WorldInfo>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("worldId", &::MyGame::WorldInfo::worldId),
+      zlink::json::field ("name", &::MyGame::WorldInfo::name),
+      zlink::json::field ("sessionEndpoint", &::MyGame::WorldInfo::sessionEndpoint)
+    };
+};
+
+template <> struct dto_traits<::MyGame::EarnRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct dto_traits<::MyGame::ViewRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct dto_traits<::MyGame::ChannelViewRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+
+template <> struct dto_traits<::MyGame::SessionInfoRequest>
+{
+    static constexpr auto fields = std::tuple{};
+};
+} // namespace zlink::json

@@ -74,9 +74,37 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (
             spot.Snapshot.ObjectGeneration != actor.CurrentSpotGeneration
             || spot.Snapshot.Allocation.ObjectKind != ZLinkPlacementObjectKind.UserSpot
+            || spot.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
+            || !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
+                spot.Snapshot.Payload.Span,
+                out var target
+            )
+            || target.State != ZLinkUserSpotAuthorityState.Ready
         )
             return ZLinkFrameworkErrorKind.Unavailable;
         var participant = aggregate?.Participants.SingleOrDefault(p => p.Key == key);
+        if (
+            spot.Meta.AggregateFence is { } fence
+            && (
+                aggregate is null
+                || fence
+                    != new ZLinkAggregateFence(aggregate.AggregateId, aggregate.AggregateGeneration)
+            )
+        )
+        {
+            var pending = await ReadRecordAsync<AggregateRecord>(
+                    AggregateKey(fence),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (pending?.Record.Status == AggregateStatus.Prepared)
+                return ZLinkFrameworkErrorKind.Unavailable;
+            if (pending is not null)
+                AddCondition(
+                    conditions,
+                    new ZLinkStoreCondition.Version(AggregateKey(fence), pending.Version)
+                );
+        }
         var token =
             participant?.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
                 ? aggregate!.TargetOwner
@@ -271,7 +299,10 @@ internal sealed partial class ZLinkProviderLocationRepository
                 var liveOwner = await ReadLiveOwnerAsync(targetOwner, cancellationToken)
                     .ConfigureAwait(false);
                 if (liveOwner is null)
-                    return Conflict(current);
+                    return Conflict(current) with
+                    {
+                        MembershipFailure = ZLinkFrameworkErrorKind.Unavailable,
+                    };
 
                 AddCondition(
                     conditions,
@@ -4748,7 +4779,9 @@ internal sealed partial class ZLinkProviderLocationRepository
         && current.Snapshot.OwnerLeaseGeneration == reservation.TargetOwner.LeaseGeneration
         && current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Reserved;
 
-    private static ZLinkAuthorityCompareExchangeResult Conflict(StoredAuthority? current) =>
+    private static ZLinkAuthorityCompareExchangeResult.Conflict Conflict(
+        StoredAuthority? current
+    ) =>
         new ZLinkAuthorityCompareExchangeResult.Conflict(
             current is null
                 ? new ZLinkAuthorityReadResult.Missing(DateTimeOffset.UtcNow)

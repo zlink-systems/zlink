@@ -1,5 +1,6 @@
 #pragma once
 #include "server/shared/contracts.hpp"
+#include <zlink/json.hpp>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -15,13 +16,11 @@ struct PositionSnapshot
     std::int64_t Sequence = 0;
     std::int64_t RemainingMs = 0;
     bool operator== (const PositionSnapshot &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PositionSnapshot, PlayerId, X, Sequence, RemainingMs)
 };
 struct PositionsSnapshot
 {
     std::vector<PositionSnapshot> Players;
     bool operator== (const PositionsSnapshot &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (PositionsSnapshot, Players)
 };
 
 class Positions
@@ -148,3 +147,23 @@ class Positions
     }
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::PositionSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("PlayerId", &::MyGame::PositionSnapshot::PlayerId),
+      zlink::json::field ("X", &::MyGame::PositionSnapshot::X),
+      zlink::json::field ("Sequence", &::MyGame::PositionSnapshot::Sequence),
+      zlink::json::field ("RemainingMs", &::MyGame::PositionSnapshot::RemainingMs)
+    };
+};
+
+template <> struct dto_traits<::MyGame::PositionsSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("Players", &::MyGame::PositionsSnapshot::Players)
+    };
+};
+} // namespace zlink::json

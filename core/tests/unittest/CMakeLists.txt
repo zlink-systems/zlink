@@ -35,6 +35,7 @@ set(unittests
     unittest_zmp_pair_lifecycle
     unittest_ws_metadata
     unittest_phase3_request_reply_owners
+    unittest_inproc_unbind_peer_async
     unittest_flow_state_socket
     unittest_flow_state_monitor
     unittest_ctx_lifecycle
