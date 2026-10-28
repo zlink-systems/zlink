@@ -93,9 +93,48 @@ const std::string &zlink::socket_endpoint_runtime_t::last_endpoint_uri () const
     return last_endpoint;
 }
 
-void zlink::socket_inprocs_t::emplace (const char *endpoint_uri_, pipe_t *pipe_)
+void zlink::socket_inprocs_t::emplace (const char *endpoint_uri_,
+                                       pipe_t *pipe_,
+                                       const std::shared_ptr<connection_attempt_result_t> &attempt_)
 {
-    _inprocs.ZLINK_MAP_INSERT_OR_EMPLACE (std::string (endpoint_uri_), pipe_);
+    socket_endpoint_pipe_t entry (NULL, pipe_, endpoint_type_connect);
+    zlink_assert (pipe_);
+    entry.connection_attempt = attempt_;
+    entry.transport_lane = pipe_->get_transport_lane ();
+    for (auto it = _inprocs.lower_bound (endpoint_uri_); it != _inprocs.upper_bound (endpoint_uri_);
+         ++it) {
+        if (!it->second.pipe && attempt_ && it->second.connection_attempt == attempt_
+            && it->second.transport_lane == entry.transport_lane) {
+            it->second = entry;
+            return;
+        }
+    }
+    _inprocs.ZLINK_MAP_INSERT_OR_EMPLACE (std::string (endpoint_uri_), entry);
+}
+
+bool zlink::socket_inprocs_t::has_endpoint (const std::string &endpoint_) const
+{
+    return _inprocs.find (endpoint_) != _inprocs.end ();
+}
+
+std::shared_ptr<zlink::connection_attempt_result_t>
+zlink::socket_inprocs_t::attempt_for_pipe (const pipe_t *pipe_) const
+{
+    if (!pipe_)
+        return {};
+    for (const auto &entry : _inprocs)
+        if (entry.second.pipe == pipe_)
+            return entry.second.connection_attempt;
+    return {};
+}
+
+void zlink::socket_inprocs_t::collect_attempts (std::set<connection_attempt_result_t *> *out_) const
+{
+    for (const auto &entry : _inprocs)
+        if (entry.second.connection_attempt
+            && entry.second.connection_attempt->registration
+                 == connection_attempt_result_t::registered)
+            out_->insert (entry.second.connection_attempt.get ());
 }
 
 int zlink::socket_inprocs_t::erase_pipes (const std::string &endpoint_uri_str_,
@@ -112,10 +151,13 @@ int zlink::socket_inprocs_t::erase_pipes (const std::string &endpoint_uri_str_,
 
     std::vector<pipe_t *> pipes;
     for (map_t::iterator it = range.first; it != range.second; ++it)
-        if (it->second->retain_lifetime_ref ())
-            pipes.push_back (it->second);
+        if (it->second.pipe && it->second.pipe->retain_lifetime_ref ())
+            pipes.push_back (it->second.pipe);
     // Remove connect intent before materialization can observe peer termination
     // and queue a reconnect. Retain the pipes across that command progress.
+    for (auto it = range.first; it != range.second; ++it)
+        if (it->second.connection_attempt)
+            it->second.connection_attempt->registration = connection_attempt_result_t::removed;
     _inprocs.erase (range.first, range.second);
 
     // Pending peers have no binder to complete their termination handshake.
@@ -130,9 +172,16 @@ int zlink::socket_inprocs_t::erase_pipes (const std::string &endpoint_uri_str_,
 
 void zlink::socket_inprocs_t::erase_pipe (const pipe_t *pipe_)
 {
+    if (!pipe_)
+        return;
     for (map_t::iterator it = _inprocs.begin (), end = _inprocs.end (); it != end; ++it)
-        if (it->second == pipe_) {
-            _inprocs.erase (it);
+        if (it->second.pipe == pipe_) {
+            if (it->second.connection_attempt
+                && it->second.connection_attempt->registration
+                     == connection_attempt_result_t::registered)
+                it->second.pipe = NULL;
+            else
+                _inprocs.erase (it);
             break;
         }
 }
@@ -145,7 +194,7 @@ bool zlink::socket_inprocs_t::endpoint_for_pipe (
 
     for (map_t::const_iterator it = _inprocs.begin (), end = _inprocs.end ();
          it != end; ++it) {
-        if (it->second != pipe_)
+        if (it->second.pipe != pipe_)
             continue;
         *endpoint_out_ = it->first;
         return true;
