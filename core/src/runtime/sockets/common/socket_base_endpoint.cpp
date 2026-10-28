@@ -1031,15 +1031,8 @@ void zlink::socket_base_t::finish_inproc_endpoint_termination (
     peer_progress_pipes_->clear ();
 
     const int disconnect_errno = errno;
-    for (int attempt = 0; attempt != 20; ++attempt) {
-        bool complete = true;
-        for (size_t i = 0; i != terminating_pipes_->size (); ++i)
-            complete = complete
-                       && (*terminating_pipes_)[i]->has_completed_termination ();
-        if (complete)
-            break;
-        (void) process_commands (10, false);
-    }
+    // The endpoint and local routes are already removed. Existing command
+    // owners finish the peer handshake; pipe lifetime pins survive this scope.
     for (size_t i = 0; i != terminating_pipes_->size (); ++i)
         (*terminating_pipes_)[i]->release_lifetime_ref ();
     terminating_pipes_->clear ();
@@ -1115,8 +1108,8 @@ int zlink::socket_base_t::term_endpoint_internal (
                     begin_inproc_pipe_termination (pipe, peer_progress_pipes_);
                 }
             }
-            // The caller starts the peer executor and waits for reciprocal
-            // acknowledgement only after releasing this socket's turn.
+            // The caller starts the peer executor after releasing this
+            // socket's turn; reciprocal acknowledgement remains asynchronous.
             return 0;
         }
         std::lock_guard<std::recursive_mutex> attempt_lock (endpoint_runtime ().attempts_sync);
@@ -1252,7 +1245,7 @@ int zlink::socket_base_t::term_endpoint (const char *endpoint_uri_)
     // Install progress after the synchronous listener release has completed:
     // its I/O thread must not wait on our API lock while we wait for it. The
     // normal idle boundary retains the executor until child/pipe teardown ends.
-    // A zero-I/O-thread context keeps the synchronous inproc teardown path.
+    // A zero-I/O-thread context keeps application-owned command progress.
     transport_pair_owner_progress_scope_t progress_owner (this);
     if (get_ctx ()->choose_io_thread (0)) {
         if (acquire_transport_pair_owner_progress () != 0)
