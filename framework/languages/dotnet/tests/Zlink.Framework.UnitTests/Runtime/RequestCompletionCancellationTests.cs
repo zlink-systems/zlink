@@ -49,35 +49,16 @@ public sealed class RequestCompletionCancellationTests
             Baseline(token);
             using var completion = new ZLinkRequestCompletion<int>(token);
         }
-        var baseline = SteadyAllocated(() => Baseline(token));
-        var actual = SteadyAllocated(() =>
-        {
-            using var completion = new ZLinkRequestCompletion<int>(token);
-        });
-        Assert.Equal(baseline, actual);
-    }
-
-    // Steady per-call bytes: the value most pause-free calls allocate. An extra
-    // allocation in the completion adds to every call, while a one-time runtime
-    // allocation in either window (registration storage growth, tier-up) adds to
-    // one call only and must not decide the comparison.
-    private static long SteadyAllocated(Action action)
-    {
         const int count = 1024;
-        var counts = new Dictionary<long, int>();
-        for (var measured = 0; measured < count; )
-        {
-            var pause = GC.GetTotalPauseDuration();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            action();
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (GC.GetTotalPauseDuration() != pause)
-                continue;
-            counts[bytes] = counts.GetValueOrDefault(bytes) + 1;
-            measured++;
-        }
-        // On a tie, report the larger count so a real per-call cost is never hidden.
-        return counts.MaxBy(static entry => (entry.Value, entry.Key)).Key;
+        var baseline = PerCallAllocation.MinWindow(() => Baseline(token), count);
+        var actual = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var completion = new ZLinkRequestCompletion<int>(token);
+            },
+            count
+        );
+        Assert.Equal(baseline, actual);
     }
 
     private static void Baseline(CancellationToken token)
