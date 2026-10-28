@@ -15,8 +15,6 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
     private readonly TaskCompletionSource<TResult> _completion = new(
         TaskCreationOptions.RunContinuationsAsynchronously
     );
-    private readonly CancellationTokenSource? _timeoutSource;
-    private readonly CancellationTokenRegistration _timeoutRegistration;
 
     internal ZLinkRequestCompletion(
         CancellationToken callerCancellation,
@@ -31,40 +29,6 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
         _onCanceled = onCanceled;
         _callerCancellationRegistration = RegisterCancellation(callerCancellation);
         _stopCancellationRegistration = RegisterShutdown(stopCancellation);
-    }
-
-    internal ZLinkRequestCompletion(
-        CancellationToken callerCancellation,
-        TimeSpan timeout,
-        string timeoutMessage,
-        Action<TResult>? discardResult = null
-    )
-        : this(callerCancellation, default, timeout, timeoutMessage, discardResult) { }
-
-    internal ZLinkRequestCompletion(
-        CancellationToken callerCancellation,
-        CancellationToken stopCancellation,
-        TimeSpan timeout,
-        string timeoutMessage,
-        Action<TResult>? discardResult = null,
-        Action? onCanceled = null,
-        Func<string, Exception>? timeoutExceptionFactory = null
-    )
-        : this(callerCancellation, stopCancellation, discardResult, onCanceled)
-    {
-        _timeoutSource = new CancellationTokenSource();
-        _timeoutRegistration = _timeoutSource.Token.Register(
-            static state =>
-            {
-                var timeoutState = (TimeoutState<TResult>)state!;
-                timeoutState.Completion.TrySetException(
-                    timeoutState.ExceptionFactory?.Invoke(timeoutState.Message)
-                        ?? new TimeoutException(timeoutState.Message)
-                );
-            },
-            new TimeoutState<TResult>(_completion, timeoutMessage, timeoutExceptionFactory)
-        );
-        _timeoutSource.CancelAfter(timeout);
     }
 
     internal Task<TResult> Task => _completion.Task;
@@ -93,8 +57,6 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
     {
         _callerCancellationRegistration.Dispose();
         _stopCancellationRegistration.Dispose();
-        _timeoutRegistration.Dispose();
-        _timeoutSource?.Dispose();
     }
 
     private CancellationTokenRegistration RegisterCancellation(CancellationToken cancellationToken)
@@ -120,10 +82,4 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
             this
         );
     }
-
-    private sealed record TimeoutState<T>(
-        TaskCompletionSource<T> Completion,
-        string Message,
-        Func<string, Exception>? ExceptionFactory
-    );
 }
