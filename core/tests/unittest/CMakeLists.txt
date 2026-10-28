@@ -62,6 +62,7 @@ set(unittests
     unittest_auto_hwm_policy
     unittest_flow_state_frame
     unittest_pipe_byte_charge
+    unittest_asio_listener_accept_drain
     unittest_asio_write_turn_policy
     unittest_asio_transport_writev_lifetime
     unittest_control_runtime)
