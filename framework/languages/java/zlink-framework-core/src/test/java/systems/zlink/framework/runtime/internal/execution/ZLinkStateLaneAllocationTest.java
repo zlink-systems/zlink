@@ -19,6 +19,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
 
 /** Measures the completion and invocation storage of actual lane turns. */
@@ -125,9 +126,6 @@ public final class ZLinkStateLaneAllocationTest {
         var hold = new CompletableFuture<Void>();
         assertTrue(lane.tryPost(() -> hold));
         scheduled.remove().run();
-        var mailboxField = ZLinkStateLane.class.getDeclaredField("mailbox");
-        mailboxField.setAccessible(true);
-        var mailbox = (ConcurrentLinkedQueue<?>) mailboxField.get(lane);
         var start = new CountDownLatch(1);
         var ready = new CountDownLatch(TURNS);
         var returned = new CountDownLatch(TURNS);
@@ -158,9 +156,9 @@ public final class ZLinkStateLaneAllocationTest {
                     () -> {
                         start.countDown();
                         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
-                        while (mailbox.size() != TURNS && System.nanoTime() < deadline)
+                        while (parkedCallers(threads) != TURNS && System.nanoTime() < deadline)
                             Thread.onSpinWait();
-                        assertEquals(TURNS, mailbox.size());
+                        assertEquals(TURNS, parkedCallers(threads));
                         assertEquals(TURNS, returned.getCount(), "queued callers still wait");
                     };
             if (file == null) {
@@ -179,6 +177,20 @@ public final class ZLinkStateLaneAllocationTest {
             assertTrue(failures.isEmpty(), failures.toString());
             assertTrue(lane.closeAsync().toCompletableFuture().isDone());
         }
+    }
+
+    // awaitTurn enqueues before joining its completion, so a caller parked on a
+    // CompletableFuture signaller is queued; callers still on the start latch are not.
+    private static int parkedCallers(ArrayList<Thread> threads) {
+        int parked = 0;
+        for (Thread thread : threads) {
+            Object blocker = LockSupport.getBlocker(thread);
+            if (blocker != null
+                    && blocker.getClass()
+                            .getName()
+                            .equals("java.util.concurrent.CompletableFuture$Signaller")) parked++;
+        }
+        return parked;
     }
 
     private static Counts record(Path file, Runnable work) throws Exception {
