@@ -44,8 +44,11 @@ on:
 #       - "bindings/dotnet/src/Zlink/**"
 #       - "bindings/dotnet/native/**"
   workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only;
-  # ordinary PRs and main pushes still start CI by hand.
+  # main dependency pushes use the companion cache workflow.
   push:
     branches:
       - "mergify/merge-queue/**"
@@ -124,8 +127,8 @@ jobs:
   framework-dotnet:
     name: ${{ matrix.target.name }}
     # ZLINK_LINUX_RUNNER/ZLINK_WINDOWS_RUNNER (JSON label lists) move the x64 Linux/Windows
-    # jobs to self-hosted runners; arm64 and macOS stay hosted. Only Mergify branch pushes
-    # and manual runs start this workflow, so fork code never reaches them.
+    # jobs to self-hosted runners; arm64 and macOS stay hosted. Queue, manual
+    # and main cache runs do not execute fork PR code.
     runs-on: ${{ (matrix.target.runner == 'ubuntu-24.04' && vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER)) || (matrix.target.runner == 'windows-latest' && vars.ZLINK_WINDOWS_RUNNER && fromJSON(vars.ZLINK_WINDOWS_RUNNER)) || matrix.target.runner }}
     needs:
       - prepare-dotnet-binding
@@ -133,10 +136,6 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - name: win-x64
-            runner: windows-latest
-            rid: win-x64
-            core_platform: windows-x64
           - name: linux-x64
             runner: ubuntu-24.04
             rid: linux-x64
@@ -149,6 +148,8 @@ jobs:
             runner: macos-15
             rid: osx-arm64
             core_platform: macos-arm64
+        # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
+        include: ${{ fromJSON(startsWith(github.ref_name, 'mergify/merge-queue/') && '[]' || '[{"target":{"name":"win-x64","runner":"windows-latest","rid":"win-x64","core_platform":"windows-x64"}}]') }}
 
     steps:
       - name: Checkout repository
@@ -166,6 +167,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
+          package-manager-cache: false
           node-version: 20
 
       - name: Download the prepared .NET binding package

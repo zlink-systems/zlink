@@ -55,14 +55,16 @@ if [[ -z "$RESERVED_PORT" || -z "$COURIER_NODE2" ]]; then
   echo "This environment may block local socket creation." >&2
   exit 1
 fi
+zlink_cpp_sample_log_step "build"
 cmake --build "$BUILD_DIR" --parallel 2 --target \
   zdd_dispatch \
   zdd_courier_actor_node \
   zdd_customer_gateway \
   zdd_courier_session \
   zdd_tracking \
-  zdd_client >/dev/null
+  zdd_client
 
+zlink_cpp_sample_log_step "Redis start"
 zlink_redis_start_scoped_assign REDIS_CONTAINER_NAME redis_port \
   "zlink-redis-cpp-sample-deliverydispatch" "redis:7-alpine"
 REDIS_ENDPOINT="tcp://127.0.0.1:${redis_port}"
@@ -148,7 +150,9 @@ start_role() {
   local name="$1"
   shift
   stdbuf -oL -eL "$@" >"$LOG_DIR/${name}.log" 2>&1 &
-  PIDS+=("$!")
+  local pid=$!
+  PIDS+=("$pid")
+  zlink_cpp_sample_log_step "process start: $name pid=$pid"
 }
 
 dump_logs() {

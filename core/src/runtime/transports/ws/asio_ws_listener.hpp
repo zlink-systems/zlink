@@ -12,6 +12,7 @@
 
 #include "utils/fd.hpp"
 #include "core/own.hpp"
+#include "transports/asio/asio_listener_accept_policy.hpp"
 #include "utils/stdint.hpp"
 #include "core/io_object.hpp"
 #include "transports/ws/ws_address.hpp"
@@ -92,7 +93,7 @@ class asio_ws_listener_t ZLINK_FINAL : public own_t, public io_object_t
 
     //  State flags
     size_t _accepting_count;
-    bool _terminating;
+    asio_listener_state_t _state;
     int _linger;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (asio_ws_listener_t)

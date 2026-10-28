@@ -1,4 +1,5 @@
 const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { createRelayHost } = require('./fixtures/relay-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -81,10 +82,10 @@ return resultOwner.observe((async () => {
 }
     }
   );
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, relay: hostRelay } = createRelayHost({
     registration: framework.createFrameworkRegistration()
   });
-  const relay = host.boundSessionRelay.boundSessions;
+  const relay = hostRelay.boundSessions;
   t.after(() => relay.clearServiceWireSessionRelocations());
   const context = host.streamBindingRuntime.createSessionContext(stream);
   const actor = await context.actors.bind({

@@ -41,6 +41,7 @@
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <zlink/json.hpp>
 #include <optional>
 #include <semaphore>
 #include <stdexcept>
@@ -137,15 +138,16 @@ struct unnamed_payload_t
     std::string text;
 };
 
-void to_json (nlohmann::json &json, const unnamed_payload_t &payload)
-{
-    json = nlohmann::json{{"text", payload.text}};
 }
 
-void from_json (const nlohmann::json &json, unnamed_payload_t &payload)
+template <> struct zlink::json::dto_traits<unnamed_payload_t>
 {
-    payload.text = json.value ("text", std::string{});
-}
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("text", &unnamed_payload_t::text)};
+};
+
+namespace
+{
 
 class counting_typed_codec_t final : public zlink::stream_connector::typed_codec_t
 {
@@ -814,34 +816,35 @@ static_assert (
                              .async<auto_payload_t> ()),
                  zlink::stream_e2e_client::task_t<auto_payload_t>>);
 
-void to_json (nlohmann::json &json, const auto_payload_t &payload)
-{
-    json = nlohmann::json{{"text", payload.text}};
 }
 
-void to_json (nlohmann::json &json, const login_request_t &)
+template <> struct zlink::json::dto_traits<auto_payload_t>
 {
-    json = nlohmann::json::object ();
-}
+    static constexpr auto fields = std::tuple{zlink::json::field ("text", &auto_payload_t::text)};
+};
 
-void from_json (const nlohmann::json &, login_reply_t &)
+template <> struct zlink::json::dto_traits<login_request_t>
 {
-}
+    static constexpr auto fields = std::tuple{};
+};
 
-void from_json (const nlohmann::json &json, auto_payload_t &payload)
+template <> struct zlink::json::dto_traits<login_reply_t>
 {
-    payload.text = json.at ("text").get<std::string> ();
-}
+    static constexpr auto fields = std::tuple{};
+};
+
+namespace
+{
 
 std::vector<std::uint8_t> to_stream_payload (const auto_payload_t &payload)
 {
-    return as_bytes (zlink::detail::json_profile::dump (nlohmann::json (payload)));
+    return as_bytes (zlink::detail::json_profile::encode (payload));
 }
 
 void from_stream_payload (const std::vector<std::uint8_t> &payload, auto_payload_t &message)
 {
     message =
-      zlink::detail::json_profile::parse (payload.begin (), payload.end ()).get<auto_payload_t> ();
+      zlink::detail::json_profile::decode<auto_payload_t> (payload.begin (), payload.end ());
 }
 
 zlink::stream_e2e_client::task_t<void>
@@ -1447,6 +1450,7 @@ int main (int argc, char **argv)
                   ++callbacks;
           });
         (void) connector.dispatch ();
+        (void) connector.dispatch ();
         if (result || result.error_code () != error_code_t::send_failed || errors != 1
             || callbacks != 1)
             return fail (323);
@@ -2006,7 +2010,8 @@ int main (int argc, char **argv)
             connection->complete_write ();
         }
         close_thread.join ();
-        /* Manual mode: the Send completions are delivered by the next pump. */
+        /* Pump each Send completion separately (LC §2). */
+        (void) zlink::stream_connector::detail::dispatch_pending (state);
         (void) zlink::stream_connector::detail::dispatch_pending (state);
         if (!closed_without_peer) {
             return fail (323);
@@ -2409,7 +2414,9 @@ int main (int argc, char **argv)
 
     if (!connector.connect () || !connector.is_connected () || !states->empty ()
         || connector.pending_dispatch_count () != 2 || !connector.dispatch ()
-        || states->size () != 2
+        || states->size () != 1
+        || states->back () != zlink::stream_connector::connection_state_t::connecting
+        || !connector.dispatch () || states->size () != 2
         || states->back () != zlink::stream_connector::connection_state_t::connected) {
         return fail (2);
     }
@@ -2682,8 +2689,8 @@ int main (int argc, char **argv)
             lifecycle_connector.close ();
             return fail (173);
         }
-        if (lifecycle_connector.pending_dispatch_count () == 0
-            || !lifecycle_connector.dispatch ()) {
+        if (lifecycle_connector.pending_dispatch_count () == 0 || !lifecycle_connector.dispatch ()
+            || !lifecycle_connector.dispatch () || !lifecycle_connector.dispatch ()) {
             lifecycle_connector.close ();
             return fail (174);
         }
@@ -3328,9 +3335,8 @@ int main (int argc, char **argv)
           .submit ();
     }
     {
-        // Async sends/requests ride the shared runner (write strand + posted
-        // delivery), so completions are awaited with a bounded poll instead of
-        // being asserted synchronously after submit.
+        // Check pending state after asynchronous transport work completes.
+        // Callbacks follow dispatch mode without requiring a separate delivery runner.
         const auto no_pending_requests = [] (const auto &state) {
             std::lock_guard<std::mutex> lock (state->transport_mutex);
             return state->pending_requests.empty ();
@@ -3727,7 +3733,7 @@ int main (int argc, char **argv)
                    waited_done.signal ();
                }});
         zlink::stream_connector::detail::start_read_loop (waited_state);
-        /* No dispatch pump runs: the wait result arrives on the delivery strand. */
+        /* SC §7: observe unregistered wait results without a Manual pump. */
         if (!waited_done.wait_for (std::chrono::seconds (5)) || !wait_completed_without_pump
             || !waited_state->delivery_queue.empty ()) {
             return fail (306);
@@ -4158,12 +4164,7 @@ int main (int argc, char **argv)
                                         zlink::stream_connector::codec_t::raw,
                                         false,
                                         as_bytes (std::string ("payload"))});
-    /* Immediate handlers run on the delivery strand, as for a packet the read
-   * pump received. */
-    (void) drain_strand (
-      std::static_pointer_cast<zlink::stream_connector::detail::connector_state_t> (
-        connector_internal_handle (immediate))
-        ->delivery_strand);
+    /* Immediate handlers run directly before the receive call returns. */
     if (immediate_count != 1 || immediate.pending_dispatch_count () != 0) {
         return fail (10);
     }
@@ -4175,12 +4176,12 @@ int main (int argc, char **argv)
         return fail (11);
     }
 
-    /* stream-connector §7/§12: close starts lifecycle delivery in state then
-   * disconnect order, but a state handler that does not finish cannot hold
-   * the close operation open. */
-    {
+    /* SC §7/§12: close delivers Closed state before disconnection, but does not
+     * wait for the blocked state handler to finish. Verify both dispatch modes. */
+    for (const auto mode : {zlink::stream_connector::dispatch_mode_t::manual,
+                            zlink::stream_connector::dispatch_mode_t::immediate}) {
         zlink::stream_connector::connector_options_t close_handler_options;
-        close_handler_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
+        close_handler_options.dispatch_mode = mode;
         auto close_handler_connector =
           zlink::stream_connector::connector_factory_t::create (close_handler_options);
         // Handlers own their state: they may run after this frame ended.
@@ -4188,9 +4189,13 @@ int main (int argc, char **argv)
         {
             callback_latch_t closed_state_started;
             callback_latch_t release_closed_state;
-            callback_latch_t disconnected_after_closed_state;
+            callback_latch_t closed_state_completed;
+            callback_latch_t disconnected_started;
             std::atomic_bool closed_state_finished{false};
+            std::atomic_bool disconnected_reason_valid{false};
             std::atomic_bool disconnected_ordered{false};
+            std::atomic_int closed_state_calls{0};
+            std::atomic_int disconnected_calls{0};
         };
         auto close_handler = std::make_shared<close_handler_state_t> ();
         auto close_handler_state_subscription =
@@ -4198,33 +4203,65 @@ int main (int argc, char **argv)
               if (state.current != zlink::stream_connector::connection_state_t::closed) {
                   return;
               }
+              ++close_handler->closed_state_calls;
               close_handler->closed_state_started.signal ();
               close_handler->release_closed_state.wait_for (std::chrono::seconds (2));
               close_handler->closed_state_finished.store (true, std::memory_order_release);
+              close_handler->closed_state_completed.signal ();
           });
         auto close_handler_disconnected_subscription = close_handler_connector.on_disconnected (
           [close_handler] (std::optional<zlink::stream_connector::close_reason_t> reason) {
-              close_handler->disconnected_ordered.store (
-                reason == zlink::stream_connector::close_reason_t::client_close
-                  && close_handler->closed_state_finished.load (std::memory_order_acquire),
+              ++close_handler->disconnected_calls;
+              close_handler->disconnected_reason_valid.store (
+                reason == zlink::stream_connector::close_reason_t::client_close,
                 std::memory_order_release);
-              close_handler->disconnected_after_closed_state.signal ();
+              close_handler->disconnected_ordered.store (
+                close_handler->closed_state_finished.load (std::memory_order_acquire),
+                std::memory_order_release);
+              close_handler->disconnected_started.signal ();
           });
         auto close_handler_future =
           std::async (std::launch::async, [&] { return close_handler_connector.close (); });
+        std::future<zlink::stream_connector::result_t<void>> manual_pump;
+        if (mode == zlink::stream_connector::dispatch_mode_t::manual) {
+            if (close_handler_future.wait_for (std::chrono::milliseconds (100))
+                  != std::future_status::ready
+                || close_handler->closed_state_calls.load () != 0
+                || close_handler->disconnected_calls.load () != 0) {
+                close_handler->release_closed_state.signal ();
+                (void) close_handler_future.get ();
+                return fail (369);
+            }
+            manual_pump =
+              std::async (std::launch::async, [&] { return close_handler_connector.dispatch (); });
+        }
         if (!close_handler->closed_state_started.wait_for (std::chrono::milliseconds (100))
             || close_handler_future.wait_for (std::chrono::milliseconds (100))
-                 != std::future_status::ready) {
+                 != std::future_status::ready
+            || close_handler->closed_state_finished.load (std::memory_order_acquire)
+            || close_handler->disconnected_calls.load () != 0) {
             close_handler->release_closed_state.signal ();
             (void) close_handler_future.get ();
             return fail (369);
         }
         const auto close_handler_result = close_handler_future.get ();
         close_handler->release_closed_state.signal ();
+        if (mode == zlink::stream_connector::dispatch_mode_t::manual) {
+            const auto first_pump = manual_pump.get ();
+            if (!first_pump || close_handler->closed_state_calls.load () != 1
+                || close_handler->disconnected_calls.load () != 0) {
+                return fail (257);
+            }
+            close_handler_connector.dispatch ();
+        }
         if (!close_handler_result
-            || !close_handler->disconnected_after_closed_state.wait_for (
-              std::chrono::milliseconds (100))
-            || !close_handler->disconnected_ordered.load (std::memory_order_acquire)) {
+            || !close_handler->closed_state_completed.wait_for (std::chrono::milliseconds (100))
+            || !close_handler->disconnected_started.wait_for (std::chrono::milliseconds (100))
+            || !close_handler->closed_state_finished.load (std::memory_order_acquire)
+            || !close_handler->disconnected_reason_valid.load (std::memory_order_acquire)
+            || !close_handler->disconnected_ordered.load (std::memory_order_acquire)
+            || close_handler->closed_state_calls.load () != 1
+            || close_handler->disconnected_calls.load () != 1) {
             return fail (257);
         }
     }
@@ -4519,10 +4556,11 @@ int main (int argc, char **argv)
               ++queued_failure_callbacks;
           }
       });
-    if (queued_failure_connector.pending_dispatch_count () != 1 || queued_failure_reply_hooks != 0
+    if (queued_failure_connector.pending_dispatch_count () != 2 || queued_failure_reply_hooks != 0
         || queued_failure_callbacks != 0 || !queued_failure_connector.close ()
         || !queued_failure_connector.dispatch () || queued_failure_reply_hooks != 1
-        || queued_failure_callbacks != 1
+        || queued_failure_callbacks != 0 || queued_failure_connector.pending_dispatch_count () != 1
+        || !queued_failure_connector.dispatch () || queued_failure_callbacks != 1
         || queued_failure_connector.pending_dispatch_count () != 0) {
         return fail (302);
     }
@@ -4568,7 +4606,7 @@ int main (int argc, char **argv)
     if (!callback_response_connector.connect ()) {
         return fail (60);
     }
-    // Hooks run on the delivery strand and own the order record.
+    // Record hook registration order and reply/result observation order.
     auto request_hook_order = std::make_shared<std::vector<std::string>> ();
     auto sending_first = callback_response_connector.on_request_sending (
       [request_hook_order] (zlink::stream_connector::request_sending_context_t &ctx) {
@@ -5097,12 +5135,8 @@ int main (int argc, char **argv)
         }
     }
 
-    /* stream-connector §7 (FW37): the connection state and disconnect callbacks
-   * that result from close follow the dispatch mode. Manual: the next pump
-   * after close runs them. Immediate: the close work posts them behind the
-   * callback already running and returns without waiting for them, so a
-   * handler that never finishes does not hold close - neither a close called
-   * outside a callback nor one called inside the handler itself. */
+    /* SC §7 and LC:60: close does not wait for a running error handler.
+     * Immediate close callbacks run in the close operation; Manual pumps each one. */
     for (const auto mode : {zlink::stream_connector::dispatch_mode_t::manual,
                             zlink::stream_connector::dispatch_mode_t::immediate}) {
         for (const bool close_inside : {false, true}) {
@@ -5130,6 +5164,9 @@ int main (int argc, char **argv)
             callback_latch_t blocker_entered;
             callback_latch_t inside_close_returned;
             callback_latch_t blocker_release;
+            std::atomic_bool blocker_finished{false};
+            std::atomic_bool blocker_released{false};
+            std::atomic_int blocker_calls{0};
             auto closed_subscription =
               close_connector.on_connection_state_changed ([&] (const auto &change) {
                   if (change.current == zlink::stream_connector::connection_state_t::closed) {
@@ -5140,19 +5177,24 @@ int main (int argc, char **argv)
                 ++disconnect_calls;
                 close_callbacks_ran.signal ();
             });
-            /* The blocker is a handler that does not finish until the test ends
-       * it; it holds the delivery strand the whole time. */
+            /* Verify that a handler in another receive context does not block close. */
             auto blocker_subscription = close_connector.on_error ([&] (const auto &) {
+                ++blocker_calls;
                 if (close_inside) {
                     (void) close_connector.close ();
                     inside_close_returned.signal ();
                 }
                 blocker_entered.signal ();
-                (void) blocker_release.wait_for (std::chrono::seconds (10));
+                blocker_released = blocker_release.wait_for (std::chrono::seconds (10));
+                blocker_finished = true;
+            });
+            joining_thread_t publisher ([&] {
+                if (immediate) {
+                    zlink::stream_connector::detail::publish_error (
+                      *state, {zlink::stream_connector::error_code_t::remote_error, "blocker"});
+                }
             });
             if (immediate) {
-                zlink::stream_connector::detail::publish_error (
-                  *state, {zlink::stream_connector::error_code_t::remote_error, "blocker"});
                 if (!blocker_entered.wait_for (std::chrono::seconds (5))) {
                     blocker_release.signal ();
                     return fail (360);
@@ -5161,8 +5203,12 @@ int main (int argc, char **argv)
             callback_latch_t outside_close_returned;
             std::atomic_int closed_at_return{-1};
             std::atomic_int disconnected_at_return{-1};
+            std::atomic_bool close_succeeded{false};
+            std::atomic_bool state_closed_at_return{false};
             joining_thread_t closer ([&] {
-                (void) close_connector.close ();
+                close_succeeded = static_cast<bool> (close_connector.close ());
+                state_closed_at_return =
+                  close_connector.state () == zlink::stream_connector::connection_state_t::closed;
                 closed_at_return = closed_calls.load ();
                 disconnected_at_return = disconnect_calls.load ();
                 outside_close_returned.signal ();
@@ -5171,28 +5217,42 @@ int main (int argc, char **argv)
               outside_close_returned.wait_for (std::chrono::seconds (5));
             const bool inside_returned =
               !close_inside || inside_close_returned.wait_for (std::chrono::seconds (0));
+            const bool blocker_running_at_close_return = !blocker_finished.load ();
             blocker_release.signal ();
             closer.join ();
             if (!outside_returned || !inside_returned) {
                 return fail (361);
             }
-            if (closed_at_return.load () != 0 || disconnected_at_return.load () != 0) {
+            publisher.join ();
+            // Immediate handlers may overlap; Manual invokes none before the pump.
+            if (!close_succeeded.load () || !state_closed_at_return.load ()
+                || closed_at_return.load () < 0 || closed_at_return.load () > 1
+                || disconnected_at_return.load () < 0 || disconnected_at_return.load () > 1
+                || (!immediate
+                    && (closed_at_return.load () != 0 || disconnected_at_return.load () != 0))
+                || (immediate
+                    && (!blocker_running_at_close_return || !blocker_released.load ()
+                        || !blocker_finished.load ()))
+                || blocker_calls.load () != (immediate ? 1 : 0)) {
                 return fail (371);
             }
             if (!immediate) {
+                (void) close_connector.dispatch ();
                 (void) close_connector.dispatch ();
             }
             if (!close_callbacks_ran.wait_for (std::chrono::seconds (5))
                 || closed_calls.load () != 1 || disconnect_calls.load () != 1) {
                 return fail (362);
             }
+            if (!close_connector.close () || closed_calls.load () != 1
+                || disconnect_calls.load () != 1) {
+                return fail (371);
+            }
         }
     }
 
-    /* stream-connector §7·§10.1.1 (FW38): every result of an asynchronous wait
-   * runs on the delivery strand, never on the read pump. A wait callback that
-   * makes a synchronous request therefore gets its reply: the read pump is
-   * free to read it. */
+    /* SC §7 and §10.1.1: unregistered waits complete without a pump.
+     * The callback submits a request and returns; the test thread waits for completion. */
     for (const auto mode : {zlink::stream_connector::dispatch_mode_t::manual,
                             zlink::stream_connector::dispatch_mode_t::immediate}) {
         zlink::stream_connector::connector_options_t nested_options;
@@ -5212,17 +5272,28 @@ int main (int argc, char **argv)
         std::optional<
           zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>>
           nested_reply;
+        std::atomic_int wait_callback_calls{0};
+        std::atomic_int request_callback_calls{0};
         zlink::stream_connector::detail::submit_wait_async (
           state, "wait.trigger", {}, std::chrono::seconds (5),
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::packet_t> trigger) {
-              if (trigger) {
-                  nested_reply = zlink::stream_connector::detail::submit_request (
-                    state,
-                    zlink::stream_connector::packet_t{.name = "nested.request",
-                                                      .payload = as_bytes ("q")},
-                    std::chrono::seconds (2));
+              ++wait_callback_calls;
+              if (!trigger) {
+                  nested_done.signal ();
+                  return;
               }
-              nested_done.signal ();
+              zlink::stream_connector::detail::submit_request_async (
+                state,
+                zlink::stream_connector::packet_t{.name = "nested.request",
+                                                  .payload = as_bytes ("q")},
+                std::chrono::seconds (2),
+                [&] (zlink::stream_connector::result_t<
+                     zlink::stream_connector::detail::request_reply_t> reply) {
+                    ++request_callback_calls;
+                    nested_reply = std::move (reply);
+                    nested_done.signal ();
+                },
+                /*deliver_direct=*/true);
           });
         connection->feed (make_server_frame (zlink::stream_connector::message_kind_t::send, 0,
                                              "wait.trigger", "go"));
@@ -5240,6 +5311,7 @@ int main (int argc, char **argv)
         const bool nested_finished = nested_done.wait_for (std::chrono::seconds (5));
         (void) nested_connector.close ();
         if (!nested_seq || !nested_finished || !nested_reply || !*nested_reply
+            || wait_callback_calls.load () != 1 || request_callback_calls.load () != 1
             || as_string (nested_reply->value ().packet.payload) != "reply") {
             return fail (363);
         }
@@ -5304,9 +5376,8 @@ int main (int argc, char **argv)
                                                    .payload = as_bytes ("oversized")})
           .submit ();
         const bool request_finished = request_done.wait_for (std::chrono::seconds (5));
-        /* Every report of both operations is on the delivery strand by now. */
-        const bool delivered =
-          drain_strand (state->delivery_strand) && drain_strand (state->delivery_strand);
+        /* Check completion after the write invokes its error callback directly. */
+        const bool delivered = drain_strand (state->write_strand);
         (void) report_connector.close ();
         if (!request_finished || !delivered
             || request_code != zlink::stream_connector::error_code_t::validation_failed
@@ -5365,8 +5436,8 @@ int main (int argc, char **argv)
     /* stream-connector §10: in Immediate too, a received packet that no wait
    * accepts and no handler takes stays in the receive queue until a wait
    * surface takes it. The synchronous wait_for sees it whether it arrived
-   * before the wait (372) or after the wait was registered (373), and a
-   * handler that waits synchronously for a later packet gets it (374). */
+   * before the wait (372) or after the wait was registered (373).
+   * Under SC §7 the handler returns and the test thread waits for the next packet (374). */
     {
         zlink::stream_connector::connector_options_t queue_options;
         queue_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
@@ -5412,21 +5483,41 @@ int main (int argc, char **argv)
             return fail (373);
         }
 
-        callback_latch_t nested_done;
-        std::optional<zlink::stream_connector::result_t<zlink::stream_connector::packet_t>> nested;
+        callback_latch_t trigger_done;
+        std::atomic_int trigger_calls{0};
         auto trigger_subscription = queue_connector.on<zlink::stream_connector::packet_t> (
           "handled.trigger", [&] (const packet_message_t &) {
-              nested = queue_connector.wait_for ("handled.follow", std::chrono::seconds (2));
-              nested_done.signal ();
+              ++trigger_calls;
+              trigger_done.signal ();
           });
         connection->feed (make_server_frame (zlink::stream_connector::message_kind_t::send, 0,
                                              "handled.trigger", "go"));
+        const bool trigger_finished = trigger_done.wait_for (std::chrono::seconds (5));
+        std::optional<zlink::stream_connector::result_t<zlink::stream_connector::packet_t>> nested;
+        joining_thread_t follow_waiter (
+          [&] { nested = queue_connector.wait_for ("handled.follow", std::chrono::seconds (2)); });
+        const auto follow_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+        bool follow_registered = false;
+        while (!follow_registered && std::chrono::steady_clock::now () < follow_deadline) {
+            {
+                std::lock_guard<std::mutex> lock (state->transport_mutex);
+                follow_registered = std::any_of (
+                  state->pending_waits.begin (), state->pending_waits.end (),
+                  [] (const auto &entry) { return entry.second.packet_name == "handled.follow"; });
+            }
+            if (!follow_registered) {
+                std::this_thread::yield ();
+            }
+        }
         connection->feed (make_server_frame (zlink::stream_connector::message_kind_t::send, 0,
                                              "handled.follow", "follow"));
-        const bool nested_finished = nested_done.wait_for (std::chrono::seconds (5));
+        follow_waiter.join ();
         (void) queue_connector.close ();
-        if (!nested_finished || !nested || !*nested
-            || as_string (nested->value ().payload) != "follow") {
+        if (!trigger_finished || trigger_calls.load () != 1 || !follow_registered || !nested
+            || !*nested || as_string (nested->value ().payload) != "follow"
+            || queue_connector.received_count ("handled.trigger") != 1
+            || queue_connector.received_count ("handled.follow") != 1
+            || queue_connector.pending_dispatch_count () != 0) {
             return fail (374);
         }
     }
@@ -5719,6 +5810,7 @@ int main (int argc, char **argv)
         auto own_second = own_actor->on<zlink::stream_connector::packet_t> (
           "actor.push", [&] (const packet_message_t &) { ++own_actor_calls; });
         (void) count_connector.dispatch ();
+        (void) count_connector.dispatch ();
         (void) count_connector.close ();
         if (!kept || as_string (kept.value ().payload) != "first" || other_actor_calls != 0
             || own_actor_calls != 2) {
@@ -5746,6 +5838,10 @@ int main (int argc, char **argv)
         }
         zlink::stream_connector::detail::schedule_delivery (state,
                                                             [&] { seen.push_back ("lifecycle"); });
+        (void) ordered.dispatch ();
+        if (seen != std::vector<std::string>{"packet"}) {
+            return fail (401);
+        }
         (void) ordered.dispatch ();
         if (seen != std::vector<std::string>{"packet", "lifecycle"}) {
             return fail (401);
@@ -6544,6 +6640,9 @@ int main (int argc, char **argv)
       });
     const auto reconnect_success_result = reconnect_success_connector.connect ();
     reconnect_success_connect_finished = true;
+    while (reconnect_success_connector.pending_dispatch_count () != 0) {
+        (void) reconnect_success_connector.dispatch ();
+    }
     if (!reconnect_success_result || !reconnect_success_connector.dispatch ()
         || std::find (reconnect_success_states->begin (), reconnect_success_states->end (),
                       zlink::stream_connector::connection_state_t::reconnecting)
@@ -6579,6 +6678,9 @@ int main (int argc, char **argv)
       });
     auto reconnect_result = reconnect_connector.connect ();
     // §9: connection refusal is Disconnected; ConnectTimeout requires expiry.
+    while (reconnect_connector.pending_dispatch_count () != 0) {
+        (void) reconnect_connector.dispatch ();
+    }
     if (reconnect_result
         || reconnect_result.error_code () != zlink::stream_connector::error_code_t::disconnected
         || !reconnect_connector.dispatch ()
