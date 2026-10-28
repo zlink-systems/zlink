@@ -2598,6 +2598,13 @@ void spot_context_state_t::close_now (
                             return std::exchange (self->merged_close_results, {});
                         })
                         .get ();
+        if (result && result.value ()) {
+            runtime::runtime_metrics_t metrics (owner->monitoring);
+            if (metrics.enabled ())
+                metrics.updown (
+                  "zlink.spot.count", "{spot}", -1,
+                  {{"mesh_name", owner->snapshot.name}, {"spot_kind", metric_spot_kind (*self)}});
+        }
         done (result);
         for (auto &waiter : merged)
             waiter (result);
@@ -13790,8 +13797,6 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id, spot_close_reas
     struct close_plan_t
     {
         std::optional<spot_context_t> context;
-        std::shared_ptr<monitoring_runtime_state_t> monitoring;
-        std::string kind;
     };
     auto plan = _state->lane
                   .run ([&] {
@@ -13799,8 +13804,6 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id, spot_close_reas
                       const auto found = _state->spot_contexts_by_id.find (std::string (spot_id));
                       if (found != _state->spot_contexts_by_id.end ()) {
                           result.context.emplace (spot_context_t (found->second._state));
-                          result.monitoring = _state->monitoring;
-                          result.kind = metric_spot_kind (*found->second._state);
                       }
                       return result;
                   })
@@ -13811,18 +13814,7 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id, spot_close_reas
     auto completion = std::make_shared<task_completion_source_t<bool>> ();
     auto closed = completion->task ();
     plan.context->_state->request_close (
-      {},
-      [completion, monitoring = plan.monitoring, kind = plan.kind,
-       mesh_name = _state->snapshot.name] (result_t<bool> result) {
-          if (result && result.value () && monitoring) {
-              runtime::runtime_metrics_t metrics (monitoring);
-              if (metrics.enabled ()) {
-                  metrics.updown ("zlink.spot.count", "{spot}", -1,
-                                  {{"mesh_name", mesh_name}, {"spot_kind", kind}});
-              }
-          }
-          completion->complete (std::move (result));
-      },
+      {}, [completion] (result_t<bool> result) { completion->complete (std::move (result)); },
       reason);
     return closed;
 }

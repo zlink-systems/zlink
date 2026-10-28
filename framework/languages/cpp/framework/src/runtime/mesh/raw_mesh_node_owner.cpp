@@ -454,15 +454,16 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
                                               std::shared_ptr<zlink::context_t> context) :
     _options (std::move (options)),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
-    _topology (_options.descriptor, _options.metric_channel_names, &_liveness),
+    _topology (
+      _options.descriptor, _options.metric_channel_names, &_liveness, _options.metric_provider),
     _mailbox (),
-    _request_metrics (std::make_shared<mesh_request_metrics_t> (_options.descriptor.mesh_name)),
+    _request_metrics (std::make_shared<mesh_request_metrics_t> (_options.descriptor.mesh_name,
+                                                                _options.metric_provider)),
     _operations (std::make_shared<foundation::operation_registry_t> ())
 {
     if (!_options.runtime_failures)
         throw std::invalid_argument ("A host runtime failure collector is required");
-    auto meter =
-      opentelemetry::metrics::Provider::GetMeterProvider ()->GetMeter ("zlink.framework");
+    auto meter = _options.metric_provider->GetMeter ("zlink.framework");
     if (!meter)
         return;
     constexpr std::array names{"zlink.mesh_node.peers.configured",
