@@ -1,4 +1,5 @@
 'use strict';
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -675,7 +676,7 @@ test('Cold Instance staging is hidden and failed Ready discards initialization C
   await manager.discardInstance('mesh', 'unpublished-cold');
   assert.equal(await close, false);
   assert.equal(authorityCalls, 0);
-  assert.equal(manager.activations.activationForClose('mesh', 'unpublished-cold'), undefined);
+  assert.equal(manager[inspectRuntime]().hasCloseableActivation('mesh', 'unpublished-cold'), false);
 });
 
 for (const boundary of ['register', 'publish']) {
@@ -960,10 +961,10 @@ for (const { mode, phase, native, instance, lateFailure = false } of cancellatio
       assert.equal(messages, 0);
       assert.equal(initialized, phase === 'create' ? 0 : 1);
       assert.equal(nativeDisposes, native ? 1 : 0);
-      assert.equal(manager.activations.resolve('mesh', activation.spotId), undefined);
+      assert.equal(manager.resolveRelocationActivation('mesh', activation.spotId), undefined);
       release.resolve();
       await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(manager.activations.resolve('mesh', activation.spotId), undefined);
+      assert.equal(manager.resolveRelocationActivation('mesh', activation.spotId), undefined);
       assert.equal(authorityCalls, 0);
       assert.equal(messages, 0);
       assert.equal(ticks, 0);
@@ -1048,6 +1049,6 @@ for (const instance of [false, true]) {
     await assert.rejects(creation, { name: 'AbortError' });
     assert.equal(observed, controller.signal);
     assert.equal(callbackTerminal, true);
-    assert.deepEqual(manager.activations.activeActivations(), []);
+    assert.equal(manager[inspectRuntime]().activeActivationCount, 0);
   });
 }
