@@ -17,6 +17,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -638,6 +639,46 @@ final class ZLinkChannelEnvelopeGoldenTest {
             decoded = ZLinkChannelEnvelope.decodeHeader(encoded, false);
         }
         assertEquals(header, decoded);
+    }
+
+    @Test
+    void metadataEncodingPreservesUtf8AndItsExactSizeLimit() {
+        for (String value : List.of("é☃😀", "a".repeat(ServiceWireConstants.METADATA_BYTES - 8))) {
+            var metadata = Map.of("k", value);
+            var header =
+                    ZLinkChannelEnvelope.create(
+                            ZLinkChannelEnvelope.KIND_REQUEST,
+                            "orders",
+                            "Request",
+                            "application/json",
+                            null,
+                            metadata,
+                            null);
+            assertArrayEquals(
+                    canonicalRequestBytes(header.correlationId(), null, metadata, null, null),
+                    ZLinkChannelEnvelope.encodeHeaderBytes(header));
+        }
+        for (String value :
+                List.of(
+                        "\0",
+                        "\uD800",
+                        "\uDC00",
+                        "a".repeat(ServiceWireConstants.METADATA_BYTES - 7))) {
+            var header =
+                    ZLinkChannelEnvelope.create(
+                            ZLinkChannelEnvelope.KIND_REQUEST,
+                            "orders",
+                            "Request",
+                            "application/json",
+                            null,
+                            Map.of("k", value),
+                            null);
+            var failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> ZLinkChannelEnvelope.encodeHeaderBytes(header));
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
+        }
     }
 
     @Test

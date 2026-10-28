@@ -19,6 +19,8 @@ import java.util.List;
 
 /** Counts temporary heap buffer views, separately from the required wire array. */
 public final class ZLinkServiceSendHeaderAllocationTest {
+    public static final String NATIVE_COUNTER_BOUNDARY = "zlink-request-counter-boundary";
+    public static final String NATIVE_CALLER_BOUNDARY = "zlink-request-caller-boundary";
     private static final int SENDS = 100;
     private static volatile byte[] observed;
 
@@ -49,6 +51,7 @@ public final class ZLinkServiceSendHeaderAllocationTest {
                                     "-XX:-UseTLAB",
                                     "-XX:-DoEscapeAnalysis",
                                     "-XX:ActiveProcessorCount=2",
+                                    "-XX:FlightRecorderOptions=stackdepth=128",
                                     "-cp",
                                     String.join(java.io.File.pathSeparator, classpath),
                                     fixture.getName())
