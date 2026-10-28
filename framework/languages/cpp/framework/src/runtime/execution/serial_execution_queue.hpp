@@ -146,6 +146,7 @@ struct serial_work_options_t
     // application dispatcher가 소유한 원본 메시지를 그대로 보존한다.
     std::shared_ptr<const void> retained_message;
     std::shared_ptr<serial_application_record_t> application_record;
+    std::function<void (result_t<void>)> completion;
 };
 
 using serial_submission_id_t = std::uint64_t;
@@ -292,15 +293,16 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         std::string name;
         async_work_t work;
         serial_work_lane_t lane = serial_work_lane_t::application;
+        bool cancel_requested = false;
         std::size_t byte_cost = fixed_work_byte_cost;
         serial_submission_id_t submission_id = 0;
         std::function<void ()> cancel;
         std::shared_ptr<serial_turn_handle_impl_t> turn;
-        bool cancel_requested = false;
         std::optional<std::function<void ()>> suspended_completion;
         std::shared_ptr<const void> retained_message;
         std::shared_ptr<serial_application_record_t> application_record;
         std::shared_ptr<serial_execution_queue_t> actor_mailbox;
+        std::function<void (result_t<void>)> completion;
     };
 
     struct publication_node_t
@@ -316,6 +318,9 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         std::atomic<std::size_t> messages{0};
         std::atomic<std::size_t> bytes{0};
     };
+
+    void bind_completion (work_item_t &item, std::function<void (result_t<void>)> completion);
+    void retire_work_locked (lane_state_t &lane, std::size_t messages, std::size_t bytes);
 
     struct active_turn_t
     {

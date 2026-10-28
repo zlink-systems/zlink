@@ -958,6 +958,65 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
+  get_target_property(_typed_json_include nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
+  foreach(_case RANGE 0 11)
+    add_test(NAME test_cpp_framework_typed_json_compile_fail_${_case}
+      COMMAND ${CMAKE_COMMAND}
+        -DCOMPILER=${CMAKE_CXX_COMPILER} -DCASE=${_case}
+        -DCOMMON_INCLUDE=${CMAKE_CURRENT_SOURCE_DIR}/common/include
+        -DJSON_INCLUDE=${_typed_json_include}
+        -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/Zlink.Framework.UnitTests/typed_json_compile_fail.cpp
+        -DLOG=${CMAKE_CURRENT_BINARY_DIR}/typed-json-compile-fail-${_case}.log
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/typed-json-compile-fail.cmake)
+    set_tests_properties(test_cpp_framework_typed_json_compile_fail_${_case}
+      PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
+  endforeach()
+
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_executable(test_cpp_framework_typed_json_noexception
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json_noexception.cpp)
+    target_link_libraries(test_cpp_framework_typed_json_noexception PRIVATE zlink::stream_connector)
+    target_include_directories(test_cpp_framework_typed_json_noexception PRIVATE framework/include)
+    target_compile_options(test_cpp_framework_typed_json_noexception PRIVATE -fno-exceptions -UNDEBUG)
+    add_test(NAME test_cpp_framework_typed_json_noexception COMMAND test_cpp_framework_typed_json_noexception)
+    set_tests_properties(test_cpp_framework_typed_json_noexception PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
+  endif()
+
+  foreach(_json_connector_variant core extension)
+    set(_json_connector_test test_cpp_framework_typed_json_connector_${_json_connector_variant})
+    add_executable(${_json_connector_test}
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json_connector.cpp)
+    target_link_libraries(${_json_connector_test} PRIVATE zlink::stream_connector)
+    target_include_directories(${_json_connector_test} PRIVATE framework/include)
+    if(_json_connector_variant STREQUAL "extension")
+      target_compile_definitions(${_json_connector_test} PRIVATE WITH_EXTENSION)
+    endif()
+    add_test(NAME ${_json_connector_test} COMMAND ${_json_connector_test})
+    set_tests_properties(${_json_connector_test} PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
+  endforeach()
+
+  include(cmake/typed-json-allocations.cmake)
+
+  add_executable(test_cpp_framework_typed_json_message_pack
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json_message_pack.cpp)
+  target_link_libraries(test_cpp_framework_typed_json_message_pack PRIVATE zlink::stream_connector)
+  target_include_directories(test_cpp_framework_typed_json_message_pack PRIVATE framework/include)
+  if(MSVC)
+    target_compile_options(test_cpp_framework_typed_json_message_pack PRIVATE /UNDEBUG)
+  else()
+    target_compile_options(test_cpp_framework_typed_json_message_pack PRIVATE -UNDEBUG)
+  endif()
+  add_test(NAME test_cpp_framework_typed_json_message_pack COMMAND test_cpp_framework_typed_json_message_pack)
+  set_tests_properties(test_cpp_framework_typed_json_message_pack PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
+
+  add_executable(test_cpp_framework_typed_json
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json.cpp)
+  target_link_libraries(test_cpp_framework_typed_json PRIVATE zlink_framework zlink::stream_connector)
+  target_compile_definitions(test_cpp_framework_typed_json PRIVATE
+    ZLINK_TYPED_JSON_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/framework-json-v1.json")
+  add_test(NAME test_cpp_framework_typed_json COMMAND test_cpp_framework_typed_json)
+  set_tests_properties(test_cpp_framework_typed_json PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
+
   add_executable(test_cpp_framework_result_lifetime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_result_lifetime.cpp)
   target_compile_features(test_cpp_framework_result_lifetime PRIVATE cxx_std_20)
@@ -1383,6 +1442,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     COMMAND test_cpp_framework_m6b_runtime --dispatch-callback-lifetime
     LABELS "framework-unit;framework-m6-runtime;stateful"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_message_follow_capture_lifetime
+    COMMAND test_cpp_framework_m6b_runtime --message-follow-capture-lifetime
+    LABELS "framework-unit;framework-m6-runtime;stateful"
+    TIMEOUT 30)
 
   add_executable(test_cpp_framework_reply_submit_claim
     tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp)
@@ -1538,6 +1602,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     NAME zlink_cpp_framework_mesh_node_vertical_test
     COMMAND zlink_cpp_framework_mesh_node_vertical_test
     LABELS "framework-unit;framework-zlink;framework-zlink-channel;framework-zlink-spot;framework-zlink-actor-gateway"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_application_terminal_capture_lifetime
+    COMMAND zlink_cpp_framework_mesh_node_vertical_test --terminal-owner-capture-lifetime
+    LABELS "framework-unit;framework-regression;resource"
     TIMEOUT 30)
   zlink_framework_cpp_add_test(
     NAME zlink_cpp_framework_mesh_management_async_test
@@ -2060,6 +2129,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_async_task.cpp
     "framework-unit;framework-regression;async")
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_async_task)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_coroutine_executor_capture_lifetime
+    COMMAND test_cpp_framework_async_task --coroutine-executor-capture-lifetime
+    LABELS "framework-unit;framework-regression;async;resource"
+    TIMEOUT 30)
   add_zlink_framework_test(
     test_cpp_framework_completion_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_allocations.cpp
@@ -2190,8 +2264,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_shared_serial_turn
     tests/Zlink.Framework.UnitTests/test_cpp_framework_shared_serial_turn.cpp
-    "framework-unit;framework-regression;execution;actor-join")
+    "framework-unit;framework-contract;framework-regression;execution;actor-join" contract)
   target_use_zlink_gtest_main(test_cpp_framework_shared_serial_turn)
+  target_include_directories(test_cpp_framework_shared_serial_turn PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
@@ -2521,6 +2597,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_binding_submission_order
+    COMMAND test_cpp_framework_stream_framework --binding-submission-order
+    LABELS "framework-unit;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
   target_link_libraries(test_cpp_framework_stream_framework PRIVATE
     opentelemetry-cpp::metrics
     zlink::stream_connector)
@@ -2589,6 +2671,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_runtime_metrics PRIVATE opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_runtime_metrics PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stopped_population_retirement
+    COMMAND test_cpp_framework_runtime_metrics --stopped-population-retirement
+    LABELS "framework-unit;framework-regression;framework-observability;metrics"
+    TIMEOUT 30)
   add_zlink_framework_test(
     test_cpp_framework_mesh_metrics
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_metrics.cpp

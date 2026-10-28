@@ -424,9 +424,14 @@ int bind_or_get_reuses_same_physical_session_generation ()
     auto old_stream = old_runtime.open_session ("bind-or-get-idempotent");
     auto old_stream_copy = old_stream;
     std::atomic_int old_stream_writes{0};
+    std::atomic_int old_bound_controls{0};
     old_runtime.attach_transport_writer (
-      old_stream_copy, [&old_stream_writes] (const stream_header_t &, const zlink::message_t &) {
-          ++old_stream_writes;
+      old_stream_copy, [&old_stream_writes, &old_bound_controls] (const stream_header_t &header,
+                                                                  const zlink::message_t &) {
+          if (header.packet_name () == "$zlink.actor.bound")
+              ++old_bound_controls;
+          else
+              ++old_stream_writes;
           return task_t<void> (result_t<void>::success ());
       });
     session_actor_manager_access_t::attach (manager, std::move (old_stream));
@@ -452,9 +457,14 @@ int bind_or_get_reuses_same_physical_session_generation ()
         return 2;
     auto new_stream_copy = new_stream;
     std::atomic_int new_stream_writes{0};
+    std::atomic_int new_bound_controls{0};
     new_runtime.attach_transport_writer (
-      new_stream_copy, [&new_stream_writes] (const stream_header_t &, const zlink::message_t &) {
-          ++new_stream_writes;
+      new_stream_copy, [&new_stream_writes, &new_bound_controls] (const stream_header_t &header,
+                                                                  const zlink::message_t &) {
+          if (header.packet_name () == "$zlink.actor.bound")
+              ++new_bound_controls;
+          else
+              ++new_stream_writes;
           return task_t<void> (result_t<void>::success ());
       });
     session_actor_manager_access_t::attach (manager, std::move (new_stream));
@@ -469,7 +479,8 @@ int bind_or_get_reuses_same_physical_session_generation ()
     }
     const auto delivered = gateway.dispatch_bound_session_send (
       actor, "reconnected-push", stream_codec_t::message_pack, zlink::message_t::from ("payload"));
-    if (!delivered || old_stream_writes.load () != 0 || new_stream_writes.load () != 1)
+    if (!delivered || old_stream_writes.load () != 0 || new_stream_writes.load () != 1
+        || old_bound_controls.load () != 1 || new_bound_controls.load () != 1)
         return 5;
     return 0;
 }
@@ -680,11 +691,25 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
           ++disconnected;
           return task_t<void> (result_t<void>::success ());
       });
+    // Session binding §5-2 and §6: the pending bind has not received its
+    // terminal reply, so the old binding remains current until publication.
+    const auto old_is_current = state->sync ([&] {
+        const auto &record = state->actors_by_id.at ("direct-rebind-actor");
+        return record.bound && record.binding_session_id == old_session_id
+               && record.binding_token == old_token;
+    });
+    if (!old_is_current || !old_session.find ("direct-rebind-actor")
+        || new_session.find ("direct-rebind-actor")) {
+        release_binder_source.set_value ();
+        rebind_thread.join ();
+        return 8;
+    }
+
+    release_binder_source.set_value ();
+    rebind_thread.join ();
     const auto stale_disconnect = stale_handle.notify_disconnected ().result ();
     if (stale_disconnect || stale_disconnect.error_kind () != framework_error_kind_t::not_configured
         || disconnected != 0 || old_session.find ("direct-rebind-actor")) {
-        release_binder_source.set_value ();
-        rebind_thread.join ();
         return 3;
     }
     const auto rebind_is_published = state->sync ([&] {
@@ -696,13 +721,9 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
                && record.bound_session_stream_sink;
     });
     if (!rebind_is_published) {
-        release_binder_source.set_value ();
-        rebind_thread.join ();
         return 4;
     }
 
-    release_binder_source.set_value ();
-    rebind_thread.join ();
     if (!rebound || !*rebound || !new_session.find ("direct-rebind-actor")
         || !gateway.actor_bound ("direct-rebind-actor")
         || gateway.actor_disconnected ("direct-rebind-actor") || disconnected != 0) {
@@ -7500,7 +7521,7 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
                             .bound_session ()
                             .send (std::string ("after-settlement-observer"))
                             .async ();
-    if (!next_submitted.result () || next_delivery_started.load (std::memory_order_acquire)) {
+    if (!next_submitted.result () || !next_delivery_started.load (std::memory_order_acquire)) {
         return 5;
     }
     delivery->complete (
@@ -7586,7 +7607,7 @@ int terminal_reply_precedes_session_route_publication ()
     return 0;
 }
 
-int actor_unbound_waits_for_accepted_push_fifo ()
+int actor_unbound_follows_accepted_push_submission ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -7623,25 +7644,10 @@ int actor_unbound_waits_for_accepted_push_fifo ()
                             .result ();
     if (!accepted)
         return 1;
-    for (int attempt = 0; attempt < 100; ++attempt) {
-        {
-            std::lock_guard lock (events_mutex);
-            if (!events.empty ())
-                break;
-        }
-        std::this_thread::sleep_for (std::chrono::milliseconds (1));
-    }
-    gateway.unbind_session_stream ("fifo-actor", "fifo-session", 23);
-    bool unbound_overtook_push = false;
-    {
-        std::lock_guard lock (events_mutex);
-        unbound_overtook_push = events.size () != 1 || events.front () == "$zlink.actor.unbound";
-    }
-    if (unbound_overtook_push) {
-        push_terminal->complete (result_t<void>::success ());
-        return 2;
-    }
-    push_terminal->complete (result_t<void>::success ());
+    auto direct = std::async (std::launch::async, [&] {
+        return gateway.dispatch_bound_session_send (actor, "direct.push", stream_codec_t::raw,
+                                                    zlink::message_t::from ("direct"));
+    });
     for (int attempt = 0; attempt < 100; ++attempt) {
         {
             std::lock_guard lock (events_mutex);
@@ -7650,8 +7656,33 @@ int actor_unbound_waits_for_accepted_push_fifo ()
         }
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     }
+    gateway.unbind_session_stream ("fifo-actor", "fifo-session", 23);
+    bool unbound_overtook_push = false;
+    {
+        std::lock_guard lock (events_mutex);
+        unbound_overtook_push = events.size () != 3 || events.front () == "$zlink.actor.unbound"
+                                || events[1] != "direct.push"
+                                || events.back () != "$zlink.actor.unbound";
+    }
+    if (unbound_overtook_push) {
+        push_terminal->complete (result_t<void>::success ());
+        return 2;
+    }
+    const bool waiting_for_terminal =
+      direct.wait_for (std::chrono::seconds (0)) != std::future_status::ready;
+    push_terminal->complete (result_t<void>::success ());
+    if (!waiting_for_terminal || !direct.get ())
+        return 4;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        {
+            std::lock_guard lock (events_mutex);
+            if (events.size () == 3)
+                break;
+        }
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
     std::lock_guard lock (events_mutex);
-    return events.size () == 2 && events.back () == "$zlink.actor.unbound" ? 0 : 3;
+    return events.size () == 3 && events.back () == "$zlink.actor.unbound" ? 0 : 3;
 }
 
 int actor_unbound_follows_session_termination (bool physical, bool disconnect_then_shutdown = false)
@@ -8340,7 +8371,7 @@ int main (int argc, char **argv)
         return 460 + failure;
     if (const auto ordered = terminal_reply_precedes_session_route_publication (); ordered != 0)
         return 430 + ordered;
-    if (const auto drained = actor_unbound_waits_for_accepted_push_fifo (); drained != 0)
+    if (const auto drained = actor_unbound_follows_accepted_push_submission (); drained != 0)
         return 435 + drained;
     if (const auto ordered = session_disconnect_uses_actor_slot_issue_order (); ordered != 0)
         return 440 + ordered;

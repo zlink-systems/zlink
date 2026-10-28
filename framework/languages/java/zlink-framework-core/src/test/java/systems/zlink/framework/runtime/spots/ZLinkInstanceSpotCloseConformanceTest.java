@@ -56,6 +56,53 @@ final class ZLinkInstanceSpotCloseConformanceTest {
     private static Observation current;
 
     @Test
+    void instancePopulationIsOneAfterCreationAndZeroAfterRelease() throws Exception {
+        String spotId = "java-instance-metric-" + UUID.randomUUID();
+        Observation observation = new Observation(false, false);
+        observation.closingRelease.complete(null);
+        current = observation;
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ObservedStore(spotId, observation));
+        options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
+        options.addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(RoutingId.from(spotId))
+                .objects()
+                .server()
+                .addEntrySpot(Entry.class)
+                .addInstanceSpotFactory(
+                        TYPE, Instance.class, factory -> factory.disableRelocation());
+        var tags = Map.of("mesh_name", MESH, "spot_kind", "instance");
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            try (var runtime =
+                    ZLinkFrameworkRuntimeTestAccess.start(options, new CapturingBackend())) {
+                awaitServing(runtime);
+                runtime.route()
+                        .requestToSpot(spotId, new InitialProbe())
+                        .instanceSpot(TYPE)
+                        .inMesh(MESH)
+                        .timeout(WAIT)
+                        .submit(Reply.class)
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                assertEquals(1, metrics.observable("zlink.spot.count", tags));
+                runtime.route()
+                        .sendToSpot(spotId, new CloseProbe())
+                        .instanceSpot(TYPE)
+                        .inMesh(MESH)
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                assertTrue(observation.closeResult.get(WAIT.toSeconds(), TimeUnit.SECONDS));
+                assertEquals(0, metrics.observable("zlink.spot.count", tags));
+            }
+            assertEquals(0, metrics.observable("zlink.spot.count", tags));
+        }
+    }
+
+    @Test
     void readyCommitRebuildsSharedCapacityConflictWithoutReinitializing() throws Exception {
         String spotId = "java-instance-ready-conflict-" + UUID.randomUUID();
         Observation observation = new Observation(false, false);
@@ -131,6 +178,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         current = observation;
         ObservedStore store = new ObservedStore(spotId, observation);
         var options = new DefaultZLinkFrameworkOptions();
+        options.setDefaultRequestTimeout(Duration.ofSeconds(7));
         options.addLocationStore(store);
         options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         options.addRouteMesh(MESH)
@@ -171,7 +219,9 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                     });
             try {
                 started.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                var before = java.time.Instant.now();
                 CompletionStage<Boolean> explicit = activation.closeExplicit();
+                var after = java.time.Instant.now();
                 CompletionStage<Void> shutdown =
                         activation.closingStage(
                                 ZLinkSpotCloseReason.HOST_SHUTDOWN, java.time.Instant.now());
@@ -181,6 +231,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                 assertTrue(explicit.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS));
                 shutdown.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 assertEquals(1, observation.closingCalls.get());
+                assertTrue(!observation.closingDeadline.isBefore(before.plusSeconds(7)));
+                assertTrue(!observation.closingDeadline.isAfter(after.plusSeconds(7)));
             } finally {
                 release.complete(null);
             }
@@ -1265,6 +1317,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         }
 
         public CompletionStage<Void> onClosing(ZLinkSpotClosingContext closing) {
+            observation.closingDeadline = closing.deadline();
             observation.closingCalls.incrementAndGet();
             observation.events.add("onClosing");
             observation.closingEntered.complete(null);
@@ -1403,6 +1456,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         final List<Long> configureGenerations = new CopyOnWriteArrayList<>();
         final List<Long> pendingGenerations = new CopyOnWriteArrayList<>();
         final List<String> events = new CopyOnWriteArrayList<>();
+        volatile java.time.Instant closingDeadline;
         final AtomicInteger closingCalls = new AtomicInteger();
         final AtomicInteger terminals = new AtomicInteger();
         final AtomicInteger timerCalls = new AtomicInteger();

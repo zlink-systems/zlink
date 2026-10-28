@@ -1,4 +1,3 @@
-using System.Reflection;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
@@ -30,26 +29,17 @@ public sealed class GenerationTokenRangeTests
     private const int Iterations = 1_000;
 
     [Fact]
-    public void ManagedMeshNodeLifecycleTokenStaysWithinNonzeroU64Range()
+    public async Task ManagedMeshNodeLifecycleTokenStaysWithinNonzeroU64Range()
     {
-        AssertIssuerStaysInRange(typeof(ZLinkManagedMeshNode), "NewNonZeroToken");
-    }
-
-    private static void AssertIssuerStaysInRange(Type declaringType, string methodName)
-    {
-        var method = declaringType.GetMethod(
-            methodName,
-            BindingFlags.NonPublic | BindingFlags.Static
-        );
-        Assert.NotNull(method);
-
+        using var context = Systems.Zlink.Zlink.CreateContext();
         for (var i = 0; i < Iterations; i++)
         {
-            var value = (ulong)method!.Invoke(null, null)!;
+            await using var node = new ZLinkManagedMeshNode(context, "generation-range");
+            var value = node.Status().LifecycleGeneration;
             Assert.NotEqual(0UL, value);
             Assert.True(
                 value <= long.MaxValue,
-                $"{declaringType.Name}.{methodName} issued {value:X16}, "
+                $"{nameof(ZLinkManagedMeshNode)} issued {value:X16}, "
                     + "which has the top bit set and violates the nonzero-u64 "
                     + "wire bound of [1, 2^63-1]."
             );

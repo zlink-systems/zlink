@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -39,11 +40,31 @@ struct request_t
     static constexpr const char *packet_name = "channel.reply.admission.request";
     int value = 0;
 };
+}
+
+template <> struct zlink::json::dto_traits<request_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &request_t::value)};
+};
+
+namespace
+{
+
 
 struct reply_t
 {
     int value = 0;
 };
+}
+
+template <> struct zlink::json::dto_traits<reply_t>
+{
+    static constexpr auto fields = std::tuple{zlink::json::field ("value", &reply_t::value)};
+};
+
+namespace
+{
+
 
 class blocking_request_handler_t
 {

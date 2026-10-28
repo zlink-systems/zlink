@@ -3,11 +3,13 @@
 #include <iostream>
 #include <set>
 
+#include "test_json.hpp"
+
 namespace
 {
 template <class T> bool equal (const T &a, const T &b)
 {
-    return nlohmann::json (a) == nlohmann::json (b);
+    return test_json_fps_http_domain::object (a) == test_json_fps_http_domain::object (b);
 }
 
 template <class F> bool rejects (F &&action)
@@ -102,7 +104,8 @@ void run_lobby_domain_checks ()
     game.move ("a", {{0, 0, -1}, 1});
     game.shoot ("a", {{4, 0, 1}, 2});
     const HttpRoomSnapshot snapshot{game.capture (), roster.capture ()};
-    const auto relocated = nlohmann::json (snapshot).get<HttpRoomSnapshot> ();
+    const auto relocated = test_json_fps_http_domain::decode<HttpRoomSnapshot> (
+      test_json_fps_http_domain::object (snapshot));
     RoomRoster restoredRoster;
     restoredRoster.restore (relocated.roster);
     RoomState restoredGame ([] { return 900000.0; });
@@ -116,11 +119,9 @@ void run_lobby_domain_checks ()
            "relocated roster cannot be replaced");
     check (rejects ([&] { RoomRoster{}.restore (RosterSnapshot{std::nullopt, {"a"}}); }),
            "unprepared snapshot with members");
-    check (nlohmann::json::parse (R"({"playerId":"default"})")
-                 .get<MatchRequest> ()
-                 .mode
-               == Names::default_mode,
-           "omitted HTTP mode defaults to duel");
+    const auto defaultRequest = test_json_fps_http_domain::decode<MatchRequest> (
+      test_json_fps_http_domain::object (MatchRequest{"default"}));
+    check (defaultRequest.mode == Names::default_mode, "MatchRequest defaults to duel");
 
     std::vector<std::pair<std::string, std::vector<std::string>>> calls;
     Matchmaker firstProcess;

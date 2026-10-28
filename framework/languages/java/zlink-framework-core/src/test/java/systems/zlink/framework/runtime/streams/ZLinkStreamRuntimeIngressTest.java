@@ -197,19 +197,18 @@ final class ZLinkStreamRuntimeIngressTest {
     @Test
     void ordinaryReceiveDoesNotPostAnAdditionalStateOwnerTask() throws Exception {
         FakeStream stream = new FakeStream();
-        ZLinkStreamRuntime runtime =
-                startDeterministic(stream, new java.util.concurrent.atomic.AtomicLong());
-        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
         AtomicInteger postedTasks = new AtomicInteger();
-        var laneField = ZLinkStreamRuntime.class.getDeclaredField("stateLane");
-        laneField.setAccessible(true);
-        laneField.set(
-                runtime,
+        var lane =
                 new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
                         command -> {
                             postedTasks.incrementAndGet();
                             command.run();
-                        }));
+                        });
+        ZLinkStreamRuntime runtime =
+                startDeterministic(
+                        stream, new java.util.concurrent.atomic.AtomicLong(), ignored -> {}, lane);
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        postedTasks.set(0);
 
         dispatchDeterministic(runtime, "ordinary", false);
 
@@ -261,15 +260,11 @@ final class ZLinkStreamRuntimeIngressTest {
     @Test
     void heartbeatContractConcurrentCreationConnectsBeforeFirstPacket() throws Exception {
         FakeStream stream = new FakeStream();
-        ZLinkStreamRuntime runtime =
-                startDeterministic(stream, new java.util.concurrent.atomic.AtomicLong());
         CompletableFuture<Void> readyConstructing = new CompletableFuture<>();
         CompletableFuture<Void> dataConstructing = new CompletableFuture<>();
         CompletableFuture<Void> published = new CompletableFuture<>();
         CompletableFuture<Void> releaseReady = new CompletableFuture<>();
         AtomicReference<Thread> readyThread = new AtomicReference<>();
-        var laneField = ZLinkStreamRuntime.class.getDeclaredField("stateLane");
-        laneField.setAccessible(true);
         var lane =
                 new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
                         command -> {
@@ -280,7 +275,9 @@ final class ZLinkStreamRuntimeIngressTest {
                                 releaseReady.join();
                             }
                         });
-        laneField.set(runtime, lane);
+        ZLinkStreamRuntime runtime =
+                startDeterministic(
+                        stream, new java.util.concurrent.atomic.AtomicLong(), ignored -> {}, lane);
         var mailboxField = lane.getClass().getDeclaredField("mailbox");
         mailboxField.setAccessible(true);
         var sessionsField = ZLinkStreamRuntime.class.getDeclaredField("sessions");
@@ -521,6 +518,20 @@ final class ZLinkStreamRuntimeIngressTest {
             java.util.function.Consumer<
                             systems.zlink.framework.configuration.ZLinkStreamNodeBuilder>
                     configure) {
+        return startDeterministic(
+                stream,
+                clock,
+                configure,
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane());
+    }
+
+    private ZLinkStreamRuntime startDeterministic(
+            FakeStream stream,
+            java.util.concurrent.atomic.AtomicLong clock,
+            java.util.function.Consumer<
+                            systems.zlink.framework.configuration.ZLinkStreamNodeBuilder>
+                    configure,
+            systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane) {
         var options = new DefaultZLinkFrameworkOptions();
         var builder =
                 options.addStreamNode("stream")
@@ -548,7 +559,8 @@ final class ZLinkStreamRuntimeIngressTest {
                                         (ignoredReady, ignoredShutdown) ->
                                                 CompletableFuture.completedFuture(null),
                                 clock::get,
-                                () -> scheduler)
+                                () -> scheduler,
+                                stateLane)
                         .start();
         scheduler.shutdownNow();
         runtimes.add(runtime);
@@ -710,7 +722,8 @@ final class ZLinkStreamRuntimeIngressTest {
                                 assertSame(
                                         probe,
                                         TestSession.connected,
-                                        "runtime callbacks must finish before the shared probe resets"));
+                                        "runtime callbacks must finish before the shared probe"
+                                                + " resets"));
 
         resetSessionProbe();
 
@@ -2101,7 +2114,8 @@ final class ZLinkStreamRuntimeIngressTest {
                                         (ignoredSubmission, ignoredCleanup) ->
                                                 CompletableFuture.failedFuture(
                                                         new IllegalStateException(
-                                                                "one-way admission factory is required")),
+                                                                "one-way admission factory is"
+                                                                        + " required")),
                                 System::nanoTime,
                                 () ->
                                         java.util.concurrent.Executors

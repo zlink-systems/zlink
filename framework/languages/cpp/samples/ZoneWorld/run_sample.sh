@@ -23,10 +23,11 @@ if [[ "$#" -ne 0 ]]; then
 fi
 zlink_cpp_sample_prepare_build
 
+zlink_cpp_sample_log_step "build"
 cmake --build "$BUILD_DIR" --parallel 2 --target sample_cpp_framework_zoneworld_zone_node \
   sample_cpp_framework_zoneworld_gateway sample_cpp_framework_zoneworld_ops \
   sample_cpp_framework_zoneworld_client \
-  sample_cpp_framework_zoneworld_session_route_proxy >/dev/null
+  sample_cpp_framework_zoneworld_session_route_proxy
 
 B8_PROVEN=0
 G4_PROVEN=0
@@ -96,6 +97,7 @@ if [[ "$B8_CHILD" == "1" ]]; then
   NODE2_MESH_BIND="tcp://127.0.0.2:${ZONEWORLD_PORTS[1]}"
   NODE_MESH_ADVERTISE_HOST="127.0.0.1"
 fi
+zlink_cpp_sample_log_step "Redis start"
 zlink_redis_start_scoped_assign REDIS_CONTAINER_NAME redis_port "zlink-redis-cpp-sample-zoneworld" "redis:7-alpine"
 
 CONFIG_DIR="$RUN_DIR/config"
@@ -156,21 +158,17 @@ start_role() {
   local pid=$!
   PIDS+=("$pid")
   ROLE_PID["$label"]="$pid"
-}
-remove_owned_pid() {
-  local completed_pid="$1" active=() pid
-  for pid in "${PIDS[@]:-}"; do
-    [[ "$pid" == "$completed_pid" ]] || active+=("$pid")
-  done
-  PIDS=("${active[@]}")
+  zlink_cpp_sample_log_step "process start: $label pid=$pid"
 }
 stop_role() {
   local label="$1" signal="${2:-KILL}"
   local pid="${ROLE_PID[$label]:-}"
+  local status=0
   [[ -n "$pid" ]] || return 0
   kill "-$signal" "$pid" >/dev/null 2>&1 || true
-  wait "$pid" >/dev/null 2>&1 || true
-  remove_owned_pid "$pid"
+  wait "$pid" >/dev/null 2>&1 || status=$?
+  zlink_cpp_sample_log_step "process exit: $label status=$status"
+  zlink_cpp_sample_remove_pid "$pid"
   unset "ROLE_PID[$label]"
 }
 next_log_line() {
@@ -279,7 +277,8 @@ if [[ "$B8_CHILD" == "1" ]]; then
   wait "$b8_pid"
   b8_status=$?
   set -e
-  remove_owned_pid "$b8_pid"
+  zlink_cpp_sample_log_step "process exit: client-b8 status=$b8_status"
+  zlink_cpp_sample_remove_pid "$b8_pid"
   unset "ROLE_PID[client-b8]"
   if [[ "$b8_status" -ne 0 ]] \
      || ! grep -Fq "scenario ZW-B8 passed" "$LOG_DIR/client-b8.log" \
@@ -321,7 +320,8 @@ if [[ "$G4_CHILD" == "1" ]]; then
   wait "$g4_pid"
   g4_client_status=$?
   set -e
-  remove_owned_pid "$g4_pid"
+  zlink_cpp_sample_log_step "process exit: client-g4 status=$g4_client_status"
+  zlink_cpp_sample_remove_pid "$g4_pid"
   unset "ROLE_PID[client-g4]"
   start_zone_node "$g4_node" "$g4_node-replacement"
   if ! g4_new_rid="$(wait_for_new_routing_id "$g4_node" "$g4_old_rid")"; then
@@ -411,7 +411,8 @@ if wait_for_log_after client-transition "scenario ZW-B4-C3 armed node=" 1 600; t
     wait "$transition_pid"
     transition_client_status=$?
     set -e
-    remove_owned_pid "$transition_pid"
+    zlink_cpp_sample_log_step "process exit: client-transition status=$transition_client_status"
+    zlink_cpp_sample_remove_pid "$transition_pid"
     unset "ROLE_PID[client-transition]"
     if [[ "$transition_client_status" -eq 0 ]] \
        && grep -Fq "scenario ZW-B4 passed" "$LOG_DIR/client-transition.log" \
@@ -447,7 +448,8 @@ if [[ "$e5_arm_status" -eq 0 ]]; then
   wait "$e5_pid"
   e5_restore_status=$?
   set -e
-  remove_owned_pid "$e5_pid"
+  zlink_cpp_sample_log_step "process exit: client-e5 status=$e5_restore_status"
+  zlink_cpp_sample_remove_pid "$e5_pid"
   unset "ROLE_PID[client-e5]"
   if [[ "$e5_restore_status" -eq 0 ]] \
      && grep -Fq "scenario ZW-E5 passed" "$LOG_DIR/client-e5.log"; then
@@ -495,8 +497,10 @@ if wait_for_log_after client-c2 "scenario ZW-C2 armed node=" 1 600; then
   stop_role "$C2_NODE" TERM
   set +e
   wait "$c2_pid"
+  c2_status=$?
   set -e
-  remove_owned_pid "$c2_pid"
+  zlink_cpp_sample_log_step "process exit: client-c2 status=$c2_status"
+  zlink_cpp_sample_remove_pid "$c2_pid"
   unset "ROLE_PID[client-c2]"
   start_zone_node "$C2_NODE" "$C2_NODE-replacement"
 fi

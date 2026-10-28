@@ -590,8 +590,7 @@ void verify_bound_session_bind_missing_descriptor_is_unavailable_without_blockin
     auto bind_result = bind_promise.get_future ();
     std::thread bind_caller ([&] {
         bind_promise.set_value (source.request_bound_session_bind (
-          remote.node_routing_id,
-          bound_session_bind_request (remote, "missing-bind-actor"), 2s,
+          remote.node_routing_id, bound_session_bind_request (remote, "missing-bind-actor"), 2s,
           [] (foundation::operation_terminal_t, zlink::message_t) {}));
     });
     const bool returned_while_lane_held = bind_result.wait_for (2s) == std::future_status::ready;

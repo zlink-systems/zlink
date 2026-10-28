@@ -117,7 +117,6 @@ bool state_lane_t::schedule_drain (bool inline_drain, const std::function<void (
     if (_executor.try_submit_internal ([this] { drain_loop (); }))
         return true;
 
-    _scheduled.store (false, std::memory_order_release);
     _closed.store (true, std::memory_order_release);
     abandon_pending (
       std::make_exception_ptr (std::runtime_error ("state lane executor is stopping")));
@@ -159,7 +158,6 @@ void state_lane_t::abandon_pending (std::exception_ptr error) noexcept
     {
         std::lock_guard lock (_mailbox_mutex);
         abandoned = std::move (_mailbox);
-        _drained.notify_all ();
     }
     for (auto &item : abandoned) {
         try {
@@ -167,6 +165,12 @@ void state_lane_t::abandon_pending (std::exception_ptr error) noexcept
         }
         catch (...) {
         }
+    }
+    abandoned.clear ();
+    {
+        std::lock_guard lock (_mailbox_mutex);
+        _scheduled.store (false, std::memory_order_release);
+        _drained.notify_all ();
     }
 }
 

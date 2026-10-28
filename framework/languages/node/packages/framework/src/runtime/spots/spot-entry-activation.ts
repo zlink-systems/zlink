@@ -1,3 +1,4 @@
+import { dispatchActorPacketInMailbox } from './spot-actor-admission-coordinator';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import type {
   ActorRef,
@@ -70,7 +71,6 @@ import type {
   ZLinkSpotActorHandoffRuntime,
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
-import { ZLinkSpotLifecycleMetrics } from './spot-lifecycle-metrics';
 
 interface ZLinkEntrySpotActivationOptions {
   readonly admission?: import('../admission').ZLinkRuntimeAdmissionGate;
@@ -111,7 +111,6 @@ export class ZLinkEntrySpotActivation {
   private readonly handlers: DefaultZLinkSpotHandlerRegistry;
   private readonly outbound: DefaultZLinkSpotOutbound;
   private readonly workerRuntime: ZLinkWorkerRuntime;
-  private readonly lifecycleMetrics: ZLinkSpotLifecycleMetrics;
   private readonly packetDispatch: ZLinkRoutedSpotPacketDispatch;
   private readonly actorPacketDispatch: ZLinkSpotActorPacketDispatch;
   private initialized = false;
@@ -151,7 +150,6 @@ export class ZLinkEntrySpotActivation {
       options.metrics,
       () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     );
-    this.lifecycleMetrics = new ZLinkSpotLifecycleMetrics(options.metrics);
     this.workerRuntime = options.workerRuntime ?? new ZLinkWorkerRuntime();
     this.context = createEntrySpotContext({
       spotId: String(options.nativeSpot.routingId),
@@ -198,13 +196,16 @@ export class ZLinkEntrySpotActivation {
       spotId: () => String(this.options.nativeSpot.routingId),
       registry: this.actorHandlers,
       resolveActor: (targetActorId) => this.options.entryActorRuntime?.resolveActor(targetActorId),
-      routeBeforeLocal: (target) =>
+      routeBeforeLocal: (delivery) =>
         this.options.entryActorRuntime?.routePacket(
-          target.actorId,
-          target.parts,
-          target.returnResponse,
-          target.remoteBoundSessionTarget,
-          target.fallbackActorRef
+          delivery.actorId,
+          delivery.parts,
+          delivery.returnResponse,
+          delivery.remoteBoundSessionTarget,
+          delivery.fallbackActorRef,
+          delivery.origin,
+          delivery.requestTerminal,
+          delivery.messageFollowOrigin
         ),
       onDisconnectActor: (actor) => this.notifyDisconnectActor(actor),
       actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(
@@ -306,7 +307,7 @@ export class ZLinkEntrySpotActivation {
     await this.serial.execute(() => this.entrySpot.onInitialize?.());
     this.attachActorJoinDispatch();
     this.initialized = true;
-    this.lifecycleMetrics.opened('entry');
+    this.options.metrics?.recordSpotCount(this.options.spotNodeName, 'entry', 1);
   }
 
   async dispose(deadline?: Date): Promise<void> {
@@ -340,7 +341,7 @@ export class ZLinkEntrySpotActivation {
       await this.options.nativeSpot.dispose();
     });
     if (this.initialized) {
-      this.lifecycleMetrics.closed('entry');
+      this.options.metrics?.recordSpotCount(this.options.spotNodeName, 'entry', -1);
     }
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Entry Spot cleanup failed.');
@@ -466,27 +467,14 @@ export class ZLinkEntrySpotActivation {
   }
 
   async dispatchActorPacket(delivery: ZLinkActorPacketDelivery): Promise<unknown> {
-    const {
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      messageFollowOrigin
-    } = delivery;
-    const handoff = this.options.actorHandoffRuntime?.capture(
-      delivery.origin,
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      undefined,
-      messageFollowOrigin
-    );
-    if (handoff !== undefined) return await handoff;
-    return this.spotSerialExecutor.executeActor(actorId, () =>
-      this.dispatchActorPacketInsideMailbox(delivery)
+    return dispatchActorPacketInMailbox(
+      (operation) => this.spotSerialExecutor.executeActor(delivery.actorId, operation),
+      () =>
+        this.actorPacketDispatch.admitDelivery(
+          undefined,
+          delivery,
+          this.options.actorHandoffRuntime
+        )
     );
   }
 
@@ -541,7 +529,7 @@ export class ZLinkEntrySpotActivation {
   private async dispatchActorPacketInsideMailbox(
     delivery: ZLinkActorPacketDelivery
   ): Promise<unknown> {
-    return this.actorPacketDispatch.dispatchDelivery(delivery);
+    return this.actorPacketDispatch.dispatchDelivery(undefined, delivery);
   }
 
   private replyActorNoBind(
