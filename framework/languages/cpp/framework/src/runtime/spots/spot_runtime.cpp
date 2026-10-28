@@ -2557,6 +2557,7 @@ void spot_context_state_t::close_now (
             if (reason != spot_close_reason_t::host_shutdown && actor_count != 0)
                 return result;
             result.path = close_path_t::start;
+            result.kind = metric_spot_kind (*this);
             result.token = reserve_close_core (*owner, close_reservation_kind_t::explicit_close);
             if (reason == spot_close_reason_t::host_shutdown) {
                 result.authority_begin = local_close_step ();
@@ -2591,7 +2592,8 @@ void spot_context_state_t::close_now (
     // The Close ends its reservation in the same lane turn that takes the
     // merged requests, so every merged request receives this result.
     const auto token = start.token;
-    auto settle = [self = shared_from_this (), owner, done, token] (result_t<bool> result) {
+    auto settle = [self = shared_from_this (), owner, done, token,
+                   kind = start.kind] (result_t<bool> result) {
         auto merged = owner->lane
                         .run ([&] {
                             self->clear_close_reservation_core (token);
@@ -2603,7 +2605,7 @@ void spot_context_state_t::close_now (
             if (metrics.enabled ())
                 metrics.updown (
                   "zlink.spot.count", "{spot}", -1,
-                  {{"mesh_name", owner->snapshot.name}, {"spot_kind", metric_spot_kind (*self)}});
+                  {{"mesh_name", owner->snapshot.name}, {"spot_kind", kind}});
         }
         done (result);
         for (auto &waiter : merged)
