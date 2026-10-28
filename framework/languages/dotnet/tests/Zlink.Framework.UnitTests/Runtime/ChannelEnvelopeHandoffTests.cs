@@ -77,14 +77,12 @@ public sealed class ChannelEnvelopeHandoffTests
         }
         // Both paths finish synchronously here. Measure the same pipeline and reply gate;
         // the dispatcher must add no per-record callback storage before the absent-token check.
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
-            await Baseline();
-        var pipelineStorage = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
-            await Dispatch();
-        Assert.Equal(pipelineStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+        var pipelineStorage = await PerCallAllocation.MinWindowAsync(
+            () => new ValueTask(Baseline()),
+            1000
+        );
+        var dispatchStorage = await PerCallAllocation.MinWindowAsync(Dispatch, 1000);
+        Assert.Equal(pipelineStorage, dispatchStorage);
     }
 
     [Theory]
