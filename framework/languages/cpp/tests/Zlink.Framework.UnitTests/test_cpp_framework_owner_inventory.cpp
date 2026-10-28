@@ -22,7 +22,7 @@ std::shared_ptr<host::public_host_runtime_t> make_host ()
                               .node_routing_id = {'n'},
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
-                              .advertised_endpoint = "tcp://127.0.0.1:7182"},
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
                .runtime_failures = std::make_shared<fw::runtime::runtime_failure_collector_t> ()}});
     runtime->configure_stateful_dispatch (
       [] (const stateful::accepted_record_authority_query_t &)
