@@ -140,6 +140,10 @@ public sealed class JoinCommitGenerationTests(ITestOutputHelper output)
     }
 
     [Theory]
+    [InlineData(false, 4)]
+    [InlineData(true, 4)]
+    [InlineData(false, 5)]
+    [InlineData(true, 5)]
     [InlineData(false, 3)]
     [InlineData(true, 3)]
     [InlineData(false, 0)]
@@ -240,6 +244,56 @@ public sealed class JoinCommitGenerationTests(ITestOutputHelper output)
                 );
                 Assert.NotEqual(generation, replacement.Snapshot.ObjectGeneration);
             }
+            if (mode is 4 or 5)
+            {
+                var repository = new ZLinkProviderLocationRepository(store);
+                var key =
+                    mode == 5
+                        ? ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)
+                        : ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(activation.SpotId);
+                var current = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(key)
+                );
+                Assert.NotEqual(
+                    current.Snapshot.ObjectGeneration,
+                    mode == 5
+                        ? generation
+                        : Assert
+                            .IsType<ZLinkAuthorityReadResult.Found>(
+                                await repository.ReadAuthorityAsync(
+                                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)
+                                )
+                            )
+                            .Snapshot.ObjectGeneration
+                );
+                ReadOnlyMemory<byte> payload = current.Snapshot.Payload;
+                if (mode == 4)
+                {
+                    Assert.True(
+                        ZLinkUserSpotAuthorityPayloadCodec.TryDecode(payload.Span, out var ready)
+                    );
+                    payload = ZLinkUserSpotAuthorityPayloadCodec.Encode(
+                        ready with
+                        {
+                            State = ZLinkUserSpotAuthorityState.Closing,
+                        }
+                    );
+                }
+                Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                    await repository.CompareExchangeAuthorityAsync(
+                        key,
+                        current.Snapshot.StoreVersion,
+                        new ZLinkAuthorityMutation.Put(
+                            payload,
+                            mode == 5
+                                ? ZLinkAuthorityGenerationTransition.Reincarnate
+                                : ZLinkAuthorityGenerationTransition.Preserve,
+                            null,
+                            null
+                        )
+                    )
+                );
+            }
             var spotAuthority = await new ZLinkProviderLocationRepository(store).ReadAuthorityAsync(
                 ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(activation.SpotId)
             );
@@ -270,7 +324,12 @@ public sealed class JoinCommitGenerationTests(ITestOutputHelper output)
         if (mode >= 2)
         {
             Assert.Equal(
-                mode == 2 ? ZLinkFrameworkErrorKind.NotFound : ZLinkFrameworkErrorKind.Unavailable,
+                mode switch
+                {
+                    2 => ZLinkFrameworkErrorKind.NotFound,
+                    5 => ZLinkFrameworkErrorKind.InvalidOperation,
+                    _ => ZLinkFrameworkErrorKind.Unavailable,
+                },
                 Assert.IsType<ZLinkActorJoinCompletion.Failed>(completion).Kind
             );
             Assert.Equal(0, trace.TargetLifecycleAttemptCount);

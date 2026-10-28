@@ -4759,10 +4759,11 @@ bool verify_close_terminal_for_operational_boundary ()
         int reincarnations = 0;
         state->lifecycle.on_closing = [&, state] (void *, const spot_closing_context_t &,
                                                   std::stop_token) {
-            node->host_phase = [boundary] {
-                return boundary == 0   ? framework_runtime_state_t::draining
-                       : boundary == 1 ? framework_runtime_state_t::relocating
-                                       : framework_runtime_state_t::relocated;
+            node->host_lifecycle = [boundary] {
+                return host_lifecycle_snapshot_t{boundary == 0 ? framework_runtime_state_t::draining
+                                                 : boundary == 1
+                                                   ? framework_runtime_state_t::relocating
+                                                   : framework_runtime_state_t::relocated};
             };
             node->drain_flag->store (boundary == 0);
             state->relocation_boundary_active = boundary != 0;
