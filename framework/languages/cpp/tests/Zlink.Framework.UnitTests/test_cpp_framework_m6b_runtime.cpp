@@ -1597,9 +1597,23 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (invalidations == 1);
     assert (route_resolutions - initial_route_resolutions == 0);
 
-    // The route snapshot exists but its owner route cannot be used. Routing
-    // spec 08 §2 ends that operation as Unavailable; error model §5 reserves
-    // DeadlineExceeded for an admitted request whose reply misses its deadline.
+    // A known owner descriptor may wait for ADMIT without an ingress pump.
+    auto pending_descriptor = target_descriptor;
+    pending_descriptor.node_routing_id =
+      zlink::routing_id_t::from ("pending-bound-session-target").to_bytes ();
+    source.native_node ().transport ().expect_peer (pending_descriptor);
+    auto pending_route = route;
+    pending_route.node_rid = zlink::routing_id_t::from ("pending-bound-session-target");
+    const auto preadmit_deadline =
+      source
+        .bind_application_actor_session (
+          actor, zlink::routing_id_t::from ("bound-session-before-admit"), 1, pending_route, 20ms)
+        .result ();
+    assert (!preadmit_deadline);
+    assert (preadmit_deadline.error_kind () == framework_error_kind_t::deadline_exceeded);
+
+    // The route snapshot has no known owner descriptor. Routing spec 08 §2
+    // ends this invalid target as Unavailable before readiness waiting.
     const runtime::spot_address_t disconnected_route{
       "m6b-mesh", zlink::routing_id_t::from ("unconnected-bound-session-target"),
       {},         0,
@@ -1618,7 +1632,7 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (route_resolutions - initial_route_resolutions == 0);
 
     // The connected route admits this request, but the target withholds its
-    // reply. Only this post-admission deadline expiry is DeadlineExceeded.
+    // reply. Its post-admission deadline expiry is also DeadlineExceeded.
     auto withheld = std::async (std::launch::async, [&] {
         return source
           .bind_application_actor_session (
@@ -2843,7 +2857,7 @@ void verify_host_send_forwarding_allocations ()
     }
 }
 
-void verify_actor_create_replays_after_reciprocal_handover ()
+void verify_actor_create_does_not_replay_after_reciprocal_handover ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
     mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
@@ -2903,6 +2917,7 @@ void verify_actor_create_replays_after_reciprocal_handover ()
         return claim;
     };
     auto losing = receive ();
+    const auto first_record = *losing->records.front ();
     const auto first = protocol::decode_actor_create_header (
       protocol::message_bytes (losing->records.front ()->parts.front ()));
     assert (first.operation == request.operation);
@@ -2911,34 +2926,34 @@ void verify_actor_create_replays_after_reciprocal_handover ()
     assert (completion.wait_for (0ms) == std::future_status::timeout);
     assert (target.mailbox ().release (*losing));
 
-    // Receipt proves admission on Z -> A. Withhold its reply, then let Core
-    // select A -> Z; only the durable owner resubmits the operation.
-    const auto handover_started = std::chrono::steady_clock::now ();
+    // Submit §5: handover ends the binding request with its typed result.
+    // A selected-route change cannot submit this operation a second time.
     assert (target.connect_peer (source.endpoint (), source_descriptor));
-    auto survivor = receive ();
-    const auto replay = protocol::decode_actor_create_header (
-      protocol::message_bytes (survivor->records.front ()->parts.front ()));
-    assert (replay == first);
-    assert (survivor->records.front ()->correlation == first.correlation);
-    assert (completion.wait_for (0ms) == std::future_status::timeout);
-    assert (target.reply_actor_create ((*survivor->records.front ()),
-                                       {{replay.correlation, 0, 0},
-                                        protocol::actor_create_result_t::created,
-                                        target_descriptor.node_routing_id,
-                                        replay.actor_id,
-                                        1}));
-    assert (target.mailbox ().release (*survivor));
+    const auto no_replay = [&] {
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+    };
     while (completion.wait_for (0ms) != std::future_status::ready
-           && std::chrono::steady_clock::now () < deadline)
+           && std::chrono::steady_clock::now () < deadline) {
         pump ();
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
+        no_replay ();
+    }
     assert (completion.wait_for (0ms) == std::future_status::ready);
-    assert (std::chrono::steady_clock::now () < deadline);
-    assert (completion.get ().first == foundation::operation_terminal_t::completed);
-    std::cout << "handover durable_replay_us="
-              << std::chrono::duration_cast<std::chrono::microseconds> (
-                   std::chrono::steady_clock::now () - handover_started)
-                   .count ()
-              << " same_operation=1 same_correlation=1 same_deadline=1 result=completed\n";
+    const auto ended = completion.get ();
+    assert (ended.first == foundation::operation_terminal_t::transport_failed);
+    assert (ended.second.empty ());
+    assert (source.pending_operation_count () == 0);
+    (void) target.reply_actor_create (first_record, {{first.correlation, 0, 0},
+                                                     protocol::actor_create_result_t::created,
+                                                     target_descriptor.node_routing_id,
+                                                     first.actor_id,
+                                                     1});
+    for (int turn = 0; turn < 32; ++turn) {
+        pump ();
+        no_replay ();
+    }
+    assert (source.pending_operation_count () == 0);
     source.close ();
     target.close ();
 }
@@ -9656,7 +9671,7 @@ int main (int argc, char **argv)
     }
     if (!verify_remote_user_spot_create_close_terminal_once (true))
         return 1;
-    verify_actor_create_replays_after_reciprocal_handover ();
+    verify_actor_create_does_not_replay_after_reciprocal_handover ();
     verify_message_follow_invalidation_subscriptions_are_lifetime_safe ();
     verify_actor_calls_keep_selected_route_until_follow_notice ();
     verify_session_relocation_gateway_commit_is_atomic ();
