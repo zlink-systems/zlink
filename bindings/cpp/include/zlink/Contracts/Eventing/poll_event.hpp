@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 #pragma once
 
+#include <zlink_enum.h>
+
 #include <cstdint>
 
 namespace zlink
@@ -14,7 +16,8 @@ enum class poll_event_flag_t : short
     pollout = 2,        ///< Writable: a send will not block.
     pollerr = 4,        ///< An error condition occurred on the source.
     pollcompletion = 32, ///< An asynchronous operation completed.
-    pollroute = 64       ///< A ROUTER's selected routes changed; read routes_snapshot().
+    pollroute = 64,      ///< A ROUTER's selected routes changed; read routes_snapshot().
+    pollconnect = ZLINK_POLLCONNECT ///< Connection attempts changed; read connection_attempts_snapshot().
 };
 
 inline poll_event_flag_t operator| (poll_event_flag_t a_, poll_event_flag_t b_)

@@ -566,7 +566,10 @@ if(ZLINK_CPP_BUILD_TESTS)
     add_cpp_contract_test(test_cpp_contract_poller_core_results
       "tests/contract/test_cpp_contract_poller_core_results.cpp")
     target_link_options(test_cpp_contract_poller_core_results PRIVATE
-      "LINKER:--wrap=zlink_poller_wait")
+      "LINKER:--wrap=zlink_poller_wait"
+      "LINKER:--wrap=zlink_socket_connection_attempts_snapshot"
+      "LINKER:--wrap=zlink_ctx_new"
+      "LINKER:--wrap=zlink_completion_recv")
     add_cpp_contract_test(test_cpp_contract_poller_wait_allocations
       "tests/contract/test_cpp_contract_poller_wait_allocations.cpp")
   endif()

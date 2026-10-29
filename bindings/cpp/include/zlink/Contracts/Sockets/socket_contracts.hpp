@@ -10,6 +10,7 @@
 #include "../Eventing/monitor.hpp"
 #include "../Core/routing_id.hpp"
 #include "socket_options.hpp"
+#include "connection_attempt.hpp"
 #include "results.hpp"
 
 #include <cerrno>
@@ -53,6 +54,8 @@ class socket_t
     void unbind (const std::string &endpoint_);
     void disconnect (const std::string &endpoint_);
     void disconnect_rid (const routing_id_t &peer_rid_);
+
+    std::vector<connection_attempt_t> connection_attempts_snapshot ();
 
     socket_monitor_t monitor_open (monitor_event events_ = monitor_event::all,
                                    byte_count_t monitor_hwm_bytes_ = byte_count_t::bytes (0)) const

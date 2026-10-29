@@ -30,6 +30,8 @@ static_assert (static_cast<short> (zlink::poll_event_flag_t::pollroute) == ZLINK
 namespace
 {
 
+bool connect_ready_now (zlink::socket_t &socket_);
+
 constexpr auto wait_limit = std::chrono::milliseconds (5000);
 
 std::unique_ptr<zlink::router_socket_t> make_router (zlink::context_t &context_,
@@ -143,7 +145,11 @@ void test_snapshot_pollroute_and_record_generation ()
               & static_cast<short> (zlink::poll_event_flag_t::pollroute))
              != 0);
 
+    REQUIRE (connect_ready_now (*client));
     const auto routes = client->routes_snapshot ();
+    REQUIRE (connect_ready_now (*client));
+    REQUIRE (client->connection_attempts_snapshot ().size () == 1);
+    REQUIRE (!connect_ready_now (*client));
     REQUIRE (routes.size () == 1);
     const auto selected = find_generation (routes, "route-server");
     REQUIRE (selected != 0);
@@ -152,6 +158,11 @@ void test_snapshot_pollroute_and_record_generation ()
 
     (void) wait_route (*server, nullptr, "route-client");
     send_text (*server, "route-client", "selected");
+    auto input = zlink::poll_item_t::from_socket (*client, zlink::poll_event_flag_t::pollin);
+    REQUIRE (zlink::poll (&input, 1, wait_limit) == 1);
+    (void) client->connection_attempts_snapshot ();
+    REQUIRE (zlink::poll (&input, 1, std::chrono::milliseconds (0)) == 1);
+    REQUIRE ((static_cast<short> (input.revents) & ZLINK_POLLIN) != 0);
     const auto received = recv_text (*client, "selected");
     REQUIRE (received.route_generation () == selected);
 
@@ -216,10 +227,108 @@ void test_snapshot_grows_past_initial_capacity ()
     REQUIRE (client->routes_snapshot ().size () == 12);
 }
 
+bool connect_ready_now (zlink::socket_t &socket_)
+{
+    auto item = zlink::poll_item_t::from_socket (socket_, zlink::poll_event_flag_t::pollconnect);
+    REQUIRE (zlink::poll (&item, 1, std::chrono::milliseconds (0)) >= 0);
+    return (static_cast<short> (item.revents) & ZLINK_POLLCONNECT) != 0;
+}
+
+zlink::connection_attempt_t wait_connection_state (
+  zlink::socket_t &socket_, zlink::connection_attempt_state_t state_)
+{
+    const auto deadline = std::chrono::steady_clock::now () + wait_limit;
+    auto rows = socket_.connection_attempts_snapshot ();
+    REQUIRE (rows.size () == 1);
+    if (rows[0].state == state_)
+        return rows[0];
+    for (;;) {
+        const auto now = std::chrono::steady_clock::now ();
+        REQUIRE (now < deadline);
+        const auto timeout = std::chrono::ceil<std::chrono::milliseconds> (deadline - now);
+        auto item = zlink::poll_item_t::from_socket (socket_, zlink::poll_event_flag_t::pollconnect);
+        const int count = zlink::poll (&item, 1, timeout);
+        REQUIRE (count >= 0);
+        if (count > 0
+            && (static_cast<short> (item.revents) & ZLINK_POLLCONNECT) != 0) {
+            rows = socket_.connection_attempts_snapshot ();
+            REQUIRE (rows.size () == 1);
+            if (rows[0].state == state_)
+                return rows[0];
+        }
+    }
+}
+
+void test_connection_snapshot_lifetime ()
+{
+    zlink::context_t context;
+    zlink::dealer_socket_t client (context);
+    client.options ().linger (std::chrono::milliseconds (0));
+    REQUIRE (client.connection_attempts_snapshot ().empty ());
+    bool rejected = false;
+    try { client.connect ("invalid-endpoint"); }
+    catch (const zlink::connect_error_t &) { rejected = true; }
+    REQUIRE (rejected);
+    REQUIRE (client.connection_attempts_snapshot ().empty ());
+    const auto endpoint = zlink_cpp_contract::unique_inproc ("connection-\xed\x95\x9c\xea\xb8\x80");
+    client.connect (endpoint);
+    client.connect (endpoint);
+    const auto rows = client.connection_attempts_snapshot ();
+    REQUIRE (rows.size () == 2);
+    REQUIRE (rows[0].endpoint == endpoint && rows[1].endpoint == endpoint);
+    REQUIRE (rows[0].intent_id != 0 && rows[1].intent_id != 0);
+    REQUIRE (rows[0].intent_id != rows[1].intent_id);
+    REQUIRE (rows[0].revision != 0 && rows[1].revision != 0);
+    REQUIRE (rows[0].last_failure_id == 0 && rows[1].last_failure_id == 0);
+    client.disconnect (endpoint);
+    REQUIRE (client.connection_attempts_snapshot ().empty ());
+    client.close ();
+    REQUIRE (rows[0].endpoint == endpoint && rows[1].endpoint == endpoint);
+    std::puts ("connection lifetime: empty=1 rejected_connect=1 duplicate_intents=2 removal=1 owned_utf8_after_close=1");
+}
+
+void test_connection_failure_recovery ()
+{
+    zlink::context_t context;
+    zlink::router_socket_t server (context);
+    zlink::dealer_socket_t client (context);
+    server.options ().linger (std::chrono::milliseconds (0));
+    client.options ().linger (std::chrono::milliseconds (0));
+    server.bind ("tcp://127.0.0.1:*");
+    const auto endpoint = server.options ().last_endpoint ();
+    server.unbind (endpoint);
+    client.connect (endpoint);
+    REQUIRE (connect_ready_now (client));
+    auto failed = wait_connection_state (client, zlink::connection_attempt_state_t::attempt_failed);
+    REQUIRE (failed.last_failure_id != 0);
+    REQUIRE (failed.last_failure.kind == zlink::connection_failure_kind_t::refused);
+    REQUIRE (failed.last_failure.stage == zlink::connection_failure_stage_t::transport);
+    REQUIRE (failed.last_failure.normalized_errno == ECONNREFUSED);
+    server.bind (endpoint);
+    auto connected = wait_connection_state (client, zlink::connection_attempt_state_t::connected);
+    REQUIRE (connected.intent_id == failed.intent_id);
+    REQUIRE (connected.revision != failed.revision);
+    REQUIRE (connected.last_failure_id != 0);
+    // The last failure can advance during reconnect; Core must retain it on success.
+    REQUIRE (connected.last_failure.kind == failed.last_failure.kind);
+    REQUIRE (connected.last_failure.stage == failed.last_failure.stage);
+    REQUIRE (connected.last_failure.normalized_errno == failed.last_failure.normalized_errno);
+    REQUIRE (!connect_ready_now (client));
+    client.disconnect (endpoint);
+    REQUIRE (connect_ready_now (client));
+    REQUIRE (client.connection_attempts_snapshot ().empty ());
+    REQUIRE (!connect_ready_now (client));
+    client.connect (endpoint);
+    REQUIRE (client.connection_attempts_snapshot ()[0].intent_id != failed.intent_id);
+    std::puts ("connection recovery: failed_query_is_data=1 connected_history=1 removal_readiness=1 new_intent=1");
+}
+
 } // namespace
 
 int main ()
 {
+    test_connection_snapshot_lifetime ();
+    test_connection_failure_recovery ();
     test_snapshot_pollroute_and_record_generation ();
     test_replaced_route_changes_generation ();
     test_snapshot_grows_past_initial_capacity ();
