@@ -1127,7 +1127,9 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
   }
 
   private meshNode(meshName: string): ZLinkBackendMeshNode | undefined {
-    return this.meshRuntime?.()?.meshNode?.(meshName);
+    const runtime = this.meshRuntime?.();
+    if (runtime === undefined) this.requireManager();
+    return runtime?.meshNode?.(meshName);
   }
 
   private isKnownBackendPeer(node: ZLinkBackendMeshNode, targetNodeRid: string): boolean {

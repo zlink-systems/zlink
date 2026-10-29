@@ -425,7 +425,18 @@ export class ZLinkFrameworkRuntimeHost
     this.meshRouters = new MeshRouterResolver(options.registration);
     this.spotRouterChannelIdForMesh = this.meshRouters.spotRouterChannelIdByMesh();
     this.routeTransport = new ZLinkRuntimeRouteTransport(
-      () => this.channelRuntime,
+      () => {
+        if (
+          this.channelRuntime === undefined &&
+          this.runtimeState === ZLinkFrameworkRuntimeState.Stopped
+        ) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+            'Route channel runtime is stopped.'
+          );
+        }
+        return this.channelRuntime;
+      },
       (routerChannelId) => this.meshRouters.canUseRouterChannel(routerChannelId),
       () => this.spotNodeRuntime,
       { serializers: options.registration.messageSerializers },

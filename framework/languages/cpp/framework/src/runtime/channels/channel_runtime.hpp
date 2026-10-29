@@ -249,9 +249,6 @@ class channel_runtime_state_t
     std::map<std::string, spot_mesh_request_t> spot_mesh_requesters;
     instance_spot_send_t instance_spot_sender;
     instance_spot_request_t instance_spot_requester;
-    /* Route client request work. The runtime owns it and its teardown drains it: the last
-     * route client reference can be released on one of its workers. */
-    std::shared_ptr<runtime::offload_executor_t> route_client_executor;
     std::map<std::string, route_handler_registry_t> route_handlers;
     std::shared_ptr<const std::map<std::string, int>> server_peer_weight_overrides =
       std::make_shared<const std::map<std::string, int>> ();
