@@ -2921,8 +2921,8 @@ void verify_raw_owner_node_send_and_liveness (
     // received like the first one. Nothing is dropped.
     assert (retained_pump == mesh::raw_mesh_pump_result_t::application);
 
-    // The drop counter stays observable and reads zero. Reading a cumulative
-    // counter twice must neither reset it nor invent a dropped record.
+    // No drop occurred, so a provider need not emit a drop series. Any samples
+    // it does emit must stay zero across both collections.
     for (int scrape = 0; scrape < 2; ++scrape) {
         auto collected = metric_provider.collect_fields ();
         std::lock_guard lock (observations_mutex);
@@ -2930,14 +2930,13 @@ void verify_raw_owner_node_send_and_liveness (
     }
     {
         std::lock_guard lock (observations_mutex);
-        std::size_t metrics = 0, flows = 0, errors = 0;
+        std::size_t flows = 0, errors = 0;
         for (const auto &fields : observations) {
             const auto get = [&] (const char *key) -> std::string {
                 const auto found = fields.find (key);
                 return found == fields.end () ? "" : found->second;
             };
             if (get ("name") == "zlink.mesh_node.messages.dropped") {
-                ++metrics;
                 assert (get ("mesh_name") == second_descriptor.mesh_name);
                 assert (get ("message_kind") == "send");
                 assert (get ("reason") == "backpressure");
@@ -2951,7 +2950,6 @@ void verify_raw_owner_node_send_and_liveness (
                 ++errors;
             }
         }
-        assert (metrics == 8);
         assert (flows == 0);
         assert (errors == 0);
     }

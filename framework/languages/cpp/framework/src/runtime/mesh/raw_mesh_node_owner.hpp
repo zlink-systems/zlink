@@ -627,9 +627,6 @@ class raw_mesh_node_owner_t
     };
     std::array<peer_metric_registration_t, 4> _peer_metrics;
     static void publish_peer_metrics (opentelemetry::metrics::ObserverResult result, void *state);
-    std::array<std::atomic_uint64_t, 4> _inbound_drops{};
-    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _drop_metric;
-    static void publish_drop_metrics (opentelemetry::metrics::ObserverResult result, void *state);
     std::atomic_size_t _last_pump_bytes{0};
     std::shared_ptr<foundation::operation_registry_t> _operations;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
