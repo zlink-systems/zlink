@@ -1,0 +1,79 @@
+name: Source Core accepted-reply check
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Candidate Core, binding and Framework source ref (resolved SHA is retained)
+        required: true
+        default: main
+        type: string
+      full_unit_suite:
+        description: Also run the full Release/net10.0 unit suite after the focused checks
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  accepted-reply:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      ZLinkFrameworkTargetFrameworks: net10.0
+      NUGET_PACKAGES: ${{ runner.temp }}/reply-check/nuget-cache
+      REPLY_CHECK_RESULTS: ${{ runner.temp }}/reply-check/results
+      FULL_UNIT_SUITE: ${{ inputs.full_unit_suite }}
+    steps:
+      # Pin the verification implementation independently of candidate/control source.
+      - name: Checkout verification implementation
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: verification
+          persist-credentials: false
+
+      - name: Checkout candidate source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref }}
+          path: candidate
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      - name: Build source Core and check accepted replies
+        shell: bash
+        working-directory: candidate
+        run: |
+          mkdir -p "$REPLY_CHECK_RESULTS"
+          bash "$GITHUB_WORKSPACE/verification/scripts/ci/core-dotnet-reply-check.sh" \
+            2>&1 | tee "$REPLY_CHECK_RESULTS/run.log"
+
+      - name: Retain provenance and all results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: source-core-reply-check-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/reply-check/results
+            ${{ runner.temp }}/reply-check/packages/nuget/*.nupkg
+            ${{ runner.temp }}/zlink-framework-tests
+            ${{ github.workspace }}/candidate/core/build/reply-check/CMakeCache.txt
+            ${{ github.workspace }}/candidate/core/build/reply-check/compile_commands.json
+            ${{ github.workspace }}/candidate/core/build/reply-check/lib/*.dylib
+          if-no-files-found: warn
+          retention-days: 14
