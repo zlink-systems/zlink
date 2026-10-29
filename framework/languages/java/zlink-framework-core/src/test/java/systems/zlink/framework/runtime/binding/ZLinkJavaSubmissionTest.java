@@ -213,20 +213,28 @@ final class ZLinkJavaSubmissionTest {
 
     @ParameterizedTest
     @EnumSource(Adapter.class)
-    void cancellingPendingRequestCancelsBindingWaiterWithoutResubmission(Adapter adapter)
+    void cancellingPendingRequestRetainsLateReplyProcessingWithoutResubmission(Adapter adapter)
             throws Exception {
         try (var binding = new BindingProbe();
                 Message part = Message.from("request")) {
             binding.result = SubmitResult.BACKPRESSURED;
             var completion = requestForCancellation(binding, adapter, List.of(part));
             assertTrue(completion.cancel(false));
+            var cancellation =
+                    completion.handle((reply, failure) -> failure).get(1, TimeUnit.SECONDS);
+            assertInstanceOf(java.util.concurrent.CancellationException.class, cancellation);
             assertEquals(0, binding.operations.pendingCount());
-            // §10.1/§11: physical waiter cancellation follows the caller's dispatcher terminal.
-            binding.replies.getFirst().handle((reply, failure) -> null).get(1, TimeUnit.SECONDS);
-            assertTrue(binding.replies.getFirst().isCancelled());
+            assertFalse(binding.replies.getFirst().isDone());
             assertEquals(1, binding.submissions);
             binding.admission.complete(null);
+            try (Message late = Message.from("late")) {
+                assertTrue(binding.replies.getFirst().complete(List.of(late)));
+                assertTrue(late.empty());
+            }
+            assertSame(cancellation, completion.handle((reply, failure) -> failure).join());
             assertTrue(completion.isCancelled());
+            assertEquals(1, binding.submissions);
+            assertEquals(0, binding.operations.pendingCount());
         }
     }
 
@@ -644,7 +652,6 @@ final class ZLinkJavaSubmissionTest {
                                 null,
                                 null,
                                 null,
-                                java.util.Map.of(),
                                 java.util.Map.of(),
                                 Runnable::run)) {
             binding.result = SubmitResult.BACKPRESSURED;

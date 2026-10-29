@@ -510,24 +510,86 @@ def verify_sample_runner_inventories() -> tuple[int, list[Path]]:
 
 
 def verify_jvm_build_lock() -> None:
-    lock_path = "/tmp/zlink-framework-java-kotlin-sample-gradle.lock"
     sample_helper = ROOT / "framework/languages/java/samples/runner-common.sh"
-    require_text(sample_helper, lock_path)
-    require_text(
-        ROOT / "framework/languages/java/samples/redis-common.ps1",
-        "zlink-framework-java-kotlin-sample-gradle.lock",
-    )
+    key_function = shell_function(sample_helper, "zlink_sample_gradle_lock_path")
+    for marker in (
+        'git -C "${here}" rev-parse --show-toplevel',
+        "tr -d '\\r\\n' | sha256sum | cut -c1-16",
+        "/tmp/zlink-framework-java-kotlin-sample-gradle-%s.lock",
+    ):
+        if marker not in key_function:
+            raise ValueError(f"{sample_helper.relative_to(ROOT)}: checkout key omits {marker!r}")
     build_function = shell_function(sample_helper, "zlink_sample_gradle_locked")
-    if 'flock --exclusive --close "${lock_path}" "$@"' not in build_function:
+    for marker in (
+        'lock_path="$(zlink_sample_gradle_lock_path)"',
+        'exec 9>"${lock_path}"',
+        "flock --exclusive --nonblock 9",
+        "flock --exclusive 9",
+        '"$@" 9>&-',
+    ):
+        if marker not in build_function:
+            raise ValueError(f"{sample_helper.relative_to(ROOT)}: build lock omits {marker!r}")
+    if not re.search(r'(?s)\n  \(\n.*?\n  \)\n}', build_function) or "exec flock" in build_function:
         raise ValueError(
-            f"{sample_helper.relative_to(ROOT)}: JVM build lock must wrap only "
-            "the requested build command and close inherited descriptors"
+            f"{sample_helper.relative_to(ROOT)}: build-only lock must close FD9 "
+            "in the child and release its subshell before servers start"
         )
-    if "exec flock" in build_function:
-        raise ValueError(
-            f"{sample_helper.relative_to(ROOT)}: JVM build lock must be released "
-            "when the build command returns"
-        )
+    for name in ("gradle_run", "zlink_sample_build_framework_jars_if_available"):
+        if "zlink_sample_gradle_locked ./gradlew" not in shell_function(sample_helper, name):
+            raise ValueError(f"{sample_helper.relative_to(ROOT)}: {name} bypasses shared output lock")
+
+    powershell = ROOT / "framework/languages/java/samples/redis-common.ps1"
+    source = powershell.read_text(encoding="utf-8")
+    require_once(powershell, "function Invoke-ZlinkSampleGradleBuild {")
+    build = source.split("function Invoke-ZlinkSampleGradleBuild {", 1)[1].split("\nfunction ", 1)[0]
+    for marker in (
+        "git -C $PSScriptRoot rev-parse --show-toplevel",
+        "[System.Security.Cryptography.SHA256]::Create()",
+        "[System.Text.Encoding]::UTF8.GetBytes($checkoutRoot.Trim())",
+        'Select-Object -First 8 | ForEach-Object { $_.ToString("x2") }',
+        "zlink-framework-java-kotlin-sample-gradle-$checkoutKey.lock",
+        "[System.IO.FileShare]::None",
+        "& $GradleExecutable @buildArguments",
+    ):
+        if marker not in build:
+            raise ValueError(f"{powershell.relative_to(ROOT)}: exclusive checkout build omits {marker!r}")
+    if not re.search(
+        r"(?s)& \$GradleExecutable @buildArguments.*?} finally \{\s*"
+        r"if \(\$buildRoot\) \{ Pop-Location }\s*\$lockStream\.Dispose\(\)",
+        build,
+    ):
+        raise ValueError(f"{powershell.relative_to(ROOT)}: build must dispose lock in finally")
+
+    # Templates share the checkout/output key and close the descriptor in children.
+    for suite in ("sample", "e2e"):
+        path = ROOT / f"framework/doc/framework/common/{suite}/runner-templates/run_{suite}.template.sh"
+        function = shell_function(path, "run_build")
+        for marker in (
+            "flock --exclusive --close",
+            '/tmp/zlink-framework-java-kotlin-sample-gradle-$(git -C "${SCRIPT_DIR}" '
+            "rev-parse --show-toplevel | tr -d '\\r\\n' | sha256sum | cut -c1-16).lock",
+            '"$@"',
+            "return",
+        ):
+            if marker not in function:
+                raise ValueError(f"{path.relative_to(ROOT)}: build-only checkout lock omits {marker!r}")
+
+    for language in ("java", "kotlin"):
+        for path in (ROOT / f"framework/languages/java/samples/{language}").glob("*/run_sample.*"):
+            source = path.read_text(encoding="utf-8")
+            if path.suffix == ".sh":
+                forbidden = r"(?m)^\s*(?!zlink_sample_gradle_locked\b)(?:\.\.?/)*gradlew\b"
+                wrapper = "gradle_run"
+            elif path.suffix == ".ps1":
+                forbidden = (
+                    r"(?im)^\s*&\s+(?:\$Gradle|\./gradlew)"
+                    r"(?:[^\n]*`\n)*[^\n]*(?:installDist|frameworkJar|contractTest|fakeBackendTest|:jar)"
+                )
+                wrapper = "Invoke-ZlinkSampleGradleBuild"
+            else:
+                continue
+            if wrapper not in source or re.search(forbidden, source):
+                raise ValueError(f"{path.relative_to(ROOT)}: build must use the shared output lock")
 
 
 def verify_shell_redis_helpers() -> int:

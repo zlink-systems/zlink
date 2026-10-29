@@ -528,11 +528,18 @@ final class ZLinkJavaDurableRequestTest {
         source.signal();
         assertEquals(1, attempts.get());
         completion.cancel(false);
-        // §11 delivers cancellation and its physical cleanup on the dispatcher turn.
-        pending.handle((reply, failure) -> null).get(1, TimeUnit.SECONDS);
-        assertTrue(pending.isCancelled());
+        var cancellation = completion.handle((reply, failure) -> failure).join();
+        assertInstanceOf(java.util.concurrent.CancellationException.class, cancellation);
         source.observerClosed.get(1, TimeUnit.SECONDS);
         assertNull(source.listener);
+        assertFalse(pending.isDone());
+        var delivered = new AtomicInteger();
+        pending.thenAccept(reply -> delivered.incrementAndGet());
+        assertTrue(pending.complete(List.of(new byte[] {7})));
+        assertEquals(1, delivered.get());
+        assertSame(cancellation, completion.handle((reply, failure) -> failure).join());
+        source.signal();
+        assertEquals(1, attempts.get());
     }
 
     @Test
@@ -583,10 +590,19 @@ final class ZLinkJavaDurableRequestTest {
         ended.set(true);
         source.signal();
         assertFailure(completion, ZLinkFrameworkErrorKind.UNAVAILABLE, null);
-        pending.handle((reply, failure) -> null).get(1, TimeUnit.SECONDS);
-        assertTrue(pending.isCancelled());
+        var targetFailure = assertThrows(CompletionException.class, completion::join).getCause();
         source.observerClosed.get(1, TimeUnit.SECONDS);
         assertNull(source.listener);
+        assertFalse(pending.isDone());
+        var delivered = new AtomicInteger();
+        pending.thenAccept(reply -> delivered.incrementAndGet());
+        assertTrue(pending.complete(List.of(new byte[] {7})));
+        assertEquals(1, delivered.get());
+        assertSame(
+                targetFailure,
+                assertThrows(CompletionException.class, completion::join).getCause());
+        source.signal();
+        assertEquals(1, attempts.get());
     }
 
     @Test
