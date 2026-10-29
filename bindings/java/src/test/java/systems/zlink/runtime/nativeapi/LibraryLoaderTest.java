@@ -2,7 +2,13 @@ package systems.zlink.runtime.nativeapi;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -14,13 +20,13 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 class LibraryLoaderTest {
     private static final String RESOURCE =
             "/systems/zlink/runtime/nativeapi/native-test.bin";
     private static final String FILE_NAME = "libzlink-test.so";
+    private static final long PROBE_TIMEOUT_SECONDS = 30;
+    private static final String OLD_CORE_LIBRARY_ENV = "ZLINK_TEST_OLD_CORE_LIBRARY";
 
     @TempDir
     Path temporaryDirectory;
@@ -73,7 +79,7 @@ class LibraryLoaderTest {
         processBuilder.redirectErrorStream(true);
 
         Process process = processBuilder.start();
-        if (!process.waitFor(30, TimeUnit.SECONDS)) {
+        if (!process.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
             process.destroyForcibly();
             fail("fallback probe did not terminate");
         }
@@ -81,6 +87,49 @@ class LibraryLoaderTest {
                 StandardCharsets.UTF_8);
         assertEquals(0, process.exitValue(), output);
     }
+
+    @Test
+    void compatibleCoreCreatesContextBeforeAnySnapshot() throws Exception {
+        ProcessResult result = runContextProbe(null);
+        assertEquals(0, result.exitCode(), result.output());
+        assertTrue(result.output().contains("CONTEXT_CREATED"), result.output());
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = OLD_CORE_LIBRARY_ENV, matches = ".+")
+    void coreWithoutSnapshotExportIsRejectedBeforeContextCreation() throws Exception {
+        ProcessResult result = runContextProbe(System.getenv(OLD_CORE_LIBRARY_ENV));
+        assertTrue(result.exitCode() != 0, result.output());
+        assertTrue(
+                result.output()
+                        .contains(
+                                "Missing native symbol 'zlink_socket_connection_attempts_snapshot'"),
+                result.output());
+        assertFalse(result.output().contains("CONTEXT_CREATED"), result.output());
+    }
+
+    private ProcessResult runContextProbe(String library) throws Exception {
+        Path java = Path.of(System.getProperty("java.home"), "bin", "java");
+        ProcessBuilder builder =
+                new ProcessBuilder(
+                        java.toString(),
+                        "--enable-native-access=ALL-UNNAMED",
+                        "-cp",
+                        System.getProperty("java.class.path"),
+                        ConnectionContextProbe.class.getName());
+        if (library != null) builder.environment().put("ZLINK_LIBRARY_PATH", library);
+        builder.redirectErrorStream(true);
+        Process process = builder.start();
+        if (!process.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            process.destroyForcibly();
+            fail("context probe did not terminate");
+        }
+        return new ProcessResult(
+                process.exitValue(),
+                new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+    }
+
+    private record ProcessResult(int exitCode, String output) {}
 
     private byte[] resourceBytes() throws IOException {
         try (var in = LibraryLoaderTest.class.getResourceAsStream(RESOURCE)) {

@@ -1,22 +1,45 @@
 package systems.zlink.runtime.nativeapi;
-import systems.zlink.contracts.errors.ZlinkRecvException;
-import systems.zlink.contracts.eventing.MonitorEvent;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.contracts.sockets.RecvResult;
-import systems.zlink.contracts.sockets.RouterRoute;
 import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ZlinkException;
+import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.eventing.MonitorEvent;
+import systems.zlink.contracts.sockets.ConnectionAttempt;
+import systems.zlink.contracts.sockets.ConnectionFailure;
+import systems.zlink.contracts.sockets.RecvResult;
+import systems.zlink.contracts.sockets.RouterRoute;
+import systems.zlink.contracts.sockets.SubmitResult;
+
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+
 public final class Native {
+    static {
+        NativeSymbols.require("zlink_socket_connection_attempts_snapshot");
+    }
+
+    private static final MethodHandle MH_CONNECTION_ATTEMPTS_SNAPSHOT =
+            downcall(
+                    "zlink_socket_connection_attempts_snapshot",
+                    FunctionDescriptor.of(
+                            ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS,
+                            ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS,
+                            ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS));
+    private static final long INITIAL_CONNECTION_SNAPSHOT_CAPACITY = 16;
+    private static final long INITIAL_CONNECTION_ENDPOINT_CAPACITY = 256;
     private static final int SEND_DONT_WAIT = 1;
     private static final ThreadLocal<NativeMultipartScratch>
         MULTIPART_RECEIVE_SCRATCH =
@@ -1442,6 +1465,117 @@ public final class Native {
         } catch (Throwable t) {
             throw new RuntimeException("zlink_router_routes_snapshot failed",
                 t);
+        }
+    }
+
+    /** Copies Core facts; buffer growth does not retry a connection attempt. */
+    public static List<ConnectionAttempt> connectionAttemptsSnapshot(MemorySegment socket) {
+        long capacity = INITIAL_CONNECTION_SNAPSHOT_CAPACITY;
+        long bytesCapacity = INITIAL_CONNECTION_ENDPOINT_CAPACITY;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment countOut = arena.allocate(ValueLayout.JAVA_LONG);
+            MemorySegment bytesOut = arena.allocate(ValueLayout.JAVA_LONG);
+            for (; ; ) {
+                MemorySegment rows =
+                        arena.allocate(NativeLayouts.CONNECTION_ATTEMPT_LAYOUT, capacity);
+                MemorySegment endpoints = arena.allocate(bytesCapacity);
+                int rc =
+                        (int)
+                                MH_CONNECTION_ATTEMPTS_SNAPSHOT.invokeExact(
+                                        socket,
+                                        rows,
+                                        capacity,
+                                        countOut,
+                                        endpoints,
+                                        bytesCapacity,
+                                        bytesOut);
+                long count = countOut.get(ValueLayout.JAVA_LONG, 0);
+                long bytes = bytesOut.get(ValueLayout.JAVA_LONG, 0);
+                if (count < 0
+                        || count > Integer.MAX_VALUE
+                        || bytes < 0
+                        || bytes > Integer.MAX_VALUE) {
+                    throw new ZlinkConfigException(ConfigResult.INTERNAL_ERROR);
+                }
+                if (rc == ConfigResult.BUFFER_TOO_SMALL.value()
+                        && (count > capacity || bytes > bytesCapacity)) {
+                    capacity = Math.max(capacity, count);
+                    bytesCapacity = Math.max(bytesCapacity, bytes);
+                    continue;
+                }
+                if (rc != ConfigResult.OK.value()) {
+                    throw new ZlinkConfigException(ConfigResult.fromValue(rc), errno());
+                }
+                if (count > capacity || bytes > bytesCapacity) {
+                    throw new ZlinkConfigException(ConfigResult.INTERNAL_ERROR);
+                }
+                long stride = NativeLayouts.CONNECTION_ATTEMPT_LAYOUT.byteSize();
+                List<ConnectionAttempt> attempts = new ArrayList<>((int) count);
+                for (long index = 0; index < count; index++) {
+                    MemorySegment row = rows.asSlice(index * stride, stride);
+                    long offset =
+                            row.get(
+                                    ValueLayout.JAVA_LONG,
+                                    NativeLayouts.CONNECTION_ATTEMPT_ENDPOINT_OFFSET_OFFSET);
+                    long length =
+                            row.get(
+                                    ValueLayout.JAVA_LONG,
+                                    NativeLayouts.CONNECTION_ATTEMPT_ENDPOINT_LENGTH_OFFSET);
+                    if (offset < 0 || length < 0 || offset > bytes || length > bytes - offset) {
+                        throw new ZlinkConfigException(ConfigResult.INTERNAL_ERROR);
+                    }
+                    MemorySegment failure =
+                            row.asSlice(
+                                    NativeLayouts.CONNECTION_ATTEMPT_LAST_FAILURE_OFFSET,
+                                    NativeLayouts.CONNECTION_FAILURE_LAYOUT.byteSize());
+                    attempts.add(
+                            new ConnectionAttempt(
+                                    new String(
+                                            endpoints
+                                                    .asSlice(offset, length)
+                                                    .toArray(ValueLayout.JAVA_BYTE),
+                                            StandardCharsets.UTF_8),
+                                    row.get(
+                                            ValueLayout.JAVA_LONG,
+                                            NativeLayouts.CONNECTION_ATTEMPT_INTENT_ID_OFFSET),
+                                    row.get(
+                                            ValueLayout.JAVA_LONG,
+                                            NativeLayouts.CONNECTION_ATTEMPT_REVISION_OFFSET),
+                                    row.get(
+                                            ValueLayout.JAVA_LONG,
+                                            NativeLayouts
+                                                    .CONNECTION_ATTEMPT_LAST_FAILURE_ID_OFFSET),
+                                    EnumCodecs.connectionAttemptStateFromValue(
+                                            row.get(
+                                                    ValueLayout.JAVA_INT,
+                                                    NativeLayouts.CONNECTION_ATTEMPT_STATE_OFFSET)),
+                                    new ConnectionFailure(
+                                            EnumCodecs.connectionFailureKindFromValue(
+                                                    failure.get(
+                                                            ValueLayout.JAVA_INT,
+                                                            NativeLayouts
+                                                                    .CONNECTION_FAILURE_KIND_OFFSET)),
+                                            EnumCodecs.connectionFailureStageFromValue(
+                                                    failure.get(
+                                                            ValueLayout.JAVA_INT,
+                                                            NativeLayouts
+                                                                    .CONNECTION_FAILURE_STAGE_OFFSET)),
+                                            failure.get(
+                                                    ValueLayout.JAVA_INT,
+                                                    NativeLayouts
+                                                            .CONNECTION_FAILURE_NORMALIZED_ERRNO_OFFSET),
+                                            Integer.toUnsignedLong(
+                                                    failure.get(
+                                                            ValueLayout.JAVA_INT,
+                                                            NativeLayouts
+                                                                    .CONNECTION_FAILURE_DISCONNECT_REASON_OFFSET)))));
+                }
+                return List.copyOf(attempts);
+            }
+        } catch (ZlinkConfigException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new RuntimeException("zlink_socket_connection_attempts_snapshot failed", t);
         }
     }
 

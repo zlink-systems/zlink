@@ -7,10 +7,16 @@ import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.RequestOperation;
 import systems.zlink.contracts.messaging.SendOperation;
 
+import java.util.List;
+
 /** A socket that load-balances sends across its connected peers and can issue routed requests. */
 public interface DealerSocket extends Socket {
     void bind(String endpoint);
     void connect(String endpoint);
+
+    /** Copies the current Core connection-attempt facts and acknowledges their readiness. */
+    List<ConnectionAttempt> connectionAttemptsSnapshot();
+
     void unbind(String endpoint);
     void disconnect(String endpoint);
     void disconnectRid(RoutingId routingId);

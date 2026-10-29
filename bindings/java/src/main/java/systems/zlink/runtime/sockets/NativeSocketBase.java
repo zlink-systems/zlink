@@ -1,16 +1,17 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 package systems.zlink.runtime.sockets;
-import systems.zlink.internal.sockets.SocketOptionKey;
-
-import systems.zlink.contracts.sockets.*;
-
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
+import systems.zlink.contracts.sockets.*;
 import systems.zlink.internal.ContractAccess;
+import systems.zlink.internal.sockets.SocketOptionKey;
 import systems.zlink.runtime.nativeapi.InternalAccess;
+import systems.zlink.runtime.nativeapi.Native;
+
 import java.lang.foreign.MemorySegment;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -215,6 +216,10 @@ abstract class NativeSocketBase implements Socket {
     public final void setTlsClient(String caCertPem, String hostname,
                                    boolean trustSystem) { runtime.setTlsClient(caCertPem, hostname, trustSystem); }
     @Override public void close() { runtime.close(); }
+
+    public final List<ConnectionAttempt> connectionAttemptsSnapshot() {
+        return Native.connectionAttemptsSnapshot(nativeHandle());
+    }
 
     MemorySegment nativeHandle() { return runtime.handle(); }
     MemorySegment handle() { return runtime.handle(); }

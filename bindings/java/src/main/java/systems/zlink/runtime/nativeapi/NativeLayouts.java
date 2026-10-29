@@ -32,6 +32,45 @@ public final class NativeLayouts {
     public static final long ROUTER_ROUTE_GENERATION_OFFSET = offset(
         ROUTER_ROUTE_LAYOUT, "route_generation");
 
+    public static final MemoryLayout CONNECTION_FAILURE_LAYOUT =
+            MemoryLayout.structLayout(
+                    ValueLayout.JAVA_INT.withName("kind"),
+                    ValueLayout.JAVA_INT.withName("stage"),
+                    ValueLayout.JAVA_INT.withName("normalized_errno"),
+                    ValueLayout.JAVA_INT.withName("disconnect_reason"));
+    public static final MemoryLayout CONNECTION_ATTEMPT_LAYOUT =
+            MemoryLayout.structLayout(
+                    ValueLayout.JAVA_LONG.withName("endpoint_offset"),
+                    ValueLayout.JAVA_LONG.withName("endpoint_length"),
+                    ValueLayout.JAVA_LONG.withName("intent_id"),
+                    ValueLayout.JAVA_LONG.withName("revision"),
+                    ValueLayout.JAVA_LONG.withName("last_failure_id"),
+                    ValueLayout.JAVA_INT.withName("state"),
+                    CONNECTION_FAILURE_LAYOUT.withName("last_failure"),
+                    MemoryLayout.paddingLayout(4));
+    public static final long CONNECTION_FAILURE_KIND_OFFSET =
+            offset(CONNECTION_FAILURE_LAYOUT, "kind");
+    public static final long CONNECTION_FAILURE_STAGE_OFFSET =
+            offset(CONNECTION_FAILURE_LAYOUT, "stage");
+    public static final long CONNECTION_FAILURE_NORMALIZED_ERRNO_OFFSET =
+            offset(CONNECTION_FAILURE_LAYOUT, "normalized_errno");
+    public static final long CONNECTION_FAILURE_DISCONNECT_REASON_OFFSET =
+            offset(CONNECTION_FAILURE_LAYOUT, "disconnect_reason");
+    public static final long CONNECTION_ATTEMPT_ENDPOINT_OFFSET_OFFSET =
+            offset(CONNECTION_ATTEMPT_LAYOUT, "endpoint_offset");
+    public static final long CONNECTION_ATTEMPT_ENDPOINT_LENGTH_OFFSET =
+            offset(CONNECTION_ATTEMPT_LAYOUT, "endpoint_length");
+    public static final long CONNECTION_ATTEMPT_INTENT_ID_OFFSET =
+            offset(CONNECTION_ATTEMPT_LAYOUT, "intent_id");
+    public static final long CONNECTION_ATTEMPT_REVISION_OFFSET =
+            offset(CONNECTION_ATTEMPT_LAYOUT, "revision");
+    public static final long CONNECTION_ATTEMPT_LAST_FAILURE_ID_OFFSET =
+            offset(CONNECTION_ATTEMPT_LAYOUT, "last_failure_id");
+    public static final long CONNECTION_ATTEMPT_STATE_OFFSET =
+            offset(CONNECTION_ATTEMPT_LAYOUT, "state");
+    public static final long CONNECTION_ATTEMPT_LAST_FAILURE_OFFSET =
+            offset(CONNECTION_ATTEMPT_LAYOUT, "last_failure");
+
     public static final MemoryLayout COMPLETION_LAYOUT =
             MemoryLayout.structLayout(
                     ValueLayout.JAVA_INT.withName("struct_size"),
