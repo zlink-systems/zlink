@@ -3177,6 +3177,62 @@ napi_value socket_reply (napi_env env, napi_callback_info info)
     return out;
 }
 
+napi_value socket_connection_attempts_snapshot (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *socket = NULL;
+    napi_get_value_external (env, argv[0], &socket);
+    std::vector<zlink_connection_attempt_t> attempts (8);
+    std::vector<char> endpoints (256);
+    size_t count = 0;
+    size_t endpoint_bytes = 0;
+    for (;;) {
+        const zlink_config_result_t rc = zlink_socket_connection_attempts_snapshot (
+          socket, attempts.data (), attempts.size (), &count,
+          endpoints.data (), endpoints.size (), &endpoint_bytes);
+        if (rc == ZLINK_CONFIG_OK)
+            break;
+        if (rc != ZLINK_CONFIG_BUFFER_TOO_SMALL)
+            return throw_result_error (env, "connection snapshot query failed", rc);
+        // Both capacities describe the same complete snapshot. Only a successful
+        // query releases readiness; insufficient buffers never publish rows.
+        attempts.resize (count);
+        endpoints.resize (endpoint_bytes);
+    }
+    napi_value out;
+    napi_create_array_with_length (env, count, &out);
+    for (size_t i = 0; i < count; ++i) {
+        const zlink_connection_attempt_t &attempt = attempts[i];
+        napi_value row, failure, value;
+        napi_create_object (env, &row);
+        napi_create_string_utf8 (env, endpoints.data () + attempt.endpoint_offset,
+                                 attempt.endpoint_length, &value);
+        napi_set_named_property (env, row, "endpoint", value);
+        napi_create_bigint_uint64 (env, attempt.intent_id, &value);
+        napi_set_named_property (env, row, "intentId", value);
+        napi_create_bigint_uint64 (env, attempt.revision, &value);
+        napi_set_named_property (env, row, "revision", value);
+        napi_create_bigint_uint64 (env, attempt.last_failure_id, &value);
+        napi_set_named_property (env, row, "lastFailureId", value);
+        napi_create_uint32 (env, attempt.state, &value);
+        napi_set_named_property (env, row, "state", value);
+        napi_create_object (env, &failure);
+        napi_create_uint32 (env, attempt.last_failure.kind, &value);
+        napi_set_named_property (env, failure, "kind", value);
+        napi_create_uint32 (env, attempt.last_failure.stage, &value);
+        napi_set_named_property (env, failure, "stage", value);
+        napi_create_int32 (env, attempt.last_failure.normalized_errno, &value);
+        napi_set_named_property (env, failure, "normalizedErrno", value);
+        napi_create_uint32 (env, attempt.last_failure.disconnect_reason, &value);
+        napi_set_named_property (env, failure, "disconnectReason", value);
+        napi_set_named_property (env, row, "lastFailure", failure);
+        napi_set_element (env, out, static_cast<uint32_t> (i), row);
+    }
+    return out;
+}
+
 napi_value router_routes_snapshot (napi_env env, napi_callback_info info)
 {
     napi_value argv[1];

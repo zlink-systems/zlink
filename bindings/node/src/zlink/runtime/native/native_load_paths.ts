@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import * as fs from 'node:fs';
+import { Module } from 'node:module';
+import { constants } from 'node:os';
 import * as path from 'node:path';
 
 import type { NativeBinding } from './binding';
@@ -106,7 +108,37 @@ function windowsRuntimePath(entry: string | undefined): string | undefined {
 }
 
 export function requireNativeAt(target: string): NativeBinding {
-  return require(target) as NativeBinding;
+  let binding: NativeBinding;
+  if (process.platform === 'win32') {
+    binding = require(target) as NativeBinding;
+  } else {
+    const filename = require.resolve(target);
+    if (path.extname(filename) !== '.node' || require.cache[filename]) {
+      binding = require(target) as NativeBinding;
+    } else {
+      const flags = constants.dlopen?.RTLD_NOW;
+      if (typeof flags !== 'number') {
+        throw new Error('zlink native addon requires os.constants.dlopen.RTLD_NOW');
+      }
+      const addon = new Module(filename, module);
+      addon.filename = filename;
+      require.cache[filename] = addon;
+      try {
+        process.dlopen(addon, filename, flags);
+      } catch (error) {
+        if (require.cache[filename] === addon) delete require.cache[filename];
+        const childIndex = module.children.indexOf(addon);
+        if (childIndex !== -1) module.children.splice(childIndex, 1);
+        throw error;
+      }
+      addon.loaded = true;
+      binding = addon.exports as NativeBinding;
+    }
+  }
+  if (typeof binding.socketConnectionAttemptsSnapshot !== 'function') {
+    throw new Error('zlink native addon requires connection snapshot/PollConnect support: socketConnectionAttemptsSnapshot is missing');
+  }
+  return binding;
 }
 
 function refreshAddonRuntimeLink(addonLib: string, sourceLibs: string[]): void {

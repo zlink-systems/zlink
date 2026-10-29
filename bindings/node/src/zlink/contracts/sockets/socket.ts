@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { MonitorEventType, MonitorSocket } from '../eventing';
+import type { ConnectionAttempt } from './connection_attempt';
 import type { RoutingId } from '../core';
 import type { ReceiveFlowState } from './socket_constants';
 import type { DealerSocket } from './dealer_socket';
@@ -67,6 +68,12 @@ export interface ConnectableSocket extends Socket {
    * returns before the peer is reachable.
    */
   connect(endpoint: string): void;
+  /**
+   * Read every current outbound registration, clearing PollConnect readiness
+   * only after a successful complete snapshot. Use one observer per socket.
+   * AttemptFailed is snapshot data, not a query error.
+   */
+  connectionAttemptsSnapshot(): readonly ConnectionAttempt[];
   /** Disconnect the connection previously established to `endpoint`. */
   disconnect(endpoint: string): void;
   /** Disconnect the peer identified by `routingId` rather than by address. */

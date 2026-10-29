@@ -131,3 +131,25 @@ received.transportPairId;
 ctx.shutdown();
 packet.close(); timer.close(); events.close(); poller.close(); monitor.close();
 stream.close(); router.close(); dealer.close(); pub.close(); pair.close(); ctx.close();
+
+const connectionRows: readonly zlink.ConnectionAttempt[] = dealer.connectionAttemptsSnapshot();
+poller.modify(dealer, [zlink.PollEventFlag.PollConnect]);
+for (const row of connectionRows) {
+  const token: bigint = row.intentId;
+  const state: zlink.ConnectionAttemptState = row.state;
+  const failure: zlink.ConnectionFailure = row.lastFailure;
+  const kind: zlink.ConnectionFailureKind = failure.kind;
+  const stage: zlink.ConnectionFailureStage = failure.stage;
+  void token; void state; void kind; void stage;
+  // @ts-expect-error Snapshot tokens are readonly.
+  row.intentId = 1n;
+  // @ts-expect-error Failure diagnostics are readonly.
+  failure.normalizedErrno = 0;
+}
+// @ts-expect-error The returned snapshot is readonly.
+connectionRows.push(connectionRows[0]);
+// @ts-expect-error STREAM does not initiate connections.
+stream.connectionAttemptsSnapshot();
+// @ts-expect-error State is a closed enum.
+const unknownConnectionState: zlink.ConnectionAttemptState = 999;
+void unknownConnectionState;

@@ -37,6 +37,7 @@ napi_value test_run_send_close_stress (napi_env env, napi_callback_info info);
 napi_value socket_bind (napi_env env, napi_callback_info info);
 napi_value socket_unbind (napi_env env, napi_callback_info info);
 napi_value socket_connect (napi_env env, napi_callback_info info);
+napi_value socket_connection_attempts_snapshot (napi_env env, napi_callback_info info);
 napi_value socket_disconnect (napi_env env, napi_callback_info info);
 napi_value socket_disconnect_rid (napi_env env, napi_callback_info info);
 napi_value socket_set_tls_server (napi_env env, napi_callback_info info);

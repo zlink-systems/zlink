@@ -66,6 +66,7 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_SOCKET_METHOD ("socketBind", socket_bind),
       ZLINK_SOCKET_METHOD ("socketUnbind", socket_unbind),
       ZLINK_SOCKET_METHOD ("socketConnect", socket_connect),
+      ZLINK_SOCKET_METHOD ("socketConnectionAttemptsSnapshot", socket_connection_attempts_snapshot),
       ZLINK_SOCKET_METHOD ("socketDisconnect", socket_disconnect),
       ZLINK_SOCKET_METHOD ("socketDisconnectRid", socket_disconnect_rid),
       ZLINK_SOCKET_METHOD ("socketSetTlsServer", socket_set_tls_server),
