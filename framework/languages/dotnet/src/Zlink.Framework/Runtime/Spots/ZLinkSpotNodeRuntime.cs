@@ -74,11 +74,16 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         );
         if (node is IZLinkBackendActorMessageFollowIngress messageFollowIngress)
         {
+            var receiverMeshName = ZLinkFrameworkRuntime.ResolveSpotNodeMeshName(this);
             messageFollowIngress.SetActorMessageFollowIngressAdmission(ingress =>
                 ZLinkActorHandoffIngress.CanAdmitStaleManagedIngress(runtime, ingress)
             );
             messageFollowIngress.SetActorMessageFollowIngressHandler(parts =>
-                ZLinkActorHandoffIngress.TryCaptureOrFollowStaleManagedIngress(runtime, parts)
+                ZLinkActorHandoffIngress.TryCaptureOrFollowStaleManagedIngress(
+                    runtime,
+                    parts,
+                    receiverMeshName
+                )
             );
         }
         if (node is IZLinkBackendMessageFollowNotifications messageFollowNotifications)
@@ -1089,7 +1094,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         {
             if (ShouldAttachActorDispatchPump())
             {
-                _entryDispatchPump = new ZLinkEntrySpotDispatchPump(_runtime, null, _taskRunner);
+                _entryDispatchPump = new ZLinkEntrySpotDispatchPump(
+                    _runtime,
+                    null,
+                    _taskRunner,
+                    ZLinkFrameworkRuntime.ResolveSpotNodeMeshName(this)
+                );
                 _entryDispatchPump.Attach(_entrySpot);
                 if (Interlocked.Exchange(ref _entrySpotMetricActive, 1) == 0)
                     ZLinkRuntimeMetrics.RecordSpotCreated(Registration.SpotNodeName, "entry");
@@ -1111,7 +1121,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             _entrySpotActivation = activation;
         }
 
-        _entryDispatchPump = new ZLinkEntrySpotDispatchPump(_runtime, activation, _taskRunner);
+        _entryDispatchPump = new ZLinkEntrySpotDispatchPump(
+            _runtime,
+            activation,
+            _taskRunner,
+            ZLinkFrameworkRuntime.ResolveSpotNodeMeshName(this)
+        );
         _entryDispatchPump.Attach(entrySpot);
         if (Interlocked.Exchange(ref _entrySpotMetricActive, 1) == 0)
             ZLinkRuntimeMetrics.RecordSpotCreated(Registration.SpotNodeName, "entry");

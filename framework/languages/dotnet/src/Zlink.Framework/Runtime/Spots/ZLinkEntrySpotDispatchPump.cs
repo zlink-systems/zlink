@@ -18,14 +18,19 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
     public ZLinkEntrySpotDispatchPump(
         ZLinkFrameworkRuntime runtime,
         ZLinkEntrySpotActivation? activation,
-        ZLinkRuntimeTaskRunner taskRunner
+        ZLinkRuntimeTaskRunner taskRunner,
+        string receiverMeshName
     )
     {
         _runtime = runtime;
         _activation = activation;
         _taskRunner = taskRunner;
         _actorLanes = new(StringComparer.Ordinal);
-        _actorPipeline = new(runtime, new ZLinkEntrySpotActorInboundEndpoint(runtime));
+        _actorPipeline = new(
+            runtime,
+            new ZLinkEntrySpotActorInboundEndpoint(runtime),
+            receiverMeshName
+        );
     }
 
     public void Attach(IZLinkBackendSpot entrySpot)

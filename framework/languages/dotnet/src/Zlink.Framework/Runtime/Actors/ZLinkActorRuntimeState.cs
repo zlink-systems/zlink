@@ -317,6 +317,7 @@ internal sealed class ZLinkActorRuntimeState(
     public bool IsTeardownPending => _destroyPhase != ZLinkActorDestroyPhase.None;
 
     public ZLinkActorSerialExecutor.BarrierReservation? ReserveDeferredJoinBarrier(
+        string receiverMeshName,
         out Task? targetCompletion
     )
     {
@@ -336,12 +337,14 @@ internal sealed class ZLinkActorRuntimeState(
         }
         catch
         {
-            ReleaseDeferredJoinBarrier();
+            ReleaseDeferredJoinBarrier(receiverMeshName);
             throw;
         }
     }
 
-    public ZLinkActorSerialExecutor.BarrierReservation ReserveDeferredJoinBarrierAfterTarget()
+    public ZLinkActorSerialExecutor.BarrierReservation ReserveDeferredJoinBarrierAfterTarget(
+        string receiverMeshName
+    )
     {
         try
         {
@@ -349,7 +352,7 @@ internal sealed class ZLinkActorRuntimeState(
         }
         catch
         {
-            ReleaseDeferredJoinBarrier();
+            ReleaseDeferredJoinBarrier(receiverMeshName);
             throw;
         }
     }
@@ -375,7 +378,7 @@ internal sealed class ZLinkActorRuntimeState(
             );
     }
 
-    public void ReleaseDeferredJoinBarrier()
+    public void ReleaseDeferredJoinBarrier(string receiverMeshName)
     {
         try
         {
@@ -383,7 +386,7 @@ internal sealed class ZLinkActorRuntimeState(
                 (frame, start) =>
                     _services
                         .GetRequiredService<ZLinkFrameworkRuntime>()
-                        .AdmitActorHandoffFrame(this, frame, start)
+                        .AdmitActorHandoffFrame(this, frame, start, receiverMeshName)
             );
         }
         finally

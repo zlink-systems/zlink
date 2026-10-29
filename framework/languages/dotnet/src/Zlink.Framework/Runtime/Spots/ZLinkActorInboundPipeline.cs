@@ -33,7 +33,8 @@ internal interface IZLinkActorInboundEndpoint
 
 internal sealed class ZLinkActorInboundPipeline(
     ZLinkFrameworkRuntime runtime,
-    IZLinkActorInboundEndpoint endpoint
+    IZLinkActorInboundEndpoint endpoint,
+    string receiverMeshName
 )
 {
     public async ValueTask DispatchAsync(
@@ -449,6 +450,33 @@ internal sealed class ZLinkActorInboundPipeline(
             //  real Actor then resolves normally above.
             if (runtime.TryParkActorJoinPrewarmIngress(frame))
                 return;
+
+            if (frame.Header.Kind == ZlinkStreamMessageKind.Send)
+            {
+                if (runtime.Flow.DispatchErrorsEnabled)
+                    runtime.Flow.TraceDispatchError(
+                        new ZLinkDispatchFailure(
+                            ZLinkDispatchErrorSurface.SpotActor,
+                            ZLinkDispatchMessageKind.ActorSend,
+                            ZLinkDispatchErrorReason.StaleTarget,
+                            ZLinkDispatchErrorAction.Drop,
+                            frame.Header.Name,
+                            ActorId: frame.Actor.ActorId,
+                            CorrelationId: frame.Header.CorrelationId,
+                            SourceRid: frame.SourceNodeRid.ToHex(),
+                            MeshName: receiverMeshName,
+                            TargetRid: frame.Actor.NodeRid.ToHex()
+                        )
+                    );
+                Diagnostics.ZLinkRuntimeMetrics.RecordMessageDropped(
+                    receiverMeshName,
+                    "actor",
+                    "send",
+                    Diagnostics.ZLinkTraceFormat.DispatchReasonKey(
+                        ZLinkDispatchErrorReason.StaleTarget
+                    )
+                );
+            }
 
             //  A bound request whose incarnation is gone used to get no reply at
             //  all: the helper below answers no-bind requests only, and the frame

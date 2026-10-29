@@ -630,6 +630,15 @@ public sealed partial class UnhandledDispatchPolicyTests
                 && message.Contains("outcome=failed", StringComparison.Ordinal)
                 && message.Contains("reason=no_handler", StringComparison.Ordinal)
         );
+        Assert.Single(
+            logger.Messages.Where(message =>
+                message.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
+            )
+        );
+        Assert.DoesNotContain(
+            logger.Messages,
+            message => message.Contains("reason=stale_target", StringComparison.Ordinal)
+        );
         await runner.StopAsync();
     }
 

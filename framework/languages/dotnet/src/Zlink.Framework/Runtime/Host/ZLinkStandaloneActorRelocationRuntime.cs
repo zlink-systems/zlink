@@ -184,7 +184,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             if (captureStarted)
             {
                 await runtime
-                    .RestoreStandaloneActorRelocationSourceAsync(actorState)
+                    .RestoreStandaloneActorRelocationSourceAsync(
+                        actorState,
+                        sourceAuthority.MeshName
+                    )
                     .ConfigureAwait(false);
                 if (settled == ZLinkSourceSettlement.SourcePreserved)
                     relocationMetric.CompleteSource(settled);
@@ -3938,11 +3941,12 @@ internal sealed partial class ZLinkFrameworkRuntime
     }
 
     internal ValueTask RestoreStandaloneActorRelocationSourceAsync(
-        ZLinkActorRuntimeState actorState
+        ZLinkActorRuntimeState actorState,
+        string receiverMeshName
     )
     {
         actorState.Handoff.AbortCapture(
-            (frame, start) => AdmitActorHandoffFrame(actorState, frame, start)
+            (frame, start) => AdmitActorHandoffFrame(actorState, frame, start, receiverMeshName)
         );
         return ValueTask.CompletedTask;
     }
@@ -4172,7 +4176,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         var targetOwner = RequireStandaloneActorTargetOwner();
         var pipeline = new ZLinkActorInboundPipeline(
             this,
-            new ZLinkEntrySpotActorInboundEndpoint(this)
+            new ZLinkEntrySpotActorInboundEndpoint(this),
+            targetAuthority.MeshName
         );
         var participant = progress.Root.Participants.Single();
         var jobs = participant
@@ -4183,6 +4188,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         AdmitTransferredActorPrefix(
             actorState,
             handoffId,
+            targetAuthority.MeshName,
             frame =>
             {
                 if (

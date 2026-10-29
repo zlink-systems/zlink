@@ -1074,7 +1074,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                     )
                 )
                     await runtime
-                        .RestoreStandaloneActorRelocationSourceAsync(state)
+                        .RestoreStandaloneActorRelocationSourceAsync(state, activation.MeshName)
                         .ConfigureAwait(false);
             }
 

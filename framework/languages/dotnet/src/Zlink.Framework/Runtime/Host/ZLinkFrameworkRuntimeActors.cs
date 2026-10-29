@@ -1167,7 +1167,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     () =>
                     {
                         actorState.Handoff.PrepareImportedReplay([]);
-                        AdmitTransferredActorPrefix(actorState, request.HandoffId);
+                        AdmitTransferredActorPrefix(actorState, request.HandoffId, targetMeshName);
                         return ValueTask.CompletedTask;
                     },
                     async () =>
@@ -1560,7 +1560,11 @@ internal sealed partial class ZLinkFrameworkRuntime
                         else
                         {
                             actorState.Handoff.PrepareImportedReplay(request.Frames);
-                            AdmitTransferredActorPrefix(actorState, request.HandoffId);
+                            AdmitTransferredActorPrefix(
+                                actorState,
+                                request.HandoffId,
+                                publishedActorAuthority.MeshName
+                            );
                         }
                     },
                     async () =>
@@ -3015,13 +3019,14 @@ internal sealed partial class ZLinkFrameworkRuntime
     private void AdmitTransferredActorPrefix(
         ZLinkActorRuntimeState actorState,
         string handoffId,
+        string receiverMeshName,
         Func<ZLinkActorHandoffFrame, Task>? dispatch = null
     )
     {
         var start = actorState.Handoff.TargetActivation;
         _ = actorState.Handoff.AdmitDurablePrefix(
             handoffId,
-            frame => AdmitActorHandoffFrame(actorState, frame, start, dispatch)
+            frame => AdmitActorHandoffFrame(actorState, frame, start, receiverMeshName, dispatch)
         );
     }
 
@@ -3032,6 +3037,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkActorRuntimeState actorState,
         ZLinkActorHandoffFrame frame,
         Task start,
+        string receiverMeshName,
         Func<ZLinkActorHandoffFrame, Task>? dispatch = null
     )
     {
@@ -3057,7 +3063,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 else
                     await new ZLinkActorInboundPipeline(
                         this,
-                        new ZLinkEntrySpotActorInboundEndpoint(this)
+                        new ZLinkEntrySpotActorInboundEndpoint(this),
+                        receiverMeshName
                     )
                         .DispatchOwnedFrameAsync(
                             ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
@@ -3323,7 +3330,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         );
     }
 
-    private static string ResolveSpotNodeMeshName(ZLinkSpotNodeRuntime node) =>
+    internal static string ResolveSpotNodeMeshName(ZLinkSpotNodeRuntime node) =>
         node.Registration.SpotMeshChannelName ?? node.Registration.SpotNodeName;
 
     internal ValueTask<ZLinkSpotActivation?> JoinActorToSpotAsync(
@@ -4013,7 +4020,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         // a chained transfer that state already points at the next owner, and
         // replacing the incoming identity would bypass this node's Message
         // Use the Message Follow route before attempting blocked local dispatch.
-        var targetNode = GetSpotNodeRuntime(targetNodeRid).Node;
+        var targetNodeRuntime = GetSpotNodeRuntime(targetNodeRid);
+        var targetNode = targetNodeRuntime.Node;
         //  These throws run inside a one-way route send handler, so the
         //  exception never reaches the original requester: the frame just
         //  disappears and the caller waits out its deadline.
@@ -4211,12 +4219,19 @@ internal sealed partial class ZLinkFrameworkRuntime
                 $"Actor '{actorId}' direct relay authority identity is stale."
             );
         }
-        await DispatchRemoteFrameAsync(batch, deadlineUnixMs, cancellationToken, CurrentOperation)
+        await DispatchRemoteFrameAsync(
+                batch,
+                ResolveSpotNodeMeshName(targetNodeRuntime),
+                deadlineUnixMs,
+                cancellationToken,
+                CurrentOperation
+            )
             .ConfigureAwait(false);
     }
 
     private async Task DispatchRemoteFrameAsync(
         ZLinkSpotActorFrameBatch batch,
+        string receiverMeshName,
         ulong deadlineUnixMs,
         CancellationToken cancellationToken,
         ZLinkRuntimeOperationLease? operationAdmission
@@ -4225,7 +4240,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         using var operationScope = EnterAcceptedOperation(operationAdmission);
         if (deadlineUnixMs == 0)
         {
-            await new ZLinkActorInboundPipeline(this, new ZLinkEntrySpotActorInboundEndpoint(this))
+            await new ZLinkActorInboundPipeline(
+                this,
+                new ZLinkEntrySpotActorInboundEndpoint(this),
+                receiverMeshName
+            )
                 .DispatchAsync(batch, cancellationToken)
                 .ConfigureAwait(false);
             return;
@@ -4240,7 +4259,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromMilliseconds(remaining));
-        await new ZLinkActorInboundPipeline(this, new ZLinkEntrySpotActorInboundEndpoint(this))
+        await new ZLinkActorInboundPipeline(
+            this,
+            new ZLinkEntrySpotActorInboundEndpoint(this),
+            receiverMeshName
+        )
             .DispatchAsync(batch, deadline.Token)
             .ConfigureAwait(false);
     }

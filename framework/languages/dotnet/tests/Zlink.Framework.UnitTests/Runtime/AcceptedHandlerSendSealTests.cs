@@ -162,7 +162,7 @@ public sealed partial class EntrySpotActorDispatchTests
             ownerLeaseGeneration: 1
         );
         var runner = new ZLinkRuntimeTaskRunner(runtime.ErrorSink, CancellationToken.None);
-        await using var entryPump = new ZLinkEntrySpotDispatchPump(runtime, null, runner);
+        await using var entryPump = new ZLinkEntrySpotDispatchPump(runtime, null, runner, "entry");
         if (path is AcceptedSendPath.EntryActorFrames or AcceptedSendPath.WarmEntryActorFrames)
             entryPump.Attach(nativeSpot);
         else
@@ -389,7 +389,7 @@ public sealed partial class EntrySpotActorDispatchTests
         state.Handoff.BeginCapture();
         var nativeSpot = new CapturingSpot();
         var runner = new ZLinkRuntimeTaskRunner(runtime.ErrorSink, CancellationToken.None);
-        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, null, runner);
+        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, null, runner, "entry");
         pump.Attach(nativeSpot);
         try
         {

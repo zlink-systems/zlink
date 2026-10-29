@@ -32,7 +32,8 @@ internal static class ZLinkActorHandoffIngress
 
     internal static bool TryCaptureOrFollowStaleManagedIngress(
         ZLinkFrameworkRuntime runtime,
-        IReadOnlyList<ZLinkBackendActorPart> parts
+        IReadOnlyList<ZLinkBackendActorPart> parts,
+        string receiverMeshName
     )
     {
         if (parts.Count == 0)
@@ -111,7 +112,8 @@ internal static class ZLinkActorHandoffIngress
                     cancellationToken =>
                         new ZLinkActorInboundPipeline(
                             runtime,
-                            new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                            new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                            receiverMeshName
                         ).DispatchAsync(owned, cancellationToken)
                 )
             )

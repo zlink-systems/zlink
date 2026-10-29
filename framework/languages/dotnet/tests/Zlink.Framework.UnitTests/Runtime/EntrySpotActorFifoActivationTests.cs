@@ -51,7 +51,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 reply = null;
                 var pipeline = new ZLinkActorInboundPipeline(
                     runtime,
-                    new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                    new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                    "entry"
                 );
                 var terminals = state.AdmitDurablePrefix([
                     new ZLinkActorDurableRecord(ct => new ValueTask(
@@ -444,7 +445,8 @@ public sealed partial class EntrySpotActorDispatchTests
             var state = runtime.GetOrCreateActorState(actorRef.ActorId);
             var pipeline = new ZLinkActorInboundPipeline(
                 runtime,
-                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
             );
             var frames = ZLinkActorHandoffIngress.CaptureMovingFrames(
                 ZLinkApplicationJobOrigin.Remote,
@@ -503,7 +505,8 @@ public sealed partial class EntrySpotActorDispatchTests
             }
             var pipeline = new ZLinkActorInboundPipeline(
                 runtime,
-                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
             );
             const string packet = "owned-missing-send";
             var frames = ZLinkActorHandoffIngress.CaptureMovingFrames(
