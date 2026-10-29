@@ -1608,27 +1608,34 @@ export class RawServiceMeshRuntime {
   }
 
   close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    this.applicationJobStop.abort(
-      new Error('Raw service runtime application job admission stopped.')
-    );
-    this.receivePermit?.releaseAfterInternalProcessing();
-    this.receivePermit?.releaseStorage?.();
-    this.receivePermit = undefined;
-    for (const send of this.controlSends.values()) delete send.next;
-    this.controlSends.clear();
-    this.mailbox.close();
-    this.releaseOperations();
-    this.serviceIngress = undefined;
-    const router = this.router;
-    if (router !== undefined) {
-      this.applicationJobQueue.unregisterReceiveFlowTarget?.(router);
-    }
     const host = this.host;
-    if (host !== undefined) host.close();
-    this.router = undefined;
+    if (this.closed && host === undefined) return;
     this.host = undefined;
+    try {
+      if (!this.closed) {
+        this.closed = true;
+        this.applicationJobStop.abort(
+          new Error('Raw service runtime application job admission stopped.')
+        );
+        this.receivePermit?.releaseAfterInternalProcessing();
+        this.receivePermit?.releaseStorage?.();
+        this.receivePermit = undefined;
+        for (const send of this.controlSends.values()) delete send.next;
+        this.controlSends.clear();
+        this.mailbox.close();
+        this.releaseOperations();
+        this.serviceIngress = undefined;
+        const router = this.router;
+        if (router !== undefined) {
+          this.applicationJobQueue.unregisterReceiveFlowTarget?.(router);
+        }
+      }
+      if (host !== undefined) host.close();
+      this.router = undefined;
+    } catch (error) {
+      this.host = host;
+      throw error;
+    }
   }
 
   private requestToTarget(

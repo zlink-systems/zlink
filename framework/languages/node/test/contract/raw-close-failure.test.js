@@ -429,3 +429,122 @@ for (const kind of ['client', 'fanout']) {
     });
   }
 }
+
+const {
+  RawServiceMeshRuntime
+} = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../packages/framework/dist/runtime/host/application-job-queue');
+const {
+  M6A_SERVICE_WIRE_REQUIRED_CAPABILITY
+} = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+
+test('raw runtime retains the same host after explicit close failure without reopening admission', async (t) => {
+  const context = zlink.createContext();
+  const port = new ZLinkNodeRawBindingPort(context);
+  const createHost = port.createHost.bind(port);
+  const createRouterSocket = zlink.createRouterSocket;
+  const failure = new Error('first raw runtime socket close failed');
+  let host;
+  let router;
+  let socket;
+  let closeSocket;
+  let raw;
+  let attempts = 0;
+  let nativeCloses = 0;
+  let reentrantReturns = 0;
+  t.mock.method(port, 'createHost', () => {
+    host = createHost();
+    const createRouter = host.createRouter.bind(host);
+    t.mock.method(host, 'createRouter', () => {
+      router = createRouter();
+      return router;
+    });
+    return host;
+  });
+  t.mock.method(zlink, 'createRouterSocket', (value) => {
+    socket = createRouterSocket(value);
+    closeSocket = socket.close.bind(socket);
+    t.mock.method(socket, 'close', function () {
+      assert.equal(this, socket);
+      if (++attempts === 1) {
+        raw.close();
+        ++reentrantReturns;
+        assert.equal(attempts, 1);
+        throw failure;
+      }
+      closeSocket();
+      ++nativeCloses;
+    });
+    return socket;
+  });
+  const failures = [];
+  try {
+    raw = new RawServiceMeshRuntime({
+      descriptor: {
+        meshName: 'raw-close-failure',
+        nodeRoutingId: 'source',
+        lifecycleGeneration: 1n,
+        descriptorRevision: 1n,
+        advertisedEndpoint: `inproc://raw-close-failure-${process.pid}`,
+        channels: [],
+        state: 'serving',
+        securityIdentity: 'default',
+        applicationVersion: 1n,
+        protocolCapabilities: [M6A_SERVICE_WIRE_REQUIRED_CAPABILITY],
+        objectRole: 'server',
+        placementWeight: 1,
+        activeCapacityLimit: 100,
+        pendingCapacityLimit: 16,
+        activeCapacityUsed: 0,
+        pendingCapacityUsed: 0
+      },
+      applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
+      bindingPort: port
+    });
+    raw.start();
+    const receive = t.mock.method(router, 'receive');
+    const send = t.mock.method(router, 'submitSend');
+    const routes = t.mock.method(router, 'routesSnapshot');
+    const containsFailure = (error) => error === failure ||
+      (error instanceof AggregateError && error.errors.some(containsFailure));
+    assert.throws(() => raw.close(), (error) =>
+      error instanceof AggregateError && containsFailure(error));
+    assert.equal(attempts, 1);
+    assert.equal(reentrantReturns, 1);
+    assert.equal(nativeCloses, 0);
+    assert.equal(raw.announcePeer('peer'), false);
+    assert.equal(await raw.pumpBatch(true, true), false);
+    assert.equal(receive.mock.callCount(), 0);
+    assert.equal(send.mock.callCount(), 0);
+    assert.equal(routes.mock.callCount(), 0);
+    raw.close();
+    assert.equal(attempts, 2);
+    assert.equal(nativeCloses, 1);
+    raw.close();
+    assert.equal(attempts, 2);
+    assert.equal(nativeCloses, 1);
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    for (const close of [() => raw?.close(), () => host?.close(),
+      () => {
+        if (closeSocket !== undefined && nativeCloses === 0) {
+          closeSocket();
+          ++nativeCloses;
+        }
+      }, () => context.close()]) {
+      try {
+        close();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, 'raw runtime test or resource cleanup failed');
+  }
+});
