@@ -8,12 +8,24 @@
 #include <zlink.h>
 
 #include <cerrno>
+#include <stdexcept>
 
 namespace zlink
 {
 
 namespace
 {
+
+void *create_context ()
+{
+    size_t count = 0;
+    size_t required = 0;
+    const auto result = zlink_socket_connection_attempts_snapshot (
+      nullptr, nullptr, 0, &count, nullptr, 0, &required);
+    if (result != ZLINK_CONFIG_INVALID_HANDLE)
+        throw std::runtime_error ("connection snapshot protocol violation: Core capability check");
+    return zlink_ctx_new ();
+}
 
 int context_option_id_value (detail::context_option_id option_) noexcept
 {
@@ -43,12 +55,12 @@ struct context_t::impl
 
 context_t::context_t () : _impl (std::make_unique<impl> ())
 {
-    _impl->ctx = zlink_ctx_new ();
+    _impl->ctx = create_context ();
 }
 
 context_t::context_t (io_thread_count_t io_threads_) : _impl (std::make_unique<impl> ())
 {
-    _impl->ctx = zlink_ctx_new ();
+    _impl->ctx = create_context ();
     if (_impl->ctx)
         (void) zlink_ctx_set (
           _impl->ctx,

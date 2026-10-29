@@ -9,6 +9,23 @@
 namespace
 {
 
+template <typename T, typename = void>
+struct has_connection_snapshot : std::false_type {};
+
+template <typename T>
+struct has_connection_snapshot<T, std::void_t<decltype (
+  std::declval<T &> ().connection_attempts_snapshot ())>> : std::true_type {};
+
+static_assert (has_connection_snapshot<zlink::pair_socket_t>::value);
+static_assert (has_connection_snapshot<zlink::dealer_socket_t>::value);
+static_assert (has_connection_snapshot<zlink::router_socket_t>::value);
+static_assert (has_connection_snapshot<zlink::pub_socket_t>::value);
+static_assert (has_connection_snapshot<zlink::sub_socket_t>::value);
+static_assert (has_connection_snapshot<zlink::xpub_socket_t>::value);
+static_assert (has_connection_snapshot<zlink::xsub_socket_t>::value);
+static_assert (!has_connection_snapshot<zlink::stream_socket_t>::value);
+static_assert (std::is_same_v<decltype (std::declval<zlink::socket_t &> ().connection_attempts_snapshot ()), std::vector<zlink::connection_attempt_t>>);
+
 using pair_send_t = decltype (std::declval<zlink::pair_socket_t &> ().send ());
 using multipart_submit_t = decltype (
   std::declval<pair_send_t> ()

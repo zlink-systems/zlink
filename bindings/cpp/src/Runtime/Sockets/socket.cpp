@@ -18,6 +18,7 @@
 #include <zlink.h>
 
 #include <cerrno>
+#include <stdexcept>
 
 namespace zlink
 {
@@ -130,6 +131,127 @@ void socket_t::disconnect_rid (const routing_id_t &peer_rid_)
     const int rc = zlink_disconnect_rid (detail::native_handle (*this), &native);
     if (rc != 0)
         throw connect_error_t (static_cast<connect_result_t> (rc), zlink_errno ());
+}
+
+namespace
+{
+[[noreturn]] void connection_snapshot_protocol_violation ()
+{
+    throw std::runtime_error ("connection snapshot protocol violation");
+}
+
+connection_attempt_state_t connection_snapshot_connection_attempt_state (uint32_t value_)
+{
+    switch (value_) {
+        case ZLINK_CONNECTION_CONNECTING:
+            return connection_attempt_state_t::connecting;
+        case ZLINK_CONNECTION_CONNECTED:
+            return connection_attempt_state_t::connected;
+        case ZLINK_CONNECTION_ATTEMPT_FAILED:
+            return connection_attempt_state_t::attempt_failed;
+        default:
+            connection_snapshot_protocol_violation ();
+    }
+}
+
+connection_failure_kind_t connection_snapshot_connection_failure_kind (uint32_t value_)
+{
+    switch (value_) {
+        case ZLINK_CONNECTION_FAILURE_NONE:
+            return connection_failure_kind_t::none;
+        case ZLINK_CONNECTION_FAILURE_REFUSED:
+            return connection_failure_kind_t::refused;
+        case ZLINK_CONNECTION_FAILURE_ENDPOINT_MISSING:
+            return connection_failure_kind_t::endpoint_missing;
+        case ZLINK_CONNECTION_FAILURE_TIMED_OUT:
+            return connection_failure_kind_t::timed_out;
+        case ZLINK_CONNECTION_FAILURE_UNREACHABLE:
+            return connection_failure_kind_t::unreachable;
+        case ZLINK_CONNECTION_FAILURE_NAME_RESOLUTION:
+            return connection_failure_kind_t::name_resolution;
+        case ZLINK_CONNECTION_FAILURE_AUTH_FAILED:
+            return connection_failure_kind_t::auth_failed;
+        case ZLINK_CONNECTION_FAILURE_PROTOCOL_FAILED:
+            return connection_failure_kind_t::protocol_failed;
+        case ZLINK_CONNECTION_FAILURE_CONNECTION_LOST:
+            return connection_failure_kind_t::connection_lost;
+        case ZLINK_CONNECTION_FAILURE_OTHER:
+            return connection_failure_kind_t::other;
+        default:
+            connection_snapshot_protocol_violation ();
+    }
+}
+
+connection_failure_stage_t connection_snapshot_connection_failure_stage (uint32_t value_)
+{
+    switch (value_) {
+        case ZLINK_CONNECTION_STAGE_NONE:
+            return connection_failure_stage_t::none;
+        case ZLINK_CONNECTION_STAGE_RESOLVE:
+            return connection_failure_stage_t::resolve;
+        case ZLINK_CONNECTION_STAGE_TRANSPORT:
+            return connection_failure_stage_t::transport;
+        case ZLINK_CONNECTION_STAGE_TLS:
+            return connection_failure_stage_t::tls;
+        case ZLINK_CONNECTION_STAGE_WEBSOCKET:
+            return connection_failure_stage_t::websocket;
+        case ZLINK_CONNECTION_STAGE_CORE_HANDSHAKE:
+            return connection_failure_stage_t::core_handshake;
+        case ZLINK_CONNECTION_STAGE_ESTABLISHED:
+            return connection_failure_stage_t::established;
+        default:
+            connection_snapshot_protocol_violation ();
+    }
+}
+
+} // namespace
+
+std::vector<connection_attempt_t> socket_t::connection_attempts_snapshot ()
+{
+    std::vector<zlink_connection_attempt_t> native;
+    std::vector<char> endpoints;
+    for (;;) {
+        size_t count = 0;
+        size_t bytes = 0;
+        const auto rc = zlink_socket_connection_attempts_snapshot (
+          detail::native_handle (*this), native.empty () ? nullptr : native.data (),
+          native.size (), &count, endpoints.empty () ? nullptr : endpoints.data (),
+          endpoints.size (), &bytes);
+        const int native_errno = zlink_errno ();
+        if (rc == ZLINK_CONFIG_BUFFER_TOO_SMALL) {
+            if (count <= native.size () && bytes <= endpoints.size ())
+                connection_snapshot_protocol_violation ();
+            if (count > native.size ())
+                native.resize (count);
+            if (bytes > endpoints.size ())
+                endpoints.resize (bytes);
+            continue;
+        }
+        if (rc != ZLINK_CONFIG_OK)
+            throw config_error_t (static_cast<config_result_t> (rc), native_errno);
+        if (count > native.size () || bytes > endpoints.size ())
+            connection_snapshot_protocol_violation ();
+
+        std::vector<connection_attempt_t> attempts;
+        attempts.reserve (count);
+        for (size_t index = 0; index < count; ++index) {
+            const auto &row = native[index];
+            if (row.intent_id == 0 || row.revision == 0
+                || row.endpoint_offset >= bytes
+                || row.endpoint_length >= bytes - row.endpoint_offset
+                || endpoints[row.endpoint_offset + row.endpoint_length] != '\0')
+                connection_snapshot_protocol_violation ();
+            attempts.push_back (connection_attempt_t{
+              std::string (endpoints.data () + row.endpoint_offset, row.endpoint_length),
+              row.intent_id, row.revision, row.last_failure_id,
+              connection_snapshot_connection_attempt_state (row.state),
+              connection_failure_t{
+                connection_snapshot_connection_failure_kind (row.last_failure.kind),
+                connection_snapshot_connection_failure_stage (row.last_failure.stage),
+                row.last_failure.normalized_errno, row.last_failure.disconnect_reason}});
+        }
+        return attempts;
+    }
 }
 
 void socket_t::set_tls_server (const std::string &cert_,

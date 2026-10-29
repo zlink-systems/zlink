@@ -33,6 +33,7 @@ class stream_socket_t : public routed_message_socket_t
   private:
     using routed_message_socket_t::recv;
     using socket_t::connect;
+    using socket_t::connection_attempts_snapshot;
     using socket_t::disconnect;
 };
 
