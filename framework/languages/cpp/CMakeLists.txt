@@ -2166,6 +2166,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-contract;framework-regression;execution"
     TIER unit
     TIMEOUT 30)
+  add_executable(test_cpp_framework_shared_infrastructure
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_shared_infrastructure.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_shared_infrastructure)
+  target_compile_features(test_cpp_framework_shared_infrastructure PRIVATE cxx_std_20)
+  target_link_libraries(test_cpp_framework_shared_infrastructure PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_shared_infrastructure PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_shared_infrastructure
+    COMMAND test_cpp_framework_shared_infrastructure
+    LABELS "framework-unit;framework-regression;execution"
+    TIER unit
+    TIMEOUT 30)
   add_executable(test_cpp_framework_state_lane
     tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp)
   target_use_zlink_gtest_main(test_cpp_framework_state_lane)

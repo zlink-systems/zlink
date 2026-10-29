@@ -11,6 +11,7 @@
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/manual_internal_scheduler.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <zlink/json.hpp>
@@ -46,6 +47,8 @@ TEST (ActorEntryPlacementRegression, ReadyContinuationAwaitsBusySpotInventory)
     auto node = fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> (
       "inventory-continuation");
     fw::detail::spot_node_runtime_t runtime (node);
+    auto release_workers =
+      fw::test::reserve_single_infrastructure_worker (*fw::runtime::infrastructure_executor ());
     std::promise<void> ready, occupied, release, yielded;
     auto ready_seen = ready.get_future ();
     auto occupied_seen = occupied.get_future ().share ();
@@ -56,10 +59,12 @@ TEST (ActorEntryPlacementRegression, ReadyContinuationAwaitsBusySpotInventory)
         (void) co_await runtime.relocation_ready_async ();
         ready.set_value ();
         occupied_seen.wait ();
-        node->lane_executor.submit ([&] { yielded.set_value (); });
+        ::zlink::framework::runtime::infrastructure_executor ()->submit (
+          [&] { yielded.set_value (); });
         co_return co_await runtime.active_user_spot_count_async ();
     };
-    node->lane_executor.submit ([&] { query.emplace (count_after_ready ()); });
+    ::zlink::framework::runtime::infrastructure_executor ()->submit (
+      [&] { query.emplace (count_after_ready ()); });
     ready_seen.get ();
     std::jthread holder ([&] {
         node->lane

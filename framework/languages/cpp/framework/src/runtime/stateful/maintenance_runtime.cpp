@@ -1877,11 +1877,7 @@ host_maintenance_runtime_t::host_maintenance_runtime_t (
   stateful_object_runtime_t &objects,
   stream_session_registry_t &sessions,
   std::function<task_t<void> ()> seal_targets) :
-    _objects (objects),
-    _sessions (sessions),
-    _seal_targets (std::move (seal_targets)),
-    _lane_executor (),
-    _lane (_lane_executor)
+    _objects (objects), _sessions (sessions), _seal_targets (std::move (seal_targets))
 {
 }
 

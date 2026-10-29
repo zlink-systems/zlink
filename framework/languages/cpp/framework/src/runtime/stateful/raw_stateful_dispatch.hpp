@@ -458,7 +458,7 @@ class raw_relocation_replay_coordinator_t
 
     mesh::raw_mesh_node_owner_t *_transport;
     std::function<bool ()> _flow_capture;
-    offload_executor_t _lane_executor;
+
     mutable state_lane_t _lane;
     std::mutex _activity_wait_mutex;
     std::condition_variable _activity_changed;

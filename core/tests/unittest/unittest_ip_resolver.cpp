@@ -240,6 +240,25 @@ static void test_parse_ipv4_simple ()
     test_resolve (resolver_opts, "1.2.128.129", "1.2.128.129");
 }
 
+static void test_allow_nic_name_ipv4_literal ()
+{
+    zlink::ip_resolver_options_t resolver_opts;
+
+    resolver_opts.allow_nic_name (true).allow_dns (true);
+
+    test_resolve (resolver_opts, "127.0.0.1", "127.0.0.1");
+}
+
+static void test_allow_nic_name_ipv6_literals ()
+{
+    zlink::ip_resolver_options_t resolver_opts;
+
+    resolver_opts.allow_nic_name (true).allow_dns (true).ipv6 (true);
+
+    test_resolve (resolver_opts, "::1", "::1");
+    test_resolve (resolver_opts, "[::1]", "::1");
+}
+
 static void test_parse_ipv4_zero ()
 {
     zlink::ip_resolver_options_t resolver_opts;
@@ -903,6 +922,8 @@ int main (void)
     RUN_TEST (test_nobind_addr_port0_ipv4);
     RUN_TEST (test_nobind_addr_port0_ipv6);
     RUN_TEST (test_parse_ipv4_simple);
+    RUN_TEST (test_allow_nic_name_ipv4_literal);
+    RUN_TEST (test_allow_nic_name_ipv6_literals);
     RUN_TEST (test_parse_ipv4_zero);
     RUN_TEST (test_parse_ipv4_max);
     RUN_TEST (test_parse_ipv4_brackets);

@@ -188,14 +188,14 @@ raw_client_server_server_t::raw_client_server_server_t (
   std::shared_ptr<zlink::context_t> context,
   runtime::offload_executor_t *infrastructure_executor) :
     _options (std::move (options)),
-    _lane_executor (infrastructure_executor ? nullptr
-                                            : std::make_unique<runtime::offload_executor_t> ()),
-    _lane (infrastructure_executor ? *infrastructure_executor : *_lane_executor),
+    _lane ([infrastructure_executor] () -> runtime::state_lane_t {
+        if (infrastructure_executor)
+            return runtime::state_lane_t (*infrastructure_executor);
+        return runtime::state_lane_t ();
+    }()),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
     _mailbox (),
-    _liveness (mesh::service_liveness_registry_t::default_probe_interval,
-               mesh::service_liveness_registry_t::default_peer_timeout,
-               infrastructure_executor ? infrastructure_executor : _lane_executor.get ())
+    _liveness (_lane)
 {
     if (!_options.runtime_failures)
         throw std::invalid_argument ("A host runtime failure collector is required");
@@ -913,9 +913,8 @@ bool raw_client_server_server_t::byte_vector_less_t::operator() (
 
 // Completed admission/probe request replies parked by the asynchronous
 // completion callbacks until the pump loop applies them. The callbacks
-// capture only this shared state (never the owning client), so a completion
-// arriving after the client is destroyed writes into an orphaned state and
-// is dropped.
+// capture only this shared state (never the owning client). Client close seals
+// and drains its lane before releasing ownership; late posts are rejected.
 struct raw_client_server_client_t::control_reply_state_t
 {
     /* Spec 51 §4 physical-connection replacement: a late event from a
@@ -929,8 +928,7 @@ struct raw_client_server_client_t::control_reply_state_t
         detail::backend::raw_request_completion_t completion;
     };
 
-    runtime::offload_executor_t lane_executor;
-    runtime::state_lane_t lane{lane_executor};
+    runtime::state_lane_t lane;
     bool admission_in_flight = false;
     std::optional<parked_reply_t> admission;
     std::vector<std::pair<std::uint64_t, parked_reply_t>> probes;
@@ -940,6 +938,7 @@ raw_client_server_client_t::raw_client_server_client_t (raw_client_server_client
                                                         std::shared_ptr<zlink::context_t> context) :
     _options (std::move (options)),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
+    _liveness (_lane),
     _control_replies (std::make_shared<control_reply_state_t> ())
 {
     if (!_options.runtime_failures)
@@ -1054,6 +1053,7 @@ task_t<void> raw_client_server_client_t::close_task (transport_turn_t transport_
         }
         return true;
     });
+    co_await _control_replies->lane.close_async ();
     if (failure)
         std::rethrow_exception (failure);
 }
@@ -1071,7 +1071,7 @@ task_t<raw_client_server_client_t::pump_status_t>
 raw_client_server_client_t::pump_status_task () const
 {
     return _lane.run_task ([this] {
-        return pump_status_t{_ready, _liveness.next_activity (),
+        return pump_status_t{_ready, _liveness.next_activity_owned (),
                              !_closed && static_cast<bool> (_dealer)};
     });
 }
@@ -1144,8 +1144,8 @@ task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
             });
             if (current) {
                 (void) co_await _lane.run_task ([this, &connection] {
-                    return _liveness.disconnect (_options.expected_server.server_routing_id,
-                                                 connection);
+                    return _liveness.disconnect_owned (_options.expected_server.server_routing_id,
+                                                       connection);
                 });
             }
         }
@@ -1204,8 +1204,8 @@ raw_client_server_client_t::pump_one (mesh::service_liveness_registry_t::clock_t
             const auto liveness = protocol::decode_liveness (received->front ());
             if (liveness.kind == protocol::command::livenessProbe) {
                 const auto acknowledged = co_await _lane.run_task ([this, &connection, &liveness] {
-                    return _liveness.acknowledge_probe (_options.expected_server.server_routing_id,
-                                                        connection, liveness.probe_id);
+                    return _liveness.acknowledge_probe_owned (
+                      _options.expected_server.server_routing_id, connection, liveness.probe_id);
                 });
                 const detail::backend::raw_message_t ack_message{
                   protocol::encode_liveness (protocol::command::livenessAck, liveness.probe_id)};
@@ -1217,8 +1217,8 @@ raw_client_server_client_t::pump_one (mesh::service_liveness_registry_t::clock_t
                 }
             } else {
                 (void) co_await _lane.run_task ([this, &connection, &liveness, now] {
-                    return _liveness.acknowledge (_options.expected_server.server_routing_id,
-                                                  connection, liveness.probe_id, now);
+                    return _liveness.acknowledge_owned (_options.expected_server.server_routing_id,
+                                                        connection, liveness.probe_id, now);
                 });
             }
             co_return client_server_pump_result_t::infrastructure;
@@ -1233,7 +1233,8 @@ raw_client_server_client_t::pump_one (mesh::service_liveness_registry_t::clock_t
 task_t<mesh::service_liveness_tick_t> raw_client_server_client_t::tick_liveness (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
-    const auto result = co_await _lane.run_task ([this, now] { return _liveness.tick (now); });
+    const auto result =
+      co_await _lane.run_task ([this, now] { return _liveness.tick_owned (now); });
     const auto port = co_await _lane.run_task ([this] { return _port; });
     if (port) {
         for (const auto &probe : result.probes) {
@@ -1293,7 +1294,8 @@ task_t<client_server_pump_result_t> raw_client_server_client_t::accept_server_ad
                + " ready=" + (state.ready ? "true" : "false");
     });
     co_await _lane.run_task ([this, &server, &state, now] {
-        _liveness_connection = _liveness.admit (server.server_routing_id, state.connection, now);
+        _liveness_connection =
+          _liveness.admit_owned (server.server_routing_id, state.connection, now);
         _liveness_connection->record_received (now);
         return true;
     });
@@ -1502,8 +1504,8 @@ task_t<bool> raw_client_server_client_t::apply_pending_control_replies (
                 continue;
             }
             (void) co_await _lane.run_task ([this, &current_connection, &liveness, now] {
-                return _liveness.acknowledge (_options.expected_server.server_routing_id,
-                                              current_connection, liveness.probe_id, now);
+                return _liveness.acknowledge_owned (_options.expected_server.server_routing_id,
+                                                    current_connection, liveness.probe_id, now);
             });
         }
         catch (const protocol::service_wire_error_t &) {

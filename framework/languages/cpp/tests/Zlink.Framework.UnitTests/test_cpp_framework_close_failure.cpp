@@ -813,6 +813,8 @@ int main (int argc, char **argv)
         failed = true;
     }
     assert (failed);
+    assert (!node.started ()); // The receive port detached before the router close failure.
     node.close ();
+    assert (!node.started ());
     assert (socket_attempts == before + 2);
 }
