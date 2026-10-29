@@ -25,8 +25,6 @@ jobs:
       DOTNET_NOLOGO: true
       DOTNET_CLI_TELEMETRY_OPTOUT: true
       ZLinkFrameworkTargetFrameworks: net10.0
-      NUGET_PACKAGES: ${{ runner.temp }}/reply-check/nuget-cache
-      REPLY_CHECK_RESULTS: ${{ runner.temp }}/reply-check/results
       FULL_UNIT_SUITE: ${{ inputs.full_unit_suite }}
     steps:
       # Pin the verification implementation independently of candidate/control source.
@@ -58,6 +56,9 @@ jobs:
       - name: Build source Core and check accepted replies
         shell: bash
         working-directory: candidate
+        env:
+          NUGET_PACKAGES: ${{ runner.temp }}/reply-check/nuget-cache
+          REPLY_CHECK_RESULTS: ${{ runner.temp }}/reply-check/results
         run: |
           mkdir -p "$REPLY_CHECK_RESULTS"
           bash "$GITHUB_WORKSPACE/verification/scripts/ci/core-dotnet-reply-check.sh" \
