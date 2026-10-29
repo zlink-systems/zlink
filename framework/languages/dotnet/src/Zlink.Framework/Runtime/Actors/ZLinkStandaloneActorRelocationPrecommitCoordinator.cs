@@ -519,6 +519,26 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         throw Moving("Preparing abort conflicted after the bounded retry limit");
     }
 
+    internal static bool IsExactSourceAuthority(
+        ZLinkAuthorityReadResult current,
+        ZLinkAuthoritySnapshot expected,
+        ZLinkActorAuthorityPayload expectedPayload,
+        bool requireStoreVersion
+    )
+    {
+        return current is ZLinkAuthorityReadResult.Found found
+            && (!requireStoreVersion || found.Snapshot.StoreVersion == expected.StoreVersion)
+            && found.Snapshot.ObjectGeneration == expected.ObjectGeneration
+            && found.Snapshot.AuthorityOwnerGeneration == expected.AuthorityOwnerGeneration
+            && found.Snapshot.OwnerId == expected.OwnerId
+            && found.Snapshot.OwnerLeaseGeneration == expected.OwnerLeaseGeneration
+            && ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                found.Snapshot.Payload.Span,
+                out var payload
+            )
+            && payload == expectedPayload;
+    }
+
     internal static bool IsSourcePrecommit(ZLinkAuthoritySnapshot snapshot, Guid relocationId)
     {
         if (
