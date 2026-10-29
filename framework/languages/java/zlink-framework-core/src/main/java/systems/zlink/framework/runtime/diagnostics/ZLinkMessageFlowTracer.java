@@ -163,8 +163,11 @@ public final class ZLinkMessageFlowTracer {
      * backpressure and drops through {@link #dispatchErrorsEnabled()}).
      */
     public boolean captureEnabled() {
-        return options.diagnostics().effectiveMessageFlow().value()
-                >= ZLinkMessageFlowLogMode.NORMAL.value();
+        return captureEnabled(options.diagnostics().effectiveMessageFlow());
+    }
+
+    private static boolean captureEnabled(ZLinkMessageFlowLogMode mode) {
+        return mode.value() >= ZLinkMessageFlowLogMode.NORMAL.value();
     }
 
     /** Whether dispatch error, backpressure and drop records are written (every level but Off). */
@@ -223,7 +226,8 @@ public final class ZLinkMessageFlowTracer {
     }
 
     private void traceAtMode(ZLinkMessageFlowEvent event, ZLinkMessageFlowLogMode mode) {
-        ZLinkMessageFlowEvent tracedFlow = attachAmbientFlow(event);
+        ZLinkMessageFlowEvent tracedFlow =
+                captureEnabled(mode) ? attachAmbientFlow(event) : event.withFlow(null, null);
         if (sampled(tracedFlow)
                 && !sample(tracedFlow.flowId(), tracedFlow.sourceMeshGeneration())) {
             return;
