@@ -115,6 +115,21 @@ public sealed class CompletionDispatcherIsolationTests
         await Task.WhenAll(first, second).WaitAsync(TestGuard);
     }
 
+    [Fact]
+    public async Task RunningActorCancellationRemovesAllFrameworkPendingBeforeDeadline()
+    {
+        await using var fixture = await ActorRequests.StartAsync();
+        using var cancellation = new CancellationTokenSource();
+        var requests = await fixture.SubmitAsync(cancellation.Token);
+        Assert.Equal(2, fixture.PendingCount);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => requests.First);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => requests.Second);
+        Assert.Equal(0, fixture.PendingCount);
+        fixture.Reply(0);
+        fixture.Reply(1);
+    }
+
     private sealed class ReplySignals
     {
         internal TaskCompletionSource[] Entered { get; } = [Signal(), Signal()];
@@ -245,21 +260,35 @@ public sealed class CompletionDispatcherIsolationTests
         internal async Task<(
             Task<CompletionReply> First,
             Task<CompletionReply> Second
-        )> SubmitAsync()
+        )> SubmitAsync(CancellationToken cancellationToken = default)
         {
             var client = host.Services.GetRequiredService<IZLinkActorClient>();
             var first = client
                 .RequestToActor(_actorIds[0], new CompletionProbe(0))
-                .Async<CompletionReply>()
+                .Async<CompletionReply>(cancellationToken)
                 .AsTask();
             var second = client
                 .RequestToActor(_actorIds[1], new CompletionProbe(1))
-                .Async<CompletionReply>()
+                .Async<CompletionReply>(cancellationToken)
                 .AsTask();
             await Task.WhenAll(signals.Entered.Select(signal => signal.Task)).WaitAsync(TestGuard);
             Assert.False(first.IsCompleted);
             Assert.False(second.IsCompleted);
             return (first, second);
+        }
+
+        internal int PendingCount
+        {
+            get
+            {
+                var runtime =
+                    host.Services.GetRequiredService<Zlink.Framework.Runtime.Host.ZLinkFrameworkRuntime>();
+                var wrapper =
+                    Assert.IsType<Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendSpotNodeWrapper>(
+                        runtime.GetActorSpotNode()
+                    );
+                return wrapper.NativeNode.PendingOperationCount;
+            }
         }
 
         internal void Reply(int number) => signals.Releases[number].TrySetResult();

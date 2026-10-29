@@ -279,6 +279,11 @@ public sealed class ClientServerLivenessLaneTests
         dealer.Connect(endpoint);
         var barrier = new CompletedReplyDealer(dealer, router, poller);
         var time = new ControllableTimeProvider();
+        await using var deadlineOwner = new Zlink.Framework.Runtime.Execution.ZLinkStateLane();
+        await using var deadlines = new Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex(
+            deadlineOwner,
+            time
+        );
         var failures = new AuditRuntimeFailureReporter();
         using var stop = new CancellationTokenSource();
         var connectionType = typeof(ZLinkClientServerClientRuntime).GetNestedType(
@@ -303,6 +308,7 @@ public sealed class ClientServerLivenessLaneTests
                 time,
                 failures,
                 new ZLinkRuntimeTaskRunner(failures, stop.Token),
+                deadlines,
             ],
             culture: null
         )!;

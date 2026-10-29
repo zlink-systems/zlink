@@ -156,6 +156,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private final ZLinkJavaRawServicePort port;
     private final LongSupplier currentTimeMillis;
     private final LongSupplier nanoTime;
+    private final Supplier<Runnable> pumpManagement;
     private final Map<String, Integer> channelWeights = new ConcurrentHashMap<>();
     private final Map<Long, PeerIntent> peerIntents = new ConcurrentHashMap<>();
     private final Map<RoutingId, PeerAdmissionExpectation> peerAdmissionExpectations =
@@ -471,6 +472,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         this.liveness =
                 new ZLinkServiceLivenessRegistry(
                         livenessProbeInterval, livenessPeerTimeout, transportStateLane);
+        this.pumpManagement = () -> tickLivenessOnLane(this.nanoTime.getAsLong());
         this.port.setReceiveSource(liveness::connectionFromOwner);
         if (topology != null) {
             port.inStateLane(
@@ -1868,9 +1870,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return topology.isReady(peer);
     }
 
-    private boolean isRouteReady(RoutingId peerRid, long generation) {
+    private boolean isRouteReady(RoutingId peerRid) {
         var current = topology;
-        return current != null && current.isRouteReady(peerRid, routeConnectionId(generation));
+        return current != null && current.isReady(peerRid);
     }
 
     boolean canRequestCanonicalActorJoin(ZLinkInternalMeshNode.CanonicalActorJoinRequest request) {
@@ -5132,8 +5134,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         port.inStateLane(
                 () -> {
                     if (topology != null) {
-                        for (var peer : topology.peers()) {
-                            disconnectAdmitted(
+                        for (var peer : topology.disconnectAll()) {
+                            liveness.disconnect(
                                     peer.descriptor().nodeRoutingId(), peer.connectionId());
                         }
                     }
@@ -5189,13 +5191,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                     pumpSocket,
                                     managementDeadlineNanos(waitStartedAt),
                                     waitStartedAt);
-            long now = nanoTime.getAsLong();
             // The existing pump remains this ROUTER's one route observer.
             if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
                 observeSelectedRoutes();
             }
             drainPeerCloseRequests();
-            tickLiveness(now);
+            Runnable afterManagement = port.inStateLane(pumpManagement);
+            if (afterManagement != null) afterManagement.run();
             if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0
                     || pendingRawMulticast != null) {
                 drainIngressBatch(pumpSocket);
@@ -8036,7 +8038,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             long generation = route.getValue();
             if (notRequiredPeers.contains(peerRid)
                     || rejectedPeers.contains(peerRid)
-                    || isRouteReady(peerRid, generation)) continue;
+                    || isRouteReady(peerRid)) continue;
             HelloExchange current = helloExchanges.get(peerRid);
             boolean sameRoute = current != null && current.routeGeneration() == generation;
             if (sameRoute && (!admissionDue || !current.submission().isDone())) continue;
@@ -8063,7 +8065,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             for (var route : selectedRoutes.entrySet()) {
                 if (notRequiredPeers.contains(route.getKey())
                         || rejectedPeers.contains(route.getKey())) continue;
-                if (!isRouteReady(route.getKey(), route.getValue())) {
+                if (!isRouteReady(route.getKey())) {
                     pending = true;
                     break;
                 }
@@ -8081,77 +8083,65 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     void tickLiveness(long nowNanos) {
-        Runnable afterCommit =
-                port.inStateLane(
-                        () -> {
-                            refreshAdmissionPending(nowNanos);
-                            boolean admissionDue = liveness.tickAdmission(nowNanos);
-                            var submissions = announceExpectedPeers(admissionDue);
-                            var tick = liveness.tick(nowNanos);
-                            if (submissions.isEmpty()
-                                    && tick.probes().isEmpty()
-                                    && tick.timedOutNodes().isEmpty()) return null;
-                            List<RoutingId> disconnected = null;
-                            for (RoutingId peer : tick.timedOutNodes()) {
-                                if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
-                                    if (disconnected == null) disconnected = new ArrayList<>();
-                                    disconnected.add(peer);
-                                }
-                            }
-                            if (disconnected != null) publishPeerObservation();
-                            List<RoutingId> targets =
-                                    disconnected == null ? List.of() : List.copyOf(disconnected);
-                            return () -> {
-                                for (var exchange : submissions) {
-                                    descriptorStateLane
-                                            .runAsync(
-                                                    () -> {
-                                                        if (peerAdmissionSealed.getAsBoolean()
-                                                                || helloExchanges.get(
-                                                                                exchange.target)
-                                                                        != exchange)
-                                                            return CompletableFuture
-                                                                    .<Void>completedStage(null);
-                                                        if (exchange.hello == null)
-                                                            exchange.hello =
-                                                                    wire.encodeAdmission(
-                                                                            ServiceWireConstants
-                                                                                    .COMMAND_HELLO,
-                                                                            localDescriptor);
-                                                        return trySendAdmissionControl(
-                                                                exchange.target,
-                                                                List.of(exchange.hello));
-                                                    })
-                                            .thenCompose(stage -> stage)
-                                            .whenComplete(
-                                                    (ignored, failure) -> {
-                                                        if (failure == null)
-                                                            exchange.submission.complete(null);
-                                                        else
-                                                            exchange.submission
-                                                                    .completeExceptionally(failure);
-                                                    });
-                                }
-                                for (var probe : tick.probes()) {
-                                    try {
-                                        sendLiveness(
-                                                probe.nodeRoutingId(),
-                                                encodeLiveness(
-                                                        ServiceWireConstants.COMMAND_LIVENESS_PROBE,
-                                                        probe.probeId()));
-                                    } catch (RuntimeException failure) {
-                                        // Existing timeout policy owns eviction after transient
-                                        // send failure.
-                                    }
-                                }
-                                for (RoutingId peer : targets) {
-                                    ZLinkJavaSocketSupport.disconnectRidIfPresent(
-                                            requireStarted(), peer);
-                                    signalStateChanged(peer);
-                                }
-                            };
-                        });
+        Runnable afterCommit = port.inStateLane(() -> tickLivenessOnLane(nowNanos));
         if (afterCommit != null) afterCommit.run();
+    }
+
+    private Runnable tickLivenessOnLane(long nowNanos) {
+        refreshAdmissionPending(nowNanos);
+        boolean admissionDue = liveness.tickAdmission(nowNanos);
+        var submissions = announceExpectedPeers(admissionDue);
+        var tick = liveness.tick(nowNanos);
+        if (submissions.isEmpty() && tick.probes().isEmpty() && tick.timedOutNodes().isEmpty())
+            return null;
+        List<RoutingId> disconnected = null;
+        for (RoutingId peer : tick.timedOutNodes()) {
+            if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
+                if (disconnected == null) disconnected = new ArrayList<>();
+                disconnected.add(peer);
+            }
+        }
+        if (disconnected != null) publishPeerObservation();
+        List<RoutingId> targets = disconnected == null ? List.of() : List.copyOf(disconnected);
+        return () -> {
+            for (var exchange : submissions) {
+                descriptorStateLane
+                        .runAsync(
+                                () -> {
+                                    if (peerAdmissionSealed.getAsBoolean()
+                                            || helloExchanges.get(exchange.target) != exchange)
+                                        return CompletableFuture.<Void>completedStage(null);
+                                    if (exchange.hello == null)
+                                        exchange.hello =
+                                                wire.encodeAdmission(
+                                                        ServiceWireConstants.COMMAND_HELLO,
+                                                        localDescriptor);
+                                    return trySendAdmissionControl(
+                                            exchange.target, List.of(exchange.hello));
+                                })
+                        .thenCompose(stage -> stage)
+                        .whenComplete(
+                                (ignored, failure) -> {
+                                    if (failure == null) exchange.submission.complete(null);
+                                    else exchange.submission.completeExceptionally(failure);
+                                });
+            }
+            for (var probe : tick.probes()) {
+                try {
+                    sendLiveness(
+                            probe.nodeRoutingId(),
+                            encodeLiveness(
+                                    ServiceWireConstants.COMMAND_LIVENESS_PROBE, probe.probeId()));
+                } catch (RuntimeException failure) {
+                    // Existing timeout policy owns eviction after transient
+                    // send failure.
+                }
+            }
+            for (RoutingId peer : targets) {
+                ZLinkJavaSocketSupport.disconnectRidIfPresent(requireStarted(), peer);
+                signalStateChanged(peer);
+            }
+        };
     }
 
     private CompletionStage<Void> sendLiveness(RoutingId target, List<byte[]> frames) {

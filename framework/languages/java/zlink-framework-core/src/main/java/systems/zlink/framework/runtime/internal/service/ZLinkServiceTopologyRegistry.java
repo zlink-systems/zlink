@@ -179,6 +179,18 @@ public final class ZLinkServiceTopologyRegistry {
         return true;
     }
 
+    /** Ends all logical admissions in one owner turn when the mesh node closes. */
+    public List<Peer> disconnectAll() {
+        return inStateLane(
+                () -> {
+                    var removed = peersOnLane();
+                    peers.clear();
+                    readyConnections.clear();
+                    rebuildChannelPlansOnLane();
+                    return removed;
+                });
+    }
+
     public void bindLiveness(
             RoutingId nodeRoutingId, ZLinkServiceLivenessRegistry.PeerState liveness) {
         inStateLane(
@@ -311,7 +323,11 @@ public final class ZLinkServiceTopologyRegistry {
 
     /** Whether the currently admitted peer has received ADMIT. */
     public boolean isReady(RoutingId peer) {
-        return inStateLane(() -> readyConnections.containsKey(peer));
+        return stateLane.isOnLane() ? isReadyOnLane(peer) : inStateLane(() -> isReadyOnLane(peer));
+    }
+
+    private boolean isReadyOnLane(RoutingId peer) {
+        return readyConnections.containsKey(peer);
     }
 
     /** Whether this peer received ADMIT on its currently admitted route. */
@@ -321,8 +337,13 @@ public final class ZLinkServiceTopologyRegistry {
 
     /** Reads the route's ADMIT receipt without entering a second owner turn. */
     public boolean isRouteReady(RoutingId peer, String connectionId) {
-        return inStateLane(
-                () -> connectionId != null && connectionId.equals(readyConnections.get(peer)));
+        return stateLane.isOnLane()
+                ? isRouteReadyOnLane(peer, connectionId)
+                : inStateLane(() -> isRouteReadyOnLane(peer, connectionId));
+    }
+
+    private boolean isRouteReadyOnLane(RoutingId peer, String connectionId) {
+        return connectionId != null && connectionId.equals(readyConnections.get(peer));
     }
 
     /**

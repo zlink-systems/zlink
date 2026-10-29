@@ -2,6 +2,14 @@ const { inspectRuntime } = require('../../packages/framework/dist/runtime/intern
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
+const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
+
+function deliverCutover(runtime, meshName, cutover) {
+  const bytes = wire.encodeMaintenanceRelocationControl(cutover);
+  return runtime.tryHandleControl(meshName, {
+    sourceNodeRid: 'source', parts: [{ data: () => bytes, close() {} }]
+  });
+}
 const {
   ZLinkHostServiceRelocationRuntime
 } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
@@ -127,7 +135,7 @@ function targetFixture(runtime = new ZLinkHostServiceRelocationRuntime({}), mesh
     store,
     authority,
     finalize: () => runtime.beginTargetFinalize(meshName, '0:17:1', stage),
-    cutover: () => runtime.handleOneWayControl(meshName, cutover, 'source')
+    cutover: () => deliverCutover(runtime, meshName, cutover)
   };
 }
 
@@ -203,7 +211,8 @@ test(
     const fixture = targetFixture();
     const prepare = fixture.stage.offer.prepare;
     await assert.rejects(
-      fixture.runtime.handleOneWayControl(
+      deliverCutover(
+        fixture.runtime,
         'mesh',
         {
           ...prepare,
@@ -211,8 +220,7 @@ test(
           senderRole: 'source',
           boundaryRecordCount: 0n,
           boundaryChecksumCrc32c: 1
-        },
-        'source'
+        }
       ),
       /boundary confirmation mismatch/
     );

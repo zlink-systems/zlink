@@ -238,17 +238,17 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                                 return false;
                             }
                             UUID id = ZLinkServiceOperationIds.next();
-                            registerEntry(0, id, Kind.SEND, completion, null);
+                            Entry<Void> entry = registerEntry(0, id, Kind.SEND, completion, null);
                             try {
                                 Objects.requireNonNull(admitted.get(), "binding admission")
                                         .whenComplete(
                                                 (ignored, failure) -> {
                                                     if (failure != null)
-                                                        completeExceptionally(id, failure);
-                                                    else complete(id, null);
+                                                        completeExceptionally(entry, failure);
+                                                    else complete(entry, null);
                                                 });
                             } catch (RuntimeException | Error failure) {
-                                completeExceptionally(id, failure);
+                                completeExceptionally(entry, failure);
                             }
                             return true;
                         },
@@ -307,9 +307,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     /**
      * Registers an operation whose submission reports its terminal straight to this entry (spec 08
-     * §3 E3/E5): the submission receives the entry's terminal callback and returns the stage that
-     * caller cancellation must reach, or {@code null} when nothing remains to cancel. A value that
-     * arrives after the entry ended (timeout, cancellation, close) goes to {@code discardValue}.
+     * §3 E3/E5): the submission receives the entry's terminal callback. Its returned producer stage
+     * remains owned by the submission so physical processing can finish after logical terminal. A
+     * value that arrives after the entry ended (timeout, cancellation, close) goes to {@code
+     * discardValue}.
      */
     public <T> CompletableFuture<T> submitTerminal(
             UUID id,
@@ -365,7 +366,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                                 return false;
                             }
                             if (!isPending(id)) return false;
-                            submitOnOwner(id, submission, discardValue, completion);
+                            submitOnOwner(entry, submission, discardValue);
                             return true;
                         },
                         true);
@@ -379,43 +380,42 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     private <T> void submitOnOwner(
-            UUID id,
+            Entry<T> entry,
             Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
-            Consumer<? super T> discardValue,
-            CompletableFuture<T> completion) {
+            Consumer<? super T> discardValue) {
         BiConsumer<T, Throwable> terminal =
                 (value, failure) -> {
-                    if (failure != null) completeExceptionally(id, failure);
-                    else if (!complete(id, value) && value != null) discardValue.accept(value);
+                    if (failure != null) completeExceptionally(entry, failure);
+                    else if (!complete(entry, value) && value != null) discardValue.accept(value);
                 };
         try {
-            CompletionStage<?> target = submission.apply(terminal);
-            if (target != null) {
-                ZLinkCompletionBridge.forwardCancellation(completion, target);
-            }
+            submission.apply(terminal);
         } catch (RuntimeException | Error failure) {
-            completeExceptionally(id, failure);
+            completeExceptionally(entry, failure);
         }
     }
 
     public <T> boolean complete(UUID id, T value) {
         @SuppressWarnings("unchecked")
-        Entry<T> entry = (Entry<T>) take(Objects.requireNonNull(id, "id"));
-        if (entry == null) {
-            return false;
-        }
+        Entry<T> entry = (Entry<T>) pending.get(Objects.requireNonNull(id, "id"));
+        return complete(entry, value);
+    }
+
+    private <T> boolean complete(Entry<T> entry, T value) {
+        if (entry == null || take(entry) == null) return false;
         entry.completeWithValue(value);
         completions.post(entry);
         return true;
     }
 
     public boolean completeExceptionally(UUID id, Throwable failure) {
-        Throwable terminal = Objects.requireNonNull(failure, "failure");
-        Entry<?> entry = take(Objects.requireNonNull(id, "id"));
-        if (entry == null) {
-            return false;
-        }
-        entry.completeWithFailure(terminal);
+        Objects.requireNonNull(failure, "failure");
+        return completeExceptionally(pending.get(Objects.requireNonNull(id, "id")), failure);
+    }
+
+    private boolean completeExceptionally(Entry<?> entry, Throwable failure) {
+        if (entry == null || take(entry) == null) return false;
+        entry.completeWithFailure(failure);
         completions.post(entry);
         return true;
     }

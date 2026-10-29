@@ -320,7 +320,7 @@ class channel_runtime_t
                                  zlink::message_t message,
                                  detail::inbound_message_context_t inbound) const;
 
-    boost::asio::awaitable<result_t<zlink::message_t>>
+    task_t<result_t<zlink::message_t>>
     dispatch_request_on_handler_executor (std::string channel_name,
                                           std::string topic,
                                           std::string packet_name,
@@ -358,7 +358,7 @@ class channel_runtime_t
                               zlink::message_t message,
                               detail::inbound_message_context_t inbound) const;
 
-    boost::asio::awaitable<void>
+    task_t<void>
     dispatch_send_on_handler_executor (std::string channel_name,
                                        std::string topic,
                                        std::string packet_name,

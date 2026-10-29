@@ -164,11 +164,7 @@
     "accesses": {
       "7989c533fbebee4d15598a117bee2feb3fc2891d14bda9053d6f3945d50a0b33": 1,
       "7aca22396bc2d30f248f1e0868b322368babfadb7a735668262d1a1dbe121cc2": 1,
-      "8a319b809bb4555f738a9fc2a15519eae4efe7f06d9f9edd134c10acadc9ca1d": 1,
-      "9074163c5bd585c910a422b506f21db1c6bcb9b45f11b8bd016f1b270bb9bccb": 1,
-      "c1e7a7276cc717be42e7d432d5c3daf0cd573b5fdb00acc69a5f32fe7a66d198": 1,
-      "e6ddc3b65f6d6c8994d2a8ff688d6b4708f96c068399f2e1f27144701bbad891": 2,
-      "f99585ac5191c4fed96908218a4e35b7e0c80079b6c2af904671e72bee83f719": 1
+      "e6ddc3b65f6d6c8994d2a8ff688d6b4708f96c068399f2e1f27144701bbad891": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeDescriptorOrderTest.java": {

@@ -1367,21 +1367,43 @@ final class ZLinkServiceOperationRegistryTest {
     }
 
     @Test
-    void submittedRequestCancellationReachesTheBindingWaiterBeforeClose() throws Exception {
+    void startedProducerSurvivesCallerCancellationAndDiscardsItsDecodedReply() throws Exception {
         try (ZLinkServiceOperationRegistry registry = new ZLinkServiceOperationRegistry()) {
-            CompletableFuture<String> binding = new CompletableFuture<>();
-            CountDownLatch bindingCancelled = new CountDownLatch(1);
-            binding.whenComplete(
-                    (ignored, failure) -> {
-                        if (binding.isCancelled()) bindingCancelled.countDown();
-                    });
-            CompletableFuture<String> caller =
-                    registry.submit(
-                            UUID.randomUUID(), Duration.ofSeconds(1), () -> binding, ignored -> {});
-            ownerLane(registry).runAsync(() -> {}).toCompletableFuture().get(1, TimeUnit.SECONDS);
+            var physical = new CompletableFuture<String>();
+            var codecCalls = new AtomicInteger();
+            var submissions = new AtomicInteger();
+            var discarded = new AtomicReference<String>();
+            var caller =
+                    registry.<String>submitTerminal(
+                            UUID.randomUUID(),
+                            Duration.ofSeconds(1),
+                            terminal -> {
+                                submissions.incrementAndGet();
+                                physical.whenComplete(
+                                        (value, failure) -> {
+                                            if (failure != null) terminal.accept(null, failure);
+                                            else {
+                                                codecCalls.incrementAndGet();
+                                                terminal.accept(
+                                                        value.toUpperCase(java.util.Locale.ROOT),
+                                                        null);
+                                            }
+                                        });
+                                return physical;
+                            },
+                            discarded::set);
+            assertEquals(1, submissions.get());
             assertTrue(caller.cancel(false));
-            assertTrue(bindingCancelled.await(1, TimeUnit.SECONDS));
+            var cancellation = caller.handle((value, failure) -> failure).get(1, TimeUnit.SECONDS);
+            assertInstanceOf(CancellationException.class, cancellation);
+            assertEquals(0, registry.pendingCount());
+            assertFalse(physical.isDone());
+            assertTrue(physical.complete("late reply"));
+            assertEquals(1, codecCalls.get());
+            assertEquals("LATE REPLY", discarded.get());
+            assertEquals(1, submissions.get());
             registry.close();
+            assertSame(cancellation, caller.handle((value, failure) -> failure).join());
             assertTrue(caller.isCancelled());
             assertEquals(0, registry.pendingCount());
         }

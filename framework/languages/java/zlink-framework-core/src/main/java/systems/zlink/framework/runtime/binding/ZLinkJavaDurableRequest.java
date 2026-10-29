@@ -21,7 +21,7 @@ import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/** Owns readiness and physical resources for one registered lifecycle request. */
+/** Owns readiness for one registered lifecycle request. */
 public final class ZLinkJavaDurableRequest<T> {
     public static Throwable requestFailure(Throwable failure) {
         return ZLinkJavaRawMeshNode.requestFailure(failure);
@@ -111,7 +111,8 @@ public final class ZLinkJavaDurableRequest<T> {
                                     id,
                                     terminal,
                                     admission);
-                    // The entry's final receiver also owns observer and physical-waiter cleanup.
+                    // Logical completion releases readiness; the binding retains its physical
+                    // receiver.
                     caller.whenComplete((reply, failure) -> request.post(request::release));
                     request.post(
                             () -> {
@@ -195,9 +196,6 @@ public final class ZLinkJavaDurableRequest<T> {
             }
             observation = null;
         }
-        if (pending != null) {
-            pending.toCompletableFuture().cancel(false);
-            pending = null;
-        }
+        pending = null;
     }
 }

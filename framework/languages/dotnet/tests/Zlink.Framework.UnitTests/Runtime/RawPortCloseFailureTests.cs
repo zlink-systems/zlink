@@ -107,6 +107,8 @@ public sealed class RawPortCloseFailureTests
         proxy.FailClose = true;
         using var errors = new ZLinkRuntimeErrorSink();
         var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var deadlineLane = new ZLinkStateLane();
+        await using var deadlines = new ZLinkRequestDeadlineIndex(deadlineLane);
         var runtime = new ZLinkClientServerClientRuntime(
             "events",
             null!,
@@ -135,6 +137,7 @@ public sealed class RawPortCloseFailureTests
                 TimeProvider.System,
                 errors,
                 runner,
+                deadlines,
             ],
             null
         )!;
