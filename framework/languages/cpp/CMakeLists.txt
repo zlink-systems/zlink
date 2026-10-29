@@ -2592,6 +2592,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_mesh_selected_route PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_durable_head_supply
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_durable_head_supply.cpp
+    "framework-unit;framework-regression;execution;dispatch;admission"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_durable_head_supply)
+  target_include_directories(test_cpp_framework_durable_head_supply PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_application_job_queue
     tests/Zlink.Framework.UnitTests/test_cpp_framework_application_job_queue.cpp
     "framework-unit;framework-regression;execution;admission")

@@ -1239,6 +1239,12 @@ void serial_execution_queue_t::prepare_application_head_locked ()
     const auto next = next_application_locked ().next;
     if (next == _application.queue.end ())
         return;
+    // Actor tickets advertise pending payload without acquiring supply.
+    // Only the shared gate's idle head selection prepares their payload.
+    if (next->actor_mailbox) {
+        next->actor_mailbox->prepare_application_head_locked ();
+        return;
+    }
     const auto &record = next->application_record;
     if (!record || record->admission.ready ())
         return;
@@ -2817,9 +2823,9 @@ void serial_execution_queue_t::connect_actor_head (
 {
     assert (current_shared_gate == this);
     actor->import_publications ();
-    if (actor->_active == 0)
-        actor->prepare_application_head_locked ();
-    if (actor->_active != 0 || !actor->has_ready_locked ())
+    if (actor->_active != 0
+        || (!actor->has_ready_locked ()
+            && actor->next_application_locked ().next == actor->_application.queue.end ()))
         return;
     const auto lane = actor->select_next_lane_locked ();
     const auto already_queued = [&actor] (const lane_state_t &ready_lane) {
