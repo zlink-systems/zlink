@@ -4753,7 +4753,7 @@ export class ServiceStatefulRuntime {
     pending: PendingOperation<unknown>
   ): Promise<readonly Buffer[]> {
     return new Promise((resolve, reject) => {
-      const finish = (parts: readonly Uint8Array[]) => {
+      const finish: NonNullable<ServiceMailboxRecord['reply']> = (parts) => {
         resolve(parts.map((part) => Buffer.from(part)));
       };
       void (async () => {

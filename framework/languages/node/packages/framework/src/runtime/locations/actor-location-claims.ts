@@ -233,9 +233,7 @@ export class ZLinkActorLocationClaims {
       current.allocation.descriptorLifecycleGeneration !== ownerNodeGeneration
     ) {
       throw new ZLinkFrameworkException(
-        current.kind === 'snapshot' && current.objectGeneration !== actorRef.objectGeneration
-          ? ZLinkFrameworkErrorKind.InvalidOperation
-          : ZLinkFrameworkErrorKind.Unavailable,
+        classifyMembershipAuthorityFailure(current, actorRef),
         `Actor '${actorId}' membership authority fence does not match.`
       );
     }
@@ -273,7 +271,8 @@ export class ZLinkActorLocationClaims {
     if (result.kind !== 'stored') {
       throw new ZLinkFrameworkException(
         result.kind === 'conflict'
-          ? (result.membershipFailure ?? ZLinkFrameworkErrorKind.Unavailable)
+          ? (result.membershipFailure ??
+              classifyMembershipAuthorityFailure(result.current, actorRef))
           : ZLinkFrameworkErrorKind.InternalFailure,
         `Actor '${actorId}' membership commit was rejected with status ${result.kind}.`
       );
@@ -458,6 +457,15 @@ interface TrackedActor {
   row: ZLinkActorLocation;
   generation: bigint;
   readonly deactivate?: () => Promise<void>;
+}
+
+function classifyMembershipAuthorityFailure(
+  current: { readonly kind: 'missing' } | ZLinkAuthoritySnapshot,
+  actorRef: ActorRef
+): ZLinkFrameworkErrorKind {
+  return current.kind === 'snapshot' && current.objectGeneration !== actorRef.objectGeneration
+    ? ZLinkFrameworkErrorKind.InvalidOperation
+    : ZLinkFrameworkErrorKind.Unavailable;
 }
 
 function matchesActorAuthority(

@@ -113,7 +113,7 @@ export interface RawServiceIngressRecord {
   readonly sourceNodeGeneration?: bigint;
   readonly sourceRoute?: Uint8Array;
   readonly requestSequence?: bigint;
-  readonly reply?: (parts: readonly Uint8Array[]) => void;
+  readonly reply?: ServiceMailboxRecord['reply'];
   readonly parts: readonly Buffer[];
   readonly applicationJobOwner?: ApplicationIngressRecordOwner;
 }

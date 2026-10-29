@@ -932,6 +932,84 @@ for (const backend of ['authority-memory', 'provider-memory']) {
   }
 }
 
+for (const backend of ['authority-memory', 'provider-memory']) {
+  for (const change of ['actorGeneration', 'actorVersion']) {
+    test(`${backend} membership CAS classifies late ${change}`, async () => {
+      const f = await membershipFailureFixture(backend);
+      const key = encodeAuthorityKey('actor', 'player');
+      const compareExchange = f.store.compareExchangeAuthority.bind(f.store);
+      assert.notEqual(f.actor.objectGeneration, 0n);
+      assert.notEqual(f.spot.objectGeneration, 0n);
+      assert.notEqual(f.actor.objectGeneration, f.spot.objectGeneration);
+      let writes = 0;
+      let reads = 0;
+      let result;
+      let changed;
+      let joined = 0;
+      const claims = new ZLinkActorLocationClaims({ currentOwnerToken: f.owner }, {}, 'play', {
+        async readAuthority(...args) {
+          reads++;
+          return f.store.readAuthority(...args);
+        },
+        async compareExchangeAuthority(...args) {
+          writes++;
+          assert.equal(writes, 1, 'membership must not retry after the Actor fence changes');
+          changed = await compareExchange(key, f.actorSnapshot.storeVersion, {
+            kind: 'put',
+            generationTransition: change === 'actorGeneration' ? 'reincarnate' : 'preserve',
+            payload: f.actorSnapshot.payload
+          });
+          assert.equal(changed.kind, 'stored');
+          assert.notEqual(changed.storeVersion.value, f.actorSnapshot.storeVersion.value);
+          assert.equal(
+            changed.objectGeneration,
+            f.actor.objectGeneration + (change === 'actorGeneration' ? 1n : 0n)
+          );
+          result = await compareExchange(...args);
+          assert.equal(result.kind, 'conflict');
+          assert.equal(result.membershipFailure, undefined);
+          assert.equal(result.current.kind, 'snapshot');
+          assert.equal(result.current.objectGeneration, changed.objectGeneration);
+          assert.equal(result.current.storeVersion.value, changed.storeVersion.value);
+          return result;
+        }
+      });
+      const operation = claims
+        .commitMembership(
+          'Player',
+          f.actor,
+          f.actorSnapshot.authorityOwnerGeneration,
+          'table',
+          f.spot.objectGeneration,
+          framework.ZLinkSpotKind.User,
+          7n
+        )
+        .then(() => joined++);
+      let failure;
+      await assert.rejects(operation, (error) => {
+        failure = error;
+        return error instanceof framework.ZLinkFrameworkException;
+      });
+      assert.equal(reads, 1, 'Conflict.current supplies the terminal classification');
+      assert.equal(writes, 1);
+      assert.equal(joined, 0);
+      const current = await f.store.readAuthority(key);
+      assert.equal(current.storeVersion.value, changed.storeVersion.value);
+      assert.deepEqual(current.payload, f.actorSnapshot.payload);
+      const identity = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
+      assert.equal(identity.spotKind, framework.ZLinkSpotKind.Entry);
+      assert.equal(identity.spotId, f.actor.nodeRid);
+      assert.equal(identity.spotGeneration, 7n);
+      assert.equal(
+        failure.kind,
+        change === 'actorGeneration'
+          ? framework.ZLinkFrameworkErrorKind.InvalidOperation
+          : framework.ZLinkFrameworkErrorKind.Unavailable
+      );
+    });
+  }
+}
+
 async function membershipFailureFixture(backend) {
   const internal = require('../../packages/framework/dist/internal');
   const {
