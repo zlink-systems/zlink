@@ -21,6 +21,9 @@ def main() -> int:
             symbol = line.strip().split(maxsplit=1)[0] if line.strip() else ""
             if symbol.startswith("??$"):
                 continue
+            if symbol.startswith("?use_metric_provider@app_t@framework@zlink@@"):
+                exports.append(line)
+                continue
             if re.search(r"boost|protobuf|absl|opentelemetry", symbol, re.IGNORECASE):
                 continue
             if re.search(r"@zlink@@(?:[A-Z0-9]|@8)", symbol):

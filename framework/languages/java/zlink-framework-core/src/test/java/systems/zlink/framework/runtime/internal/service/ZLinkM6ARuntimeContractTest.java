@@ -513,6 +513,21 @@ final class ZLinkM6ARuntimeContractTest {
     }
 
     @Test
+    void readyLookupUsesTheCurrentOwnerTurn() {
+        var lane = new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane();
+        var topology =
+                new ZLinkServiceTopologyRegistry(
+                        descriptor("mesh", "local", 1, 1, List.of(), 100), lane);
+        var peer = descriptor("mesh", "peer", 1, 1, List.of(), 100);
+        topology.admit(peer, "route", ServiceWireConstants.COMMAND_ADMIT);
+        assertTrue(
+                lane.awaitTurn(
+                        () ->
+                                topology.isReady(
+                                        topology.peerOrNullFromOwner(peer.nodeRoutingId()))));
+    }
+
+    @Test
     void channelSelectionPlanChangesOnlyWithTopologyReadiness() {
         var topology =
                 new ZLinkServiceTopologyRegistry(descriptor("mesh", "local", 1, 1, List.of(), 100));
@@ -536,8 +551,12 @@ final class ZLinkM6ARuntimeContractTest {
         topology.admit(peerB, "pipe-b", ServiceWireConstants.COMMAND_HELLO);
 
         assertTrue(topology.selectReadyChannel("orders").isEmpty());
-        assertTrue(topology.setChannelReady(peerA.nodeRoutingId(), "pipe-a", true));
-        assertTrue(topology.setChannelReady(peerB.nodeRoutingId(), "pipe-b", true));
+        assertEquals(
+                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                topology.admit(peerA, "pipe-a", ServiceWireConstants.COMMAND_ADMIT));
+        assertEquals(
+                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                topology.admit(peerB, "pipe-b", ServiceWireConstants.COMMAND_ADMIT));
         assertEquals(
                 List.of("peer-b", "peer-a", "peer-b", "peer-b"),
                 java.util.stream.IntStream.range(0, 4)
@@ -550,7 +569,9 @@ final class ZLinkM6ARuntimeContractTest {
                                                 .toString())
                         .toList());
 
-        assertTrue(topology.setChannelReady(peerB.nodeRoutingId(), "pipe-b", false));
+        assertEquals(
+                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                topology.admit(peerB, "pipe-b-replaced", ServiceWireConstants.COMMAND_HELLO));
         for (int index = 0; index < 4; index++) {
             assertEquals(
                     peerA.nodeRoutingId(),

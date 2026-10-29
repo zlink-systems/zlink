@@ -107,12 +107,14 @@ class PartySpot final : public fx::spot_t<Player>
 
     std::vector<std::byte> capture () const
     {
-        const auto payload = zlink::message_t::from_json (state);
-        return {payload.bytes ().begin (), payload.bytes ().end ()};
+        const auto payload = fx::serializer_registry_t{}.get<PartyRun> ().serialize (state);
+        const auto bytes = payload.bytes ();
+        return {bytes.begin (), bytes.end ()};
     }
     void restore (std::vector<std::byte> payload)
     {
-        state = zlink::message_t::from (std::span<const std::byte> (payload)).parse_json<PartyRun> ();
+        state = fx::serializer_registry_t{}.get<PartyRun> ().deserialize (
+          fx::encoded_payload_t::from_bytes (std::span<const std::byte> (payload)));
     }
 };
 class PartyRelocation final : public fx::spot_relocation_adapter_t<PartySpot>

@@ -23,8 +23,10 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
@@ -427,9 +429,9 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
 
+        var backend = new ObservedBackend();
         try (ZLinkFrameworkRuntime target =
-                        RuntimeTestSupport.startFramework(
-                                targetOptions, new ZLinkJavaBackendAdapterFactory());
+                        RuntimeTestSupport.startFramework(targetOptions, backend);
                 ZLinkFrameworkRuntime source =
                         RuntimeTestSupport.startFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
@@ -465,10 +467,10 @@ final class InstanceSpotRuntimeIntegrationTest {
                     store.releaseReady.complete(null);
                     if (replacedBoundary) {
                         SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
-                        try (var seed = new RetainedAdmissionBoundary(target, spotId);
+                        try (var seed = new RetainedAdmissionBoundary(target, backend, spotId);
                                 var late =
                                         new RetainedAdmissionBoundary(
-                                                target, spotId, lateInstanceIntent)) {
+                                                target, backend, spotId, lateInstanceIntent)) {
                             seed.resumeClose.complete(null);
                             late.start.complete(null);
                             late.beforeAdmission.get(5, TimeUnit.SECONDS);
@@ -507,7 +509,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                         if (retainedBoundary && !admissionBoundary)
                             SourceEntrySpot.afterCloseStart.complete(null);
                         SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
-                        try (var boundary = new RetainedAdmissionBoundary(target, spotId)) {
+                        try (var boundary =
+                                new RetainedAdmissionBoundary(target, backend, spotId)) {
                             if (!sealedBoundary) {
                                 boundary.start.complete(null);
                                 boundary.beforeAdmission.get(5, TimeUnit.SECONDS);
@@ -564,7 +567,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                             if (admissionBoundary) {
                                 try (var readBoundary =
                                         new InstanceAdmissionReadBoundary(
-                                                target,
+                                                backend,
                                                 spotId,
                                                 failureStage
                                                         == CloseScenario
@@ -650,17 +653,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                 var spots = target.spotManager();
                 AtomicInteger completedBackendOperation =
                         failureStage == CloseScenario.RESOURCE
-                                ? installBackendFailure(spots, spotId, "closeInstanceSpot")
+                                ? backend.failOnce(spotId, "closeInstanceSpot")
                                 : null;
-                var close =
-                        spots.getClass()
-                                .getDeclaredMethod("closeInstanceSpot", String.class, long.class);
-                close.setAccessible(true);
-                @SuppressWarnings("unchecked")
                 CompletionStage<Boolean> closing =
-                        (CompletionStage<Boolean>)
-                                close.invoke(
-                                        spots, spotId, EchoInstanceSpot.generations.getFirst());
+                        ZLinkSpotRuntimeTesting.closeInstanceSpot(
+                                spots, spotId, EchoInstanceSpot.generations.getFirst());
                 if (failureStage == CloseScenario.DOUBLE_RELEASE) {
                     store.deleteFailed.get(5, TimeUnit.SECONDS);
                     assertThrows(
@@ -668,18 +665,16 @@ final class InstanceSpotRuntimeIntegrationTest {
                             () -> closing.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> second =
-                            (CompletionStage<Boolean>)
-                                    close.invoke(
-                                            spots, spotId, EchoInstanceSpot.generations.getFirst());
+                            ZLinkSpotRuntimeTesting.closeInstanceSpot(
+                                    spots, spotId, EchoInstanceSpot.generations.getFirst());
                     store.deleteFailedTwice.get(5, TimeUnit.SECONDS);
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
                             () -> second.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> resumed =
-                            (CompletionStage<Boolean>)
-                                    close.invoke(
-                                            spots, spotId, EchoInstanceSpot.generations.getFirst());
+                            ZLinkSpotRuntimeTesting.closeInstanceSpot(
+                                    spots, spotId, EchoInstanceSpot.generations.getFirst());
                     assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     store.deleteApplied.get(5, TimeUnit.SECONDS);
                     // The activation record holds the Spot lane until the release succeeds.
@@ -695,9 +690,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                     assertEquals(1, target.activeSpotCount("game"));
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> resumed =
-                            (CompletionStage<Boolean>)
-                                    close.invoke(
-                                            spots, spotId, EchoInstanceSpot.generations.getFirst());
+                            ZLinkSpotRuntimeTesting.closeInstanceSpot(
+                                    spots, spotId, EchoInstanceSpot.generations.getFirst());
                     assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     store.deleteApplied.get(5, TimeUnit.SECONDS);
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
@@ -709,7 +703,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     // Spot address messaging §7 step 1: the probe reaches the owner while Close
                     // runs and waits behind it. §9 Closing row: without Instance intent it ends
                     // with NotFound once Close ends.
-                    awaitPendingMessage(spots, spotId);
+                    awaitPendingMessage(spotId);
                     store.releaseClosing.complete(null);
                     assertProbeKind(
                             ZLinkFrameworkErrorKind.NOT_FOUND,
@@ -749,11 +743,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                     if (!failCommit) {
                         @SuppressWarnings("unchecked")
                         CompletionStage<Boolean> resumed =
-                                (CompletionStage<Boolean>)
-                                        close.invoke(
-                                                spots,
-                                                spotId,
-                                                EchoInstanceSpot.generations.getFirst());
+                                ZLinkSpotRuntimeTesting.closeInstanceSpot(
+                                        spots, spotId, EchoInstanceSpot.generations.getFirst());
                         assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     }
                 }
@@ -795,8 +786,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         final CompletableFuture<Void> resume = new CompletableFuture<>();
         final CompletableFuture<Void> received = new CompletableFuture<>();
         final String spotId;
-        final Object spotNode;
-        final java.lang.reflect.Field resolverField;
+        final ZLinkInternalSpotNode spotNode;
         final systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode
                         .SpotAdmissionResolver
                 original;
@@ -822,25 +812,13 @@ final class InstanceSpotRuntimeIntegrationTest {
                 };
 
         InstanceAdmissionReadBoundary(
-                ZLinkFrameworkRuntime runtime, String targetSpotId, boolean holdBeforeRead)
+                ObservedBackend backend, String targetSpotId, boolean holdBeforeRead)
                 throws Exception {
             this.spotId = targetSpotId;
-            Object spots = runtime.spotManager();
-            var meshesField = spots.getClass().getDeclaredField("routeMeshNodesByName");
-            meshesField.setAccessible(true);
-            var mesh =
-                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode)
-                            ((java.util.Map<?, ?>) meshesField.get(spots)).get("game");
-            spotNode = mesh.spotNode();
-            resolverField = spotNode.getClass().getDeclaredField("spotAdmissionResolver");
-            resolverField.setAccessible(true);
-            original =
-                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode
-                                    .SpotAdmissionResolver)
-                            resolverField.get(spotNode);
+            spotNode = backend.spotNode;
+            original = backend.resolver;
             logger.addHandler(listener);
-            resolverField.set(
-                    spotNode,
+            spotNode.setSpotAdmissionResolver(
                     (systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode
                                     .SpotAdmissionResolver)
                             (spotId, ownerGeneration, intent, present, route) -> {
@@ -878,7 +856,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         @Override
         public void close() throws IllegalAccessException {
             resume.complete(null);
-            resolverField.set(spotNode, original);
+            spotNode.setSpotAdmissionResolver(original);
             logger.removeHandler(listener);
         }
     }
@@ -897,21 +875,22 @@ final class InstanceSpotRuntimeIntegrationTest {
         final java.util.concurrent.ExecutorService executor =
                 java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
-        RetainedAdmissionBoundary(ZLinkFrameworkRuntime runtime, String spotId) throws Exception {
-            this(runtime, spotId, true);
+        RetainedAdmissionBoundary(
+                ZLinkFrameworkRuntime runtime, ObservedBackend backend, String spotId)
+                throws Exception {
+            this(runtime, backend, spotId, true);
         }
 
         RetainedAdmissionBoundary(
-                ZLinkFrameworkRuntime runtime, String spotId, boolean instanceIntent)
+                ZLinkFrameworkRuntime runtime,
+                ObservedBackend backend,
+                String spotId,
+                boolean instanceIntent)
                 throws Exception {
             Object spots = runtime.spotManager();
             var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
             activations.setAccessible(true);
             Object activation = ((java.util.Map<?, ?>) activations.get(spots)).get(spotId);
-            var base = activation.getClass().getSuperclass();
-            var backendField = base.getDeclaredField("backendSpot");
-            backendField.setAccessible(true);
-            Object backend = backendField.get(activation);
             var route =
                     new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceColdActivation(
@@ -1016,31 +995,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                             admitted.completeExceptionally(failure);
                         }
                     });
-            Object proxy =
-                    java.lang.reflect.Proxy.newProxyInstance(
-                            backend.getClass().getClassLoader(),
-                            new Class<?>[] {
-                                systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot
-                                        .class
-                            },
-                            (ignored, method, args) -> {
-                                if (method.getName().equals("close")) {
-                                    afterPendingCut.complete(null);
-                                    resumeClose.get(5, TimeUnit.SECONDS);
-                                }
-                                try {
-                                    return method.invoke(backend, args);
-                                } catch (java.lang.reflect.InvocationTargetException failure) {
-                                    throw failure.getCause();
-                                }
-                            });
-            backendField.set(activation, proxy);
-            var contextField = base.getDeclaredField("context");
-            contextField.setAccessible(true);
-            Object context = contextField.get(activation);
-            var contextBackend = context.getClass().getDeclaredField("backendSpot");
-            contextBackend.setAccessible(true);
-            contextBackend.set(context, proxy);
+            backend.spots.get(spotId).beforeClose =
+                    () -> {
+                        afterPendingCut.complete(null);
+                        resumeClose.orTimeout(5, TimeUnit.SECONDS).join();
+                    };
         }
 
         @Override
@@ -1110,20 +1069,11 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     /** Waits until the Instance Spot owner queue holds an accepted message behind Close. */
-    private static void awaitPendingMessage(Object spots, String spotId) throws Exception {
-        var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
-        activations.setAccessible(true);
-        Object activation = ((java.util.Map<?, ?>) activations.get(spots)).get(spotId);
-        var contextField = activation.getClass().getSuperclass().getDeclaredField("context");
-        contextField.setAccessible(true);
-        Object context = contextField.get(activation);
-        var ownerQueue = context.getClass().getDeclaredMethod("ownerQueue");
-        ownerQueue.setAccessible(true);
-        var queue =
-                (systems.zlink.framework.execution.ZLinkSerialExecutionQueue)
-                        ownerQueue.invoke(context);
+    private static void awaitPendingMessage(String spotId) throws Exception {
+        var context = EchoInstanceSpot.latestContext;
+        assertEquals(spotId, context.spotId());
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (queue.pendingMessages().toCompletableFuture().join().isEmpty()) {
+        while (!ZLinkSpotRuntimeTesting.hasPendingMessages(context).toCompletableFuture().join()) {
             if (System.nanoTime() > deadline) {
                 throw new java.util.concurrent.TimeoutException("probe never reached the owner");
             }
@@ -1131,46 +1081,167 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
     }
 
-    private static AtomicInteger installBackendFailure(
-            Object spots, String spotId, String operation) throws Exception {
-        var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
-        activations.setAccessible(true);
-        Object activation = ((java.util.Map<?, ?>) activations.get(spots)).get(spotId);
-        var backendField = activation.getClass().getSuperclass().getDeclaredField("backendSpot");
-        backendField.setAccessible(true);
-        Object backend = backendField.get(activation);
-        AtomicBoolean failOnce = new AtomicBoolean(true);
-        AtomicInteger completed = new AtomicInteger();
-        Object proxy =
-                java.lang.reflect.Proxy.newProxyInstance(
-                        backend.getClass().getClassLoader(),
-                        new Class<?>[] {
-                            systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot.class
-                        },
-                        (ignored, method, args) -> {
-                            if (method.getName().equals(operation)
-                                    && failOnce.compareAndSet(true, false)) {
-                                throw new IllegalStateException(
-                                        "injected " + operation + " failure");
+    /** Decorates the existing constructor collaborator before runtime objects are created. */
+    private static final class ObservedBackend implements ZLinkBackendAdapterProvider {
+        private final ZLinkBackendAdapterProvider delegate = new ZLinkJavaBackendAdapterFactory();
+        private final java.util.Map<String, ObservedSpot> spots =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        private volatile ZLinkInternalSpotNode spotNode;
+        private volatile ZLinkInternalSpotNode.SpotAdmissionResolver resolver;
+
+        private ZLinkInternalSpotNode observe(ZLinkInternalSpotNode node) {
+            spotNode = node;
+            return proxy(
+                    ZLinkInternalSpotNode.class,
+                    node,
+                    (method, args) -> {
+                        if (method.getName().equals("setSpotAdmissionResolver"))
+                            resolver = (ZLinkInternalSpotNode.SpotAdmissionResolver) args[0];
+                        Object result = invoke(node, method, args);
+                        if (result instanceof ZLinkBackendSpot spot) {
+                            return observeSpot(spot);
+                        }
+                        return result;
+                    });
+        }
+
+        private ZLinkBackendSpot observeSpot(ZLinkBackendSpot spot) {
+            var observed = new ObservedSpot(spot);
+            spots.put(spot.spotId(), observed);
+            return observed.proxy;
+        }
+
+        private ZLinkInternalMeshNode.InstanceSpotActivationHandler observeInstanceHandler(
+                ZLinkInternalMeshNode.InstanceSpotActivationHandler handler) {
+            return proxy(
+                    ZLinkInternalMeshNode.InstanceSpotActivationHandler.class,
+                    handler,
+                    (method, args) -> {
+                        if (method.getName().equals("activate")) {
+                            args = args.clone();
+                            var original = (ZLinkBackendSpot) args[2];
+                            args[2] = observeSpot(original);
+                            if (args.length == 5) {
+                                @SuppressWarnings("unchecked")
+                                var restore =
+                                        (java.util.function.BiFunction<
+                                                        ZLinkBackendSpot,
+                                                        CompletableFuture<Void>,
+                                                        CompletionStage<Void>>)
+                                                args[4];
+                                // The backend restore callback requires its original raw Spot.
+                                args[4] =
+                                        (java.util.function.BiFunction<
+                                                        ZLinkBackendSpot,
+                                                        CompletableFuture<Void>,
+                                                        CompletionStage<Void>>)
+                                                (ignored, admission) ->
+                                                        restore.apply(original, admission);
                             }
-                            try {
-                                Object result = method.invoke(backend, args);
-                                if (method.getName().equals(operation)) {
-                                    completed.incrementAndGet();
-                                }
-                                return result;
-                            } catch (java.lang.reflect.InvocationTargetException failure) {
-                                throw failure.getCause();
+                        }
+                        return invoke(handler, method, args);
+                    });
+        }
+
+        private AtomicInteger failOnce(String spotId, String operation) {
+            var spot = java.util.Objects.requireNonNull(spots.get(spotId));
+            spot.failureOperation = operation;
+            spot.failOnce.set(true);
+            return spot.completed;
+        }
+
+        @Override
+        public ZLinkChannelBackendAdapter createChannelAdapter(ZLinkBackendAdapterOptions options) {
+            return delegate.createChannelAdapter(options);
+        }
+
+        @Override
+        public ZLinkSpotBackendAdapter createSpotAdapter(ZLinkBackendAdapterOptions options) {
+            var adapter = delegate.createSpotAdapter(options);
+            return (context, mode) -> observe(adapter.createSpotNode(context, mode));
+        }
+
+        @Override
+        public ZLinkMeshBackendAdapter createMeshAdapter(ZLinkBackendAdapterOptions options) {
+            var adapter = delegate.createMeshAdapter(options);
+            return (context, name) -> {
+                var mesh = adapter.createMeshNode(context, name);
+                var node = observe(mesh.spotNode());
+                return proxy(
+                        ZLinkInternalMeshNode.class,
+                        mesh,
+                        (method, args) -> {
+                            if (method.getName().equals("spotNode")) return node;
+                            if (method.getName().equals("registerInstanceSpotType")
+                                    && args.length == 2) {
+                                args = args.clone();
+                                var handler =
+                                        (ZLinkInternalMeshNode.InstanceSpotActivationHandler)
+                                                args[1];
+                                args[1] = observeInstanceHandler(handler);
                             }
+                            return invoke(mesh, method, args);
                         });
-        backendField.set(activation, proxy);
-        var contextField = activation.getClass().getSuperclass().getDeclaredField("context");
-        contextField.setAccessible(true);
-        Object context = contextField.get(activation);
-        var contextBackend = context.getClass().getDeclaredField("backendSpot");
-        contextBackend.setAccessible(true);
-        contextBackend.set(context, proxy);
-        return completed;
+            };
+        }
+
+        @Override
+        public ZLinkStreamBackendAdapter createStreamAdapter(ZLinkBackendAdapterOptions options) {
+            return delegate.createStreamAdapter(options);
+        }
+
+        @Override
+        public ZLinkMonitoringBackendAdapter createMonitoringAdapter(
+                ZLinkBackendAdapterOptions options) {
+            return delegate.createMonitoringAdapter(options);
+        }
+    }
+
+    private static final class ObservedSpot {
+        private final AtomicBoolean failOnce = new AtomicBoolean();
+        private final AtomicInteger completed = new AtomicInteger();
+        private volatile String failureOperation;
+        private volatile Runnable beforeClose = () -> {};
+        private final ZLinkBackendSpot proxy;
+
+        private ObservedSpot(ZLinkBackendSpot backend) {
+            proxy =
+                    proxy(
+                            ZLinkBackendSpot.class,
+                            backend,
+                            (method, args) -> {
+                                if (method.getName().equals("close")) beforeClose.run();
+                                boolean selected = method.getName().equals(failureOperation);
+                                if (selected && failOnce.compareAndSet(true, false))
+                                    throw new IllegalStateException(
+                                            "injected " + failureOperation + " failure");
+                                Object result = invoke(backend, method, args);
+                                if (selected) completed.incrementAndGet();
+                                return result;
+                            });
+        }
+    }
+
+    @FunctionalInterface
+    private interface BackendInvocation {
+        Object invoke(java.lang.reflect.Method method, Object[] args) throws Throwable;
+    }
+
+    private static <T> T proxy(Class<T> contract, T delegate, BackendInvocation invocation) {
+        return contract.cast(
+                java.lang.reflect.Proxy.newProxyInstance(
+                        delegate.getClass().getClassLoader(),
+                        new Class<?>[] {contract},
+                        (ignored, method, args) -> invocation.invoke(method, args)));
+    }
+
+    private static Object invoke(Object delegate, java.lang.reflect.Method method, Object[] args)
+            throws Throwable {
+        try {
+            return method.invoke(delegate, args);
+        } catch (java.lang.reflect.InvocationTargetException failure) {
+            throw failure.getCause();
+        }
     }
 
     @Test
@@ -1267,7 +1338,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                 if (expectedKind == null) {
                     // OnClosing stays held until the probe waits in the owner queue, so step 3
                     // sees the pending Instance intent message and creates the next incarnation.
-                    awaitPendingMessage(target.spotManager(), spotId);
+                    awaitPendingMessage(spotId);
                     EchoInstanceSpot.closingRelease.complete(null);
                     assertEquals(
                             "echo:during-close",
@@ -1895,10 +1966,12 @@ final class InstanceSpotRuntimeIntegrationTest {
         static volatile CompletableFuture<Void> closingRelease =
                 CompletableFuture.completedFuture(null);
         static volatile RuntimeException closingFailure;
+        static volatile ZLinkInstanceSpotContext latestContext;
         private final ZLinkInstanceSpotContext context;
 
         public EchoInstanceSpot(ZLinkInstanceSpotContext context) {
             this.context = context;
+            latestContext = context;
         }
 
         @Override

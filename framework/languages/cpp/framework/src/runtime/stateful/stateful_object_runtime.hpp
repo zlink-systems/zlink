@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <tuple>
@@ -275,29 +276,31 @@ class stateful_object_runtime_t
     friend struct stateful_object_runtime_test_access_t;
 
   public:
-    task_t<void> configure_population_metrics (std::string mesh_name)
+    task_t<void> configure_population_metrics (
+      std::string mesh_name, runtime::metric_provider_t provider = runtime::noop_metric_provider ())
     {
-        return _lane.run_task ([this, mesh_name = std::move (mesh_name)] () mutable {
-            if (_actor_metric)
-                return;
-            _metric_mesh = std::move (mesh_name);
-            auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
-            if (!dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ())) {
-                auto meter = provider->GetMeter ("zlink.framework");
-                if (!meter)
-                    return;
-                _actor_metric =
-                  meter->CreateDoubleUpDownCounter ("zlink.actor.count", "", "{actor}");
-                if (_actor_metric) {
-                    _actor_metric->Add (0, {{"mesh_name", _metric_mesh}});
-                    for (const auto &[key, object] : _objects)
-                        record_actor_population (object, 1);
-                }
-            }
-        });
+        return _lane.run_task (
+          [this, mesh_name = std::move (mesh_name), provider = std::move (provider)] () mutable {
+              if (_actor_metric)
+                  return;
+              _metric_mesh = std::move (mesh_name);
+              _metric_provider = provider;
+              if (!dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ())) {
+                  auto meter = provider->GetMeter ("zlink.framework");
+                  if (!meter)
+                      return;
+                  _actor_metric =
+                    meter->CreateDoubleUpDownCounter ("zlink.actor.count", "", "{actor}");
+                  if (_actor_metric) {
+                      _actor_metric->Add (0, {{"mesh_name", _metric_mesh}});
+                      for (const auto &[key, object] : _objects)
+                          record_actor_population (object, 1);
+                  }
+              }
+          });
     }
 
-    task_t<void> retire_population_metrics_async ();
+    std::future<void> retire_population_metrics_async ();
 
     using relocation_state_capture_t = std::function<task_t<frozen_object_state_t> (
       const object_ref_t &, const std::string &, std::stop_token)>;
@@ -647,8 +650,7 @@ class stateful_object_runtime_t
       std::make_shared<detail::actor_transfer_coordinator_t> ();
     std::vector<object_inventory_t> inventory_on_lane (bool actors_only) const;
 
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    mutable runtime::state_lane_t _lane;
     // Lane-owned waiters of a seal; empty unless a seal waits for active turns.
     std::vector<std::shared_ptr<task_completion_source_t<void>>> _quiescence_waiters;
     std::vector<placement_candidate_t> _candidates;
@@ -672,6 +674,7 @@ class stateful_object_runtime_t
     {
         erase_object_on_lane (_objects.find (key));
     }
+    runtime::metric_provider_t _metric_provider;
     std::string _metric_mesh;
     opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<double>> _actor_metric;
     std::map<object_key_t, object_record_t> _objects;

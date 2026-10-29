@@ -1,5 +1,6 @@
 #pragma once
 #include "server/shared/contracts.hpp"
+#include <zlink/json.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -124,8 +125,7 @@ struct CombatantSnapshot
     double fireRemainingMs{};
     double moveRemainingMs{};
     bool operator== (const CombatantSnapshot &) const = default;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE (CombatantSnapshot, playerId, position, hp, sequence,
-                                    fireRemainingMs, moveRemainingMs)
+
 };
 
 struct RoomSnapshot
@@ -135,19 +135,6 @@ struct RoomSnapshot
     std::optional<std::string> winner{};
     bool operator== (const RoomSnapshot &) const = default;
 };
-inline void to_json (nlohmann::json &j, const RoomSnapshot &value)
-{
-    j = nlohmann::json::object ();
-    j["players"] = value.players;
-    j["phase"] = value.phase;
-    j["winner"] = detail::to_nullable_json (value.winner);
-}
-inline void from_json (const nlohmann::json &j, RoomSnapshot &value)
-{
-    j.at ("players").get_to (value.players);
-    j.at ("phase").get_to (value.phase);
-    detail::from_nullable_json (j.at ("winner"), value.winner);
-}
 
 struct ShotDecision
 {
@@ -339,3 +326,27 @@ class RoomState
     std::optional<std::string> winner_;
 };
 }
+
+namespace zlink::json
+{
+template <> struct dto_traits<::MyGame::CombatantSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("playerId", &::MyGame::CombatantSnapshot::playerId),
+      zlink::json::field ("position", &::MyGame::CombatantSnapshot::position),
+      zlink::json::field ("hp", &::MyGame::CombatantSnapshot::hp),
+      zlink::json::field ("sequence", &::MyGame::CombatantSnapshot::sequence),
+      zlink::json::field ("fireRemainingMs", &::MyGame::CombatantSnapshot::fireRemainingMs),
+      zlink::json::field ("moveRemainingMs", &::MyGame::CombatantSnapshot::moveRemainingMs)
+    };
+};
+
+template <> struct dto_traits<::MyGame::RoomSnapshot>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("players", &::MyGame::RoomSnapshot::players),
+      zlink::json::field ("phase", &::MyGame::RoomSnapshot::phase),
+      zlink::json::field ("winner", &::MyGame::RoomSnapshot::winner)
+    };
+};
+} // namespace zlink::json

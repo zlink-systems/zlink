@@ -1,3 +1,4 @@
+const { createMeshHost } = require('./fixtures/mesh-host');
 const { mapZLinkRequestReply, observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -4786,7 +4787,7 @@ test('ZLinkChannelRequestDispatcher submits error replies directly to the comple
 });
 
 test('self-RID RouteMesh waits on the shared application job queue without local backpressure', async () => {
-  const host = new framework.ZLinkFrameworkRuntimeHost({
+  const { host, meshRuntime: hostMesh } = createMeshHost({
     registration: framework.createFrameworkRegistration({
       applicationJobQueue: { maxQueuedApplicationJobs: 1n }
     })
@@ -4813,10 +4814,10 @@ test('self-RID RouteMesh waits on the shared application job queue without local
       if (handled === 1) await firstHandlerGate;
     }
   };
-  host.spotNodeRuntime = {
+  Object.assign(hostMesh, {
     meshNode: () => ({ status: () => ({ routingId: zlink.RoutingId.from('self-node') }) }),
     meshCompletionTable: () => undefined
-  };
+  });
 
   const first = host.routeTransport.submit('mesh', 'self-node', 'Notice', { sequence: 1 });
   assert.deepEqual(await first, { status: ZLinkSubmitStatus.Submitted });
@@ -4835,7 +4836,7 @@ test('self-RID RouteMesh waits on the shared application job queue without local
   const secondDispatch = scheduled.shift()();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(handled, 1);
-  assert.equal(host.applicationJobQueue.snapshot().capacityWaiters, 1n);
+  assert.equal(host.status.capacity.applicationJobQueue.capacityWaiters, 1n);
   releaseFirstHandler();
   await Promise.all([firstDispatch, secondDispatch]);
   assert.equal(scheduled.length, 1);
@@ -4847,7 +4848,7 @@ test('self-RID RouteMesh waits on the shared application job queue without local
   assert.equal(scheduled.length, 1);
   await scheduled.shift()();
   assert.equal(handled, 4);
-  assert.equal(host.applicationJobQueue.snapshot().permitsInUse, 0n);
+  assert.equal(host.status.capacity.applicationJobQueue.permitsInUse, 0n);
 });
 
 test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors to the logger provider', async () => {

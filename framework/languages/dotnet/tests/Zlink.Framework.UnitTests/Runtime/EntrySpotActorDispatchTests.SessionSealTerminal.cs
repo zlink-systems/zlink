@@ -68,7 +68,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 foreach (var actorId in new[] { "actor-b", "actor-c" })
                 {
                     var participant = actorRef with { ActorId = actorId };
-                    await CreateTrackedLocalActorOwnershipAsync(
+                    participant = await CreateTrackedLocalActorOwnershipAsync(
                         authorityStore!,
                         runtime.LocationLifecycle!.OwnerToken,
                         runtime.LocationLifecycle.ActorOwnership,

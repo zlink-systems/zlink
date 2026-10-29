@@ -36,6 +36,7 @@
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/streams/session_serial_executor.hpp"
+#include "runtime/fanout/fanout_location_runtime.hpp"
 #include "runtime/timers/core_timer_drain_loop.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/timers/timer_runtime.hpp"
@@ -71,6 +72,33 @@
 #include <vector>
 
 using zlink::framework::test::begin_reserved_object;
+
+namespace zlink::framework::runtime
+{
+struct state_lane_test_access_t
+{
+    static bool has_pending (state_lane_t &lane)
+    {
+        const std::lock_guard lock (lane._mailbox_mutex);
+        return !lane._mailbox.empty ();
+    }
+};
+}
+
+namespace zlink::framework::runtime::fanout
+{
+struct fanout_location_runtime_test_access_t
+{
+    static state_lane_t &lane (fanout_location_runtime_t &runtime) { return runtime._lane; }
+    static void pump (fanout_location_runtime_t &runtime) { runtime.pump (); }
+    static void run (fanout_location_runtime_t &runtime) { runtime.run (); }
+    static void request_stop (fanout_location_runtime_t &runtime)
+    {
+        runtime._stop.store (true, std::memory_order_release);
+        runtime._wake_timer.signal ();
+    }
+};
+}
 
 namespace
 {
@@ -1869,6 +1897,112 @@ bool verify_serial_queue_owner_time_budget ()
     const auto last = std::find (order.begin (), order.end (), "overloaded-7");
     return other != order.end () && last != order.end () && other < last
            && overloaded_owner.pending_count () == 0 && other_owner.pending_count () == 0;
+}
+
+bool verify_session_control_lifecycle_priority ()
+{
+    using namespace zlink::framework::runtime;
+    serial_executor_test_fixture_t fixture (serial_lane_policy_t::per_actor_spot ());
+    session_serial_executor_t session (fixture.worker);
+    serial_test_blocker_t first;
+    std::vector<int> order;
+    if (!session.execute_application ("held", first.work ()) || !first.wait_for_entry ())
+        return false;
+    const auto append = [&] (int value) {
+        return [&, value] (auto complete) {
+            order.push_back (value);
+            complete ([] {});
+        };
+    };
+    const bool accepted = session.execute_application ("backlog", append (3))
+                          && session.execute_control ("control-1", append (1))
+                          && session.execute_control ("control-2", append (2));
+    first.release ();
+    session.drain ();
+    return accepted && order == std::vector<int>{1, 2, 3};
+}
+
+bool verify_fanout_snapshot_state_owner ()
+{
+    using namespace zlink::framework;
+    completion_owner_t completion_owner;
+    runtime::configure_handler_coroutine_executor (handler_coroutine_worker_count);
+    runtime::install_host_context_hooks ();
+    scope_exit_t shutdown ([] { runtime::shutdown_handler_coroutine_executor (); });
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    handler_registry_t handlers;
+    runtime::in_memory_location_repository_t store;
+    runtime::location_runtime_t locations (store);
+    channel_snapshot_t channel;
+    channel.name = "state-owner";
+    channel.subscriber.enabled = true;
+    channel.subscriber.discovery = true;
+    auto executor = std::make_shared<runtime::offload_executor_t> ();
+    std::atomic_bool on_lane{true};
+    auto builder = zlink::framework::test::runtime_failure_builder ();
+    runtime::fanout::fanout_location_runtime_t fanout (
+      builder.message_bus (), {channel}, locations, store, store, provider, serializers, handlers,
+      [&] {
+          if (!runtime::state_lane_t::current ())
+              on_lane.store (false);
+          return framework_runtime_state_t::serving;
+      },
+      executor);
+    const auto initial = fanout.snapshot (channel.name);
+    std::vector<std::future<fanout_channel_snapshot_t>> reads;
+    for (int i = 0; i < 8; ++i)
+        reads.push_back (
+          std::async (std::launch::async, [&] { return fanout.snapshot (channel.name); }));
+    bool same_sequence = initial.sequence == 1;
+    for (auto &read : reads)
+        same_sequence = read.get ().sequence == initial.sequence && same_sequence;
+    std::promise<fanout_channel_snapshot_t> observed;
+    auto delivered = observed.get_future ();
+    auto observation = fanout.observe (
+      channel.name, 4, [&] (const auto &status) { observed.set_value (status.status); });
+    const bool ready = delivered.wait_for (std::chrono::seconds (5)) == std::future_status::ready;
+    const bool coherent = ready && delivered.get ().sequence == initial.sequence;
+    observation->close ();
+    auto &lane = runtime::fanout::fanout_location_runtime_test_access_t::lane (fanout);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ().share ();
+    const bool blocked = lane.try_post ([&] {
+        entered.set_value ();
+        released.wait ();
+    });
+    entered.get_future ().wait ();
+    auto running = std::async (std::launch::async, [&] {
+        runtime::fanout::fanout_location_runtime_test_access_t::run (fanout);
+    });
+    const bool submitted =
+      wait_until ([&] { return runtime::state_lane_test_access_t::has_pending (lane); });
+    runtime::fanout::fanout_location_runtime_test_access_t::request_stop (fanout);
+    const bool loop_returned =
+      running.wait_for (std::chrono::seconds (5)) == std::future_status::ready;
+    auto pumping = std::async (std::launch::async, [&] {
+        runtime::fanout::fanout_location_runtime_test_access_t::pump (fanout);
+    });
+    const bool posted = pumping.wait_for (std::chrono::seconds (5)) == std::future_status::ready;
+    release.set_value ();
+    pumping.get ();
+    running.get ();
+    lane.run ([] {}).get ();
+    bool reentry_rejected = false;
+    lane
+      .run ([&] {
+          try {
+              (void) fanout.snapshot (channel.name);
+          }
+          catch (const std::logic_error &) {
+              reentry_rejected = true;
+          }
+      })
+      .get ();
+    return on_lane.load () && same_sequence && coherent && blocked && submitted && loop_returned
+           && posted && reentry_rejected;
 }
 
 bool verify_serial_executor_submission_paths_select_queues ()
@@ -4759,10 +4893,11 @@ bool verify_close_terminal_for_operational_boundary ()
         int reincarnations = 0;
         state->lifecycle.on_closing = [&, state] (void *, const spot_closing_context_t &,
                                                   std::stop_token) {
-            node->host_phase = [boundary] {
-                return boundary == 0   ? framework_runtime_state_t::draining
-                       : boundary == 1 ? framework_runtime_state_t::relocating
-                                       : framework_runtime_state_t::relocated;
+            node->host_lifecycle = [boundary] {
+                return host_lifecycle_snapshot_t{boundary == 0 ? framework_runtime_state_t::draining
+                                                 : boundary == 1
+                                                   ? framework_runtime_state_t::relocating
+                                                   : framework_runtime_state_t::relocated};
             };
             node->drain_flag->store (boundary == 0);
             state->relocation_boundary_active = boundary != 0;
@@ -9396,8 +9531,8 @@ bool verify_public_local_member_defer (
     auto node = mesh->spot_state;
     auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
     node->worker_executor = scheduler;
-    scheduler->publication_fence (
-      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (fw::test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     fw::service_collection_t services;
     node->root_services = services.build_provider ();
     auto spot = std::make_shared<detail::spot_context_state_t> ();
@@ -10027,8 +10162,8 @@ bool verify_real_join_completion_callback_owner (int policy,
       "join-completion-owner-node");
     auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
     node->worker_executor = scheduler;
-    scheduler->publication_fence (
-      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (fw::test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     auto spot = std::make_shared<detail::spot_context_state_t> ();
     spot->node = node;
     spot->node_rid = fw::node_rid_t::from_string ("join-completion-owner-node");
@@ -11200,6 +11335,14 @@ bool verify_nested_barrier_phases (bool shared, bool cancel)
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--session-control-priority")
+        return verify_session_control_lifecycle_priority () ? 0 : 1;
+    if (argc == 2 && std::string_view (argv[1]) == "--fanout-state-owner")
+        return verify_fanout_snapshot_state_owner () ? 0 : 1;
+    if (argc == 1
+        && (!verify_session_control_lifecycle_priority ()
+            || !verify_fanout_snapshot_state_owner ()))
+        return 1;
     zlink::framework::completion_owner_t completion_owner;
     if (argc == 2 && std::string_view (argv[1]) == "--handler-origin-terminals")
         return verify_all_handler_origin_terminals () ? EXIT_SUCCESS : EXIT_FAILURE;

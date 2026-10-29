@@ -196,9 +196,19 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
         );
         for (var index = 0; index < 1000; index++)
             TraceStages();
-        // The allocating row only needs one allocation to show; short windows keep it clear of
-        // the GC pauses that other tests cause. The off row needs the long window.
-        var allocated = PerCallAllocation.MinWindow(TraceStages, allocates ? 16 : 256);
+        // The Normal row uses the cumulative counter, which stays positive across GC; Off still needs the long window.
+        long allocated;
+        if (allocates)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < 16; index++)
+                TraceStages();
+            allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        else
+        {
+            allocated = PerCallAllocation.MinWindow(TraceStages, 256);
+        }
         Assert.Equal(allocates, allocated > 0);
         if (!allocates)
             Assert.Equal(0, allocated);

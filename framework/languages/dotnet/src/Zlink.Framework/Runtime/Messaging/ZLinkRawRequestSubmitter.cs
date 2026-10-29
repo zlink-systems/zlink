@@ -21,10 +21,45 @@ internal static class ZLinkRawRequestSubmitter
         ArgumentNullException.ThrowIfNull(request);
         try
         {
+            return await SubmitAsync(
+                    (
+                        State: state,
+                        Parts: parts,
+                        Request: request,
+                        Timeout: timeout,
+                        Token: cancellationToken,
+                        FailureMessage: failureMessage
+                    ),
+                    static pending =>
+                        pending.Request(
+                            pending.State,
+                            pending.Parts,
+                            pending.Timeout,
+                            pending.Token
+                        ),
+                    static (pending, result) => pending.FailureMessage(pending.State, result)
+                )
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    internal static async ValueTask<IReadOnlyList<Message>> SubmitAsync<TState>(
+        TState state,
+        Func<TState, Task<IReadOnlyList<Message>>> request,
+        Func<TState, object, string> failureMessage
+    )
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
             Task<IReadOnlyList<Message>> completion;
             try
             {
-                completion = request(state, parts, timeout, cancellationToken);
+                completion = request(state);
             }
             catch (ZlinkSubmitException error)
             {
@@ -57,10 +92,6 @@ internal static class ZLinkRawRequestSubmitter
                 error,
                 failureMessage(state, error.Result)
             );
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(parts);
         }
     }
 }

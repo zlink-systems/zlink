@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -100,7 +101,7 @@ test('a queued request moving B to C to D leaves terminal delivery to D and orig
   const backlog = b.coordinator.snapshot('actor-1');
   b.coordinator.complete('actor-1', target('C'), targetActorRef('C'), [], ownerFence('C', 2n));
   assert.equal(await pending, actorHandoff.RELOCATED_REQUEST_OWNED_BY_REQUESTER);
-  assert.equal(b.coordinator.replyRoutes.size, 0);
+  assert.equal(b.coordinator[inspectRuntime]().replyRouteCount, 0);
   parts.forEach((part) => part.close());
   const c = harness();
   const cTerminals = [];
@@ -521,8 +522,8 @@ test('Actor ingress lookup does not inspect unrelated actors or departed tenures
       []
     );
     reads.clear();
-    assert.equal(h.coordinator.hasMessageFollowRouteForStaleRef('missing-actor', ref), false);
-    assert.equal(h.coordinator.hasMessageFollowRouteForStaleRef('actor-1', ref), true);
+    assert.equal(h.coordinator[inspectRuntime]().hasMessageFollowRoute('missing-actor', ref), false);
+    assert.equal(h.coordinator[inspectRuntime]().hasMessageFollowRoute('actor-1', ref), true);
     assert.deepEqual(
       [...reads.keys()].filter((index) => index < 64),
       []

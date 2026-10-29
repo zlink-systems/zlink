@@ -5,7 +5,6 @@
 #include "sockets/router/router.hpp"
 #include "sockets/router/router_debug.hpp"
 
-#include "api/socket/socket_request_reply_internal.hpp"
 #include "core/c_api_copy_internal.hpp"
 #include "core/pipe.hpp"
 #include "protocol/wire.hpp"
@@ -425,10 +424,7 @@ void router_t::finish_route_adoption (pipe_t *adopted_pipe_,
     if (actions_->superseded_pipe) {
         // A standby keeps its physical lanes, but supersession ends this
         // socket's request use of the pair just like a physical detach.
-        socket_reqrep_internal::fail_pending_requests_for_transport_pair (
-          request_reply_state (),
-          actions_->superseded_pipe->get_transport_pair_id (),
-          actions_->superseded_pipe->get_transport_pair_generation ());
+        socket_base_t::pipe_peer_terminating (actions_->superseded_pipe);
         actions_->superseded_pipe->release_lifetime_ref ();
         actions_->superseded_pipe = NULL;
     }

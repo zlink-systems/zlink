@@ -28,18 +28,9 @@
     "reason": "공개 동작 관찰로 바꾸려면 기존 backend provider 주입과 공개 startup·shutdown·relocation 흐름으로 실패 경계를 고정하는 통합 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
       "03fac09765245a216e676a7c910a40a4956b164a625a6eb565b3d23e82a2a144": 1,
-      "1be8074d09fdf4d5c7d1926fbc240f0012b41d4c97ecd4debb1382deaaaf74b2": 1,
-      "2210d4dfe68eef60914f06662bfed424af406eeddbc0158407ed0843082c2a2e": 1,
-      "2cf83fd031fb73fef84e1a9a6c53641da092607f342582fdea7e896a11f31841": 1,
-      "3209020cf608b2ac100b534a2049959bf926327d65a32bb72d75110c8f0759d1": 1,
       "33310f11d3e7b5626ef777ee2831202452cfdb2bf1a12b8217ea370d42a98b79": 1,
-      "3ba0af2c82de71b11ce3d0ae3edcf62a7f5bd21ecf57645df5d729378028d6fd": 2,
-      "435a18fb7935f94fb53a63ef4b03f8641066c00ca090d0e3b6bfcdfa25d724f7": 1,
-      "4708c4186102b3be48744fda996365671256b63e356a306d48003678fd38f6ee": 1,
-      "4a35c51e7bce71c2763dde0656322fc1a6bf8dd07d3aa3b8ef57dd46a6ce035e": 3,
-      "5578c37989ae3dc6c3a0de932b44cde0dfa5b774e2316ae74fb0cd4ad0bfd847": 1,
+      "4a35c51e7bce71c2763dde0656322fc1a6bf8dd07d3aa3b8ef57dd46a6ce035e": 1,
       "64805e854dc5a37c1268cf0e3a790451b65b782e1249f7d9fdf90725677704e5": 1,
-      "65d9eafcb202c6671a61027b021c6f49882a022ab36bedbb30074e6603cf36cc": 2,
       "803fb4fd955146079ee9d7f2cfd9553d9529c9d7e0df02e482119a02937f0cea": 1
     }
   },
@@ -173,11 +164,7 @@
     "accesses": {
       "7989c533fbebee4d15598a117bee2feb3fc2891d14bda9053d6f3945d50a0b33": 1,
       "7aca22396bc2d30f248f1e0868b322368babfadb7a735668262d1a1dbe121cc2": 1,
-      "8a319b809bb4555f738a9fc2a15519eae4efe7f06d9f9edd134c10acadc9ca1d": 1,
-      "9074163c5bd585c910a422b506f21db1c6bcb9b45f11b8bd016f1b270bb9bccb": 1,
-      "c1e7a7276cc717be42e7d432d5c3daf0cd573b5fdb00acc69a5f32fe7a66d198": 1,
-      "e6ddc3b65f6d6c8994d2a8ff688d6b4708f96c068399f2e1f27144701bbad891": 2,
-      "f99585ac5191c4fed96908218a4e35b7e0c80079b6c2af904671e72bee83f719": 1
+      "e6ddc3b65f6d6c8994d2a8ff688d6b4708f96c068399f2e1f27144701bbad891": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeDescriptorOrderTest.java": {
@@ -198,9 +185,7 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeHelloRetryTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "3fd0fcdcb99621770f270a083df246bd98ae75952bcdc1721e1ea335168a4ca4": 1,
       "742b58790041bad1dc68efa296764d6d5d7d5701136cc489a3ec9ff92df5fa94": 1,
-      "8ded5991f32d0a8152c8be12f8015a9a1dbe945dc61575e761df2a1ccabb4b92": 1,
       "ddd4b45e7b5eae4bea9001cb8229b01b56ba4d30a8c41d8bf24dd5cb891aa1d2": 1,
       "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 2
     }
@@ -234,12 +219,10 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeM6ATest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "3a08d75d9a70d847223c9810d95fd533bc4fcfdac351848aec2ece8ed26df0b6": 1,
       "4c57fc5f875a131e9ea87b7636cc70bd127907bc91ac365ecee9cf395f370660": 1,
       "590bdb1c224d9df8b4f4cf61c89ca9e4da6cdc8a66891d3bd209d29cadcbc1d6": 1,
       "5c104b02f79bd1dfdcde05002b724dfb31bc0626bd2c129fd92ea224583135c2": 1,
-      "dcc0166f8f81eccb1068d31fd3c8e2bd87d0d2f676d9b524456f3cb7e7fb16ab": 1,
-      "eab58556ab833d473bdbc933eb4577d695d53ab9407ac54c3d8bf182715557ec": 1
+      "dcc0166f8f81eccb1068d31fd3c8e2bd87d0d2f676d9b524456f3cb7e7fb16ab": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeMetricsTest.java": {
@@ -271,7 +254,6 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeShutdownSealTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "a57ec7bd29908b4e225d03d97b106676d797f0761f224a84e7ce2fccbb1146a2": 1,
       "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 1
     }
   },
@@ -348,12 +330,10 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubmissionTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "4e6054ce4cc53e26b19d2d9f7606700f76fb66569570006ed5cf79af407e1d97": 1,
       "62d3491a93c9fa8f2b0eb231239b3e77105c1753c068ce476f2fb28a5d82eca8": 1,
       "a4ba7f5a13d4caa41b635bc79a7355a60d151c6d1a0a4329629c83dc0f4c5623": 1,
       "b0f65dc0c876e9d931741a93cbe689fd4d0dd789c9beb6855ff2fc19a98d6586": 1,
       "ee3796ebe62e27493663704320a8d86f8fc0b6e36f60914b00870a0ed7fb2dc4": 1,
-      "eecd00c301e19fa574db731531c0335f9a4c3f20bd8bc7350c6813f78196d7c4": 1,
       "f1dd979437ba45ebbcda3ca0f747af1f47ebe9f173aa472e61353554585396f0": 2
     }
   },
@@ -372,7 +352,6 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/channels/ZLinkChannelShutdownInFlightTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 backend socket·scheduler·종료 executor를 생성 시 주입하고 공개 submit·shutdown 결과로 수신 순서와 실패를 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "024c2a559ebec01832d0dfc0ed8a26dcf8a22c112e4fa797df94e70e6b15e23f": 1,
       "10c782587989f8bf443eb49574494f2966bd26d75dfe28465e23ec0e0715980f": 1,
       "4f68163112e421470bee6b421b333fe7d226a99097b9756e87a6967da46efe88": 1,
       "6c4f8ad07e4fafe8ccfd740ab97463309bb8b75b9a22740ea3edb5731ec600d7": 1,
@@ -474,26 +453,6 @@
       "b73bf527dd42beaa690dfd05edd1c1acc754800b1985292785ec20f26564bcd1": 1
     }
   },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/internal/locations/ZLinkProviderAuthorityRepositoryTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 기존 Store 주입으로 reserve·prepare·commit과 조건부 쓰기 충돌을 재현하고 저장 record를 공개 repository 결과로 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "09992bee5791d5a1a8dd87b0d77f23e3a4ca27e1d1f29c99651d969c326e6b82": 3,
-      "324d33ae77bb35943d268fba711979f63c3c4a40716d99086b8f1b83640f240d": 1,
-      "38cc47211b266b850fd3cbcd689b3fa4a0b4852e7f1f8412a576d140d6314988": 1,
-      "3bbf03c262d035fc3b03140ba9f14e4da883dac3c4c0fdcf63cb430e3b5c067c": 4,
-      "3f81f9ee8758a27fdd256bd34dc1c40be04f9ce2449759182adba0a2770cbbb3": 1,
-      "458a47c39c5883d1ff6edef54956a5343cff9e18aab0193627d86d5c07887a9c": 1,
-      "45ff617611c0bd10215dcc0f88bb063bfcca5858fafde360ed1084bc5b10527b": 1,
-      "5ea3569fb3701414b4bc6773b8c06b8e2c351a26bdc1c7976252eb66cb4bc649": 1,
-      "8e309cb35291bfce0e5e0281106983016613fd0ae20b3445e2bd566aa14c2d70": 1,
-      "9d888a6f7f11c9a8ccba48be637f2cc1589658dba79c18e5b1d7fb44ec4d3f79": 1,
-      "b314b819dfc125d44085e8a7be93b592c143d8bc14f6d8beed3c88f6cd1a77dc": 1,
-      "d2abfd733f57ecf61a7151cc6426bf49dd568e1b6d5dbd2fa31ac5de63792271": 1,
-      "da1f5a03f1dd5270b6f62088a663cae4a6e71f11faa4e6674cf47d8fdc09f7fa": 1,
-      "ed334979f9ff930345df9a765189bb94341e449e71d810a104cf58874571a30d": 1,
-      "fae4f24f4dc108db8f5290d98cc20cf6ec93cd2eb1d04e35adaf9a8f88adaaa1": 1
-    }
-  },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/internal/monitoring/ZLinkStatusPublisherTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 생성 시 주입한 저장소·scheduler·완료 callback으로 기존 내부 상태 단언과 같은 실패를 검출하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
@@ -504,10 +463,7 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistryTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 공개 등록·완료·해제로 slot 재사용과 예외 객체 수명까지 구분하는 할당 관찰 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "158c896e07c9e64b843133ca1998f88ff5728b0542344567a6ca42bc69a1c0af": 1,
-      "4d784ae46bbda5a6e0134ee616206bfd2349694d3389ba4c11ea3438f88986cd": 1,
-      "6f8a62a89535fbd26185b9765e9a1392b0be1393ea68ad917d3390d71df0daca": 1,
-      "ecdfa3508de68287211b7554a2ccd44b4ba4f9471316cbf09a81c358c632f923": 1
+      "4d784ae46bbda5a6e0134ee616206bfd2349694d3389ba4c11ea3438f88986cd": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/locations/ZLinkAutoConnectLoopTest.java": {
@@ -782,7 +738,6 @@
     "accesses": {
       "229411842f18d9402cadc24a732cbf2dfd944ba96e6ae4cf3ba92fc3d587449b": 1,
       "249bb1ecea483b5a7934b2aee30bf5978784a4c0d6fe9373f3313f7041830608": 4,
-      "5fd583c8a58cbf0ffc4dc27256edad081b2fd6224100648c8aa79ee3d03729dd": 1,
       "6cd299a9df1c92b3ef99f5d633be807ba0931e6d29c0b5a7db389667badfda47": 1,
       "7271639c976e434f18e5f5436418ea45ef1016772ddfaec98c2e76e0e9083a1a": 2
     }

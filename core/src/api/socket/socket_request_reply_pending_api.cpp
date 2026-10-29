@@ -145,12 +145,13 @@ bool reqrep::take_pending_reply_from_transport_locked (
         || (!router_requester && source_pipe_ != application))
         return false;
 
-    // engine_error() clears this source's connection id under the same lock.
-    // Keep validation and pending removal in one generation decision: either
-    // this frame consumes the submit-time request, or teardown wins and leaves
-    // the pending record intact for its terminal owner.
+    // Engine failure clears shared send availability on the I/O thread. The
+    // socket endpoint retains the identity of records already in its FIFO
+    // until its owner resolves pair termination. Validate that receive
+    // capability, rather than requiring the physical engine to remain live.
     zlink::scoped_lock_t generation_lock (source_pipe_->transport_sync ());
-    if (source_pipe_->get_transport_connection_id () != source_connection_id_
+    if (source_pipe_->get_endpoint_pair ().connection_id.load ()
+          != source_connection_id_
         || !source_pipe_->is_lifecycle_active ()
         || !application->transport_pair_application_ready_cached ())
         return false;

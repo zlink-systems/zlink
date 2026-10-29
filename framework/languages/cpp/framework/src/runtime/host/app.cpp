@@ -483,6 +483,7 @@ class app_state_t
         std::optional<std::chrono::system_clock::time_point> deadline_at;
         std::vector<std::shared_ptr<termination_waiter_t>> waiters;
         std::thread worker;
+        std::stop_source cleanup_cancellation;
 
         ~termination_operation_t ()
         {
@@ -505,6 +506,7 @@ class app_state_t
     std::condition_variable termination_teardown_changed;
     std::size_t active_relocation_preflights = 0;
     bool run_active = false;
+    bool run_started = false;
     bool teardown_complete = false;
 
     class relocation_preflight_guard_t
@@ -725,9 +727,10 @@ std::shared_ptr<framework_observer_state_t> framework_runtime_status_source_t::o
   std::size_t capacity,
   std::function<void (const observed_status_t<framework_runtime_status_t> &)> observer)
 {
-    auto state = std::make_shared<framework_observer_state_t> (capacity, std::move (observer));
-    state->start ();
     std::shared_lock state_lock (_access->mutex);
+    auto state = std::make_shared<framework_observer_state_t> (
+      capacity, std::move (observer), _access->state ? _access->state->monitoring : nullptr);
+    state->start ();
     std::lock_guard lock (_mutex);
     auto initial = snapshot_locked ();
     _observers.erase (std::remove_if (_observers.begin (), _observers.end (),
@@ -1323,9 +1326,11 @@ void app_t::_apply_zlink_framework ()
     if (!_state->services.contains (std::type_index (typeid (runtime::location_runtime_t)))) {
         const auto location_options = options.location_options ();
         _state->services.add_factory<runtime::location_runtime_t> (
-          [location_options] (service_provider_t &provider) {
-              return std::make_unique<runtime::location_runtime_t> (
+          [location_options, monitoring = _state->monitoring] (service_provider_t &provider) {
+              auto runtime = std::make_unique<runtime::location_runtime_t> (
                 provider.get_required<location_repository_t> (), location_options);
+              runtime->bind_monitoring (monitoring);
+              return runtime;
           },
           service_lifetime_t::singleton);
     }
@@ -1509,10 +1514,20 @@ void app_t::_apply_zlink_framework ()
             spot_runtime.bind_location_lifecycle (location_lifecycle);
             spot_runtime.bind_spot_location_resolver (spot_resolver);
             spot_runtime.bind_drain_flag (_state->draining);
-            spot_runtime.bind_host_phase ([access = _state->status_access] {
+            spot_runtime.bind_host_lifecycle ([access = _state->status_access] {
                 std::shared_lock lock (access->mutex);
-                return access->state ? access->state->runtime_state.load (std::memory_order_acquire)
-                                     : framework_runtime_state_t::stopped;
+                detail::host_lifecycle_snapshot_t snapshot;
+                if (!access->state) {
+                    snapshot.phase = framework_runtime_state_t::stopped;
+                    return snapshot;
+                }
+                snapshot.phase = access->state->runtime_state.load (std::memory_order_acquire);
+                auto &operation = access->state->termination_operation;
+                std::lock_guard operation_lock (operation.mutex);
+                snapshot.shutdown_deadline = operation.deadline_at;
+                if (operation.started)
+                    snapshot.cleanup_cancellation = operation.cleanup_cancellation.get_token ();
+                return snapshot;
             });
             spot_runtime.set_route_client (route_client);
             spot_runtime.bind_service_provider (provider);
@@ -2996,8 +3011,22 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
     return *this;
 }
 
+app_t &app_t::use_metric_provider (runtime::metric_provider_t provider)
+{
+    std::lock_guard lock (_state->termination_teardown_mutex);
+    if (_state->run_started)
+        throw std::logic_error ("Metric provider must be configured before run");
+    _state->monitoring->use_metric_provider (std::move (provider));
+    _state->runtime_state.connect (_state->monitoring->metric_provider);
+    return *this;
+}
+
 int app_t::run (int argc, char **argv)
 try {
+    {
+        std::lock_guard lock (_state->termination_teardown_mutex);
+        _state->run_started = true;
+    }
     const completion_owner_t completion_owner;
     const auto completion_dispatcher = detail::borrow_completion_dispatcher ();
     _apply_zlink_framework ();
@@ -4005,6 +4034,8 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         if (!std::holds_alternative<shutdown_completed_t> (result))
             return;
         result = shutdown_forced_t{reason};
+        if (reason == shutdown_force_reason_t::deadline_exceeded)
+            state.termination_operation.cleanup_cancellation.request_stop ();
         if (!force_state_emitted) {
             force_state_emitted = true;
             emit_state (detail::drain_state_t::force_stopping);
@@ -4135,7 +4166,10 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
         try {
             for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
                 auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
-                if (runtime && !runtime->close_all_user_spots (deadline_at)) {
+                if (runtime
+                    && !runtime->close_all_user_spots (
+                      deadline_at, state.termination_operation.deadline_at.value (),
+                      state.termination_operation.cleanup_cancellation)) {
                     spots_closed = false;
                     state.monitoring->diagnostics_logger.error (
                       "Host shutdown Spot teardown did not complete");
@@ -4223,6 +4257,8 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
               lock, deadline_at, [&] { return state.teardown_complete; });
         }
     }
+    if (!teardown_completed)
+        state.termination_operation.cleanup_cancellation.request_stop ();
     if (!teardown_completed && terminal.outcome == termination_outcome_t::stopped) {
         terminal.outcome = termination_outcome_t::force_stopped;
         terminal.reason = termination_reason_t::deadline_exceeded;

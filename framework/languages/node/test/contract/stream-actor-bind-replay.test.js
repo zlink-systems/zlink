@@ -18,9 +18,6 @@ const {
 const {
   decodeStatefulHeader, encodeStatefulReply
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
-const {
-  OperationKind
-} = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -52,14 +49,14 @@ function bindFixture(request) {
   runtime.rememberActorRoute({
     actor, targetNodeGeneration: 3n, authorityOwnerGeneration: 9n, ownerLeaseGeneration: 10n
   });
-  const backend = new ZLinkNodeRawMeshBackend('play', 'session-node', {});
-  backend.stateful = runtime;
+  const backend = new ZLinkNodeRawMeshBackend('play', 'session-node', {}, undefined, undefined, undefined, undefined, { stateful: runtime });
   const diagnostics = [];
   const completions = new ZLinkMeshCompletionTable(d => diagnostics.push(d));
   backend.setCompletionTable(completions);
   const service = backend.createStreamSessionService({});
   // Location resolution succeeds before the bind transport scenario starts.
-  service.lookupActor = () => backend.observeStateful(OperationKind.ActorLookup, {
+  service.start();
+  runtime.lookupRemoteActor = () => ({
     id: 100n,
     promise: Promise.resolve({
       terminalResult: RequestResult.Ok, failureCode: 0,

@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
@@ -134,7 +135,7 @@ for (const kind of operationKinds) {
         t.mock.timers.tick(100);
         await turn();
         assert.equal(f.attempts.length, 1, 'late transport completion cannot restart a terminal operation');
-        assert.equal(f.raw.peerConnectionIntentRemoved.size, 0, 'terminal releases the transition observer');
+        assert.equal(f.raw[inspectRuntime]().peerConnectionIntentObservers, 0, 'terminal releases the transition observer');
       } finally { f.close(); }
     });
   }
@@ -160,7 +161,7 @@ for (const kind of operationKinds) {
       assert.equal(outcome?.error?.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
       assert.match(outcome.error.message, /lifecycle ended/);
       await operation;
-      assert.equal(f.raw.peerConnectionIntentRemoved.size, 0);
+      assert.equal(f.raw[inspectRuntime]().peerConnectionIntentObservers, 0);
     } finally { f.close(); }
   });
 
@@ -204,7 +205,7 @@ for (const kind of operationKinds) {
           assert.equal(f.attempts.length, 1);
         }
         await operation;
-        assert.equal(f.raw.peerConnectionIntentRemoved.size, 0);
+        assert.equal(f.raw[inspectRuntime]().peerConnectionIntentObservers, 0);
       } finally { f.close(); }
     }
   });
@@ -215,7 +216,7 @@ for (const kind of operationKinds) {
       await f.admit();
       await assert.rejects(f.start(kind), error => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError);
       assert.equal(f.attempts.length, 1);
-      assert.equal(f.raw.peerConnectionIntentRemoved.size, 0);
+      assert.equal(f.raw[inspectRuntime]().peerConnectionIntentObservers, 0);
     } finally { f.close(); }
   });
 }

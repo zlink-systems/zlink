@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const { mapZLinkRequestReply, observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -1987,7 +1988,7 @@ test('ClientServer request readiness is bounded by its whole request budget', as
   t.mock.timers.tick(5);
   await terminal;
   assert.equal(submitted.mock.callCount(), 0);
-  assert.equal(sockets.clientServerDiscovery.clientServerChanged.size, 0);
+  assert.equal(sockets[inspectRuntime]().clientServerObservers, 0);
 });
 
 for (const state of ['serving', 'retiring']) {
@@ -1997,7 +1998,7 @@ for (const state of ['serving', 'retiring']) {
     const submitted = t.mock.method(dealer, 'request');
     await assert.rejects(request(200), { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
     assert.equal(submitted.mock.callCount(), 0);
-    assert.equal(sockets.clientServerDiscovery.clientServerChanged.size, 0);
+    assert.equal(sockets[inspectRuntime]().clientServerObservers, 0);
   });
 }
 

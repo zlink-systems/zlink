@@ -486,6 +486,99 @@ void verify_message_follow_invalidation_subscriptions_are_lifetime_safe ()
     runtime->unsubscribe_message_follow_invalidation (first);
 }
 
+void verify_message_follow_unsubscribe_waits_for_capture_destruction ()
+{
+    using namespace zlink::framework;
+
+    struct destruction_gate_t
+    {
+        std::promise<void> entered;
+        std::promise<void> release;
+        std::shared_future<void> released = release.get_future ().share ();
+    };
+    struct captured_resource_t
+    {
+        std::shared_ptr<destruction_gate_t> gate;
+
+        ~captured_resource_t ()
+        {
+            gate->entered.set_value ();
+            gate->released.wait ();
+        }
+    };
+
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("message-follow-capture-drain-mesh");
+    auto runtime = std::make_shared<detail::mesh_node_runtime_t> (state);
+    const auto route = protocol::actor_route_fence_t{
+      "message-follow-capture-drain",
+      1,
+      zlink::routing_id_t::from ("message-follow-capture-source").to_bytes (),
+      1,
+      1,
+      1};
+    const auto notice = protocol::message_follow_notice_t{
+      .source = route, .target = route, .original_operation = {1, 1}};
+
+    auto gate = std::make_shared<destruction_gate_t> ();
+    auto captured_resource = std::make_shared<captured_resource_t> ();
+    captured_resource->gate = gate;
+    std::future<void> capture_destruction_entered = gate->entered.get_future ();
+    std::promise<void> callback_entered;
+    std::promise<void> release_callback;
+    const auto callback_released = release_callback.get_future ().share ();
+    std::atomic<std::size_t> calls{0};
+    const auto subscription = runtime->subscribe_message_follow_invalidation (
+      [captured_resource = std::move (captured_resource), &callback_entered, callback_released,
+       &calls] (const auto &) {
+          if (calls.fetch_add (1, std::memory_order_relaxed) == 0) {
+              callback_entered.set_value ();
+              callback_released.wait ();
+          }
+      });
+
+    auto dispatch =
+      std::async (std::launch::async, [&] { runtime->dispatch_message_follow (notice); });
+    const bool callback_started =
+      callback_entered.get_future ().wait_for (2s) == std::future_status::ready;
+    std::promise<void> unsubscribe_started;
+    auto unsubscribe = std::async (std::launch::async, [&] {
+        unsubscribe_started.set_value ();
+        runtime->unsubscribe_message_follow_invalidation (subscription);
+    });
+    unsubscribe_started.get_future ().wait ();
+
+    bool inactive_observed = false;
+    const auto inactive_deadline = std::chrono::steady_clock::now () + 2s;
+    while (callback_started && std::chrono::steady_clock::now () < inactive_deadline) {
+        const auto before = calls.load (std::memory_order_relaxed);
+        runtime->dispatch_message_follow (notice);
+        if (calls.load (std::memory_order_relaxed) == before) {
+            inactive_observed = true;
+            break;
+        }
+    }
+
+    release_callback.set_value ();
+    const bool capture_destruction_started =
+      capture_destruction_entered.wait_for (2s) == std::future_status::ready;
+    const auto unsubscribe_status = unsubscribe.wait_for (50ms);
+    gate->release.set_value ();
+    const auto dispatch_status = dispatch.wait_for (2s);
+    const auto final_unsubscribe_status = unsubscribe.wait_for (2s);
+    if (dispatch_status == std::future_status::ready)
+        dispatch.get ();
+    if (final_unsubscribe_status == std::future_status::ready)
+        unsubscribe.get ();
+
+    assert (callback_started);
+    assert (inactive_observed);
+    assert (capture_destruction_started);
+    assert (unsubscribe_status == std::future_status::timeout);
+    assert (dispatch_status == std::future_status::ready);
+    assert (final_unsubscribe_status == std::future_status::ready);
+}
+
 void verify_actor_calls_keep_selected_route_until_follow_notice ()
 {
     using namespace zlink::framework;
@@ -1504,9 +1597,23 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (invalidations == 1);
     assert (route_resolutions - initial_route_resolutions == 0);
 
-    // The route snapshot exists but its owner route cannot be used. Routing
-    // spec 08 §2 ends that operation as Unavailable; error model §5 reserves
-    // DeadlineExceeded for an admitted request whose reply misses its deadline.
+    // A known owner descriptor may wait for ADMIT without an ingress pump.
+    auto pending_descriptor = target_descriptor;
+    pending_descriptor.node_routing_id =
+      zlink::routing_id_t::from ("pending-bound-session-target").to_bytes ();
+    source.native_node ().transport ().expect_peer (pending_descriptor);
+    auto pending_route = route;
+    pending_route.node_rid = zlink::routing_id_t::from ("pending-bound-session-target");
+    const auto preadmit_deadline =
+      source
+        .bind_application_actor_session (
+          actor, zlink::routing_id_t::from ("bound-session-before-admit"), 1, pending_route, 20ms)
+        .result ();
+    assert (!preadmit_deadline);
+    assert (preadmit_deadline.error_kind () == framework_error_kind_t::deadline_exceeded);
+
+    // The route snapshot has no known owner descriptor. Routing spec 08 §2
+    // ends this invalid target as Unavailable before readiness waiting.
     const runtime::spot_address_t disconnected_route{
       "m6b-mesh", zlink::routing_id_t::from ("unconnected-bound-session-target"),
       {},         0,
@@ -1525,7 +1632,7 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (route_resolutions - initial_route_resolutions == 0);
 
     // The connected route admits this request, but the target withholds its
-    // reply. Only this post-admission deadline expiry is DeadlineExceeded.
+    // reply. Its post-admission deadline expiry is also DeadlineExceeded.
     auto withheld = std::async (std::launch::async, [&] {
         return source
           .bind_application_actor_session (
@@ -2750,7 +2857,7 @@ void verify_host_send_forwarding_allocations ()
     }
 }
 
-void verify_actor_create_replays_after_reciprocal_handover ()
+void verify_actor_create_does_not_replay_after_reciprocal_handover ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
     mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
@@ -2810,6 +2917,7 @@ void verify_actor_create_replays_after_reciprocal_handover ()
         return claim;
     };
     auto losing = receive ();
+    const auto first_record = *losing->records.front ();
     const auto first = protocol::decode_actor_create_header (
       protocol::message_bytes (losing->records.front ()->parts.front ()));
     assert (first.operation == request.operation);
@@ -2818,34 +2926,34 @@ void verify_actor_create_replays_after_reciprocal_handover ()
     assert (completion.wait_for (0ms) == std::future_status::timeout);
     assert (target.mailbox ().release (*losing));
 
-    // Receipt proves admission on Z -> A. Withhold its reply, then let Core
-    // select A -> Z; only the durable owner resubmits the operation.
-    const auto handover_started = std::chrono::steady_clock::now ();
+    // Submit §5: handover ends the binding request with its typed result.
+    // A selected-route change cannot submit this operation a second time.
     assert (target.connect_peer (source.endpoint (), source_descriptor));
-    auto survivor = receive ();
-    const auto replay = protocol::decode_actor_create_header (
-      protocol::message_bytes (survivor->records.front ()->parts.front ()));
-    assert (replay == first);
-    assert (survivor->records.front ()->correlation == first.correlation);
-    assert (completion.wait_for (0ms) == std::future_status::timeout);
-    assert (target.reply_actor_create ((*survivor->records.front ()),
-                                       {{replay.correlation, 0, 0},
-                                        protocol::actor_create_result_t::created,
-                                        target_descriptor.node_routing_id,
-                                        replay.actor_id,
-                                        1}));
-    assert (target.mailbox ().release (*survivor));
+    const auto no_replay = [&] {
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+    };
     while (completion.wait_for (0ms) != std::future_status::ready
-           && std::chrono::steady_clock::now () < deadline)
+           && std::chrono::steady_clock::now () < deadline) {
         pump ();
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
+        no_replay ();
+    }
     assert (completion.wait_for (0ms) == std::future_status::ready);
-    assert (std::chrono::steady_clock::now () < deadline);
-    assert (completion.get ().first == foundation::operation_terminal_t::completed);
-    std::cout << "handover durable_replay_us="
-              << std::chrono::duration_cast<std::chrono::microseconds> (
-                   std::chrono::steady_clock::now () - handover_started)
-                   .count ()
-              << " same_operation=1 same_correlation=1 same_deadline=1 result=completed\n";
+    const auto ended = completion.get ();
+    assert (ended.first == foundation::operation_terminal_t::transport_failed);
+    assert (ended.second.empty ());
+    assert (source.pending_operation_count () == 0);
+    (void) target.reply_actor_create (first_record, {{first.correlation, 0, 0},
+                                                     protocol::actor_create_result_t::created,
+                                                     target_descriptor.node_routing_id,
+                                                     first.actor_id,
+                                                     1});
+    for (int turn = 0; turn < 32; ++turn) {
+        pump ();
+        no_replay ();
+    }
+    assert (source.pending_operation_count () == 0);
     source.close ();
     target.close ();
 }
@@ -6562,7 +6670,8 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
     mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
       .descriptor = target_descriptor,
       .runtime_failures =
-        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
+      .metric_provider = metric_provider.api ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -9469,6 +9578,10 @@ int main (int argc, char **argv)
     zlink::framework::completion_owner_t completion_owner;
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    if (argc == 2 && std::string_view (argv[1]) == "--message-follow-capture-lifetime") {
+        verify_message_follow_unsubscribe_waits_for_capture_destruction ();
+        return 0;
+    }
     verify_host_send_forwarding_allocations ();
     if (argc == 2 && std::string_view (argv[1]) == "--returned-request-dispatch") {
         verify_forwarded_request_return_dispatches_without_source_operation ();
@@ -9559,7 +9672,7 @@ int main (int argc, char **argv)
     }
     if (!verify_remote_user_spot_create_close_terminal_once (true))
         return 1;
-    verify_actor_create_replays_after_reciprocal_handover ();
+    verify_actor_create_does_not_replay_after_reciprocal_handover ();
     verify_message_follow_invalidation_subscriptions_are_lifetime_safe ();
     verify_actor_calls_keep_selected_route_until_follow_notice ();
     verify_session_relocation_gateway_commit_is_atomic ();

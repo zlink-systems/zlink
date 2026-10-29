@@ -8,11 +8,10 @@ namespace fx = zlink::framework;
 class Session final : public fx::packet_stream_session_t
 {
     fx::actor_manager_t &actors_;
-    fx::serializer_registry_t &serializers_;
 
   public:
-    Session (fx::actor_manager_t &actors, fx::serializer_registry_t &serializers) :
-        actors_ (actors), serializers_ (serializers)
+    Session (fx::actor_manager_t &actors) :
+        actors_ (actors)
     {
     }
     fx::task_t<void> on_connected (fx::stream_t &) override { co_return; }
@@ -24,10 +23,10 @@ class Session final : public fx::packet_stream_session_t
     }
     fx::task_t<void> on_packet (fx::stream_t &stream,
                                 const fx::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         if (!is_client_packet (dispatch.packet_name)) {
-            const auto response = zlink::message_t::from_json (
+            const auto response = fx::message_t::from (
               ActionRejected{Rejection::packet_not_allowed});
             co_await stream.write_packet (response)
               .packet_name (ActionRejected::packet_name)
@@ -38,8 +37,7 @@ class Session final : public fx::packet_stream_session_t
         if (bound.empty ()) {
             if (dispatch.packet_name != QueueRequest::packet_name)
                 throw std::invalid_argument ("QueueRequest must be first");
-            const auto request = serializers_.get<QueueRequest> ().deserialize (
-              fx::encoded_payload_t::from_bytes (payload.bytes ()));
+            const auto request = payload.decode<QueueRequest> ();
             const auto ensured =
               co_await actors_.get_or_create (fx::actor_id_t (request.playerId), Names::player)
                 .in_mesh (Names::mesh)

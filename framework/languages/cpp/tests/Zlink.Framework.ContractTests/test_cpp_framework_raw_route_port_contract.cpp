@@ -5,7 +5,7 @@
 #include "runtime/backend/raw_dealer_port.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/backend/raw_route_port.hpp"
-#include "runtime/messaging/request_deadline.hpp"
+#include <zlink/framework/detail/deadline_scheduler.hpp>
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -284,7 +284,8 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
 {
     zlink::context_t context;
     context.options ().auto_hwm_enabled (false);
-    zlink::router_socket_t source (context), target (context);
+    zlink::dealer_socket_t source (context);
+    zlink::router_socket_t target (context);
     const auto source_rid = zlink::routing_id_t::from ("f20-writable-source");
     const auto target_rid = zlink::routing_id_t::from ("f20-writable-target");
     source.set_routing_id (source_rid);
@@ -296,22 +297,24 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
     target.set_receive_flow_state (zlink::receive_flow_state_t::paused);
     target.bind ("inproc://framework-f20-writable-request-timeout");
     auto ready = source.monitor_open (zlink::monitor_event::connection_ready);
-    source.options ().connect_routing_id (target_rid);
     source.connect ("inproc://framework-f20-writable-request-timeout");
     assert (wait_for_monitor_event (ready, zlink::monitor_event::connection_ready,
                                     raw_route_fixture_timeout));
-    backend::raw_route_port_t port (source), target_port (target);
+    zlink::poller_t source_poller;
+    backend::raw_dealer_port_t port (source, {}, &source_poller);
+    backend::raw_route_port_t target_port (target);
     const auto pause_deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
     while (ready.status ().flow_paused_connections == 0
            && std::chrono::steady_clock::now () < pause_deadline) {
         (void) target_port.poll (raw_route_fixture_poll_interval);
-        (void) port.poll (raw_route_fixture_poll_interval);
+        zlink::poll_event_t event;
+        (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
     }
     assert (ready.status ().flow_paused_connections == 1);
     std::optional<zlink::framework::task_t<zlink::submit_result_t>> blocked_send;
     for (std::size_t attempt = 0; attempt < raw_route_backpressure_attempt_limit && !blocked_send;
          ++attempt) {
-        auto sent = port.send_result (target_rid.to_bytes (), request_parts ());
+        auto sent = port.send_result (request_parts ());
         if (!sent.await_ready ())
             blocked_send.emplace (std::move (sent));
         else
@@ -320,12 +323,8 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
     assert (blocked_send);
     const auto caller_deadline = std::chrono::steady_clock::now () + raw_request_capacity_timeout;
     auto acceptance = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
-    auto pending = zlink::framework::runtime::messaging::with_request_deadline (
-      zlink::framework::request_task_t<backend::raw_request_completion_t> (
-        port.request (target_rid.to_bytes (), request_parts (), raw_route_fixture_timeout, {},
-                      acceptance),
-        acceptance),
-      caller_deadline);
+    auto pending = port.request (request_parts (), raw_request_capacity_timeout, {}, acceptance,
+                                 caller_deadline);
     auto admitted = acceptance->task ();
     assert (!admitted.await_ready ());
     std::atomic_int terminal_count{0};
@@ -338,8 +337,11 @@ void verify_writable_request_timeout_remains_deadline_exceeded ()
     assert (!pending.await_ready ());
     const auto deadline = std::chrono::steady_clock::now () + raw_route_fixture_timeout;
     while ((!pending.await_ready () || terminal_count.load (std::memory_order_acquire) == 0)
-           && std::chrono::steady_clock::now () < deadline)
-        (void) port.poll (raw_route_fixture_poll_interval);
+           && std::chrono::steady_clock::now () < deadline) {
+        zlink::poll_event_t event;
+        (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
+        port.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
+    }
     assert (pending.await_ready ());
     assert (!pending.result ());
     assert (pending.result ().error_kind ()
@@ -500,10 +502,12 @@ void verify_binding_completion_bypasses_handler_executor ()
     std::optional<backend::raw_received_t> received;
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (!received && std::chrono::steady_clock::now () < deadline)
-        received = target_port.receive_if_ready (target_port.poll (10ms));
+        received = target_port.receive_if_ready (
+          target_port.poll (10ms).value_or (zlink::poll_event_flag_t::none));
     assert (received && received->reply_token);
     assert (target_port.reply (*received, request_parts ()));
-    assert (!target_port.receive_if_ready (target_port.poll (0ms)));
+    assert (!target_port.receive_if_ready (
+      target_port.poll (0ms).value_or (zlink::poll_event_flag_t::none)));
     const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
     while (observed_count.load (std::memory_order_acquire) == 0
            && std::chrono::steady_clock::now () < completion_deadline) {
@@ -547,12 +551,15 @@ void verify_completion_only_wait_keeps_ordinary_record_unclaimed ()
         (void) source_port.poll (10ms);
     assert (sent.await_ready ());
     assert (sent.result ().value () == zlink::submit_result_t::ok);
-    assert (target_port.poll (2s) == zlink::poll_event_flag_t::pollin);
+    assert (target_port.poll (2s).value_or (zlink::poll_event_flag_t::none)
+            == zlink::poll_event_flag_t::pollin);
     // Queued DATA does not turn a completion-only wait into a busy loop.
     const auto started = std::chrono::steady_clock::now ();
-    assert (target_port.poll (20ms, false) == zlink::poll_event_flag_t::none);
+    assert (target_port.poll (20ms, false).value_or (zlink::poll_event_flag_t::none)
+            == zlink::poll_event_flag_t::none);
     assert (std::chrono::steady_clock::now () - started >= 15ms);
-    const auto received = target_port.receive_if_ready (target_port.poll (0ms));
+    const auto received = target_port.receive_if_ready (
+      target_port.poll (0ms).value_or (zlink::poll_event_flag_t::none));
     assert (received
             && zlink::framework::detail::backend::copy_binding_parts (received->parts)
                  == request_parts ());
@@ -716,7 +723,7 @@ void verify_backpressured_send_waits_for_admission ()
     auto &scheduler = zlink::framework::detail::deadline_scheduler_t::instance ();
     const auto before = scheduler.scheduled_count ();
     auto request = source_port.request (request_parts (), raw_request_capacity_timeout);
-    assert (scheduler.scheduled_count () == before + 1);
+    assert (scheduler.scheduled_count () == before);
     std::atomic_int terminals{0};
     std::promise<void> terminal_observed;
     auto observed = terminal_observed.get_future ();
@@ -731,6 +738,7 @@ void verify_backpressured_send_waits_for_admission ()
     while (std::chrono::steady_clock::now () < held_until) {
         zlink::poll_event_t event;
         (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
+        source_port.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
     }
     assert (request.await_ready ());
     observed.get ();
@@ -747,7 +755,8 @@ void verify_backpressured_send_waits_for_admission ()
            && std::chrono::steady_clock::now () < deadline) {
         zlink::poll_event_t event;
         (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
-        auto received = target_port.receive_if_ready (target_port.poll (0ms));
+        auto received = target_port.receive_if_ready (
+          target_port.poll (0ms).value_or (zlink::poll_event_flag_t::none));
         if (received && received->reply_token) {
             assert (target_port.reply (*received, request_parts ()));
             ++replies;
@@ -760,7 +769,8 @@ void verify_backpressured_send_waits_for_admission ()
     auto healthy = source_port.request (request_parts (), raw_route_fixture_timeout);
     while (!healthy.await_ready () && std::chrono::steady_clock::now () < deadline) {
         auto received =
-          target_port.receive_if_ready (target_port.poll (raw_route_fixture_poll_interval));
+          target_port.receive_if_ready (target_port.poll (raw_route_fixture_poll_interval)
+                                          .value_or (zlink::poll_event_flag_t::none));
         if (received && received->reply_token) {
             assert (target_port.reply (*received, request_parts ()));
             ++replies;
@@ -780,7 +790,23 @@ void verify_backpressured_send_waits_for_admission ()
     monitor.close ();
 }
 
-void verify_immediate_request_has_no_framework_deadline ()
+void verify_closed_dealer_request_completes_before_admission ()
+{
+    zlink::context_t context;
+    zlink::dealer_socket_t socket (context);
+    backend::raw_dealer_port_t port (socket);
+    port.close ();
+    auto admitted = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    auto request = port.request (request_parts (), raw_route_fixture_timeout, {}, admitted);
+    assert (request.await_ready ());
+    assert (!request.result ());
+    assert (request.result ().error_kind ()
+            == zlink::framework::framework_error_kind_t::shutting_down);
+    assert (admitted->task ().await_ready ());
+    assert (admitted->task ().result ().exception () == request.result ().exception ());
+}
+
+void verify_immediate_request_has_no_request_timer ()
 {
     zlink::context_t context;
     zlink::dealer_socket_t source (context);
@@ -822,7 +848,8 @@ void verify_missing_rid_is_initial_not_connected_without_wait_token ()
     assert (settled.value ().failure->internal_errno == EHOSTUNREACH);
     // A token-bearing rejection would remain pending until a WRITABLE record.
     // Synchronous completion here pins the D-B85 ID/token-zero path.
-    assert (port.poll (0ms) == zlink::poll_event_flag_t::none);
+    assert (port.poll (0ms).value_or (zlink::poll_event_flag_t::none)
+            == zlink::poll_event_flag_t::none);
     port.close ();
 }
 
@@ -850,7 +877,8 @@ void verify_handover_request_completion_is_replayable ()
     auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
     std::optional<backend::raw_received_t> admitted;
     while (!admitted && std::chrono::steady_clock::now () < deadline)
-        admitted = target_port.receive_if_ready (target_port.poll (1ms));
+        admitted = target_port.receive_if_ready (
+          target_port.poll (1ms).value_or (zlink::poll_event_flag_t::none));
     assert (admitted && admitted->reply_token);
     assert (!pending.await_ready ());
 
@@ -993,14 +1021,23 @@ static void verify_request_deadline_preserves_timeout_boundary ()
 {
     using namespace zlink::framework;
     task_completion_source_t<int> operation;
-    auto pending = runtime::messaging::with_request_deadline (operation.task (),
-                                                              std::chrono::steady_clock::now ());
+    runtime::foundation::operation_registry_t requests;
+    const runtime::call_id_t id{0, 1};
+    requests.register_operation (
+      id, std::chrono::steady_clock::now (),
+      [&] (runtime::foundation::operation_terminal_t terminal, zlink::message_t) {
+          assert (terminal == runtime::foundation::operation_terminal_t::timed_out);
+          operation.complete (detail::boundary_failure<int> (detail::boundary_error_t::timed_out,
+                                                             "request deadline expired"));
+      });
+    auto pending = operation.task ();
+    requests.expire (*requests.next_deadline ()).result ().value ();
     const auto expired = pending.result ();
     assert (!expired);
     assert (expired.error_kind () == framework_error_kind_t::deadline_exceeded);
     assert (expired.error () != nullptr);
     assert (expired.error ()->code () == std::errc::timed_out);
-    operation.complete (result_t<int>::success (7));
+    assert (!requests.complete (id, {}));
     const auto settled = pending.result ();
     assert (!settled);
     assert (settled.exception () == expired.exception ());
@@ -1047,7 +1084,8 @@ int main ()
     verify_raw_send_uses_binding_owned_message_list ();
     verify_request_deadline_preserves_timeout_boundary ();
     verify_pending_send_route_removal_and_shutdown ();
-    verify_immediate_request_has_no_framework_deadline ();
+    verify_immediate_request_has_no_request_timer ();
+    verify_closed_dealer_request_completes_before_admission ();
     verify_request_submission_stages ();
     verify_submission_admission_consumes_only_backpressure ();
     verify_capacity_refusal_phase_controls_public_terminal ();

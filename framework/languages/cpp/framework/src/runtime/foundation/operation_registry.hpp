@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/operations/call_id.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/foundation/operation_terminal.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 
@@ -10,18 +11,24 @@
 
 #include <chrono>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <unordered_map>
 #include <vector>
 
 namespace zlink::framework
 {
 struct location_owner_token_t;
+namespace detail
+{
+struct deadline_state_t;
+}
 }
 
 namespace zlink::framework::runtime::foundation
@@ -30,6 +37,8 @@ namespace zlink::framework::runtime::foundation
 using call_id_t = runtime::call_id_t;
 struct operation_completion_item_t;
 struct operation_registry_drain_state_t;
+
+struct operation_registry_state_t;
 
 class operation_registry_t
 {
@@ -48,7 +57,14 @@ class operation_registry_t
     std::optional<request_identity_t> request_identity (call_id_t id, call_id_t operation) const;
 
     operation_registry_t ();
-    explicit operation_registry_t (now_t now);
+    operation_registry_t (const operation_registry_t &) = delete;
+    operation_registry_t &operator= (const operation_registry_t &) = delete;
+    // The scheduler posts management visits to the existing owner lane.
+    static std::shared_ptr<operation_registry_t> create_scheduled (runtime::state_lane_t &owner);
+    explicit operation_registry_t (now_t now, std::function<void ()> deadline_changed = {});
+    explicit operation_registry_t (runtime::state_lane_t &owner,
+                                   now_t now = &clock_t::now,
+                                   std::function<void ()> deadline_changed = {});
     ~operation_registry_t () noexcept;
 
     bool register_operation (call_id_t id,
@@ -56,7 +72,8 @@ class operation_registry_t
                              callback_t callback,
                              std::vector<std::uint8_t> target_routing_id = {},
                              mesh_request_metric_t request_metric = {},
-                             std::optional<request_identity_t> request = {});
+                             std::optional<request_identity_t> request = {},
+                             std::stop_token cancellation = {});
     bool contains (const call_id_t &id) const;
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
                              operation_terminal_t terminal);
@@ -76,47 +93,15 @@ class operation_registry_t
                before_dispatch_t before_dispatch,
                std::optional<operation_terminal_t> request_terminal = {});
     bool unregister (const call_id_t &id);
-    std::size_t expire (clock_t::time_point now);
-    // The next occupied management tick includes slots with remaining rounds.
+    task_t<std::size_t> expire (clock_t::time_point now);
+    // An already reserved visit survives terminal removal, including the last entry.
     std::optional<clock_t::time_point> next_deadline () const;
     std::size_t shutdown ();
     std::size_t size () const;
+    std::size_t index_size () const;
 
   private:
-    using id_hash_t = runtime::call_id_hash_t;
-
-    static constexpr std::size_t deadline_slot_count = 256;
-    static constexpr unsigned deadline_bitmap_word_bits = 64;
-    static constexpr auto deadline_tick_duration = std::chrono::milliseconds (1);
-
-    struct pending_t
-    {
-        std::unique_ptr<operation_completion_item_t> completion;
-        std::vector<std::uint8_t> target_routing_id;
-        call_id_t id;
-        std::uint64_t deadline_rounds = 0;
-        std::size_t deadline_slot = 0;
-        pending_t *deadline_previous = nullptr;
-        pending_t *deadline_next = nullptr;
-        std::optional<request_identity_t> request;
-    };
-
-    bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
-    std::optional<std::uint64_t> next_occupied_tick () const noexcept;
-    void index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
-    void unindex_deadline (pending_t &pending) noexcept;
-
-    std::shared_ptr<operation_registry_drain_state_t> _drain_state;
-    mutable std::mutex _mutex;
-    std::unordered_map<call_id_t, pending_t, id_hash_t> _pending;
-    const now_t _now;
-    const clock_t::time_point _deadline_origin;
-    std::array<pending_t *, deadline_slot_count> _deadline_heads{};
-    std::array<pending_t *, deadline_slot_count> _deadline_tails{};
-    std::array<std::uint64_t, deadline_slot_count / deadline_bitmap_word_bits> _deadline_occupied{};
-    std::uint64_t _deadline_tick = 0;
-    pending_t *_deadline_cursor = nullptr;
-    bool _closed = false;
+    std::shared_ptr<operation_registry_state_t> _state;
 };
 
 } // namespace zlink::framework::runtime::foundation

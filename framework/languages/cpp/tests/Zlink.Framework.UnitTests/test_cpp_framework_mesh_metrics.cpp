@@ -237,6 +237,7 @@ void verify_topology_metrics_and_selection_reasons ()
         descriptor (std::string (mesh_name), "metrics-topology-source", {{"server-self", 100}}),
       .runtime_failures =
         std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()};
+    source_options.metric_provider = provider.api ();
     source_options.metric_channel_names = {"alpha", "empty", "zero"};
     source_options.metric_source = "manual_and_redis";
     mesh::raw_mesh_node_owner_t source (std::move (source_options));
@@ -480,6 +481,7 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
       .descriptor = descriptor ("metrics-requests", "metrics-request-source"),
       .runtime_failures =
         std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()};
+    source_options.metric_provider = provider.api ();
     source_options.metric_channel_names = {"work"};
     auto application_jobs = std::make_shared<zlink::framework::runtime::application_job_queue_t> (
       zlink::framework::runtime::application_job_queue_configuration_t{
@@ -681,7 +683,10 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
              "timeout request was not parked at its target");
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     {{"mesh_name", "metrics-requests"}, {"surface", "node"}}, 1);
-    require (source.expire_requests (foundation::operation_registry_t::clock_t::now () + 3s) == 1,
+    require (source.expire_requests (foundation::operation_registry_t::clock_t::now () + 3s)
+                 .result ()
+                 .value ()
+               == 1,
              "timeout request did not expire");
     require (timeout.wait_for (2s) == std::future_status::ready,
              "timeout callback was not delivered");
@@ -752,7 +757,8 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
 void verify_remaining_terminal_outcomes ()
 {
     metric_test::provider_t provider;
-    auto metrics = std::make_shared<runtime::mesh_request_metrics_t> ("metrics-terminals");
+    auto metrics =
+      std::make_shared<runtime::mesh_request_metrics_t> ("metrics-terminals", provider.api ());
     foundation::operation_registry_t registry;
     const auto register_operation = [&] (std::uint64_t id,
                                          runtime::mesh_request_surface_t surface) {

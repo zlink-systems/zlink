@@ -9,6 +9,8 @@
 #include <iostream>
 #include <limits>
 #include <tuple>
+#include "test_json.hpp"
+
 namespace
 {
 using namespace std::chrono_literals;
@@ -43,9 +45,9 @@ void rejected (const std::optional<ActionRejected> &result,
           + std::to_string (result->retryAfterMs) + " ms for " + result->reason);
 }
 
-nlohmann::json capture (const RoomState &room)
+nlohmann::json capture (RoomState &room)
 {
-    return nlohmann::json (room);
+    return test_json_match_http_domain::object (room.capture ());
 }
 
 RoomState new_room (TestClock &clock)
@@ -62,12 +64,10 @@ RoomState positioned (TestClock &clock,
                      double by = 10)
 {
     auto room = new_room (clock);
-    auto snapshot = capture (room);
-    snapshot["players"][0]["x"] = ax;
-    snapshot["players"][0]["y"] = ay;
-    snapshot["players"][1]["x"] = bx;
-    snapshot["players"][1]["y"] = by;
-    snapshot.get_to (room);
+    room.player ("p1").x = ax;
+    room.player ("p1").y = ay;
+    room.player ("p2").x = bx;
+    room.player ("p2").y = by;
     return room;
 }
 
@@ -209,27 +209,34 @@ void test_fire_interval ()
              "Exact-interval shot did not apply damage");
 }
 
-void test_snapshot_clock_origin ()
+void test_state_clock_origin ()
 {
     TestClock source_clock{RoomState::TimePoint{} + 12h};
     auto source = new_room (source_clock);
     require (!source.move ("p1", {Game::max_step, 0, 1}) && !source.shoot ("p1", {"p2", 2}),
-             "Snapshot setup action was rejected");
+             "State setup action was rejected");
     source_clock.advance (60ms);
-    const nlohmann::json snapshot = source;
-    require (snapshot.at ("phase").is_string ()
-               && snapshot.at ("phase").get<std::string> () == Game::playing_phase
-               && snapshot.at ("players").at (0).at ("moveBudgetRemainingMs") == 140
-               && snapshot.at ("players").at (0).at ("fireCooldownRemainingMs") == 190,
-             "Snapshot did not store remaining milliseconds");
-    require (snapshot.dump ().find ("Timestamp") == std::string::npos
-               && snapshot == capture (source),
-             "Snapshot stored an absolute timestamp or changed during capture");
+    const nlohmann::json state = capture (source);
+    const auto &player = state.at ("players").at (0);
+    require (state.at ("phase").is_string ()
+               && state.at ("phase").get<std::string> () == Game::playing_phase
+               && state.at ("winner").is_null () && player.size () == 7
+               && player.at ("playerId").get<std::string> () == "p1"
+               && player.at ("x").is_number () && player.at ("y").is_number ()
+               && player.at ("hp").is_number_integer ()
+               && player.at ("lastSequence").get<std::string> () == "2"
+               && player.at ("moveBudgetRemainingMs").get<std::string> () == "140"
+               && player.at ("fireCooldownRemainingMs").get<std::string> () == "190",
+             "State did not store the relocation snapshot fields and remaining milliseconds");
+    require (state.dump ().find ("Timestamp") == std::string::npos
+               && state == capture (source),
+             "State stored an absolute timestamp or changed during serialization");
 
     TestClock destination_clock{RoomState::TimePoint{} + 5000h};
     RoomState restored ([&] { return destination_clock.value; });
-    snapshot.get_to (restored);
-    require (restored.view () == source.view (), "Snapshot changed observable Room state");
+    const auto snapshot = test_json_match_http_domain::decode<RoomSnapshot> (state);
+    restored.restore (snapshot);
+    require (restored.view () == source.view (), "State serialization changed observable Room state");
     const auto before_move_retry = capture (restored);
     rejected (restored.move ("p1", {Game::max_step, 0, 3}), MyGame::Rejection::move_budget, 140);
     require (capture (restored) == before_move_retry, "Restored move rejection changed snapshot");
@@ -583,12 +590,15 @@ void test_http_snapshot () {
     auto source = new_room(clock);
     RoomRoster roster;
     roster.prepare("room", PrepareRoom{"room", {"p1", "p2"}});
-    const nlohmann::json envelope = HttpRoomSnapshot{source, roster.capture()};
-    const auto restored = envelope.get<HttpRoomSnapshot>();
+    const nlohmann::json envelope = test_json_match_http_domain::object (
+      HttpRoomSnapshot{source.capture (), roster.capture ()});
+    const auto restored = test_json_match_http_domain::decode<HttpRoomSnapshot> (envelope);
     RoomRoster restored_roster;
-    restored_roster.restore(restored.Roster);
-    check_http(envelope.contains("Game") && envelope.contains("Roster")
-      && restored.Game.view() == source.view() && restored.Game.phase() == source.phase()
+    restored_roster.restore (restored.Roster);
+    RoomState restored_game ([&] { return clock.value; });
+    restored_game.restore (restored.Game);
+    check_http (envelope.contains ("Game") && envelope.contains ("Roster")
+      && restored_game.view () == source.view () && restored_game.phase () == source.phase ()
       && restored_roster.can_admit("p1") && restored_roster.can_admit("p2")
       && !restored_roster.can_admit("outsider"), "HTTP relocation retains game and roster");
 }
@@ -601,7 +611,7 @@ int main () {
         test_map_boundary();
         test_fire_interval();
         test_shot_validation();
-        test_snapshot_clock_origin();
+    test_state_clock_origin();
         test_finished_rejection();
         test_nonfinite_input();
         std::cout << "Game domain checks: 9/9 categories passed\n";

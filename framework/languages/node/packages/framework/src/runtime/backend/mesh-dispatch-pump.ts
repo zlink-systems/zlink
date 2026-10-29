@@ -12,6 +12,7 @@ import type {
 import { detachedMeshDispatchScope, runZLinkExecutionArea } from '../execution';
 import {
   ReadyDomain,
+  ReceiveKind,
   type Claim,
   type ReadyBatch,
   type ReadyRecord,
@@ -542,35 +543,59 @@ export class ZLinkMeshDispatchPump {
         if (permit === state.claimPermit) state.claimPermit = undefined;
       }
       const dispatched = this.dispatchRecord(owner, record, permit);
-      if (dispatched === false) continue;
-      if (dispatched !== true) {
-        return this.continuePendingClaim(state, dispatched, record, permit);
+      if (dispatched === false) {
+        if (isNodeOrChannelRecord(record)) this.releaseRecord(record);
+        continue;
       }
-      const finished = this.finishRecord(record, permit);
-      if (finished !== undefined) return finished.then(state.dispatchRecords);
+      let terminal: Promise<void>;
+      if (dispatched === true) {
+        const finished = this.finishRecord(record, permit);
+        if (finished === undefined) {
+          if (isNodeOrChannelRecord(record)) this.releaseRecord(record);
+          continue;
+        }
+        terminal = finished;
+      } else {
+        terminal = this.continuePendingClaim(dispatched, record, permit);
+      }
+      if (isNodeOrChannelRecord(record)) {
+        // Return the receive claim for the next batch; the existing terminal observer owns record lifetime.
+        this.observeRecordTerminal(terminal, record);
+        continue;
+      }
+      return terminal.then(state.dispatchRecords);
     }
     return undefined;
   }
 
+  private observeRecordTerminal(terminal: Promise<void>, record: ReceiveRecord): void {
+    const tracked = terminal.finally(() => this.releaseRecord(record));
+    this.activeDrains.add(tracked);
+    void tracked.then(
+      () => this.activeDrains.delete(tracked),
+      (error) => {
+        this.activeDrains.delete(tracked);
+        this.reportDispatchError(error, meshDispatchFailureContext(record));
+      }
+    );
+  }
+
   private continuePendingClaim(
-    state: MeshClaimDrainState,
     dispatched: PromiseLike<void | boolean>,
     record: ReceiveRecord,
     permit: ApplicationJobPermitPort | undefined
   ): Promise<void> {
     return Promise.resolve(dispatched).then(
       (accepted) => {
-        if (accepted === false) return state.dispatchRecords();
-        const finished = this.finishRecord(record, permit);
-        return finished === undefined
-          ? state.dispatchRecords()
-          : finished.then(state.dispatchRecords);
+        if (accepted !== false) return this.finishRecord(record, permit);
       },
-      (error) => {
-        this.failRecord(error, record, permit);
-        return state.dispatchRecords();
-      }
+      (error) => this.failRecord(error, record, permit)
     );
+  }
+
+  private releaseRecord(record: ReceiveRecord): void {
+    for (let index = 0; index < record.parts.length; index++) record.parts[index]!.close();
+    record.releaseRetainedIngress?.();
   }
 
   private finishClaim(state: MeshClaimDrainState): void {
@@ -581,9 +606,9 @@ export class ZLinkMeshDispatchPump {
         if (records !== undefined) {
           for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
             const record = records[recordIndex]!;
-            for (let partIndex = 0; partIndex < record.parts.length; partIndex += 1)
-              record.parts[partIndex]!.close();
-            record.releaseRetainedIngress?.();
+            // Started Node and Channel records are cleaned up at their own terminals.
+            if (recordIndex < state.index && isNodeOrChannelRecord(record)) continue;
+            this.releaseRecord(record);
           }
         }
       } finally {
@@ -670,4 +695,13 @@ function yieldToEventLoop(): Promise<void> {
 
 function yieldToTimers(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function isNodeOrChannelRecord(record: ReceiveRecord): boolean {
+  return (
+    record.kind === ReceiveKind.NodeSend ||
+    record.kind === ReceiveKind.NodeRequest ||
+    record.kind === ReceiveKind.ChannelSend ||
+    record.kind === ReceiveKind.ChannelRequest
+  );
 }

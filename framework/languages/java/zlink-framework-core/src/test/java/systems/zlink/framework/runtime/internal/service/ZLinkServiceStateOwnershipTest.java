@@ -20,11 +20,16 @@ final class ZLinkServiceStateOwnershipTest {
                 lane.runAsync(
                         () -> {
                             assertSame(lane, ZLinkStateLane.current());
-                            assertThrows(IllegalStateException.class, registry::size);
+                            assertTrue(lane.isOnLane());
+                            assertEquals(0, registry.size());
+                            assertThrows(
+                                    IllegalStateException.class, () -> lane.awaitTurn(() -> 0));
+                            assertThrows(IllegalStateException.class, () -> lane.runAsync(() -> 0));
                             return null;
                         });
         reentry.toCompletableFuture().join();
         assertEquals(0, registry.size());
         lane.closeAsync().toCompletableFuture().join();
+        assertThrows(IllegalStateException.class, registry::size);
     }
 }

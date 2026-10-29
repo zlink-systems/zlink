@@ -1285,9 +1285,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     };
     std::map<std::string, user_spot_terminal_record_t> _user_spot_terminals;
     std::function<void ()> _maintenance_closing;
-    runtime::offload_executor_t _relocation_session_terminal_lane_executor;
-    mutable runtime::state_lane_t _relocation_session_terminal_lane{
-      _relocation_session_terminal_lane_executor};
+
+    mutable runtime::state_lane_t _relocation_session_terminal_lane;
     // Earliest instant relocation assembly expiry, target finalize polling or
     // session seal flushing can be due, written on the terminal lane. A lane
     // turn that can make that work due earlier resets it to due_now; an
@@ -1320,15 +1319,13 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         attempt.next_finalize_at = at;
         lower_relocation_next_due_on_lane (at);
     }
-    runtime::offload_executor_t _user_spot_terminal_lane_executor;
-    mutable runtime::state_lane_t _user_spot_terminal_lane{_user_spot_terminal_lane_executor};
+
+    mutable runtime::state_lane_t _user_spot_terminal_lane;
     mutable std::mutex _mutex;
-    runtime::offload_executor_t _lifecycle_configuration_lane_executor;
-    mutable runtime::state_lane_t _lifecycle_configuration_lane{
-      _lifecycle_configuration_lane_executor};
-    runtime::offload_executor_t _local_dispatch_completion_lane_executor;
-    mutable runtime::state_lane_t _local_dispatch_completion_lane{
-      _local_dispatch_completion_lane_executor};
+
+    mutable runtime::state_lane_t _lifecycle_configuration_lane;
+
+    mutable runtime::state_lane_t _local_dispatch_completion_lane;
     std::deque<local_application_dispatch_t> _local_application_dispatches;
     relocation_gate_t _relocation_gate;
     native_spot_target_t _native_spot_target;
@@ -1359,11 +1356,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              zlink::routing_id_t source_node,
                              std::function<void ()> before_application_handler = {});
     std::map<std::string, std::pair<std::string, stateful::object_ref_t>> _actors;
-    runtime::offload_executor_t _spot_actor_index_lane_executor;
-    mutable runtime::state_lane_t _spot_actor_index_lane{_spot_actor_index_lane_executor};
-    std::map<std::string, std::string> _peer_endpoints;
-    runtime::offload_executor_t _peer_endpoint_lane_executor;
-    runtime::state_lane_t _peer_endpoint_lane{_peer_endpoint_lane_executor};
+
+    mutable runtime::state_lane_t _spot_actor_index_lane;
+
     std::atomic<std::uint64_t> _next_operation{1};
     std::unique_ptr<completion_owner_t> _completion_owner;
     bool _started = false;

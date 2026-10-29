@@ -45,13 +45,15 @@ stateful_object_runtime_t::stateful_object_runtime_t () = default;
 
 stateful_object_runtime_t::~stateful_object_runtime_t ()
 {
-    retire_population_metrics_async ().result ().value ();
+    retire_population_metrics_async ().get ();
     _lane.close ();
 }
 
-task_t<void> stateful_object_runtime_t::retire_population_metrics_async ()
+std::future<void> stateful_object_runtime_t::retire_population_metrics_async ()
 {
-    return _lane.run_task ([this] {
+    // Object teardown can follow the last completion owner. Its existing lane
+    // keeps metric retirement ordered until the object storage is released.
+    return _lane.run ([this] {
         if (!_actor_metric)
             return;
         // Lifecycle teardown may visit retained objects. Observable collection
@@ -88,9 +90,8 @@ void stateful_object_runtime_t::notify_quiescence ()
         return;
     // Resume a waiting seal off this lane; it re-checks the participants in its own turn.
     for (auto &waiter : std::exchange (_quiescence_waiters, {})) {
-        auto wake = [waiter] { waiter->complete (result_t<void>::success ()); };
-        if (!_lane_executor.try_submit_internal (wake))
-            wake ();
+        detail::dispatch_completion ([waiter] { waiter->complete (result_t<void>::success ()); },
+                                     false, waiter.get ());
     }
 }
 

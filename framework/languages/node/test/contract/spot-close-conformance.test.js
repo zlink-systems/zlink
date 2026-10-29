@@ -539,7 +539,7 @@ for (const decision of [
 test('Joins admitted before Closing authority Put completes do not run after commit', async () => {
   const closingPut = { entered: deferred(), release: deferred() };
   const owner = await createOwner({ authority: 'Ready', closingPut });
-  const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
+  const activation = owner.manager.resolveRelocationActivation(MESH, owner.spotId);
   const closing = owner.spots.close(owner.ref);
   await closingPut.entered.promise;
   assert.equal(await owner.authority(), 'Ready');
@@ -584,7 +584,7 @@ for (const closeStarted of [false, true]) {
 
 test('completed Close answers lifecycle submission with NotFound without retaining work', async () => {
   const owner = await createOwner({ authority: 'Ready' });
-  const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
+  const activation = owner.manager.resolveRelocationActivation(MESH, owner.spotId);
   assert.notEqual(activation, undefined);
   assert.equal(await owner.spots.close(owner.ref), true);
   await activation.serial.whenIdle();
@@ -634,7 +634,7 @@ test('Close in the same JS turn observes an earlier submitted Join', async () =>
 
 test('Join lifecycle submission precedes same-turn Close control submission', async () => {
   const owner = await createOwner({ authority: 'Ready' });
-  const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
+  const activation = owner.manager.resolveRelocationActivation(MESH, owner.spotId);
   assert.notEqual(activation, undefined);
   const events = [];
   const joining = activation.serial.executeLifecycleOperation(() => {
@@ -649,7 +649,7 @@ test('Join lifecycle submission precedes same-turn Close control submission', as
 
 test('Join held by relocation seal precedes Close after seal release', async () => {
   const owner = await createOwner({ authority: 'Ready' });
-  const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
+  const activation = owner.manager.resolveRelocationActivation(MESH, owner.spotId);
   assert.notEqual(activation, undefined);
   const seal = activation.sealExecution();
   const events = [];

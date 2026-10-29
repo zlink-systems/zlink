@@ -6,17 +6,136 @@
 #include "runtime/execution/task_result.hpp"
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/detail/deadline_scheduler.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cstdint>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <utility>
 
 namespace zlink::framework::runtime::foundation
 {
+
+class operation_registry_state_t : public std::enable_shared_from_this<operation_registry_state_t>
+{
+  public:
+    using clock_t = std::chrono::steady_clock;
+    using callback_t = std::function<void (operation_terminal_t, zlink::message_t)>;
+    using before_dispatch_t = std::function<void ()>;
+    // The management budget reads this clock; tests inject a deterministic one.
+    using now_t = clock_t::time_point (*) ();
+
+    using request_identity_t = operation_registry_t::request_identity_t;
+    std::optional<request_identity_t> request_identity (call_id_t id, call_id_t operation) const;
+
+    explicit operation_registry_state_t (now_t now, std::function<void ()> deadline_changed = {});
+    explicit operation_registry_state_t (runtime::state_lane_t &owner,
+                                         now_t now = &clock_t::now,
+                                         std::function<void ()> deadline_changed = {});
+    ~operation_registry_state_t () noexcept;
+
+    bool register_operation (call_id_t id,
+                             clock_t::time_point deadline,
+                             callback_t callback,
+                             std::vector<std::uint8_t> target_routing_id = {},
+                             mesh_request_metric_t request_metric = {},
+                             std::optional<request_identity_t> request = {},
+                             std::stop_token cancellation = {});
+    bool contains (const call_id_t &id) const;
+    std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
+                             operation_terminal_t terminal);
+    bool complete (const call_id_t &id, zlink::message_t payload);
+    // Packed infrastructure replies retain their delivery terminal and payload
+    // for the caller to decode; request_terminal observes their semantic result.
+    bool complete (const call_id_t &id,
+                   zlink::message_t payload,
+                   before_dispatch_t before_dispatch,
+                   operation_terminal_t request_terminal = operation_terminal_t::completed);
+    bool complete_async (const call_id_t &id, std::function<task_t<void> ()> before_dispatch);
+    bool cancel (const call_id_t &id);
+    bool fail (const call_id_t &id, operation_terminal_t terminal, zlink::message_t payload = {});
+    bool fail (const call_id_t &id,
+               operation_terminal_t terminal,
+               zlink::message_t payload,
+               before_dispatch_t before_dispatch,
+               std::optional<operation_terminal_t> request_terminal = {});
+    bool unregister (const call_id_t &id);
+    task_t<std::size_t> expire (clock_t::time_point now);
+    std::size_t expire_on_owner (clock_t::time_point now);
+    // An already reserved visit survives terminal removal, including the last entry.
+    std::optional<clock_t::time_point> next_deadline () const;
+    std::size_t shutdown ();
+    std::size_t size () const;
+    std::size_t index_size () const;
+
+  public:
+    using id_hash_t = runtime::call_id_hash_t;
+
+    static constexpr std::size_t deadline_slot_count = 256;
+    static constexpr auto deadline_tick_duration = std::chrono::milliseconds (1);
+
+    struct pending_t
+    {
+        std::unique_ptr<operation_completion_item_t> completion;
+        std::vector<std::uint8_t> target_routing_id;
+        call_id_t id;
+        clock_t::time_point deadline;
+        std::size_t deadline_slot = deadline_slot_count;
+        pending_t *deadline_previous = nullptr;
+        pending_t *deadline_next = nullptr;
+        std::optional<request_identity_t> request;
+    };
+
+    template <typename Map> static auto find_pending (Map &pending, const call_id_t &id)
+    {
+        const auto [begin, end] = pending.equal_range (id);
+        const auto found = std::find_if (
+          begin, end, [] (const auto &entry) { return bool (entry.second.completion); });
+        return found == end ? pending.end () : found;
+    }
+    // C1's single terminal take; an empty completion is the only settled marker.
+    std::unique_ptr<operation_completion_item_t> take_completion (pending_t &pending)
+    {
+        auto completion = std::exchange (pending.completion, {});
+        if (completion)
+            --_pending_count;
+        return completion;
+    }
+    bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
+    bool index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
+    void unindex_deadline (pending_t &pending) noexcept;
+    void clear_deadlines () noexcept;
+    void reserve_deadline_visit (std::weak_ptr<operation_registry_state_t> self);
+
+    runtime::state_lane_t *_owner = nullptr;
+    std::shared_ptr<operation_registry_drain_state_t> _drain_state;
+    mutable std::mutex _mutex;
+    // C1 owns completion take. A taken entry remains as index storage until
+    // management visits it; a reused identity may coexist with its taken entry.
+    std::unordered_multimap<call_id_t, pending_t, id_hash_t> _entries;
+    // Observation only: terminal authority remains the completion slot above.
+    // Map size also includes taken entries retained solely as index storage.
+    std::size_t _pending_count = 0;
+    const now_t _now;
+    const clock_t::time_point _deadline_origin;
+    std::function<void ()> _deadline_changed;
+    std::shared_ptr<detail::deadline_state_t> _deadline_visit;
+    std::array<pending_t *, deadline_slot_count> _deadline_heads{};
+    std::array<pending_t *, deadline_slot_count> _deadline_tails{};
+    std::atomic_size_t _index_size{0};
+    // The owner's single reservation is also the polling resource's wake snapshot.
+    std::atomic<clock_t::duration::rep> _next_visit{clock_t::duration::max ().count ()};
+    // Minimum deadline found in the current budgeted scan, not the published wake.
+    clock_t::time_point _scan_minimum_deadline;
+    std::size_t _visit_slot = deadline_slot_count;
+    pending_t *_deadline_cursor = nullptr;
+    bool _closed = false;
+};
+
 
 struct operation_registry_drain_state_t
 {
@@ -37,10 +156,17 @@ struct operation_registry_drain_state_t
     std::atomic<std::size_t> outstanding{0};
 };
 
+struct operation_cancellation_t
+{
+    operation_registry_state_t *registry;
+    call_id_t id;
+    void operator() () const noexcept { registry->cancel (id); }
+};
+
 struct operation_completion_item_t
 {
     explicit operation_completion_item_t (
-      operation_registry_t::callback_t callback,
+      operation_registry_state_t::callback_t callback,
       std::shared_ptr<operation_registry_drain_state_t> drain_state,
       detail::completion_dispatcher_borrow_t dispatcher) :
         callback (std::move (callback)),
@@ -52,6 +178,7 @@ struct operation_completion_item_t
 
     ~operation_completion_item_t ()
     {
+        callback = nullptr;
         if (drain_state)
             drain_state->release ();
     }
@@ -61,8 +188,9 @@ struct operation_completion_item_t
         request_metric.complete (terminal);
     }
 
+    std::optional<std::stop_callback<operation_cancellation_t>> cancellation;
     detail::completion_dispatcher_borrow_t dispatcher{};
-    operation_registry_t::callback_t callback;
+    operation_registry_state_t::callback_t callback;
     std::shared_ptr<operation_registry_drain_state_t> drain_state;
     operation_terminal_t terminal = operation_terminal_t::transport_failed;
     zlink::message_t payload;
@@ -99,6 +227,10 @@ namespace
 
 void post_completions (operation_completion_chain_t completions) noexcept
 {
+    // Stop subscriptions before any callback can release the registry owner.
+    // Destroying a stop callback may join it, so this runs outside C1's mutex.
+    for (auto *item = completions.head.get (); item; item = item->next.get ())
+        item->cancellation.reset ();
     while (completions.head) {
         auto completion = std::move (completions.head);
         completions.head = std::move (completion->next);
@@ -124,21 +256,74 @@ void post_completions (operation_completion_chain_t completions) noexcept
 
 } // namespace
 
-operation_registry_t::operation_registry_t () : operation_registry_t (&clock_t::now)
+void operation_registry_state_t::reserve_deadline_visit (
+  std::weak_ptr<operation_registry_state_t> self)
 {
+    // Registration, management and shutdown serialize this reservation on C2's lane.
+    if (_deadline_visit)
+        _deadline_visit->cancelled.store (true, std::memory_order_release);
+    _deadline_visit.reset ();
+    const auto at = next_deadline ();
+    if (!at)
+        return;
+    auto visit = std::make_shared<detail::deadline_state_t> ();
+    _deadline_visit = visit;
+    detail::deadline_scheduler_t::instance ().schedule (*at, visit, [self, visit] {
+        if (const auto active = self.lock ()) {
+            // Serialize lane admission with close using the existing C1 mutex.
+            // Once closed, a delayed scheduler callback cannot touch the borrowed lane.
+            std::lock_guard lock (active->_mutex);
+            if (!active->_closed)
+                (void) active->_owner->try_post ([active, visit] {
+                    if (active->_deadline_visit != visit)
+                        return;
+                    (void) active->expire (clock_t::now ());
+                });
+        }
+    });
 }
 
-operation_registry_t::operation_registry_t (now_t now) :
+operation_registry_state_t::operation_registry_state_t (now_t now,
+                                                        std::function<void ()> deadline_changed) :
     _drain_state (std::make_shared<operation_registry_drain_state_t> ()),
     _now (now),
-    _deadline_origin (now ())
+    _deadline_origin (now ()),
+    _deadline_changed (std::move (deadline_changed))
 {
 }
 
-operation_registry_t::~operation_registry_t () noexcept
+operation_registry_state_t::operation_registry_state_t (runtime::state_lane_t &owner,
+                                                        now_t now,
+                                                        std::function<void ()> deadline_changed) :
+    _owner (&owner),
+    _drain_state (std::make_shared<operation_registry_drain_state_t> ()),
+    _now (now),
+    _deadline_origin (now ()),
+    _deadline_changed (std::move (deadline_changed))
 {
-    shutdown ();
 }
+
+operation_registry_state_t::~operation_registry_state_t () noexcept
+{
+    clear_deadlines ();
+}
+
+void operation_registry_state_t::clear_deadlines () noexcept
+{
+    for (auto *&head : _deadline_heads)
+        while (head)
+            unindex_deadline (*head);
+    _entries.clear ();
+    _next_visit.store (clock_t::duration::max ().count (), std::memory_order_release);
+    _visit_slot = deadline_slot_count;
+    _deadline_cursor = nullptr;
+    if (_deadline_visit) {
+        _deadline_visit->cancelled.store (true, std::memory_order_release);
+        _deadline_visit.reset ();
+        detail::deadline_scheduler_t::instance ().wake ();
+    }
+}
+
 
 namespace
 {
@@ -153,12 +338,13 @@ void notify (std::unique_ptr<operation_completion_item_t> completion,
 }
 }
 
-bool operation_registry_t::register_operation (call_id_t id,
-                                               clock_t::time_point deadline,
-                                               callback_t callback,
-                                               std::vector<std::uint8_t> target_routing_id,
-                                               mesh_request_metric_t request_metric,
-                                               std::optional<request_identity_t> request)
+bool operation_registry_state_t::register_operation (call_id_t id,
+                                                     clock_t::time_point deadline,
+                                                     callback_t callback,
+                                                     std::vector<std::uint8_t> target_routing_id,
+                                                     mesh_request_metric_t request_metric,
+                                                     std::optional<request_identity_t> request,
+                                                     std::stop_token cancellation)
 {
     if (!callback) {
         throw std::invalid_argument ("operation callback is required");
@@ -166,86 +352,119 @@ bool operation_registry_t::register_operation (call_id_t id,
     if (id.high == 0 && id.low == 0) {
         throw std::invalid_argument ("operation id must not be zero");
     }
-    std::lock_guard lock (_mutex);
-    if (_closed || _pending.contains (id)) {
+    pending_t prepared;
+    prepared.target_routing_id = std::move (target_routing_id);
+    prepared.request = std::move (request);
+    prepared.id = id;
+    prepared.deadline = deadline;
+    prepared.completion = std::make_unique<operation_completion_item_t> (
+      std::move (callback), _drain_state, detail::borrow_completion_dispatcher ());
+    prepared.completion->request_metric = std::move (request_metric);
+    if (cancellation.stop_possible ())
+        prepared.completion->cancellation.emplace (cancellation,
+                                                   operation_cancellation_t{this, id});
+    bool earlier = false;
+    bool accepted = true;
+    std::exception_ptr publication_error;
+    {
+        std::lock_guard lock (_mutex);
+        if (_closed || find_pending (_entries, id) != _entries.end ())
+            return false;
+        // Allocate the node and any buckets before transferring the stop
+        // subscription. Allocation failure must not join cancellation under C1.
+        auto position = _entries.emplace (id, pending_t{});
+        position->second = std::move (prepared);
+        auto *entry = &position->second;
+        ++_pending_count;
+        entry->completion->request_metric.start ();
+        if (_owner && runtime::state_lane_t::current () != _owner) {
+            try {
+                accepted = _owner->try_post ([self = shared_from_this (), id, entry] {
+                    bool earlier = false;
+                    {
+                        std::lock_guard lock (self->_mutex);
+                        if (self->_closed)
+                            return;
+                        // Compare addresses without dereferencing a possibly retired
+                        // capture. A close on the current lane may precede this turn.
+                        const auto [begin, end] = self->_entries.equal_range (id);
+                        const auto found = std::find_if (
+                          begin, end, [entry] (const auto &item) { return &item.second == entry; });
+                        if (found == end || found->second.deadline_slot != deadline_slot_count)
+                            return;
+                        earlier = self->index_deadline (id, found->second.deadline, found->second);
+                    }
+                    if (earlier && self->_deadline_changed)
+                        self->_deadline_changed ();
+                });
+            }
+            catch (const std::bad_alloc &) {
+                publication_error = std::current_exception ();
+                accepted = false;
+            }
+            if (!accepted) {
+                prepared.completion = take_completion (position->second);
+                _entries.erase (position);
+            }
+        } else {
+            earlier = index_deadline (id, deadline, *entry);
+        }
+    }
+    if (publication_error)
+        std::rethrow_exception (publication_error);
+    if (!accepted)
         return false;
-    }
-    const auto inserted = _pending.emplace (id, pending_t{{}, std::move (target_routing_id), {}});
-    if (!inserted.second)
-        return false;
-    try {
-        index_deadline (id, deadline, inserted.first->second);
-        auto completion = std::make_unique<operation_completion_item_t> (
-          std::move (callback), _drain_state, detail::borrow_completion_dispatcher ());
-        completion->request_metric = std::move (request_metric);
-        completion->request_metric.start ();
-        inserted.first->second.completion = std::move (completion);
-        inserted.first->second.request = std::move (request);
-        return true;
-    }
-    catch (...) {
-        unindex_deadline (inserted.first->second);
-        _pending.erase (inserted.first);
-        throw;
-    }
+    if (earlier && _deadline_changed)
+        _deadline_changed ();
+    // A cancellation between subscription and C1 publication saw no entry.
+    if (cancellation.stop_requested ())
+        cancel (id);
+    return true;
 }
 
-std::optional<operation_registry_t::request_identity_t>
-operation_registry_t::request_identity (call_id_t id, call_id_t operation) const
+std::optional<operation_registry_state_t::request_identity_t>
+operation_registry_state_t::request_identity (call_id_t id, call_id_t operation) const
 {
     std::lock_guard lock (_mutex);
-    const auto found = _pending.find (id);
-    if (found == _pending.end () || !found->second.request
+    const auto found = find_pending (_entries, id);
+    if (found == _entries.end () || !found->second.request
         || found->second.request->operation != operation)
         return std::nullopt;
     return found->second.request;
 }
 
-std::optional<std::uint64_t> operation_registry_t::next_occupied_tick () const noexcept
-{
-    const auto slot = static_cast<std::size_t> (_deadline_tick & (deadline_slot_count - 1));
-    const auto first_word = slot / deadline_bitmap_word_bits;
-    const auto words = _deadline_occupied.size ();
-    for (std::size_t step = 0; step <= words; ++step) {
-        const auto word = (first_word + step) % words;
-        auto bits = _deadline_occupied[word];
-        const auto mask = ~std::uint64_t{0} << (slot % deadline_bitmap_word_bits);
-        if (step == 0)
-            bits &= mask;
-        if (step == words)
-            bits &= ~mask;
-        if (bits != 0) {
-            const auto next = word * deadline_bitmap_word_bits + std::countr_zero (bits);
-            return _deadline_tick + ((next - slot) & (deadline_slot_count - 1));
-        }
-    }
-    return {};
-}
-
-void operation_registry_t::index_deadline (const call_id_t &id,
-                                           clock_t::time_point deadline,
-                                           pending_t &pending)
+bool operation_registry_state_t::index_deadline (const call_id_t &id,
+                                                 clock_t::time_point deadline,
+                                                 pending_t &pending)
 {
     const auto relative =
       deadline <= _deadline_origin
         ? std::chrono::milliseconds::zero ()
         : std::chrono::ceil<std::chrono::milliseconds> (deadline - _deadline_origin);
-    const auto tick = std::max (_deadline_tick, static_cast<std::uint64_t> (relative.count ()));
-    const auto slot = static_cast<std::size_t> (tick & (deadline_slot_count - 1));
+    const auto slot = static_cast<std::size_t> (relative.count ()) & (deadline_slot_count - 1);
     pending.id = id;
+    pending.deadline = deadline;
     pending.deadline_slot = slot;
-    pending.deadline_rounds = (tick - _deadline_tick) / deadline_slot_count;
     pending.deadline_previous = _deadline_tails[slot];
     if (pending.deadline_previous)
         pending.deadline_previous->deadline_next = &pending;
     else
         _deadline_heads[slot] = &pending;
     _deadline_tails[slot] = &pending;
-    _deadline_occupied[slot / deadline_bitmap_word_bits] |= std::uint64_t{1}
-                                                            << (slot % deadline_bitmap_word_bits);
+    ++_index_size;
+    const auto reserved = next_deadline ();
+    const auto next =
+      !reserved
+        ? std::min (deadline,
+                    _now () + deadline_tick_duration * static_cast<int> (deadline_slot_count))
+        : std::min (deadline, *reserved);
+    _next_visit.store (next.time_since_epoch ().count (), std::memory_order_release);
+    if (_visit_slot < deadline_slot_count)
+        _scan_minimum_deadline = std::min (_scan_minimum_deadline, deadline);
+    return !reserved || next < *reserved;
 }
 
-void operation_registry_t::unindex_deadline (pending_t &pending) noexcept
+void operation_registry_state_t::unindex_deadline (pending_t &pending) noexcept
 {
     const auto slot = pending.deadline_slot;
     auto *previous = pending.deadline_previous;
@@ -258,41 +477,36 @@ void operation_registry_t::unindex_deadline (pending_t &pending) noexcept
         next->deadline_previous = previous;
     else
         _deadline_tails[slot] = previous;
-    if (_deadline_cursor == &pending) {
-        _deadline_cursor = next;
-        if (!next)
-            ++_deadline_tick;
-    }
-    if (!_deadline_heads[slot])
-        _deadline_occupied[slot / deadline_bitmap_word_bits] &=
-          ~(std::uint64_t{1} << (slot % deadline_bitmap_word_bits));
-    pending.deadline_previous = nullptr;
-    pending.deadline_next = nullptr;
+    --_index_size;
+    const auto [begin, end] = _entries.equal_range (pending.id);
+    const auto found = std::find_if (
+      begin, end, [&pending] (const auto &entry) { return &entry.second == &pending; });
+    _entries.erase (found);
 }
 
-bool operation_registry_t::take (const call_id_t &id,
-                                 std::unique_ptr<operation_completion_item_t> &completion)
+bool operation_registry_state_t::take (const call_id_t &id,
+                                       std::unique_ptr<operation_completion_item_t> &completion)
 {
-    std::lock_guard lock (_mutex);
-    const auto found = _pending.find (id);
-    if (found == _pending.end ()) {
-        return false;
+    {
+        std::lock_guard lock (_mutex);
+        const auto found = find_pending (_entries, id);
+        if (found == _entries.end ())
+            return false;
+        completion = take_completion (found->second);
     }
-    completion = std::move (found->second.completion);
-    unindex_deadline (found->second);
-    _pending.erase (found);
+    completion->cancellation.reset ();
     return true;
 }
 
-bool operation_registry_t::complete (const call_id_t &id, zlink::message_t payload)
+bool operation_registry_state_t::complete (const call_id_t &id, zlink::message_t payload)
 {
     return complete (id, std::move (payload), {});
 }
 
-bool operation_registry_t::complete (const call_id_t &id,
-                                     zlink::message_t payload,
-                                     before_dispatch_t before_dispatch,
-                                     operation_terminal_t request_terminal)
+bool operation_registry_state_t::complete (const call_id_t &id,
+                                           zlink::message_t payload,
+                                           before_dispatch_t before_dispatch,
+                                           operation_terminal_t request_terminal)
 {
     std::unique_ptr<operation_completion_item_t> completion;
     if (!take (id, completion)) {
@@ -324,8 +538,8 @@ task_t<void> finish_completion_async (std::unique_ptr<operation_completion_item_
 }
 } // namespace
 
-bool operation_registry_t::complete_async (const call_id_t &id,
-                                           std::function<task_t<void> ()> before_dispatch)
+bool operation_registry_state_t::complete_async (const call_id_t &id,
+                                                 std::function<task_t<void> ()> before_dispatch)
 {
     std::unique_ptr<operation_completion_item_t> completion;
     if (!take (id, completion))
@@ -335,7 +549,7 @@ bool operation_registry_t::complete_async (const call_id_t &id,
     return true;
 }
 
-bool operation_registry_t::cancel (const call_id_t &id)
+bool operation_registry_state_t::cancel (const call_id_t &id)
 {
     std::unique_ptr<operation_completion_item_t> completion;
     if (!take (id, completion)) {
@@ -345,18 +559,18 @@ bool operation_registry_t::cancel (const call_id_t &id)
     return true;
 }
 
-bool operation_registry_t::fail (const call_id_t &id,
-                                 operation_terminal_t terminal,
-                                 zlink::message_t payload)
+bool operation_registry_state_t::fail (const call_id_t &id,
+                                       operation_terminal_t terminal,
+                                       zlink::message_t payload)
 {
     return fail (id, terminal, std::move (payload), {});
 }
 
-bool operation_registry_t::fail (const call_id_t &id,
-                                 operation_terminal_t terminal,
-                                 zlink::message_t payload,
-                                 before_dispatch_t before_dispatch,
-                                 std::optional<operation_terminal_t> request_terminal)
+bool operation_registry_state_t::fail (const call_id_t &id,
+                                       operation_terminal_t terminal,
+                                       zlink::message_t payload,
+                                       before_dispatch_t before_dispatch,
+                                       std::optional<operation_terminal_t> request_terminal)
 {
     if (terminal == operation_terminal_t::completed) {
         throw std::invalid_argument ("failure terminal cannot be completed");
@@ -378,7 +592,7 @@ bool operation_registry_t::fail (const call_id_t &id,
     return true;
 }
 
-bool operation_registry_t::unregister (const call_id_t &id)
+bool operation_registry_state_t::unregister (const call_id_t &id)
 {
     std::unique_ptr<operation_completion_item_t> completion;
     if (!take (id, completion))
@@ -387,28 +601,28 @@ bool operation_registry_t::unregister (const call_id_t &id)
     return true;
 }
 
-bool operation_registry_t::contains (const call_id_t &id) const
+bool operation_registry_state_t::contains (const call_id_t &id) const
 {
     std::lock_guard lock (_mutex);
-    return _pending.contains (id);
+    return find_pending (_entries, id) != _entries.end ();
 }
 
-std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &target_routing_id,
-                                               operation_terminal_t terminal)
+std::size_t
+operation_registry_state_t::fail_target (const std::vector<std::uint8_t> &target_routing_id,
+                                         operation_terminal_t terminal)
 {
     if (target_routing_id.empty () || terminal == operation_terminal_t::completed)
         throw std::invalid_argument ("target failure requires a target and failure terminal");
     operation_completion_chain_t completions;
     {
         std::lock_guard lock (_mutex);
-        for (auto entry = _pending.begin (); entry != _pending.end ();) {
-            if (entry->second.target_routing_id != target_routing_id) {
+        for (auto entry = _entries.begin (); entry != _entries.end ();) {
+            if (!entry->second.completion || entry->second.target_routing_id != target_routing_id) {
                 ++entry;
                 continue;
             }
-            completions.append (std::move (entry->second.completion), terminal);
-            unindex_deadline (entry->second);
-            entry = _pending.erase (entry);
+            completions.append (take_completion (entry->second), terminal);
+            ++entry;
         }
     }
     const auto failed = completions.size;
@@ -416,76 +630,140 @@ std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &
     return failed;
 }
 
-std::size_t operation_registry_t::expire (clock_t::time_point now)
+task_t<std::size_t> operation_registry_state_t::expire (clock_t::time_point now)
+{
+    if (!_owner || runtime::state_lane_t::current () == _owner)
+        return task_t<std::size_t> (result_t<std::size_t>::success (expire_on_owner (now)));
+
+    auto completion = std::make_shared<task_completion_source_t<std::size_t>> ();
+    auto task = completion->task ();
+    auto deliver = [completion, dispatcher = detail::borrow_completion_dispatcher ()] (
+                     result_t<std::size_t> result) {
+        detail::dispatch_completion (
+          [completion, result = std::move (result)] () mutable {
+              completion->complete (std::move (result));
+          },
+          false, completion.get (), dispatcher);
+    };
+    // C1 serializes admission with close, so a closed registry never touches
+    // its borrowed lane. TryPost cannot run the turn inline under this mutex.
+    std::lock_guard lock (_mutex);
+    if (_closed
+        || !_owner->try_post (
+          [self = shared_from_this (), now, deliver] {
+              try {
+                  deliver (result_t<std::size_t>::success (self->expire_on_owner (now)));
+              }
+              catch (...) {
+                  deliver (detail::current_exception_result<std::size_t> ());
+              }
+          },
+          [deliver] (std::exception_ptr error) {
+              deliver (detail::result_access_t::failure<std::size_t> (std::move (error)));
+          })) {
+        deliver (result_t<std::size_t>::failure (framework_error_kind_t::shutting_down,
+                                                 "operation registry owner is closed"));
+    }
+    return task;
+}
+
+std::size_t operation_registry_state_t::expire_on_owner (clock_t::time_point now)
 {
     operation_completion_chain_t completions;
-    // §4.2: the budget counts from entry and bounds every slot visit, a rounds-only visit
-    // included; the cursor keeps the rest of the slot for the next management turn.
-    const auto started = _now ();
-    const auto now_tick =
-      now <= _deadline_origin
-        ? std::uint64_t{0}
-        : static_cast<std::uint64_t> (
-            std::chrono::duration_cast<std::chrono::milliseconds> (now - _deadline_origin)
-              .count ());
-    while (_now () - started < runtime::dispatch_limits::receive_batch_time) {
-        std::lock_guard lock (_mutex);
-        if (!_deadline_cursor) {
-            const auto next = next_occupied_tick ();
-            if (!next) {
-                _deadline_tick = std::max (_deadline_tick, now_tick + 1);
-                break;
+    {
+        std::unique_lock lock (_mutex);
+        const auto visit = next_deadline ();
+        if (!visit || now < *visit)
+            return 0;
+        const auto started = _now ();
+        if (_visit_slot == deadline_slot_count) {
+            _scan_minimum_deadline =
+              now + deadline_tick_duration * static_cast<int> (deadline_slot_count);
+            _visit_slot = 0;
+            _deadline_cursor = _deadline_heads[0];
+        }
+        // The same index supplies both cleanup and the next deadline. Budget exhaustion
+        // retains the cursor and the due reservation; completion never edits either.
+        while (_visit_slot < deadline_slot_count) {
+            if (!_deadline_cursor) {
+                if (++_visit_slot < deadline_slot_count)
+                    _deadline_cursor = _deadline_heads[_visit_slot];
+                continue;
             }
-            if (*next > now_tick)
+            if (_now () - started >= runtime::dispatch_limits::receive_batch_time)
                 break;
-            _deadline_tick = *next;
-            _deadline_cursor = _deadline_heads[*next & (deadline_slot_count - 1)];
-        }
-        auto *current = _deadline_cursor;
-        if (current->deadline_rounds > 0) {
-            --current->deadline_rounds;
+            auto *current = _deadline_cursor;
             _deadline_cursor = current->deadline_next;
-            if (!_deadline_cursor)
-                ++_deadline_tick;
-            continue;
+            std::unique_ptr<operation_completion_item_t> completion;
+            if (current->completion && current->deadline <= now)
+                completion = take_completion (*current);
+            const bool live = bool (current->completion);
+            if (completion)
+                completions.append (std::move (completion), operation_terminal_t::timed_out);
+            if (!live)
+                unindex_deadline (*current);
+            else
+                _scan_minimum_deadline = std::min (_scan_minimum_deadline, current->deadline);
         }
-        const auto entry = _pending.find (current->id);
-        completions.append (std::move (entry->second.completion), operation_terminal_t::timed_out);
-        unindex_deadline (entry->second);
-        _pending.erase (entry);
+        if (_visit_slot == deadline_slot_count) {
+            _next_visit.store (_index_size ? _scan_minimum_deadline.time_since_epoch ().count ()
+                                           : clock_t::duration::max ().count (),
+                               std::memory_order_release);
+        }
+        const bool reschedule = _deadline_visit && _deadline_changed;
+        lock.unlock ();
+        if (reschedule)
+            _deadline_changed ();
     }
     const auto expired = completions.size;
     post_completions (std::move (completions));
     return expired;
 }
 
-std::optional<operation_registry_t::clock_t::time_point>
-operation_registry_t::next_deadline () const
+std::optional<operation_registry_state_t::clock_t::time_point>
+operation_registry_state_t::next_deadline () const
 {
-    std::lock_guard lock (_mutex);
-    const auto tick = next_occupied_tick ();
-    if (!tick)
-        return {};
-    return _deadline_origin + deadline_tick_duration * *tick;
+    const auto ticks = _next_visit.load (std::memory_order_acquire);
+    return ticks == clock_t::duration::max ().count ()
+             ? std::nullopt
+             : std::optional{clock_t::time_point{clock_t::duration{ticks}}};
 }
 
-std::size_t operation_registry_t::shutdown ()
+std::size_t operation_registry_state_t::index_size () const
+{
+    return _index_size.load (std::memory_order_acquire);
+}
+
+std::size_t operation_registry_state_t::shutdown ()
 {
     operation_completion_chain_t completions;
-    std::size_t stopped = 0;
     {
         std::lock_guard lock (_mutex);
         if (!_closed) {
             _closed = true;
-            for (auto &[id, pending] : _pending) {
+            for (auto &[id, pending] : _entries) {
                 static_cast<void> (id);
-                completions.append (std::move (pending.completion), operation_terminal_t::shutdown);
-                unindex_deadline (pending);
+                if (pending.completion)
+                    completions.append (take_completion (pending), operation_terminal_t::shutdown);
             }
-            _pending.clear ();
-            stopped = completions.size;
+            // Entries also own storage for publications not yet indexed on the lane.
+            if (!_entries.empty ()) {
+                if (_owner && runtime::state_lane_t::current () != _owner) {
+                    // FIFO follows every accepted index publication. The state, including
+                    // retired entries, outlives the public registry until cleanup finishes.
+                    (void) _owner->try_post ([self = shared_from_this ()] {
+                        std::lock_guard lock (self->_mutex);
+                        self->clear_deadlines ();
+                    });
+                    // A closing lane may reject cleanup while its final turn runs.
+                    // The last state reference then clears storage in the destructor.
+                } else {
+                    clear_deadlines ();
+                }
+            }
         }
     }
+    const auto stopped = completions.size;
     post_completions (std::move (completions));
     // A callback cannot wait for its own reservation. Other completion turns
     // still drain before registry shutdown returns.
@@ -494,10 +772,144 @@ std::size_t operation_registry_t::shutdown ()
     return stopped;
 }
 
-std::size_t operation_registry_t::size () const
+std::size_t operation_registry_state_t::size () const
 {
     std::lock_guard lock (_mutex);
-    return _pending.size ();
+    return _pending_count;
+}
+
+operation_registry_t::operation_registry_t () : operation_registry_t (&clock_t::now)
+{
+}
+operation_registry_t::operation_registry_t (now_t now, std::function<void ()> changed) :
+    _state (std::make_shared<operation_registry_state_t> (now, std::move (changed)))
+{
+}
+operation_registry_t::operation_registry_t (runtime::state_lane_t &owner,
+                                            now_t now,
+                                            std::function<void ()> changed) :
+    _state (std::make_shared<operation_registry_state_t> (owner, now, std::move (changed)))
+{
+}
+operation_registry_t::~operation_registry_t () noexcept
+{
+    _state->shutdown ();
+}
+std::shared_ptr<operation_registry_t>
+operation_registry_t::create_scheduled (runtime::state_lane_t &owner)
+{
+    auto registry = std::make_shared<operation_registry_t> (owner);
+    const std::weak_ptr<operation_registry_state_t> weak = registry->_state;
+    registry->_state->_deadline_changed = [weak] {
+        if (const auto active = weak.lock ())
+            active->reserve_deadline_visit (weak);
+    };
+    return registry;
+}
+
+std::optional<operation_registry_t::request_identity_t>
+operation_registry_t::request_identity (call_id_t id, call_id_t operation) const
+{
+    return _state->request_identity (std::move (id), std::move (operation));
+}
+
+bool operation_registry_t::register_operation (call_id_t id,
+                                               clock_t::time_point deadline,
+                                               callback_t callback,
+                                               std::vector<std::uint8_t> target_routing_id,
+                                               mesh_request_metric_t request_metric,
+                                               std::optional<request_identity_t> request,
+                                               std::stop_token cancellation)
+{
+    return _state->register_operation (std::move (id), std::move (deadline), std::move (callback),
+                                       std::move (target_routing_id), std::move (request_metric),
+                                       std::move (request), std::move (cancellation));
+}
+
+bool operation_registry_t::contains (const call_id_t &id) const
+{
+    return _state->contains (std::move (id));
+}
+
+std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &target_routing_id,
+                                               operation_terminal_t terminal)
+{
+    return _state->fail_target (std::move (target_routing_id), std::move (terminal));
+}
+
+bool operation_registry_t::complete (const call_id_t &id, zlink::message_t payload)
+{
+    return _state->complete (std::move (id), std::move (payload));
+}
+
+bool operation_registry_t::complete (const call_id_t &id,
+                                     zlink::message_t payload,
+                                     before_dispatch_t before_dispatch,
+                                     operation_terminal_t request_terminal)
+{
+    return _state->complete (std::move (id), std::move (payload), std::move (before_dispatch),
+                             std::move (request_terminal));
+}
+
+bool operation_registry_t::complete_async (const call_id_t &id,
+                                           std::function<task_t<void> ()> before_dispatch)
+{
+    return _state->complete_async (std::move (id), std::move (before_dispatch));
+}
+
+bool operation_registry_t::cancel (const call_id_t &id)
+{
+    return _state->cancel (std::move (id));
+}
+
+bool operation_registry_t::fail (const call_id_t &id,
+                                 operation_terminal_t terminal,
+                                 zlink::message_t payload)
+{
+    return _state->fail (std::move (id), std::move (terminal), std::move (payload));
+}
+
+bool operation_registry_t::fail (const call_id_t &id,
+                                 operation_terminal_t terminal,
+                                 zlink::message_t payload,
+                                 before_dispatch_t before_dispatch,
+                                 std::optional<operation_terminal_t> request_terminal)
+{
+    return _state->fail (std::move (id), std::move (terminal), std::move (payload),
+                         std::move (before_dispatch), std::move (request_terminal));
+}
+
+bool operation_registry_t::unregister (const call_id_t &id)
+{
+    return _state->unregister (std::move (id));
+}
+
+task_t<std::size_t> operation_registry_t::expire (clock_t::time_point now)
+{
+    return _state->expire (std::move (now));
+}
+
+std::optional<operation_registry_t::clock_t::time_point>
+operation_registry_t::next_deadline () const
+{
+    return _state->next_deadline ();
+}
+
+std::size_t operation_registry_t::shutdown ()
+{
+    // A delivered callback may release the public registry while shutdown drains.
+    const auto state = _state;
+    return state->shutdown ();
+}
+
+std::size_t operation_registry_t::size () const
+{
+    return _state->size ();
+}
+
+std::size_t operation_registry_t::index_size () const
+{
+    return _state->index_size ();
 }
 
 } // namespace zlink::framework::runtime::foundation

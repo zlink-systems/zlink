@@ -6,8 +6,46 @@ using Zlink.Framework.UnitTests.Runtime;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class ClientServerClientAckTests
+public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task Runtime_disposal_cancels_the_pending_probe_before_closing_its_deadline_index()
+    {
+        await using var fixture = new AckFixture(useOuterRuntime: true);
+        Task probe = null!;
+        await fixture.Lane.RunAsync(() =>
+        {
+            using (ExecutionContext.SuppressFlow())
+                probe = (Task)
+                    fixture.Invoke(
+                        "RequestLivenessProbeAsync",
+                        47UL,
+                        1UL,
+                        new ZLinkServiceLiveness(TimeProvider.System.GetTimestamp()),
+                        fixture.AdmissionStop.Token
+                    )!;
+            fixture.Invoke("RegisterRequestTask", probe);
+        });
+        using var received = Received.Create();
+        Assert.True(fixture.Router.Recv(received));
+        Assert.NotNull(received.ReplyToken);
+        Assert.True(
+            ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(received.Parts, out var probeId)
+        );
+        Assert.Equal(47UL, probeId);
+        Assert.False(probe.IsCompleted);
+        output.WriteLine("Native ROUTER received probe 47 with ReplyToken; reply withheld.");
+
+        await fixture.OuterRuntime!.DisposeAsync();
+
+        Assert.True(probe.IsCompletedSuccessfully);
+        Assert.True(fixture.AdmissionStop.IsCancellationRequested);
+        Assert.True(fixture.ReceiveStop.IsCancellationRequested);
+        Assert.Equal(1, fixture.Dealer.Closes);
+        Assert.Empty(fixture.Failures.Failures);
+        output.WriteLine("Outer disposal and probe completed; DEALER close count: 1.");
+    }
+
     [Fact]
     public async Task Pending_ack_admission_allows_the_next_receive_turn()
     {
@@ -412,6 +450,8 @@ public sealed class ClientServerClientAckTests
 
     private sealed class AckFixture : IAsyncDisposable
     {
+        private readonly ZLinkStateLane _deadlineOwner = new();
+        private readonly Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex _deadlines;
         private readonly IContext _context = Systems.Zlink.Zlink.CreateContext();
         private readonly IPoller _completions = Systems.Zlink.Zlink.CreatePoller();
         internal readonly IRouterSocket Router;
@@ -427,8 +467,9 @@ public sealed class ClientServerClientAckTests
         internal readonly AuditRuntimeFailureReporter Failures = new();
         internal readonly ZLinkStateLane Lane;
         internal readonly List<Task> Requests;
+        internal readonly ZLinkClientServerClientRuntime? OuterRuntime;
 
-        internal AckFixture(Action? beforeReport = null)
+        internal AckFixture(Action? beforeReport = null, bool useOuterRuntime = false)
         {
             _context.Options.AutoHwmEnabled = false;
             Router = _context.CreateRouterSocket();
@@ -447,6 +488,25 @@ public sealed class ClientServerClientAckTests
                 dealer.Send().Message(ready).Submit();
             using (var received = Received.Create())
                 Assert.True(Router.Recv(received));
+            if (useOuterRuntime)
+                OuterRuntime = new(
+                    "work",
+                    null!,
+                    null!,
+                    null!,
+                    CancellationToken.None,
+                    Failures,
+                    new ZLinkRuntimeTaskRunner(Failures, CancellationToken.None)
+                );
+            _deadlines = OuterRuntime is null
+                ? new(_deadlineOwner)
+                : (Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex)
+                    typeof(ZLinkClientServerClientRuntime)
+                        .GetField(
+                            "_requestDeadlines",
+                            BindingFlags.Instance | BindingFlags.NonPublic
+                        )!
+                        .GetValue(OuterRuntime)!;
             Connection = Activator.CreateInstance(
                 _type,
                 BindingFlags.Instance | BindingFlags.NonPublic,
@@ -463,6 +523,7 @@ public sealed class ClientServerClientAckTests
                     TimeProvider.System,
                     beforeReport is null ? Failures : new GatedReporter(Failures, beforeReport),
                     new ZLinkRuntimeTaskRunner(Failures, CancellationToken.None),
+                    _deadlines,
                 ],
                 culture: null
             )!;
@@ -470,6 +531,16 @@ public sealed class ClientServerClientAckTests
             Lane = (ZLinkStateLane)Get("_lane")!;
             Requests = (List<Task>)Get("_requestTasks")!;
             ReceiveStop = (CancellationTokenSource)Get("_receiveStop")!;
+            if (OuterRuntime is not null)
+                (
+                    (System.Collections.IDictionary)
+                        typeof(ZLinkClientServerClientRuntime)
+                            .GetField(
+                                "_connections",
+                                BindingFlags.Instance | BindingFlags.NonPublic
+                            )!
+                            .GetValue(OuterRuntime)!
+                ).Add(endpoint, Connection);
         }
 
         internal object? Get(string name) =>
@@ -572,7 +643,34 @@ public sealed class ClientServerClientAckTests
 
         public async ValueTask DisposeAsync()
         {
-            await ((IAsyncDisposable)Connection).DisposeAsync();
+            if (OuterRuntime is not null)
+            {
+                // The failing regression must still release the public native owners.
+                try
+                {
+                    await OuterRuntime.DisposeAsync();
+                }
+                finally
+                {
+                    if (Dealer.Closes == 0)
+                        await Dealer.DisposeAsync();
+                    await (
+                        (ZLinkStateLane)
+                            typeof(ZLinkClientServerClientRuntime)
+                                .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
+                                .GetValue(OuterRuntime)!
+                    ).DisposeAsync();
+                    await _deadlineOwner.DisposeAsync();
+                    _completions.Dispose();
+                    Router.Dispose();
+                    _context.Dispose();
+                }
+                return;
+            }
+            var close = ((IAsyncDisposable)Connection).DisposeAsync();
+            await _deadlines.DisposeAsync();
+            await close;
+            await _deadlineOwner.DisposeAsync();
             _completions.Dispose();
             Router.Dispose();
             _context.Dispose();

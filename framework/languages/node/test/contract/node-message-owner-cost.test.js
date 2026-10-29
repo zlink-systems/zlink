@@ -1,14 +1,9 @@
+const { rawMeshFixture } = require('./fixtures/raw-mesh-binding');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   ZLinkNodeRawMeshBackend
 } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
-const {
-  RawServiceMeshRuntime
-} = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
-const {
-  ServiceTopologyRegistry
-} = require('../../packages/framework/dist/runtime/foundation/service-topology-registry');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const constants = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
 const {
@@ -44,15 +39,14 @@ function descriptor(rid, overrides = {}) {
 }
 
 test('node-direct role and readiness read topology ownership without snapshots', () => {
-  const topology = new ServiceTopologyRegistry(descriptor('source'));
+  const reply = Promise.resolve([]);
+  const { runtime } = rawMeshFixture({ descriptor: descriptor('source') }, { request: () => reply });
+  const topology = runtime.topology;
   assert.equal(topology.admit(descriptor('target'), 'route', undefined, undefined, constants.ServiceWireCommand.admit), 'admitted');
   assert.equal(
     topology.admit(descriptor('client', { objectRole: 'client' }), 'client-route', undefined, undefined, constants.ServiceWireCommand.admit),
     'admitted'
   );
-  const runtime = Object.create(RawServiceMeshRuntime.prototype);
-  runtime.topology = topology;
-  runtime.descriptor = descriptor('source');
   topology.knownDescriptor = () => {
     throw new Error('Role predicate must not clone a descriptor.');
   };
@@ -68,11 +62,10 @@ test('node-direct role and readiness read topology ownership without snapshots',
   assert.equal(runtime.isObjectClientNodeDirectTarget('missing'), false);
   assert.equal(runtime.isPeerRouteReady('target', 1n), true);
   assert.equal(runtime.isPeerRouteReady('target', 2n), false);
-  const reply = Promise.resolve([]);
-  runtime.router = { request: () => reply };
   assert.equal(runtime.requestService('target', [], 10), reply);
   assert.equal(topology.disconnect('target', 'route'), true);
   assert.equal(runtime.isPeerRouteReady('target'), false);
+  runtime.close();
 });
 
 test('multipart ingress materializes one final part array and retains borrowed payload views', () => {
@@ -88,8 +81,7 @@ test('multipart ingress materializes one final part array and retains borrowed p
     parts: [wire.encodeNodeSendHeader(), frame]
   };
   let claimed = false;
-  const backend = new ZLinkNodeRawMeshBackend('mesh', 'target', {});
-  backend.runtime = {
+  const raw = {
     mailbox: {
       tryClaim() {
         if (claimed) return undefined;
@@ -101,6 +93,9 @@ test('multipart ingress materializes one final part array and retains borrowed p
       releaseClaimedPayload() {}
     }
   };
+  const backend = new ZLinkNodeRawMeshBackend(
+    'mesh', 'target', {}, undefined, undefined, undefined, undefined, { raw }
+  );
   const ready = backend.createReadyBatch(1);
   backend.drainReady(ReadyDomain.Application, ready);
   const claim = ready.takeClaim(0);

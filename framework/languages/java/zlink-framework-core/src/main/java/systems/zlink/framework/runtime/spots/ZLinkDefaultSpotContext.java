@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceive
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkIoWorkerTask;
@@ -436,6 +437,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private final ZLinkSpotTimerRegistry timers;
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final ZLinkSpotSerialExecutor serials;
+    private java.util.function.BooleanSupplier closeCommitted = () -> false;
     private final Map<String, ZLinkSpotTimerRegistry> actorTimers = new ConcurrentHashMap<>();
     private final ZLinkUserSpotExecutionMode executionMode;
     private final ZLinkSpotRelocationCoordinationMode relocationCoordinationMode;
@@ -928,13 +930,24 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     CompletionStage<Void> enqueueJoinLifecycle(Supplier<CompletionStage<Void>> operation) {
-        return serials.enqueueSpotLifecycleAdmission(() -> runLifecycleExecution(operation));
+        return serials.enqueueSpotLifecycleAdmission(
+                () -> {
+                    if (closeCommitted.getAsBoolean()) {
+                        return CompletableFuture.failedFuture(
+                                ZLinkFrameworkErrorOrigin.framework(
+                                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                                        "Spot incarnation is closing (committed Close)"));
+                    }
+                    return runLifecycleExecution(operation);
+                });
     }
 
-    CompletionStage<Void> enqueueClose(
-            Supplier<CompletionStage<Void>> operation,
-            java.util.function.BooleanSupplier committed) {
-        return serials.enqueueClose(() -> runLifecycleExecution(operation), committed);
+    void bindCloseAdmission(java.util.function.BooleanSupplier committed) {
+        closeCommitted = Objects.requireNonNull(committed, "committed");
+    }
+
+    CompletionStage<Void> enqueueClose(Supplier<CompletionStage<Void>> operation) {
+        return serials.enqueueClose(() -> runLifecycleExecution(operation), closeCommitted);
     }
 
     CompletionStage<Void> commitClose() {

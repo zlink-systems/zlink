@@ -803,7 +803,11 @@ void verify_local_join_timeout_releases_membership ()
     assert (
       actor.join_spot (rid, "join-timeout-spot", generation, {}, expired, 25ms).result ().value ()
       == zlink::submit_result_t::ok);
-    assert (runtime.transport ().expire_requests (std::chrono::steady_clock::now () + 1s) == 1);
+    assert (runtime.transport ()
+              .expire_requests (std::chrono::steady_clock::now () + 1s)
+              .result ()
+              .value ()
+            == 1);
     auto first = expired.completion->task ();
     assert (!first.result ());
     assert (first.result ().error_kind ()
@@ -2737,6 +2741,58 @@ void verify_deferred_application_terminal_ownership ()
     assert (node->active_application_callbacks () == 0);
 }
 
+bool verify_application_terminal_drain_waits_for_capture_destruction ()
+{
+    using namespace zlink::framework;
+    namespace runtime = zlink::framework::runtime;
+
+    auto registration = make_node ("tcp://127.0.0.1:0", "terminal-capture-drain");
+    auto node = std::make_shared<detail::mesh_node_runtime_t> (registration);
+    node->application_work_enqueued ();
+    node->application_work_started ();
+
+    struct destruction_gate_t
+    {
+        std::promise<void> entered;
+        std::promise<void> release;
+        std::shared_future<void> released = release.get_future ().share ();
+    };
+    struct blocking_capture_t
+    {
+        std::shared_ptr<destruction_gate_t> gate;
+
+        ~blocking_capture_t ()
+        {
+            gate->entered.set_value ();
+            gate->released.wait ();
+        }
+    };
+
+    auto gate = std::make_shared<destruction_gate_t> ();
+    std::future<void> capture_destruction_entered = gate->entered.get_future ();
+    auto capture = std::make_shared<blocking_capture_t> ();
+    capture->gate = gate;
+    runtime::application_dispatch_terminal_owner_t terminal (
+      node, [capture = std::move (capture)] {}, {});
+    capture.reset ();
+
+    std::thread settlement ([&] { terminal.settle (); });
+    const bool capture_destruction_started =
+      capture_destruction_entered.wait_for (2s) == std::future_status::ready;
+    const auto active_during_capture_destruction = node->active_application_callbacks ();
+    gate->release.set_value ();
+    settlement.join ();
+
+    const auto active_after_settlement = node->active_application_callbacks ();
+    const bool passed = capture_destruction_started && active_during_capture_destruction == 1
+                        && active_after_settlement == 0;
+    if (!passed)
+        std::cerr << "terminal capture destruction started=" << capture_destruction_started
+                  << " active during destruction=" << active_during_capture_destruction
+                  << " active after settlement=" << active_after_settlement << '\n';
+    return passed;
+}
+
 #if defined(__unix__)
 // A node process binds "tcp://127.0.0.1:*" and passes the endpoint it resolved to
 // the other process through a pipe, so no port is reserved before the bind.
@@ -3244,6 +3300,103 @@ int run_cross_process_delivery ()
 #endif
 } // namespace
 
+void verify_peer_intent_ids_and_callback_lifetime ()
+{
+    auto monitoring = zlink::framework::test::runtime_failure_monitoring ();
+    zlink::framework::zlink_builder_t builder;
+    zlink::framework::detail::bind_zlink_monitoring (builder, monitoring);
+    auto mesh = builder.add_route_mesh ("intent-issuance");
+    mesh.set_bind_host ("127.0.0.1")
+      .listen (std::uint16_t{0})
+      .set_routing_id (zlink::routing_id_t::from ("intent-issuance-local"));
+    auto &connections = mesh.peer_connections ();
+    const std::string first = "tcp://127.0.0.1:1";
+    const std::string second = "tcp://127.0.0.1:2";
+    const std::string host_only = "tcp://127.0.0.1:3";
+    const std::string raw_only = "tcp://127.0.0.1:4";
+    const std::string dynamic = "tcp://127.0.0.1:5";
+    connections.connect (first);
+    connections.connect (first);
+    const auto configured = connections.list_connections ();
+    assert (configured.size () == 2);
+    assert (configured[1].intent_id == configured[0].intent_id + 1);
+    const auto state =
+      zlink::framework::detail::mesh_node_runtime_t::registrations (builder).front ();
+    state->core_context = std::make_shared<zlink::context_t> ();
+    state->spot_state->monitoring = monitoring;
+    auto runtime = std::make_unique<zlink::framework::detail::mesh_node_runtime_t> (state);
+    runtime->start ();
+    assert (connections.list_connections ()[0].intent_id == configured[0].intent_id);
+    assert (connections.list_connections ()[1].intent_id == configured[1].intent_id);
+
+    // Both successful startup records issue an ID, even though their endpoint is the same.
+    connections.connect (second);
+    auto last = connections.list_connections ().back ().intent_id;
+    assert (last == configured[1].intent_id + 3);
+    // Only the first dynamic insertion issues a runtime ID after its public record's ID.
+    connections.connect (second);
+    auto next = connections.list_connections ().back ().intent_id;
+    assert (next == last + 2);
+    last = next;
+    connections.connect (second);
+    next = connections.list_connections ().back ().intent_id;
+    assert (next == last + 1);
+    last = next;
+    assert (runtime->native_node ().connect_peer (host_only));
+    assert (runtime->native_node ().transport ().connect_peer (raw_only));
+    connections.connect (second);
+    next = connections.list_connections ().back ().intent_id;
+    assert (next == last + 1); // Neither standalone Host nor raw submission issues runtime IDs.
+    last = next;
+    runtime->connect_peer (dynamic);
+    runtime->connect_peer (dynamic);
+    connections.connect (second);
+    next = connections.list_connections ().back ().intent_id;
+    assert (next == last + 2);
+    last = next;
+    runtime->disconnect_peer (dynamic);
+    runtime->connect_peer (dynamic);
+    connections.connect (second);
+    next = connections.list_connections ().back ().intent_id;
+    assert (next == last + 2); // Erasing an endpoint permits a new runtime insertion ID.
+    last = next;
+    assert (!runtime->native_node ().connect_peer (""));
+    runtime->connect_peer ("");
+    connections.connect (second);
+    next = connections.list_connections ().back ().intent_id;
+    assert (next == last + 1);
+    last = next;
+
+    // The existing stop operation clears only Mesh intent membership, not Host suppression.
+    runtime->native_node ().transport ().clear_peer_connection_intents ();
+    const auto expected = zlink::routing_id_t::from ("intent-issuance-remote");
+    runtime->disconnect_peer (expected, dynamic, true);
+    assert (!runtime->native_node ().connect_peer (dynamic, expected, 0, "default", true));
+    assert (!runtime->native_node ().connect_peer (host_only, expected, 0, "default", true));
+
+    auto callbacks =
+      state->lane
+        .run (
+          [&] { return std::pair{state->runtime_peer_connect, state->runtime_peer_disconnect}; })
+        .get ();
+    assert (callbacks.first && callbacks.second);
+    auto retained_host = runtime->native_node ().shared_from_this ();
+    const auto weak_host =
+      std::weak_ptr<zlink::framework::runtime::host::public_host_runtime_t> (retained_host);
+    runtime->stop ();
+    runtime.reset ();
+    const zlink::framework::mesh_peer_connection_t late{0, {}, dynamic};
+    callbacks.first (late);
+    callbacks.second (late);
+    retained_host.reset ();
+    assert (weak_host.expired ()); // Copied peer callbacks do not retain a Host cycle.
+    callbacks.first (late);
+    callbacks.second (late);
+    connections.connect (second);
+    assert (connections.list_connections ().back ().intent_id == last + 1);
+    state->spot_state->runtime_failures ()->rethrow_if_failed ();
+}
+
 void verify_repeated_mesh_connect_keeps_one_physical_connection ()
 {
     namespace mesh = zlink::framework::runtime::mesh;
@@ -3316,8 +3469,11 @@ void verify_repeated_mesh_connect_keeps_one_physical_connection ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--terminal-owner-capture-lifetime")
+        return verify_application_terminal_drain_waits_for_capture_destruction () ? 0 : 1;
     if (argc == 2 && std::string_view (argv[1]) == "--connect-intent") {
         verify_repeated_mesh_connect_keeps_one_physical_connection ();
+        verify_peer_intent_ids_and_callback_lifetime ();
         return 0;
     }
     if ((argc == 2 || argc == 3) && std::string_view (argv[1]) == "--automatic-intent") {

@@ -297,9 +297,9 @@ endpoint를 operation 종료까지 바꾸지 않는다.
 
 `DONTWAIT`은 admission을 한 번만 시도하고 endpoint를 고정하지 않는다. Wait token의 target은 request 후보 집합 전체다. 새 ROUTER 후보의 연결, 후보의 write credit 회복, weight가 `0`에서 양수로 바뀌는 일은 후보 집합을 다시 평가하는 wake edge다. Flag별 submit 결과와 재제출은 [Socket 공통 request](README.ko.md#request와-reply)를 따른다.
 
-Reply timeout의 시작과 wait token 대기는 [Socket 공통 request](README.ko.md#request와-reply)를 따른다. Admission 뒤 submit 시점 transport pair가 종료되면
-[Socket 공통 §6의 completion 표](README.ko.md#request와-reply)대로 원인과 관계없이 즉시
-`ZLINK_REQUEST_NOT_CONNECTED`로 한 번 종결하며 payload를 replay하지 않는다. Completion ownership과 close는
+Reply timeout의 시작과 wait token 대기는 [Socket 공통 request](README.ko.md#request와-reply)를 따른다.
+Admission 뒤 submit 시점 transport pair가 종료될 때의 request completion도 같은 절을 따른다.
+Payload는 replay하지 않는다. Completion ownership과 close는
 [Socket 공통](README.ko.md#completion-pull과-ownership)을 따른다.
 
 ---

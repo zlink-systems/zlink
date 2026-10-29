@@ -4249,8 +4249,8 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     auto scheduler = std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ();
-    scheduler->publication_fence (
-      zlink::framework::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (zlink::framework::test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     node->worker_executor = scheduler;
     node->channel_runtime =
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
@@ -4483,8 +4483,8 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     auto scheduler = std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ();
-    scheduler->publication_fence (
-      zlink::framework::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (zlink::framework::test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     node->worker_executor = scheduler;
     node->channel_runtime =
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
@@ -6820,8 +6820,11 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation,
         if (expire_native) {
             const auto original_operation = native_operation.id;
             const auto original_reply_route = record.reply_route_id;
-            if (fixture.reply_host->transport ().expire_requests (
-                  registered_before + std::chrono::seconds (30) - operation_clock_t::duration (1))
+            if (fixture.reply_host->transport ()
+                    .expire_requests (registered_before + std::chrono::seconds (30)
+                                      - operation_clock_t::duration (1))
+                    .result ()
+                    .value ()
                   != 0
                 || native_completion.await_ready ())
                 return 14;
@@ -6830,7 +6833,7 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation,
             const auto expiry_time =
               registered_after + std::chrono::seconds (30) + std::chrono::milliseconds (1);
             const auto expiry_count =
-              fixture.reply_host->transport ().expire_requests (expiry_time);
+              fixture.reply_host->transport ().expire_requests (expiry_time).result ().value ();
             if (expiry_count != 1) {
                 std::cerr << "native deadline expiry count=" << expiry_count
                           << " registration_span_ns="
@@ -6860,7 +6863,11 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation,
                        && native_terminals->load (std::memory_order_acquire) == 1
                        && fixture.probe->calls.load (std::memory_order_acquire) == 0
                        && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
-                       && fixture.reply_host->transport ().expire_requests (expiry_time) == 0
+                       && fixture.reply_host->transport ()
+                              .expire_requests (expiry_time)
+                              .result ()
+                              .value ()
+                            == 0
                        && node->lane.run ([&] { return node->pending_handoff_requests.empty (); })
                             .get ()
                      ? 0
@@ -8226,8 +8233,61 @@ int actor_error_payload_vectors ()
     return 0;
 }
 
+namespace zlink::framework::runtime
+{
+struct state_lane_test_access_t
+{
+    static bool has_pending (state_lane_t &lane)
+    {
+        const std::lock_guard lock (lane._mailbox_mutex);
+        return !lane._mailbox.empty ();
+    }
+};
+}
+
+int binding_context_uses_gateway_state_lane ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto manager = gateway.manager ();
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ().share ();
+    auto holder = std::async (std::launch::async, [&] {
+        state->sync ([&] {
+            entered.set_value ();
+            released.wait ();
+        });
+    });
+    entered.get_future ().wait ();
+    std::atomic_bool returned{false};
+    auto configure = std::async (std::launch::async, [&] {
+        session_actor_manager_access_t::bind_native (manager, [] (actor_ref_t, std::uint64_t) {
+            return task_t<void> (result_t<void>::success ());
+        });
+        returned.store (true, std::memory_order_release);
+    });
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    bool queued = false;
+    while (!(queued = runtime::state_lane_test_access_t::has_pending (state->lane))
+           && !returned.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    const bool completed_while_held = returned.load (std::memory_order_acquire);
+    release.set_value ();
+    holder.get ();
+    configure.get ();
+    return queued && !completed_while_held ? 0 : 1;
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--binding-state-owner")
+        return binding_context_uses_gateway_state_lane ();
+    if (argc == 1 && binding_context_uses_gateway_state_lane () != 0)
+        return 1;
     if (const auto framing = actor_reply_framing_vectors (); framing != 0)
         return 500 + framing;
 

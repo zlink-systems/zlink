@@ -383,6 +383,7 @@ struct observations_t
     int entry_joined = 0;
     int entry_left = 0;
     std::atomic<fw::actor_client_t *> joined_sender{nullptr};
+    std::function<fw::task_t<void> (fw::actor_id_t)> joined_view;
     bool release_replay_post = false;
     bool next_join_attempted = false;
     bool send_after_close = false;
@@ -887,6 +888,8 @@ class room_t final : public fw::spot_t<actor_t>
     }
     fw::task_t<void> on_actor_joined (actor_t &actor) override
     {
+        if (observations->joined_view)
+            co_await observations->joined_view (actor.context ().actor_id ());
         if (observations->joined_sender && _context.spot_id () == local_spot) {
             {
                 std::lock_guard lock (observations->mutex);
@@ -1263,6 +1266,18 @@ class view_client_t
     {
         std::unique_lock lock (_mutex);
         return _changed.wait_for (lock, wait_budget, [&] { return _closed; });
+    }
+    std::optional<int> wait_view (std::size_t index)
+    {
+        std::unique_lock lock (_mutex);
+        if (!_changed.wait_for (lock, wait_budget, [&] { return _views.size () > index; }))
+            return std::nullopt;
+        return _views[index];
+    }
+    std::size_t received_views ()
+    {
+        std::lock_guard lock (_mutex);
+        return _views.size ();
     }
     // Sends one View request on this connection and returns the View it produced.
     std::optional<int> view ()
@@ -2197,6 +2212,104 @@ TEST (ActorMaintenanceJoin, JoinedActorSendCanDeferNextJoin)
 TEST (ActorMaintenanceJoin, AssignmentAfterMoveClosesReachesSession)
 {
     joined_actor_chain (true);
+}
+
+void joined_first_view_reaches_client (bool remote)
+{
+    auto evidence = std::make_shared<observations_t> ();
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    configure (source, evidence, first_rid, store, relocations);
+    source.app.advanced ().services ().add_factory<relay_session_t> (
+      [evidence] (fw::service_provider_t &provider) {
+          return std::make_unique<relay_session_t> (provider.get_required<fw::actor_manager_t> (),
+                                                    evidence);
+      },
+      fw::service_lifetime_t::scoped);
+    source.app.add_zlink_framework ()
+      .add_stream_node (stream_name)
+      .bind ("tcp://127.0.0.1:0")
+      .register_session<relay_session_t> ();
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    view_client_t connection (services.get_required<fw::framework_runtime_t> ()
+                                .listener_status (fw::listener_kind_t::stream, stream_name)
+                                .endpoint);
+    ASSERT_TRUE (connection.connect ());
+    ASSERT_TRUE (connection.view ().has_value ());
+
+    std::optional<fw::service_provider_t> target_services;
+    auto *destination = &services;
+    if (remote) {
+        configure (target, evidence, second_rid, store, relocations);
+        target.start ();
+        ASSERT_TRUE (ready (target));
+        target_services.emplace (target.app.advanced ().services ().build_provider ());
+        ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
+        ASSERT_TRUE (
+          peer_ready (target_services->get_required<fw::route_mesh_runtime_t> (), first_rid));
+        services.get_required<fw::route_mesh_runtime_options_t> ()
+          .mesh (mesh_name)
+          .placement_weight (0);
+        destination = &*target_services;
+    }
+    ASSERT_TRUE (destination->get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+
+    auto submitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto release = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto *sender = &destination->get_required<fw::actor_client_t> ();
+    evidence->joined_view = [sender, submitted, release] (fw::actor_id_t id) -> fw::task_t<void> {
+        // The same public path as Table::publish -> deliver -> bound_session.send.
+        co_await sender->send (std::move (id), view_request_t{}).async ();
+        submitted->complete (fw::result_t<void>::success ());
+        co_await release->task ();
+    };
+    struct release_joined_t
+    {
+        std::shared_ptr<fw::task_completion_source_t<void>> release;
+        ~release_joined_t () { release->complete (fw::result_t<void>::success ()); }
+    } release_joined{release};
+    ASSERT_TRUE (services.get_required<fw::actor_client_t> ()
+                   .send (fw::actor_id_t (actor_id), move_t{local_spot})
+                   .async ()
+                   .result ());
+    const auto admitted = submitted->task ().result_for (wait_budget);
+    ASSERT_TRUE (admitted.has_value ());
+    ASSERT_TRUE (*admitted);
+    // Membership §4: payload dispatch waits for the joined callback and completion.
+    EXPECT_EQ (connection.received_views (), 1u);
+    {
+        std::lock_guard lock (evidence->mutex);
+        EXPECT_TRUE (evidence->completions.empty ());
+    }
+    release->complete (fw::result_t<void>::success ());
+    EXPECT_TRUE (connection.wait_view (1).has_value ());
+    {
+        std::lock_guard lock (evidence->mutex);
+        ASSERT_EQ (evidence->completions.size (), 1u);
+        EXPECT_TRUE (
+          std::holds_alternative<fw::actor_join_accepted_t> (evidence->completions.front ()));
+        EXPECT_EQ (evidence->completion_owners.front (), remote ? second_rid : first_rid);
+        EXPECT_EQ (evidence->completion_spots.front (), fw::spot_id_t (local_spot));
+    }
+}
+
+TEST (ActorMaintenanceJoin, JoinedFirstViewReachesClientLocal)
+{
+    joined_first_view_reaches_client (false);
+}
+TEST (ActorMaintenanceJoin, JoinedFirstViewReachesClientRemote)
+{
+    joined_first_view_reaches_client (true);
 }
 
 enum class backlog_case_t
@@ -4372,6 +4485,8 @@ TEST (ActorMaintenanceJoinDeathTest, LocalHandoffSnapshotDoesNotWaitOnItsLaneExe
           fw::runtime::install_host_context_hooks ();
           fw::runtime::configure_handler_coroutine_executor (1);
           join_claim_fixture_t fixture;
+          auto release_workers = fw::test::reserve_single_infrastructure_worker (
+            *fw::runtime::infrastructure_executor ());
           const auto claimed =
             fixture.node->actor_transfer_coordinator->try_begin_local ("player:claim-actor");
           if (!claimed)
@@ -4394,7 +4509,7 @@ TEST (ActorMaintenanceJoinDeathTest, LocalHandoffSnapshotDoesNotWaitOnItsLaneExe
             });
           // The snapshot queues its completion behind this executor turn. This
           // turn claims the next node drain behind that already queued completion.
-          fixture.node->lane_executor.submit (
+          ::zlink::framework::runtime::infrastructure_executor ()->submit (
             [state = fixture.node] { state->lane.try_post ([] {}); });
           release.set_value ();
           if (terminal.wait_for (wait_budget) != std::future_status::ready)
@@ -4430,7 +4545,7 @@ TEST (ActorMaintenanceJoin, LocalHandoffCancellationRetainsQueuedLaneInputs)
     owner.reset ();
     release.set_value ();
     lane_drained.get ();
-    fixture.node->lane_executor.drain ();
+    fixture.node->lane.run ([] {}).get ();
     fixture.drain ();
     ASSERT_TRUE (stopped);
     EXPECT_FALSE (*stopped);
@@ -7373,8 +7488,8 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
     auto node = mesh->spot_state;
     node->monitoring = fw::test::runtime_failure_monitoring ();
     auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
-    scheduler->publication_fence (
-      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (fw::test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     node->worker_executor = scheduler;
     fw::serializer_registry_t serializers;
     fw::service_collection_t services;
@@ -7709,8 +7824,8 @@ void capacity_probe (bool handler_failure = false, bool extra_supply = false)
     node->monitoring = fw::test::runtime_failure_monitoring ();
     auto scheduler = std::make_shared<fw::test::manual_internal_scheduler_t> ();
     node->worker_executor = scheduler;
-    scheduler->publication_fence (
-      fw::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (fw::test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     fw::serializer_registry_t serializers;
     fw::service_collection_t services;
     node->root_services = services.build_provider ();

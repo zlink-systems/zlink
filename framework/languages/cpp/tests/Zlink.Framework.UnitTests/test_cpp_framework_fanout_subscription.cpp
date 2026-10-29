@@ -6,6 +6,7 @@
 #include <zlink.hpp>
 
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/fanout/fanout_subscription.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
@@ -18,6 +19,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -55,34 +57,94 @@ struct gate_state_t
     std::promise<void> other_started;
     std::atomic_int first_count{0};
     std::atomic_int first_completed{0};
+    std::atomic_int cancelled_waits{0};
     std::atomic_int other_count{0};
     std::atomic_int later_started{0};
+    std::promise<void> later_completed;
+    std::mutex mutex;
+    std::vector<int> starts;
+    std::vector<int> completions;
+    std::atomic_int scopes_created{0};
+    std::atomic_int scopes_destroyed{0};
+    std::atomic_int scopes_live{0};
+    std::atomic_int failures{0};
+    bool fail_first = false;
 };
 
 std::shared_ptr<gate_state_t> gate_state;
+
+struct gate_scope_t
+{
+    std::shared_ptr<gate_state_t> state = gate_state;
+    gate_scope_t ()
+    {
+        ++state->scopes_created;
+        ++state->scopes_live;
+    }
+    ~gate_scope_t ()
+    {
+        ++state->scopes_destroyed;
+        --state->scopes_live;
+    }
+    int marker = 73;
+};
 
 class gate_handler_t
 {
   public:
     using event_type = gate_event_t;
+    explicit gate_handler_t (gate_scope_t &scope) : _scope (scope) {}
 
-    zlink::framework::task_t<void> handle (const gate_event_t &event)
+    zlink::framework::task_t<void>
+    handle (const gate_event_t &event, const zlink::framework::publish_message_context_t &context)
     {
         if (event.value == 1) {
             if (gate_state->first_count.fetch_add (1, std::memory_order_acq_rel) == 0) {
+                {
+                    std::lock_guard lock (gate_state->mutex);
+                    gate_state->starts.push_back (event.value);
+                }
                 gate_state->first_started.set_value ();
-                co_await gate_state->first_terminal.task ();
+                try {
+                    co_await gate_state->first_terminal.task ();
+                }
+                catch (const zlink::framework::framework_exception_t &error) {
+                    if (error.kind () == zlink::framework::framework_error_kind_t::shutting_down)
+                        ++gate_state->cancelled_waits;
+                    throw;
+                }
+                EXPECT_EQ (event.value, 1);
+                EXPECT_EQ (context.channel_name, "gate-a");
+                EXPECT_EQ (_scope.marker, 73);
+                {
+                    std::lock_guard lock (gate_state->mutex);
+                    gate_state->completions.push_back (event.value);
+                }
                 gate_state->first_completed.fetch_add (1, std::memory_order_acq_rel);
+                if (gate_state->fail_first)
+                    throw zlink::framework::framework_exception_t (
+                      zlink::framework::framework_error_kind_t::internal_failure,
+                      "fanout first terminal failed");
                 co_return;
             }
         }
-        if (event.value == 2)
+        if (event.value == 2) {
+            {
+                std::lock_guard lock (gate_state->mutex);
+                gate_state->starts.push_back (event.value);
+                gate_state->completions.push_back (event.value);
+            }
             gate_state->later_started.fetch_add (1, std::memory_order_acq_rel);
+            gate_state->later_completed.set_value ();
+        }
         if (event.value == 3
             && gate_state->other_count.fetch_add (1, std::memory_order_acq_rel) == 0)
             gate_state->other_started.set_value ();
         co_return;
     }
+
+  private:
+    gate_scope_t &_scope;
 };
 
 class gate_publish_client_t final : public zlink::framework::hosted_service_t
@@ -93,9 +155,10 @@ class gate_publish_client_t final : public zlink::framework::hosted_service_t
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
         auto publisher = _app->advanced ().zlink ().publisher ();
-        auto &runtime = services.get_required<zlink::framework::framework_runtime_t> ();
+        (void) services;
         auto first = gate_state->first_started.get_future ();
         auto other = gate_state->other_started.get_future ();
+        auto later = gate_state->later_completed.get_future ();
         for (int attempt = 0; attempt < 80 && !first_received; ++attempt) {
             try {
                 co_await publisher.publish ("gate-a", "gate", gate_event_t{1}).async ();
@@ -115,12 +178,7 @@ class gate_publish_client_t final : public zlink::framework::hosted_service_t
                 last_error = error.what ();
             }
             if (later_submitted) {
-                for (int attempt = 0; attempt < 80 && !later_received; ++attempt) {
-                    later_received =
-                      runtime.status ().capacity.application_job_queue.queued_application_jobs > 0;
-                    if (!later_received)
-                        std::this_thread::sleep_for (25ms);
-                }
+                later_received = later.wait_for (2s) == std::future_status::ready;
                 try {
                     co_await publisher.publish ("gate-b", "gate", gate_event_t{3}).async ();
                     other_submitted = true;
@@ -131,22 +189,16 @@ class gate_publish_client_t final : public zlink::framework::hosted_service_t
                 other_completed =
                   other_submitted && other.wait_for (2s) == std::future_status::ready;
                 if (other_completed) {
-                    std::this_thread::sleep_for (100ms);
+                    const auto deadline = std::chrono::steady_clock::now () + 2s;
+                    while (gate_state->scopes_live.load () != 1
+                           && std::chrono::steady_clock::now () < deadline)
+                        std::this_thread::sleep_for (1ms);
                     later_before_release =
                       gate_state->later_started.load (std::memory_order_acquire);
                 }
             }
         }
-        _app->stop ();
-        terminal_completed_once =
-          gate_state->first_terminal.complete (zlink::framework::result_t<void>::success ());
-        terminal_repeated =
-          gate_state->first_terminal.complete (zlink::framework::result_t<void>::success ());
-        for (int attempt = 0;
-             attempt < 80 && gate_state->later_started.load (std::memory_order_acquire) == 0;
-             ++attempt)
-            std::this_thread::sleep_for (25ms);
-        later_completed = gate_state->later_started.load (std::memory_order_acquire) > 0;
+        prepared.set_value ();
         co_return;
     }
 
@@ -162,11 +214,38 @@ class gate_publish_client_t final : public zlink::framework::hosted_service_t
     bool later_completed = false;
     bool terminal_completed_once = false;
     bool terminal_repeated = false;
+    std::promise<void> prepared;
     std::string last_error;
 
   private:
     zlink::framework::app_t *_app;
 };
+
+void configure_gate_app (
+  zlink::framework::app_t &app,
+  const std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> &store)
+{
+    app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (store);
+        options.services ().add_scoped<gate_scope_t> ();
+        zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          options.configure_dispatch (), [state = gate_state] (const auto &event) {
+              if (event.channel_name == "gate-a")
+                  ++state->failures;
+          });
+        options.handlers ().group ("gate").add_publish<gate_handler_t> ();
+        options.add_fanout_channel ("gate-a")
+          .set_routing_id (zlink::routing_id_t::from ("gate-a-publisher"))
+          .enable_publisher ("tcp://127.0.0.1:0")
+          .enable_subscriber ()
+          .use_handler_group ("gate");
+        options.add_fanout_channel ("gate-b")
+          .set_routing_id (zlink::routing_id_t::from ("gate-b-publisher"))
+          .enable_publisher ("tcp://127.0.0.1:0")
+          .enable_subscriber ()
+          .use_handler_group ("gate");
+    });
+}
 
 std::vector<std::uint8_t> bytes (std::string value)
 {
@@ -457,40 +536,115 @@ TEST (CppFrameworkFanoutSubscription, PublishDoesNotBindOutsideStartup)
     provider.close ();
 }
 
-TEST (CppFrameworkFanoutSubscription, AsyncHandlerKeepsChannelGateUntilTerminal)
+TEST (CppFrameworkFanoutSubscription, AsyncHandlersStartInFifoAndOwnTheirTerminals)
+{
+    for (bool fail_first : {false, true}) {
+        gate_state = std::make_shared<gate_state_t> ();
+        gate_state->fail_first = fail_first;
+        auto app = zlink::framework::app_t::create ();
+        auto store = std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
+        configure_gate_app (app, store);
+        auto service = std::make_unique<gate_publish_client_t> (app);
+        auto *client = service.get ();
+        app.add_hosted_service (std::move (service));
+
+        auto prepared = client->prepared.get_future ();
+        int exit_code = -1;
+        std::jthread host ([&] (std::stop_token stop) {
+            std::stop_callback request_stop (stop, [&] { app.request_stop (); });
+            exit_code = app.run (0, nullptr);
+        });
+        const auto observed = prepared.wait_for (5s) == std::future_status::ready;
+        EXPECT_TRUE (observed);
+        const auto ready_deadline = std::chrono::steady_clock::now () + 2s;
+        while (!app.is_ready () && std::chrono::steady_clock::now () < ready_deadline)
+            std::this_thread::sleep_for (1ms);
+        EXPECT_TRUE (app.is_ready ());
+        {
+            std::lock_guard lock (gate_state->mutex);
+            EXPECT_EQ (gate_state->starts, (std::vector<int>{1, 2}));
+            EXPECT_EQ (gate_state->completions, (std::vector<int>{2}));
+        }
+        EXPECT_EQ (gate_state->first_completed.load (), 0);
+        EXPECT_EQ (gate_state->scopes_live.load (), 1);
+        auto shutdown = app.shutdown ();
+        EXPECT_FALSE (shutdown.result_for (20ms));
+        client->terminal_completed_once =
+          gate_state->first_terminal.complete (zlink::framework::result_t<void>::success ());
+        client->terminal_repeated =
+          gate_state->first_terminal.complete (zlink::framework::result_t<void>::success ());
+        EXPECT_TRUE (shutdown.result_for (5s));
+        host.request_stop ();
+        host.join ();
+        EXPECT_EQ (exit_code, 0);
+        client->later_completed = gate_state->later_started.load () == 1;
+        {
+            std::lock_guard lock (gate_state->mutex);
+            EXPECT_EQ (gate_state->completions, (std::vector<int>{2, 1}));
+        }
+        EXPECT_EQ (gate_state->scopes_live.load (), 0);
+        EXPECT_EQ (gate_state->scopes_created.load (), gate_state->scopes_destroyed.load ());
+        EXPECT_EQ (gate_state->failures.load (), fail_first ? 1 : 0);
+        EXPECT_TRUE (client->first_submitted);
+        EXPECT_TRUE (client->first_received);
+        EXPECT_TRUE (client->last_error.empty ()) << client->last_error;
+        EXPECT_TRUE (client->later_submitted);
+        EXPECT_TRUE (client->later_received);
+        EXPECT_TRUE (client->other_submitted);
+        EXPECT_TRUE (client->other_completed);
+        EXPECT_EQ (client->later_before_release, 1);
+        EXPECT_TRUE (client->later_completed);
+        EXPECT_TRUE (client->terminal_completed_once);
+        EXPECT_FALSE (client->terminal_repeated);
+        EXPECT_EQ (gate_state->first_completed.load (std::memory_order_acquire), 1);
+    }
+}
+
+
+TEST (CppFrameworkFanoutSubscription, ForcedShutdownCancelsOwnedCompletionWait)
 {
     gate_state = std::make_shared<gate_state_t> ();
     auto app = zlink::framework::app_t::create ();
     auto store = std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
-    app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
-        options.add_location_store (store);
-        options.handlers ().group ("gate").add_publish<gate_handler_t> ();
-        options.add_fanout_channel ("gate-a")
-          .set_routing_id (zlink::routing_id_t::from ("gate-a-publisher"))
-          .enable_publisher ("tcp://127.0.0.1:0")
-          .enable_subscriber ()
-          .use_handler_group ("gate");
-        options.add_fanout_channel ("gate-b")
-          .set_routing_id (zlink::routing_id_t::from ("gate-b-publisher"))
-          .enable_publisher ("tcp://127.0.0.1:0")
-          .enable_subscriber ()
-          .use_handler_group ("gate");
-    });
+    configure_gate_app (app, store);
     auto service = std::make_unique<gate_publish_client_t> (app);
-    auto *client = service.get ();
+    auto prepared = service->prepared.get_future ();
     app.add_hosted_service (std::move (service));
-
-    EXPECT_EQ (app.run (0, nullptr), 0);
-    EXPECT_TRUE (client->first_submitted);
-    EXPECT_TRUE (client->first_received);
-    EXPECT_TRUE (client->last_error.empty ()) << client->last_error;
-    EXPECT_TRUE (client->later_submitted);
-    EXPECT_TRUE (client->later_received);
-    EXPECT_TRUE (client->other_submitted);
-    EXPECT_TRUE (client->other_completed);
-    EXPECT_EQ (client->later_before_release, 0);
-    EXPECT_TRUE (client->later_completed);
-    EXPECT_TRUE (client->terminal_completed_once);
-    EXPECT_FALSE (client->terminal_repeated);
-    EXPECT_EQ (gate_state->first_completed.load (std::memory_order_acquire), 1);
+    int exit_code = -1;
+    std::promise<void> run_exited;
+    auto exited = run_exited.get_future ();
+    std::jthread host ([&] {
+        exit_code = app.run (0, nullptr);
+        run_exited.set_value ();
+    });
+    EXPECT_EQ (prepared.wait_for (5s), std::future_status::ready);
+    const auto ready_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!app.is_ready () && std::chrono::steady_clock::now () < ready_deadline)
+        std::this_thread::sleep_for (1ms);
+    EXPECT_TRUE (app.is_ready ());
+    EXPECT_EQ (gate_state->scopes_live.load (), 1);
+    auto shutdown = app.shutdown (100ms);
+    EXPECT_FALSE (shutdown.result_for (20ms));
+    const auto terminal = shutdown.result_for (5s);
+    EXPECT_TRUE (terminal.has_value ());
+    if (terminal && *terminal) {
+        EXPECT_EQ (terminal->value ().outcome,
+                   zlink::framework::termination_outcome_t::force_stopped);
+        EXPECT_EQ (terminal->value ().reason,
+                   zlink::framework::termination_reason_t::deadline_exceeded);
+    }
+    const bool run_completed = exited.wait_for (5s) == std::future_status::ready;
+    EXPECT_TRUE (run_completed);
+    EXPECT_EQ (gate_state->cancelled_waits.load (), 1);
+    EXPECT_EQ (gate_state->first_completed.load (), 0);
+    EXPECT_EQ (gate_state->scopes_live.load (), 0);
+    EXPECT_FALSE (gate_state->first_terminal.task ().result_for (0ms));
+    // Completing the original source remains valid after its registered owner ended the wait.
+    EXPECT_TRUE (
+      gate_state->first_terminal.complete (zlink::framework::result_t<void>::success ()));
+    EXPECT_FALSE (
+      gate_state->first_terminal.complete (zlink::framework::result_t<void>::success ()));
+    host.join ();
+    EXPECT_EQ (exit_code, 0);
+    EXPECT_EQ (gate_state->scopes_created.load (), gate_state->scopes_destroyed.load ());
 }
