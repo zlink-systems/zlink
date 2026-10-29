@@ -150,6 +150,11 @@ struct i_pipe_events
         LIBZLINK_UNUSED (pipe_);
     }
     virtual void hiccuped (zlink::pipe_t *pipe_) = 0;
+    // Resolve queued replies while the terminating pair still owns its capability.
+    virtual void pipe_peer_terminating (zlink::pipe_t *pipe_)
+    {
+        LIBZLINK_UNUSED (pipe_);
+    }
     virtual void pipe_peer_terminated (zlink::pipe_t *pipe_, bool drain_complete_) = 0;
     virtual void pipe_terminated (zlink::pipe_t *pipe_) = 0;
 
