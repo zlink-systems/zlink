@@ -5,6 +5,7 @@ set -euo pipefail
 : "${REPLY_CHECK_RESULTS:?}"
 : "${RUNNER_TEMP:?}"
 : "${GITHUB_WORKSPACE:?}"
+: "${REPLY_CHECK_CANDIDATE_SHA:?}"
 mkdir -p "$REPLY_CHECK_RESULTS"
 exec > >(tee "$REPLY_CHECK_RESULTS/commands.log") 2>&1
 set -x
@@ -13,11 +14,9 @@ test "$(uname -m)" = arm64
 repo_root=$(pwd -P)
 build_root="$repo_root/core/build/reply-check"
 package_root="$RUNNER_TEMP/reply-check/packages"
-nuget_source="$package_root/nuget"
 project=framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj
 class=Zlink.Framework.UnitTests.ClientServerLoopOwnershipTests
 focused="$class.Stopping_server_delivers_the_reply_of_its_accepted_request"
-mkdir -p "$nuget_source"
 
 # Both source identities are immutable for this run, including the harness itself.
 {
@@ -31,6 +30,40 @@ mkdir -p "$nuget_source"
     clang++ --version
     dotnet --info
 } > "$REPLY_CHECK_RESULTS/source-and-tools.txt"
+
+# Consume the Linux producer's packages; never cross-verify its native payload here.
+# Match the immutable candidate and harness identities before using any package.
+(
+    cd "$package_root"
+    shasum -a 256 -c package-sha256.txt
+)
+python3 - "$package_root" "$REPLY_CHECK_CANDIDATE_SHA" "$repo_root" "$GITHUB_WORKSPACE/verification" <<'PY'
+import pathlib
+import subprocess
+import sys
+package_root, candidate_sha, repo_root, verification_root = sys.argv[1:]
+package_root = pathlib.Path(package_root)
+repo_root = pathlib.Path(repo_root)
+identity = dict(line.split("=", 1) for line in
+                (package_root / "source-and-packages.txt").read_text().splitlines())
+def head(path):
+    return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+assert candidate_sha == head(repo_root) == identity["candidate_sha"], "Candidate source/package SHA mismatch"
+assert head(verification_root) == identity["verification_sha"], "Verification implementation SHA mismatch"
+for field, version_file, key in (
+    ("core_version", "VERSION", "LIBZLINK_VERSION"),
+    ("binding_version", "bindings/dotnet/VERSION", "ZLINK_BINDING_VERSION"),
+    ("httpclient_version", "framework/languages/dotnet/VERSION", "ZLINK_FRAMEWORK_VERSION"),
+):
+    versions = dict(line.split("=", 1) for line in (repo_root / version_file).read_text().splitlines())
+    assert identity[field] == versions[key], f"Source/package {field} mismatch"
+for name, field in (("Zlink", "binding_version"), ("Zlink.HttpClient", "httpclient_version")):
+    assert (package_root / "nuget" / f"{name}.{identity[field]}.nupkg").stat().st_size > 0
+PY
+cp "$package_root/binding-linux-payload-provenance.json" \
+    "$package_root/source-and-packages.txt" "$package_root/package-sha256.txt" "$REPLY_CHECK_RESULTS/"
+export ZLINK_LOCAL_PACKAGE_ROOT="$package_root"
+export ZLinkLocalPackageRoot="$package_root"
 
 /opt/homebrew/bin/brew install cmake pkg-config openssl@3
 export OPENSSL_ROOT_DIR
@@ -63,27 +96,6 @@ test "$(lipo -archs "$ZLINK_LIBRARY_PATH")" = arm64
     shasum -a 256 "$ZLINK_LIBRARY_PATH"
     cmake --version
 } > "$REPLY_CHECK_RESULTS/native-provenance.txt"
-
-# The existing public binding pack contract requires a Linux/Windows runtime.
-# Its verified Linux payload is package input only, never the macOS test runtime.
-core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
-binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
-test -n "$core_version"
-test -n "$binding_version"
-core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
-    --version "$core_version" --platform linux-x64 --cache-dir .artifacts/core-release)
-dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj -c Release -o "$nuget_source" \
-    "-p:ZLinkCoreVersion=$core_version" -p:ZLinkCoreSource=local \
-    "-p:ZLinkLinuxX64NativeRoot=$core_prefix/lib" \
-    "-p:ZLinkCoreProvenancePath=$core_prefix/share/zlink/core-package-provenance.json"
-test -s "$nuget_source/Zlink.$binding_version.nupkg"
-cp "$core_prefix/share/zlink/core-package-provenance.json" \
-    "$REPLY_CHECK_RESULTS/binding-linux-payload-provenance.json"
-dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj \
-    -c Release -o "$nuget_source"
-export ZLINK_LOCAL_PACKAGE_ROOT="$package_root"
-export ZLinkLocalPackageRoot="$package_root"
-shasum -a 256 "$nuget_source"/*.nupkg > "$REPLY_CHECK_RESULTS/package-sha256.txt"
 
 dotnet restore "$project"
 dotnet build "$project" -c Release -f net10.0 --no-restore
