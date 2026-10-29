@@ -1,27 +1,39 @@
 package systems.zlink.framework.testkit;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFileAttributeView;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 final class SampleReleaseGateContractTest {
+    private static final int GRADLE_LOCK_PROCESS_TIMEOUT_SECONDS = 10;
+    private static final int GRADLE_LOCK_BUILD_FAILURE_EXIT_CODE = 23;
+
     private static final Set<String> REQUIRED_LANGUAGES = Set.of("java", "kotlin");
     private static final String FORBIDDEN_SAMPLE_ASYNC_HELPER = "Sample" + "Async";
     private static final String FORBIDDEN_TICTACTOE_RESULT = "TicTacToeClient" + "Result";
@@ -594,15 +606,48 @@ final class SampleReleaseGateContractTest {
     }
 
     @Test
-    void bashSampleBuildsUseOneSharedGradleLock() throws IOException {
+    void bashSampleBuildsUseOneSharedGradleLock() throws Exception {
         Path commonRunner = samplesRoot().resolve("runner-common.sh");
         String helper = readSource(commonRunner);
         for (String needle :
                 List.of(
-                        "zlink_sample_gradle_locked",
-                        "/tmp/zlink-framework-java-kotlin-sample-gradle.lock",
-                        "flock --exclusive --close")) {
+                        "git -C \"${here}\" rev-parse --show-toplevel",
+                        "tr -d '\\r\\n' | sha256sum | cut -c1-16",
+                        "/tmp/zlink-framework-java-kotlin-sample-gradle-%s.lock",
+                        "exec 9>\"${lock_path}\"",
+                        "flock --exclusive --nonblock 9",
+                        "flock --exclusive 9",
+                        "\"$@\" 9>&-")) {
             assertTrue(helper.contains(needle), "Gradle lock helper must contain " + needle);
+        }
+
+        assertTrue(
+                Pattern.compile("(?s)zlink_sample_gradle_locked\\(\\).*?\\n  \\(\\n.*?\\n  \\)\\n}")
+                        .matcher(helper)
+                        .find(),
+                "the lock descriptor must belong to the build subshell");
+        assertFalse(helper.contains("exec flock"));
+        assertTrue(helper.contains("zlink_sample_gradle_locked ./gradlew \"$@\""));
+        assertTrue(helper.contains("zlink_sample_gradle_locked ./gradlew --no-daemon"));
+        for (String suite : List.of("sample", "e2e")) {
+            String template =
+                    readSource(
+                            frameworkJavaRoot()
+                                    .resolve(
+                                            "../../doc/framework/common/"
+                                                    + suite
+                                                    + "/runner-templates/run_"
+                                                    + suite
+                                                    + ".template.sh"));
+            assertTrue(template.contains("flock --exclusive --close"));
+            assertTrue(
+                    template.contains(
+                            "/tmp/zlink-framework-java-kotlin-sample-gradle-$(git -C \"${SCRIPT_DIR}\" rev-parse --show-toplevel | tr -d '\\r\\n' | sha256sum | cut -c1-16).lock\" \"$@\""));
+        }
+        // The live contract uses Linux /proc FD ownership and flock. Static checks
+        // above and below remain active on every platform.
+        if (System.getProperty("os.name").equals("Linux")) {
+            verifyBashGradleLock(commonRunner);
         }
 
         Pattern unlockedGradle =
@@ -631,12 +676,26 @@ final class SampleReleaseGateContractTest {
         for (String needle :
                 List.of(
                         "Invoke-ZlinkSampleGradleBuild",
-                        "zlink-framework-java-kotlin-sample-gradle.lock",
-                        "[System.IO.FileShare]::None")) {
+                        "git -C $PSScriptRoot rev-parse --show-toplevel",
+                        "[System.Security.Cryptography.SHA256]::Create()",
+                        "[System.Text.Encoding]::UTF8.GetBytes($checkoutRoot.Trim())",
+                        "Select-Object -First 8 | ForEach-Object { $_.ToString(\"x2\") }",
+                        "zlink-framework-java-kotlin-sample-gradle-$checkoutKey.lock",
+                        "[System.IO.FileShare]::None",
+                        "& $GradleExecutable @buildArguments")) {
             assertTrue(
                     helper.contains(needle),
                     "PowerShell Gradle lock helper must contain " + needle);
         }
+
+        assertTrue(
+                Pattern.compile(
+                                "(?s)\\[System.IO.FileShare]::None.*?try \\{.*?"
+                                        + "& \\$GradleExecutable @buildArguments.*?} finally \\{\\s*"
+                                        + "if \\(\\$buildRoot\\) \\{ Pop-Location }\\s*\\$lockStream\\.Dispose\\(\\)")
+                        .matcher(helper)
+                        .find(),
+                "the exclusive stream must be disposed after the build, including failure");
 
         Pattern unlockedDirectBuild =
                 Pattern.compile(
@@ -671,6 +730,125 @@ final class SampleReleaseGateContractTest {
                                 + " shared lock");
             }
         }
+    }
+
+    private static void verifyBashGradleLock(Path commonRunner) throws Exception {
+        String script =
+                """
+                source "$1" || exit
+                lock_path="$(zlink_sample_gradle_lock_path)"
+                printf '%s\n' "$lock_path"
+                zlink_sample_gradle_locked bash -c '
+                  test ! -e /proc/$$/fd/9 || exit 1
+                  if flock --exclusive --nonblock "$1" true; then exit 1; fi
+                  printf "build\n"
+                  read -r release
+                  exit "$2"
+                ' _ "$lock_path" "$2"
+                status=$?
+                [[ "$status" == "$2" ]] || exit 1
+                test ! -e /proc/$$/fd/9 || exit 1
+                printf 'server\n'
+                exit "$status"
+                """;
+        var processes = new ArrayList<Process>();
+        var outputReads = Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            Process holder =
+                    new ProcessBuilder("bash", "-c", script, "_", commonRunner.toString(), "0")
+                            .start();
+            processes.add(holder);
+            Path checkout = frameworkJavaRoot().resolve("../../..").normalize().toRealPath();
+            String key =
+                    HexFormat.of()
+                            .formatHex(
+                                    MessageDigest.getInstance("SHA-256")
+                                            .digest(
+                                                    checkout.toString()
+                                                            .getBytes(StandardCharsets.UTF_8)))
+                            .substring(0, 16);
+            String lockPath = "/tmp/zlink-framework-java-kotlin-sample-gradle-" + key + ".lock";
+            var holderOutput = holder.inputReader();
+            assertEquals(lockPath, readGradleLockLine(outputReads, holderOutput));
+            assertTrue(
+                    readGradleLockLine(outputReads, holder.errorReader())
+                            .endsWith("gradle lock acquired: " + lockPath));
+            assertEquals("build", readGradleLockLine(outputReads, holderOutput));
+            Process contender =
+                    new ProcessBuilder(
+                                    "bash",
+                                    "-c",
+                                    script,
+                                    "_",
+                                    commonRunner.toString(),
+                                    Integer.toString(GRADLE_LOCK_BUILD_FAILURE_EXIT_CODE))
+                            .start();
+            processes.add(contender);
+            var contenderOutput = contender.inputReader();
+            var contenderErrors = contender.errorReader();
+            assertEquals(lockPath, readGradleLockLine(outputReads, contenderOutput));
+            assertTrue(
+                    readGradleLockLine(outputReads, contenderErrors)
+                            .endsWith("gradle lock wait: " + lockPath));
+            holder.outputWriter().append("release\n").flush();
+            assertTrue(
+                    readGradleLockLine(outputReads, contenderErrors)
+                            .endsWith("gradle lock acquired: " + lockPath));
+            assertEquals("build", readGradleLockLine(outputReads, contenderOutput));
+            contender.outputWriter().append("release\n").flush();
+            assertTrue(contender.waitFor(GRADLE_LOCK_PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(GRADLE_LOCK_BUILD_FAILURE_EXIT_CODE, contender.exitValue());
+            assertEquals("server", readGradleLockLine(outputReads, contenderOutput));
+            assertTrue(holder.waitFor(GRADLE_LOCK_PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(0, holder.exitValue());
+            assertEquals("server", readGradleLockLine(outputReads, holderOutput));
+            Process probe =
+                    new ProcessBuilder(
+                                    "bash",
+                                    "-c",
+                                    "source \"$1\" && flock --exclusive --nonblock \"$(zlink_sample_gradle_lock_path)\" true && zlink_sample_gradle_locked true && flock --exclusive --nonblock \"$(zlink_sample_gradle_lock_path)\" true",
+                                    "_",
+                                    commonRunner.toString())
+                            .inheritIO()
+                            .start();
+            processes.add(probe);
+            assertTrue(probe.waitFor(GRADLE_LOCK_PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            assertEquals(
+                    0, probe.exitValue(), "success and failure must both release the build lock");
+        } finally {
+            var handles =
+                    processes.stream()
+                            .flatMap(
+                                    process ->
+                                            Stream.concat(
+                                                    process.descendants(),
+                                                    Stream.of(process.toHandle())))
+                            .toList();
+            handles.forEach(ProcessHandle::destroyForcibly);
+            outputReads.shutdownNow();
+            try {
+                CompletableFuture.allOf(
+                                handles.stream()
+                                        .map(ProcessHandle::onExit)
+                                        .toArray(CompletableFuture[]::new))
+                        .get(GRADLE_LOCK_PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            } finally {
+                assertTrue(
+                        outputReads.awaitTermination(
+                                GRADLE_LOCK_PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                        "Gradle lock output readers must terminate after process cleanup");
+            }
+        }
+    }
+
+    private static String readGradleLockLine(ExecutorService outputReads, BufferedReader output)
+            throws Exception {
+        String line =
+                outputReads
+                        .submit(output::readLine)
+                        .get(GRADLE_LOCK_PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        System.out.println("linux-gradle-lock " + line);
+        return line;
     }
 
     @Test

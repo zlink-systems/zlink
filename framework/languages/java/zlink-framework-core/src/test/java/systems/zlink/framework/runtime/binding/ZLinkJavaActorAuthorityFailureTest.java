@@ -266,7 +266,6 @@ final class ZLinkJavaActorAuthorityFailureTest {
                             descriptor,
                             topology,
                             Map.of(),
-                            Map.of(),
                             Runnable::run);
             node.setRoutingId(target);
             var options = new ZLinkDispatchOptionsRegistration();

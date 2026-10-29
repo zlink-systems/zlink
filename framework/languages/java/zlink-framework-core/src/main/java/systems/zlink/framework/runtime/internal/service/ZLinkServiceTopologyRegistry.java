@@ -23,7 +23,8 @@ public final class ZLinkServiceTopologyRegistry {
 
     private final ZLinkStateLane stateLane;
     private final Map<RoutingId, Peer> peers = new HashMap<>();
-    private final Map<RoutingId, String> readyConnections = new HashMap<>();
+    // Admission and its prepared selection plans share this owner lane.
+    private final Map<RoutingId, String> readyConnections;
     private final Map<String, ChannelSelectionPlan> channelPlans = new HashMap<>();
     private final Map<String, ChannelSelectionPlan> readyChannelPlans = new HashMap<>();
     private final Map<String, Map<String, Long>> dynamicSelectionCurrents = new HashMap<>();
@@ -36,12 +37,20 @@ public final class ZLinkServiceTopologyRegistry {
 
     public ZLinkServiceTopologyRegistry(
             ZLinkServiceNodeDescriptor local, ZLinkStateLane stateLane) {
+        this(local, stateLane, new HashMap<>());
+    }
+
+    ZLinkServiceTopologyRegistry(
+            ZLinkServiceNodeDescriptor local,
+            ZLinkStateLane stateLane,
+            Map<RoutingId, String> readyConnections) {
+        this.readyConnections = Objects.requireNonNull(readyConnections, "readyConnections");
         this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
         this.local = Objects.requireNonNull(local, "local");
     }
 
     private <T> T inStateLane(java.util.function.Supplier<T> work) {
-        return stateLane.awaitTurn(work);
+        return stateLane.isOnLane() ? work.get() : stateLane.awaitTurn(work);
     }
 
     public ZLinkServiceNodeDescriptor localDescriptor() {
@@ -120,7 +129,11 @@ public final class ZLinkServiceTopologyRegistry {
                 sameConnection
                         ? new Peer(descriptor, connectionId, current.liveness())
                         : new Peer(descriptor, connectionId));
-        if (!sameConnection) readyConnections.remove(descriptor.nodeRoutingId());
+        if (command == ServiceWireConstants.COMMAND_ADMIT || sameConnection && isReady(current)) {
+            readyConnections.put(descriptor.nodeRoutingId(), connectionId);
+        } else {
+            readyConnections.remove(descriptor.nodeRoutingId());
+        }
         rebuildChannelPlansOnLane();
         return AdmissionResult.ADMITTED;
     }
@@ -166,15 +179,29 @@ public final class ZLinkServiceTopologyRegistry {
         return true;
     }
 
+    /** Ends all logical admissions in one owner turn when the mesh node closes. */
+    public List<Peer> disconnectAll() {
+        return inStateLane(
+                () -> {
+                    var removed = peersOnLane();
+                    peers.clear();
+                    readyConnections.clear();
+                    rebuildChannelPlansOnLane();
+                    return removed;
+                });
+    }
+
     public void bindLiveness(
             RoutingId nodeRoutingId, ZLinkServiceLivenessRegistry.PeerState liveness) {
         inStateLane(
                 () -> {
                     Peer peer = peers.get(nodeRoutingId);
-                    if (peer != null)
+                    if (peer != null && peer.liveness() != liveness) {
                         peers.put(
                                 nodeRoutingId,
                                 new Peer(peer.descriptor(), peer.connectionId(), liveness));
+                        rebuildChannelPlansOnLane();
+                    }
                     return null;
                 });
     }
@@ -294,31 +321,29 @@ public final class ZLinkServiceTopologyRegistry {
         }
     }
 
-    /**
-     * Projects the authoritative connection readiness into the selector. The projection is rebuilt
-     * only when topology or liveness changes; calls read the resulting plan and advance one cursor.
-     */
-    public boolean setChannelReady(RoutingId nodeRoutingId, String connectionId, boolean ready) {
-        Objects.requireNonNull(nodeRoutingId, "nodeRoutingId");
-        return inStateLane(() -> setChannelReadyOnLane(nodeRoutingId, connectionId, ready));
+    /** Whether the currently admitted peer has received ADMIT. */
+    public boolean isReady(RoutingId peer) {
+        return stateLane.isOnLane() ? isReadyOnLane(peer) : inStateLane(() -> isReadyOnLane(peer));
     }
 
-    private boolean setChannelReadyOnLane(
-            RoutingId nodeRoutingId, String connectionId, boolean ready) {
-        Peer peer = peers.get(nodeRoutingId);
-        if (peer == null || connectionId == null || !peer.connectionId().equals(connectionId)) {
-            return false;
-        }
-        boolean changed;
-        if (ready) {
-            changed = !connectionId.equals(readyConnections.put(nodeRoutingId, connectionId));
-        } else {
-            changed = readyConnections.remove(nodeRoutingId, connectionId);
-        }
-        if (changed) {
-            rebuildChannelPlansOnLane();
-        }
-        return changed;
+    private boolean isReadyOnLane(RoutingId peer) {
+        return readyConnections.containsKey(peer);
+    }
+
+    /** Whether this peer received ADMIT on its currently admitted route. */
+    public boolean isReady(Peer peer) {
+        return peer != null && isRouteReady(peer.descriptor().nodeRoutingId(), peer.connectionId());
+    }
+
+    /** Reads the route's ADMIT receipt without entering a second owner turn. */
+    public boolean isRouteReady(RoutingId peer, String connectionId) {
+        return stateLane.isOnLane()
+                ? isRouteReadyOnLane(peer, connectionId)
+                : inStateLane(() -> isRouteReadyOnLane(peer, connectionId));
+    }
+
+    private boolean isRouteReadyOnLane(RoutingId peer, String connectionId) {
+        return connectionId != null && connectionId.equals(readyConnections.get(peer));
     }
 
     /**
@@ -476,11 +501,7 @@ public final class ZLinkServiceTopologyRegistry {
 
     private void rebuildChannelPlansOnLane() {
         rebuildChannelPlansOnLane(channelPlans, ignored -> true);
-        rebuildChannelPlansOnLane(
-                readyChannelPlans,
-                peer ->
-                        peer.connectionId()
-                                .equals(readyConnections.get(peer.descriptor().nodeRoutingId())));
+        rebuildChannelPlansOnLane(readyChannelPlans, this::isReady);
     }
 
     private void rebuildChannelPlansOnLane(

@@ -126,6 +126,127 @@ final class ZLinkServiceTopologyAdmissionRevisionTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void preparedReadyPeerCarriesActualReceiptIncludingFirstAdmitAndLateHello(boolean helloFirst) {
+        var lane = new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane();
+        try {
+            var registry = new ZLinkServiceTopologyRegistry(weightedDescriptor("local", 1), lane);
+            var liveness =
+                    new ZLinkServiceLivenessRegistry(
+                            java.time.Duration.ofSeconds(5),
+                            java.time.Duration.ofSeconds(15),
+                            lane);
+            var peer = weightedDescriptor("peer", 3);
+            lane.awaitTurn(
+                    () -> {
+                        if (helloFirst) {
+                            registry.admit(peer, "1", ServiceWireConstants.COMMAND_HELLO);
+                            registry.bindLiveness(
+                                    peer.nodeRoutingId(),
+                                    liveness.admit(peer.nodeRoutingId(), "1", 0));
+                            assertTrue(registry.selectReadyChannel("orders").isEmpty());
+                        }
+                        registry.admit(peer, "1", ServiceWireConstants.COMMAND_ADMIT);
+                        var receipt = liveness.admit(peer.nodeRoutingId(), "1", 1);
+                        registry.bindLiveness(peer.nodeRoutingId(), receipt);
+                        assertSame(
+                                receipt,
+                                registry.selectReadyChannel("orders").orElseThrow().liveness());
+                        var current = registry.peer(peer.nodeRoutingId()).orElseThrow();
+                        registry.bindLiveness(peer.nodeRoutingId(), receipt);
+                        assertSame(
+                                current,
+                                registry.peer(peer.nodeRoutingId()).orElseThrow(),
+                                "same receipt is a value-preserving no-op");
+                        for (int command :
+                                new int[] {
+                                    ServiceWireConstants.COMMAND_ADMIT,
+                                    ServiceWireConstants.COMMAND_HELLO
+                                }) {
+                            registry.admit(peer, "1", command);
+                            assertSame(receipt, liveness.admit(peer.nodeRoutingId(), "1", 2));
+                            registry.bindLiveness(peer.nodeRoutingId(), receipt);
+                            assertTrue(registry.isReady(peer.nodeRoutingId()));
+                            assertSame(
+                                    receipt,
+                                    registry.selectReadyChannel("orders").orElseThrow().liveness());
+                        }
+                        return null;
+                    });
+        } finally {
+            lane.closeAsync().toCompletableFuture().join();
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void receiptRebuildPreservesTheNextWeightedSelection() {
+        var lane = new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane();
+        try {
+            var expected = new ZLinkServiceTopologyRegistry(weightedDescriptor("local", 1), lane);
+            var actual = new ZLinkServiceTopologyRegistry(weightedDescriptor("local", 1), lane);
+            var liveness =
+                    new ZLinkServiceLivenessRegistry(
+                            java.time.Duration.ofSeconds(5),
+                            java.time.Duration.ofSeconds(15),
+                            lane);
+            lane.awaitTurn(
+                    () -> {
+                        for (var peer :
+                                List.of(
+                                        weightedDescriptor("a", 5),
+                                        weightedDescriptor("b", 3),
+                                        weightedDescriptor("c", 1))) {
+                            expected.admit(peer, "1", ServiceWireConstants.COMMAND_ADMIT);
+                            actual.admit(peer, "1", ServiceWireConstants.COMMAND_ADMIT);
+                        }
+                        for (int index = 0; index < 128; index++) {
+                            if (index == 7) {
+                                for (var peer : actual.peers()) {
+                                    actual.bindLiveness(
+                                            peer.descriptor().nodeRoutingId(),
+                                            liveness.admit(
+                                                    peer.descriptor().nodeRoutingId(), "1", 0));
+                                }
+                            }
+                            assertEquals(
+                                    expected.selectReadyChannel("orders")
+                                            .orElseThrow()
+                                            .descriptor()
+                                            .nodeRoutingId(),
+                                    actual.selectReadyChannel("orders")
+                                            .orElseThrow()
+                                            .descriptor()
+                                            .nodeRoutingId(),
+                                    "selection " + index);
+                        }
+                        return null;
+                    });
+        } finally {
+            lane.closeAsync().toCompletableFuture().join();
+        }
+    }
+
+    private static ZLinkServiceNodeDescriptor weightedDescriptor(String id, int weight) {
+        return new ZLinkServiceNodeDescriptor(
+                "mesh",
+                RoutingId.from(id),
+                7,
+                1,
+                "inproc://" + id,
+                List.of(new ZLinkServiceNodeDescriptor.Channel("orders", weight)),
+                ZLinkServiceNodeDescriptor.State.SERVING,
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                1,
+                List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
+                1,
+                100,
+                10,
+                0,
+                0);
+    }
+
     private static ZLinkServiceNodeDescriptor descriptor(
             String id, long revision, ZLinkServiceNodeDescriptor.State state, boolean changed) {
         return descriptor(id, revision, state, changed, 7);

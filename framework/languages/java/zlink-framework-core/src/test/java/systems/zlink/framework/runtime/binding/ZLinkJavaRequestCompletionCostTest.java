@@ -70,7 +70,6 @@ public final class ZLinkJavaRequestCompletionCostTest {
                             null,
                             topology,
                             java.util.Map.of(),
-                            java.util.Map.of(),
                             Runnable::run);
             var meshOperations = mesh.operationRegistry();
             try {
@@ -439,15 +438,27 @@ public final class ZLinkJavaRequestCompletionCostTest {
             request.completion.whenComplete(
                     (ignored, failure) -> callerTerminals.incrementAndGet());
             assertTrue(request.completion.cancel(false));
-            fixture.cancellationReached.get(1, TimeUnit.SECONDS);
+            var cancellation =
+                    request.completion
+                            .handle((ignored, failure) -> failure)
+                            .get(1, TimeUnit.SECONDS);
+            assertInstanceOf(java.util.concurrent.CancellationException.class, cancellation);
+            assertEquals(0, fixture.operations.pendingCount());
+            assertFalse(request.pending.reply.isDone());
+            assertFalse(request.pending.reply.isCancelled());
             var late = Message.from(new byte[] {2});
             assertTrue(request.pending.reply.complete(List.of(late)));
             assertTrue(request.completion.isCancelled());
+            assertSame(
+                    cancellation,
+                    request.completion
+                            .handle((ignored, failure) -> failure)
+                            .get(1, TimeUnit.SECONDS));
             assertEquals(1, callerTerminals.get());
             assertEquals(1, fixture.submits.get());
-            assertTrue(fixture.terminals.get() <= 1);
-            assertTrue(fixture.decodes.get() <= 1);
-            assertEquals(fixture.decodes.get(), fixture.discards.get());
+            assertEquals(1, fixture.terminals.get());
+            assertEquals(1, fixture.decodes.get());
+            assertEquals(1, fixture.discards.get());
             assertEquals(0, late.size());
             assertEquals(0, fixture.operations.pendingCount());
         }
@@ -481,11 +492,23 @@ public final class ZLinkJavaRequestCompletionCostTest {
         try (var fixture = new Fixture(true)) {
             var request = fixture.submitStandalone(TIMEOUT);
             assertTrue(request.completion.cancel(false));
-            fixture.cancellationReached.get(1, TimeUnit.SECONDS);
+            var cancellation =
+                    request.completion
+                            .handle((ignored, failure) -> failure)
+                            .get(1, TimeUnit.SECONDS);
+            assertInstanceOf(java.util.concurrent.CancellationException.class, cancellation);
+            assertEquals(0, fixture.operations.pendingCount());
+            assertFalse(request.pending.reply.isDone());
+            assertFalse(request.pending.reply.isCancelled());
             request.pending.admitted.complete(null);
             var reply = Message.from(new byte[] {2});
-            request.pending.reply.complete(List.of(reply));
+            assertTrue(request.pending.reply.complete(List.of(reply)));
             assertTrue(request.completion.isCancelled());
+            assertSame(
+                    cancellation,
+                    request.completion
+                            .handle((ignored, failure) -> failure)
+                            .get(1, TimeUnit.SECONDS));
             assertEquals(1, fixture.decodes.get());
             assertEquals(1, fixture.discards.get());
             assertEquals(0, reply.size());
@@ -531,7 +554,6 @@ public final class ZLinkJavaRequestCompletionCostTest {
         private final AtomicInteger decodes = new AtomicInteger();
         private final AtomicInteger discards = new AtomicInteger();
         private final AtomicReference<Pending> pending = new AtomicReference<>();
-        private final CompletableFuture<Void> cancellationReached = new CompletableFuture<>();
         private final ZLinkStateLane operationLane = new ZLinkStateLane();
         private final ZLinkServiceOperationRegistry operations =
                 new ZLinkServiceOperationRegistry(
@@ -627,18 +649,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
 
         private Submitted submit() throws Exception {
             var admission = new CompletableFuture<Void>();
-            var next =
-                    new Pending(
-                            new CompletableFuture<>(),
-                            new CompletableFuture<>() {
-                                // This fixture keeps the binding operation active after caller
-                                // cancellation.
-                                @Override
-                                public boolean cancel(boolean interrupt) {
-                                    cancellationReached.complete(null);
-                                    return false;
-                                }
-                            });
+            var next = new Pending(new CompletableFuture<>(), new CompletableFuture<>());
             pending.set(next);
             if (!backpressured) next.admitted.complete(null);
             var message = Message.from(new byte[] {1});
@@ -670,16 +681,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
         }
 
         private Submitted submitStandalone(Duration timeout) {
-            var next =
-                    new Pending(
-                            new CompletableFuture<>(),
-                            new CompletableFuture<>() {
-                                @Override
-                                public boolean cancel(boolean interrupt) {
-                                    cancellationReached.complete(null);
-                                    return false;
-                                }
-                            });
+            var next = new Pending(new CompletableFuture<>(), new CompletableFuture<>());
             pending.set(next);
             var admission = new CompletableFuture<Void>();
             var result =

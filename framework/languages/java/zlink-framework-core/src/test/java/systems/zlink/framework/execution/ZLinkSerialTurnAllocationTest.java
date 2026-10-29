@@ -4,7 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import jdk.jfr.Event;
+import jdk.jfr.EventType;
+import jdk.jfr.Name;
 import jdk.jfr.Recording;
+import jdk.jfr.consumer.RecordedEvent;
 import jdk.jfr.consumer.RecordingFile;
 
 import org.junit.jupiter.api.Test;
@@ -18,10 +22,14 @@ import java.util.concurrent.CompletableFuture;
 
 public final class ZLinkSerialTurnAllocationTest {
     private static final int UNFILTERED_DISPATCHES = 1000;
-    // HEAD440cf6a4fa: 40991 objects / 1584176 bytes over 1000 dispatches.
+    // HEAD440cf6a4fa dispatch loop: 40881 objects / 1580976 bytes over 1000 dispatches.
     // Round each per-dispatch mean to the nearest integer; .5 rounds up (Math.round).
     private static final long EXPECTED_OBJECTS_PER_DISPATCH = 41;
-    private static final long EXPECTED_BYTES_PER_DISPATCH = 1584;
+    private static final long EXPECTED_BYTES_PER_DISPATCH = 1581;
+    private static final String UNFILTERED_WINDOW_EVENT = "systems.zlink.UnfilteredDispatchWindow";
+
+    @Name(UNFILTERED_WINDOW_EVENT)
+    public static final class UnfilteredDispatchWindow extends Event {}
 
     @Test
     void synchronousTurnsAllocateOnlyTheirGateAndCompletionObserver() throws Exception {
@@ -174,14 +182,19 @@ public final class ZLinkSerialTurnAllocationTest {
                 filtered.run();
                 rejected.run();
             }
+            var unfilteredWindow = new UnfilteredDispatchWindow();
+            var unfilteredWindowType = EventType.getEventType(UnfilteredDispatchWindow.class);
             var unfilteredWork =
                     new java.util.concurrent.FutureTask<Void>(
                             () -> {
+                                unfilteredWindow.begin();
                                 for (int i = 0; i < UNFILTERED_DISPATCHES; i++) {
                                     unfiltered.run();
                                     if (args.length != 0 && Boolean.parseBoolean(args[0]))
                                         extraAllocation = new Object();
                                 }
+                                unfilteredWindow.end();
+                                unfilteredWindow.commit();
                                 return null;
                             });
             var filteredWork =
@@ -203,6 +216,10 @@ public final class ZLinkSerialTurnAllocationTest {
                 for (int i = 0; i < 20; i++) runTurn(queue, executor, completed);
                 queue.awaitQuiescence().toCompletableFuture().join();
                 recording.enable("jdk.ObjectAllocationOutsideTLAB").withStackTrace();
+                recording
+                        .enable(unfilteredWindowType.getName())
+                        .withThreshold(java.time.Duration.ZERO)
+                        .withoutStackTrace();
                 recording.start();
                 for (int i = 0; i < 1000; i++) observeCompleted(completed);
                 for (int i = 0; i < 1000; i++) runTurn(queue, executor, completed);
@@ -221,6 +238,26 @@ public final class ZLinkSerialTurnAllocationTest {
             } finally {
                 queue.close();
             }
+            RecordedEvent dispatchWindow = null;
+            try (var events = new RecordingFile(recordingPath)) {
+                while (events.hasMoreEvents()) {
+                    var event = events.readEvent();
+                    if (event.getEventType().getName().equals(UNFILTERED_WINDOW_EVENT)) {
+                        assertTrue(
+                                dispatchWindow == null,
+                                "one unfiltered dispatch window is required");
+                        assertEquals(
+                                unfilteredThread.threadId(),
+                                event.getThread().getJavaThreadId(),
+                                "the dispatch thread must own the measurement window");
+                        dispatchWindow = event;
+                    }
+                }
+            }
+            assertTrue(dispatchWindow != null, "the unfiltered dispatch window must be recorded");
+            assertTrue(
+                    dispatchWindow.getEndTime().isAfter(dispatchWindow.getStartTime()),
+                    "the dispatch window must have a positive duration");
             long futures = 0;
             long baseline = 0;
             long actions = 0;
@@ -245,8 +282,11 @@ public final class ZLinkSerialTurnAllocationTest {
                     String allocatedClass = event.getClass("objectClass").getName();
                     if (event.getThread("eventThread").getJavaThreadId()
                             == unfilteredThread.threadId()) {
-                        unfilteredObjects++;
-                        unfilteredTotalBytes += event.getLong("allocationSize");
+                        if (!event.getStartTime().isBefore(dispatchWindow.getStartTime())
+                                && !event.getStartTime().isAfter(dispatchWindow.getEndTime())) {
+                            unfilteredObjects++;
+                            unfilteredTotalBytes += event.getLong("allocationSize");
+                        }
                         if (allocatedClass.equals(
                                         "systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner")
                                 || allocatedClass.equals("java.util.LinkedHashMap")
@@ -453,7 +493,8 @@ public final class ZLinkSerialTurnAllocationTest {
                             assertEquals(
                                     0,
                                     singleActivations,
-                                    "successful unfiltered dispatch needs no lease or release record"),
+                                    "successful unfiltered dispatch needs no lease or release"
+                                            + " record"),
                     () ->
                             assertEquals(
                                     1000,
@@ -473,8 +514,8 @@ public final class ZLinkSerialTurnAllocationTest {
                             assertEquals(
                                     2000,
                                     channelActions,
-                                    "unfiltered dispatch only needs reply mapping and terminal scope"
-                                            + " cleanup actions"),
+                                    "unfiltered dispatch only needs reply mapping and terminal"
+                                            + " scope cleanup actions"),
                     () ->
                             assertEquals(
                                     1000,

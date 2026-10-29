@@ -76,7 +76,6 @@ final class ZLinkJavaRawMeshNodeLocalSubmissionTest {
                                 descriptor,
                                 null,
                                 Map.of(),
-                                Map.of(),
                                 Runnable::run);
                 var packet = Message.from("packet");
                 var body = Message.from("payload")) {
