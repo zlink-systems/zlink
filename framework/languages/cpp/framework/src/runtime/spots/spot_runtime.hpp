@@ -1880,6 +1880,7 @@ class spot_node_runtime_t
     // Runs a remote User Spot Close (command 48) for the local owner activation.
     void close_user_spot_owner (const std::string &spot_id,
                                 std::uint64_t object_generation,
+                                std::chrono::system_clock::time_point deadline,
                                 service::spot_close_begin_t begin,
                                 service::spot_close_done_t done);
     bool close_all_user_spots (std::chrono::steady_clock::time_point deadline_at,
