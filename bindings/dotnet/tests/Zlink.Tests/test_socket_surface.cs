@@ -9,6 +9,27 @@ public sealed class test_socket_surface
         type.GetMethods(BindingFlags.Instance | BindingFlags.Public);
 
     [Fact]
+    public void connection_attempt_snapshot_belongs_to_connectable_sockets_only()
+    {
+        MethodInfo method = typeof(IConnectableSocket).GetMethod(
+            nameof(IConnectableSocket.ConnectionAttemptsSnapshot))!;
+        Assert.Equal(typeof(IReadOnlyList<ConnectionAttempt>), method.ReturnType);
+        Assert.Empty(method.GetParameters());
+        foreach (Type type in new[] { typeof(IPairSocket), typeof(IDealerSocket),
+                     typeof(IPubSocket), typeof(ISubSocket), typeof(IXPubSocket),
+                     typeof(IXSubSocket), typeof(IRouterSocket) })
+            Assert.True(typeof(IConnectableSocket).IsAssignableFrom(type));
+        Assert.False(typeof(IConnectableSocket).IsAssignableFrom(typeof(IStreamSocket)));
+        Assert.Null(typeof(ISocket).GetMethod(method.Name));
+        Assert.Null(typeof(IStreamSocket).GetMethod(method.Name));
+        Assert.Equal(typeof(ulong), typeof(ConnectionAttempt).GetProperty(nameof(ConnectionAttempt.IntentId))!.PropertyType);
+        Assert.Equal(typeof(ulong), typeof(ConnectionAttempt).GetProperty(nameof(ConnectionAttempt.Revision))!.PropertyType);
+        Assert.Equal(typeof(ulong), typeof(ConnectionAttempt).GetProperty(nameof(ConnectionAttempt.LastFailureId))!.PropertyType);
+        Assert.Equal(typeof(int), typeof(ConnectionFailure).GetProperty(nameof(ConnectionFailure.NormalizedErrno))!.PropertyType);
+        Assert.Equal(typeof(uint), typeof(ConnectionFailure).GetProperty(nameof(ConnectionFailure.DisconnectReason))!.PropertyType);
+    }
+
+    [Fact]
     public void send_and_request_expose_contract_b_terminals()
     {
         Assert.Equal(typeof(SendOperation),

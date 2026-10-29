@@ -103,6 +103,14 @@ public interface ISocket : IZlinkSocket, IDisposable, IAsyncDisposable
 public interface IConnectableSocket : ISocket
 {
     /// <summary>
+    ///     Returns one row per outbound connect intent, including retained failures.
+    ///     Keep one snapshot and PollConnect observer per socket. A successful
+    ///     snapshot clears readiness for the changes it reflects. Failed attempts
+    ///     are normal data; only query errors use the existing config error contract.
+    /// </summary>
+    IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot();
+
+    /// <summary>
     ///     Connects to a remote transport address (for example
     ///     <c>tcp://host:5555</c>). Connection is asynchronous; this returns before
     ///     the peer is reachable.

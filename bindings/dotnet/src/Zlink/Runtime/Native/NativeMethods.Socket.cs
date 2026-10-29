@@ -33,6 +33,13 @@ internal static partial class NativeMethods
     internal static extern int zlink_disconnect_rid(IntPtr socket,
         ref ZlinkRoutingId peerRoutingId);
 
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl,
+        SetLastError = true)]
+    internal static extern unsafe int zlink_socket_connection_attempts_snapshot(
+        IntPtr socket, ZlinkConnectionAttempt* attempts, nuint capacity,
+        out nuint attemptCount, byte* endpointBytes, nuint endpointBytesCapacity,
+        out nuint endpointBytesRequired);
+
     [LibraryImport(LibraryName, SetLastError = true)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static unsafe partial int zlink_send(IntPtr socket,

@@ -6,6 +6,11 @@ namespace Systems.Zlink;
 
 internal static class SocketConnectionOperations
 {
+    internal static IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot(SocketKernel kernel)
+    {
+        return kernel.ConnectionAttemptsSnapshot();
+    }
+
     internal static void Connect(SocketKernel kernel, string address)
     {
         kernel.Connect(address);

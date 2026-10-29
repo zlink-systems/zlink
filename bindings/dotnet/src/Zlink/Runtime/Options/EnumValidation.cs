@@ -11,7 +11,8 @@ internal static class EnumValidation
                                                    | PollEventFlags.PollErr
                                                    | PollEventFlags.PollPri
                                                    | PollEventFlags.PollCompletion
-                                                   | PollEventFlags.PollRoute;
+                                                   | PollEventFlags.PollRoute
+                                                   | PollEventFlags.PollConnect;
 
     internal static void EnsureContextOption(ContextOption option,
         string paramName)
