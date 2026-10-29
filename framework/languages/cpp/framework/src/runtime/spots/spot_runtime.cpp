@@ -13931,6 +13931,7 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id,
 
 void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
                                                  std::uint64_t object_generation,
+                                                 std::chrono::system_clock::time_point deadline,
                                                  service::spot_close_begin_t begin,
                                                  service::spot_close_done_t done)
 {
@@ -13944,7 +13945,8 @@ void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
                    })
                    .get ();
     if (state) {
-        state->request_close (std::move (begin), std::move (done));
+        state->request_close (std::move (begin), std::move (done),
+                              spot_close_reason_t::explicit_close, deadline);
         return;
     }
     // 해당 generation의 local activation이 없으면 기존 authority owner가
