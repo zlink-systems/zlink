@@ -9,7 +9,7 @@ namespace Zlink.Framework.UnitTests;
 // Spec 30 §14 step 1 (D-097): the mesh node follows the host's shutdown
 // admission seal. After the seal it neither starts nor accepts peer admission,
 // already-admitted peers still receive the Draining Update, and peer loss
-// (transport disconnect, liveness expiry, failed control send) never undoes
+// (transport disconnect or liveness expiry) never undoes
 // the published Draining. Service-wire §5: a repeated Hello/Admit that carries
 // the current descriptor is idempotent - it completes the admission again
 // without re-admitting the peer or resetting its descriptor/liveness epoch.
@@ -598,8 +598,8 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.True(entries.Sum(entry => entry.LinkReads) <= 2 * entries.Length);
         // Control input: traversing the old entries for each registration must exceed the linear bound.
         for (var i = 0; i < entries.Length; i++)
-        for (var at = 0; at < i; at++)
-            _ = entries[at].DeadlineNext;
+            for (var at = 0; at < i; at++)
+                _ = entries[at].DeadlineNext;
         Assert.True(entries.Sum(entry => entry.LinkReads) > 2 * entries.Length);
         output.WriteLine(
             "concurrent_pending=1000 registration_index_traversals=0 traversal_control_rejected=true"
@@ -1569,7 +1569,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         internal void ReceiveChunks()
         {
             using var chunk = Received.Create();
-            for (var ordinal = 0; ordinal < _payload.ChunkCount; )
+            for (var ordinal = 0; ordinal < _payload.ChunkCount;)
             {
                 Assert.True(_server.Recv(chunk));
                 if (
@@ -1715,10 +1715,15 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         }
     }
 
-    private sealed class CanonicalRequestPoller(IPoller inner) : IPoller
+    internal sealed class CanonicalRequestPoller(
+        IPoller inner,
+        Func<IZlinkSocket, IZlinkSocket>? mapSocket = null
+    ) : IPoller
     {
-        private static IZlinkSocket Native(IZlinkSocket socket) =>
-            socket is CanonicalRequestContext.CountingRouter router ? router.Native : socket;
+        private IZlinkSocket Native(IZlinkSocket socket) =>
+            mapSocket is not null
+                ? mapSocket(socket)
+                : socket is CanonicalRequestContext.CountingRouter router ? router.Native : socket;
 
         public int Size => inner.Size;
 
@@ -2036,33 +2041,48 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
-    public async Task FailedAdmitSend_KeepsConfiguredNotRequiredPeer()
+    public async Task SelectedRouteLoss_KeepsConfiguredNotRequiredPeer()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, MeshName);
-        var rid = RoutingId.From("not-required-send-failure");
-        const ulong routeGeneration = 17;
-        node.ConnectPeer("tcp://127.0.0.1:20002", rid);
-        var peer = new ZLinkMeshPeer(999)
+        node.SetRoutingId(RoutingId.From("not-required-route-owner"));
+        node.SetObjectRole(ZLinkMeshNodeObjectRole.Client);
+        node.SetBind(EphemeralTcpEndpoint);
+        node.Start();
+        var rid = RoutingId.From("not-required-route-peer");
+        ulong intent;
+        using (var peer = context.CreateDealerSocket())
         {
-            RoutingId = rid,
-            PhysicalRoutingId = rid,
-            RouteGeneration = routeGeneration,
-            State = MeshPeerState.NotRequired,
-        };
-        const System.Reflection.BindingFlags Private =
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
-        var index =
-            (Dictionary<RoutingId, ZLinkMeshPeer>)
-                typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
-        index.Add(rid, peer);
-        typeof(ZLinkManagedMeshNode)
-            .GetMethod("ClosePeerAfterControlSendFailure", Private)!
-            .Invoke(node, [rid, routeGeneration]);
-
-        Assert.Equal(MeshPeerState.NotRequired, peer.State);
-        Assert.True(index.ContainsKey(rid));
-        Assert.Equal(0UL, peer.RouteGeneration);
+            peer.SetRoutingId(rid);
+            peer.Bind(EphemeralTcpEndpoint);
+            var endpoint = peer.Options.LastEndpoint;
+            intent = node.ConnectPeer(endpoint, rid);
+            Assert.Equal(ServiceWireConstants.Command.Hello, await ReceiveAdmissionCommandAsync(peer));
+            await SendAsync(
+                peer,
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Hello,
+                    MeshName,
+                    endpoint,
+                    7,
+                    1,
+                    new Dictionary<string, uint>(),
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Client
+                )
+            );
+            await ReceiveAdmitAsync(peer);
+            await WaitUntilAsync(() =>
+                node.Peers().Any(candidate => candidate.State == MeshPeerState.NotRequired)
+            );
+            Assert.NotEqual(0UL, node.ObservePeerRoute(rid).SelectedGeneration);
+            Assert.Equal(intent, Assert.Single(node.Peers()).ConnectionIntentId);
+        }
+        await WaitUntilAsync(() => node.ObservePeerRoute(rid).SelectedGeneration == 0);
+        var retained = Assert.Single(node.Peers());
+        Assert.Equal(rid, retained.RoutingId);
+        Assert.Equal(intent, retained.ConnectionIntentId);
+        Assert.Equal(MeshPeerState.NotRequired, retained.State);
+        Assert.Equal(0U, node.Status().AdmittedPeerCount);
     }
 
     [Fact]

@@ -13574,43 +13574,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        catch (ObjectDisposedException)
-        {
-            ClosePeerAfterControlSendFailure(target, routeGeneration);
-        }
-        catch (ZlinkSubmitException submit)
-            when (submit.Result != ZlinkSubmitException.ErrorCode.NotConnected
-                && submit.Result != ZlinkSubmitException.ErrorCode.NotFound
-                && submit.Result != ZlinkSubmitException.ErrorCode.Terminated
-            )
-        {
-            //  Spec 13-mesh-node:331 (condition 3) — only route/lifecycle
-            //  terminal evidence ("the previous pipe has ended") may demote
-            //  the peer epoch. Backpressure (queue/HWM/submit timeout),
-            //  NotAdmitted (a LIVE route rejecting admission, e.g. zero
-            //  weight), and caller-contract or internal submit failures are
-            //  not that evidence: keep the admission/liveness generation
-            //  fence intact and let the admission retry pump try again.
-            //  NotConnected/NotFound/Terminated fall through to the demotion
-            //  below.
-        }
-        catch (ZlinkSubmitException)
-        {
-            //  Only the route/lifecycle-terminal submit codes reach here
-            //  (NotConnected/NotFound/Terminated — everything else was
-            //  consumed above): terminal evidence, demote the epoch.
-            ClosePeerAfterControlSendFailure(target, routeGeneration);
-        }
-        catch (ZlinkException)
-        {
-            //  Spec 13-mesh-node:331 (condition 3) — non-submit failures on
-            //  this path (ZlinkConfigException from native message
-            //  allocation/copy, ZlinkHandlerException from lazy routed-
-            //  admission handler registration) are local configuration/
-            //  allocation faults, not confirmation that the previous peer
-            //  pipe ended. Keep the admission/liveness generation fence
-            //  intact; the admission retry pump owns the retry.
-        }
+        catch (ObjectDisposedException) { }
+        catch (ZlinkException) { }
         return false;
     }
 
@@ -13624,33 +13589,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         internal ZLinkServiceWireCodec.AdmissionRecord? HelloDescriptor { get; set; }
         internal byte[]? Pending { get; set; }
-    }
-
-    private void ClosePeerAfterControlSendFailure(
-        RoutingId physicalRoutingId,
-        ulong routeGeneration
-    )
-    {
-        var publishClosed = false;
-        RoutingId closedRid = default;
-        RunState(() =>
-        {
-            var peer = _peersByRid.GetValueOrDefault(physicalRoutingId);
-            if (peer?.RouteGeneration != routeGeneration)
-                return;
-            // Route loss and control-send failure end the same admission epoch.
-            // Only the matching Core route generation may be retired.
-            var ended = EndRouteAdmissionUnderLock(
-                new RouterRoute(physicalRoutingId, routeGeneration)
-            );
-            if (ended is { } rid)
-            {
-                publishClosed = true;
-                closedRid = rid;
-            }
-        });
-        if (publishClosed)
-            Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
     }
 
     private bool TryScheduleRoutedSend(

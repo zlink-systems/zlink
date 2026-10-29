@@ -1,12 +1,142 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed partial class StatefulServiceRuntimeTests
 {
+    [Fact]
+    public Task ControlSendNotConnected_KeepsAdmissionUntilSelectedRouteEnds() =>
+        VerifyControlSendFailureAsync(
+            ZlinkSubmitException.ErrorCode.NotConnected,
+            nameof(ControlSendNotConnected_KeepsAdmissionUntilSelectedRouteEnds)
+        );
+
+    [Fact]
+    public Task ControlSendNotFound_KeepsAdmissionUntilSelectedRouteEnds() =>
+        VerifyControlSendFailureAsync(
+            ZlinkSubmitException.ErrorCode.NotFound,
+            nameof(ControlSendNotFound_KeepsAdmissionUntilSelectedRouteEnds)
+        );
+
+    [Fact]
+    public Task ControlSendTerminated_KeepsAdmissionUntilSelectedRouteEnds() =>
+        VerifyControlSendFailureAsync(
+            ZlinkSubmitException.ErrorCode.Terminated,
+            nameof(ControlSendTerminated_KeepsAdmissionUntilSelectedRouteEnds)
+        );
+
+    private static async Task VerifyControlSendFailureAsync(
+        ZlinkSubmitException.ErrorCode result,
+        string methodName
+    )
+    {
+        if (await IsolatedTestProcess.RunIsolatedAsync(typeof(StatefulServiceRuntimeTests), methodName))
+            return;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        Exception? failure = null;
+        var failed = 0;
+        var scheduler = new ControlFailureTaskScheduler();
+        var captured = new CapturingMeshSocketContext(context)
+        {
+            BeforeSend = () =>
+            {
+                if (Interlocked.Exchange(ref failure, null) is not { } error)
+                    return;
+                Interlocked.Increment(ref failed);
+                scheduler.MarkFailedTurn();
+                throw error;
+            },
+        };
+        await using var owner = new ZLinkManagedMeshNode(
+            captured,
+            "mesh",
+            routedSubmitScheduler: scheduler,
+            receivePollerFactory: () => new MeshNodeShutdownSealTests.CanonicalRequestPoller(
+                Systems.Zlink.Zlink.CreatePoller(),
+                socket => socket is CapturingMeshSocketContext.CapturingRouterSocketProxy proxy
+                    ? proxy.Native
+                    : socket
+            )
+        );
+        owner.SetRoutingId(RoutingId.From("control-failure-owner"));
+        owner.SetBind("tcp://127.0.0.1:0");
+        owner.Start();
+        using var peer = context.CreateDealerSocket();
+        var rid = RoutingId.From("control-failure-peer");
+        const string peerEndpoint = "inproc://control-failure-peer";
+        peer.SetRoutingId(rid);
+        peer.Connect(Assert.IsType<string>(owner.Status().LocalEndpoint));
+        using (var hello = Message.From(
+            ZLinkServiceWireCodec.EncodeRouteAdmission(
+                ServiceWireConstants.Command.Hello,
+                "mesh",
+                peerEndpoint,
+                7,
+                1,
+                new Dictionary<string, uint>(),
+                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+            )
+        ))
+            await peer.Send().Message(hello).Async().EnsureAcceptedAsync();
+        using var admission = await RawMeshPeerAdmission.CompleteAsync(
+            peer,
+            "mesh",
+            peerEndpoint,
+            7
+        );
+        await ObserveAsync(() => owner.Status().AdmittedPeerCount == 1);
+        var generation = owner.ObservePeerRoute(rid).ReadyGeneration;
+        Assert.NotEqual(0UL, generation);
+        Interlocked.Exchange(ref failure, new ZlinkSubmitException(result));
+        using (var probe = Message.From(
+            ZLinkServiceWireCodec.EncodeLiveness(ServiceWireConstants.Command.LivenessProbe, 1)
+        ))
+            await peer.Send().Message(probe).Async().EnsureAcceptedAsync();
+        // The scheduler signals after the throwing send and its synchronous catch finish.
+        await scheduler.FailedTurn.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, Volatile.Read(ref failed));
+        Assert.Equal(1U, owner.Status().AdmittedPeerCount);
+        Assert.Equal(generation, owner.ObservePeerRoute(rid).ReadyGeneration);
+        Assert.Equal(MeshPeerState.Admitted, Assert.Single(owner.Peers()).State);
+
+        // Physical route removal is independently observed by the existing receive owner.
+        captured.Router!.DisconnectRid(rid);
+        await ObserveAsync(() => owner.Status().AdmittedPeerCount == 0);
+        Assert.Equal(0UL, owner.ObservePeerRoute(rid).ReadyGeneration);
+        Assert.NotEqual(MeshNodeState.Error, owner.Status().State);
+    }
+
+    private sealed class ControlFailureTaskScheduler : TaskScheduler
+    {
+        private readonly TaskCompletionSource _completed = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private Task? _executingTask;
+        private Task? _failedTask;
+
+        internal Task FailedTurn => _completed.Task;
+
+        internal void MarkFailedTurn() =>
+            Volatile.Write(ref _failedTask, Volatile.Read(ref _executingTask));
+
+        protected override IEnumerable<Task> GetScheduledTasks() => [];
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+
+        protected override void QueueTask(Task task) =>
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                Volatile.Write(ref _executingTask, task);
+                TryExecuteTask(task);
+                if (ReferenceEquals(Volatile.Read(ref _failedTask), task))
+                    _completed.TrySetResult();
+            });
+    }
+
     [Fact]
     public async Task LivenessDisconnect_NonNotFoundBindingFailureIsExposed()
     {
