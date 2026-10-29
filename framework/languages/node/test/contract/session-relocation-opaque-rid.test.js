@@ -91,17 +91,26 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   );
   if (nativeBinding) {
     sessionService.lookupActor = (_node, actorId) =>
-      backend.observeStateful(OperationKind.ActorLookup, {
-        id: 100n,
-        promise: Promise.resolve({
-          terminalResult: RequestResult.Ok,
-          failureCode: 0,
-          kindData: {
-            kind: 'actorLookupCompletion',
-            location: { actor: { actorId, generation: 5n, nodeRid: ids.source } }
+      backend.observeStateful(
+        OperationKind.ActorLookup,
+        Object.assign(
+          Object.create(
+            new (require('../../packages/framework/dist/runtime/foundation/operation-registry').OperationRegistry)().register(
+              1000
+            )
+          ),
+          {
+            promise: Promise.resolve({
+              terminalResult: RequestResult.Ok,
+              failureCode: 0,
+              kindData: {
+                kind: 'actorLookupCompletion',
+                location: { actor: { actorId, generation: 5n, nodeRid: ids.source } }
+              }
+            })
           }
-        })
-      });
+        )
+      );
   }
   const context = host.streamBindingRuntime.createSessionContext(stream);
   const actorId = hooks.actorId ?? 'opaque-relocation-actor';
@@ -527,6 +536,7 @@ for (const peerOrder of ['none', 'before failure', 'after failure']) {
       },
       abortRelocation() {
         events.push('spot:abort');
+        return true;
       }
     };
     const runtime = new ZLinkHostServiceRelocationRuntime({
@@ -1102,7 +1112,7 @@ test('aggregate reaches coordinator with both Actors and membership but only the
     spotId: 'spot',
     serial: new ZLinkSpotSerialTurnExecutor(),
     captureRelocation: async () => ({ timers: [] }),
-    abortRelocation() {}
+    abortRelocation() { return true; }
   };
   const states = [closed, live].map((h) => ({
     meshName: 'mesh',

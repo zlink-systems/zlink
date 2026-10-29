@@ -1,7 +1,5 @@
 'use strict';
 
-const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
-
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
@@ -14,6 +12,7 @@ const framework = require('../../packages/framework/dist/internal');
 // reachable from its reply reactions; only the submit operation uses them.
 function fixture(surface) {
   const submitted = [];
+  const controller = new AbortController();
   const node = {
     requestToNode(_target, parts) {
       submitted.push(new WeakRef(parts));
@@ -25,24 +24,46 @@ function fixture(surface) {
     }
   };
   // The reply never arrives during the test: the request stays pending.
-  const table = { submit(operation, _signal, entry) { operation(entry); return entry; } };
+  const table = { submit(operation) { operation(); return new Promise(() => {}); } };
   const transport = new framework.ZLinkRuntimeRouteTransport(
     () => undefined, undefined,
     () => ({ meshNode: () => node, meshCompletionTable: () => table }),
     undefined, undefined, undefined, undefined, () => false
   );
-  const request = () => surface === 'node'
-    ? transport.request(new ZLinkRequestResult(), 'mesh', 'peer', 'Packet', { body: 'x'.repeat(1024) }, 1000)
-    : transport.requestToChannel(new ZLinkRequestResult(), 'mesh', 'channel', 'Packet', { body: 'x'.repeat(1024) }, 1000);
-  return { submitted, request };
+  const request = () =>
+    surface === 'node'
+      ? transport.request(
+          'mesh',
+          'peer',
+          'Packet',
+          { body: 'x'.repeat(1024) },
+          1000,
+          controller.signal
+        )
+      : transport.requestToChannel(
+          'mesh',
+          'channel',
+          'Packet',
+          { body: 'x'.repeat(1024) },
+          1000,
+          controller.signal
+        );
+  return { submitted, request, controller };
 }
 
 for (const surface of ['node', 'channel']) {
-  test(`pending ${surface} request does not retain its encoded parts`, async t => {
+  test(`pending ${surface} request does not retain its encoded parts`, async (t) => {
     if (runWithGc(t)) return;
     const f = fixture(surface);
     const pending = [];
-    for (let index = 0; index < 8; index++) pending.push(f.request());
+    const cancelled = [];
+    for (let index = 0; index < 8; index++) {
+      const result = f.request();
+      pending.push(result);
+      cancelled.push(
+        assert.rejects(result.pending, (error) => error === f.controller.signal.reason)
+      );
+    }
     assert.equal(f.submitted.length, 8);
     await new Promise(resolve => setImmediate(resolve));
     global.gc();
@@ -51,6 +72,8 @@ for (const surface of ['node', 'channel']) {
     assert.equal(retained, 0);
     // The pending results stay reachable for the whole check.
     assert.equal(pending.length, 8);
+    f.controller.abort(new Error('retention observation completed'));
+    await Promise.all(cancelled);
   });
 }
 

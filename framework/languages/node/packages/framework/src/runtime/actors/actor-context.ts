@@ -147,16 +147,24 @@ export class DefaultZLinkActorContext implements ZLinkActorContext {
   ): Promise<boolean> {
     const requestMessage = encodeJoinRequest(request, this.messageSerializers);
     try {
-      return (
-        await this.requireJoinCoordinator().joinEntrySpot(
-          this.requireActor(),
-          this.state,
-          nodeRid,
-          requestMessage,
-          undefined,
-          signal
-        )
-      ).accepted;
+      const result = await this.requireJoinCoordinator().joinEntrySpot(
+        this.requireActor(),
+        this.state,
+        nodeRid,
+        requestMessage,
+        undefined,
+        signal
+      );
+      try {
+        if (result.sourceCleanup !== undefined) {
+          await result.sourceCleanup();
+          return result.accepted;
+        }
+      } finally {
+        result.reply?.close();
+      }
+      await result.finalizeDeferredJoin?.();
+      return result.accepted;
     } finally {
       requestMessage.close();
     }
@@ -248,7 +256,8 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
               requestMessage,
               remainingJoinTimeout(deadline.atMs),
               deadline.signal,
-              operationId
+              operationId,
+              deadline.atMs
             );
             if (this.turn === undefined) {
               await pendingJoin.catch(() => undefined);
@@ -271,7 +280,8 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
                 requestMessage,
                 remainingJoinTimeout(deadline.atMs),
                 deadline.signal,
-                operationId
+                operationId,
+                deadline.atMs
               );
             result =
               this.turn === undefined
@@ -396,7 +406,8 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
               requestMessage,
               remainingJoinTimeout(deadline.atMs),
               deadline.signal,
-              operationId
+              operationId,
+              deadline.atMs
             );
             if (this.turn === undefined) {
               await pendingJoin.catch(() => undefined);
@@ -419,7 +430,8 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
                 requestMessage,
                 remainingJoinTimeout(deadline.atMs),
                 deadline.signal,
-                operationId
+                operationId,
+                deadline.atMs
               );
             result =
               this.turn === undefined

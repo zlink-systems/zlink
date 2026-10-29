@@ -1,4 +1,3 @@
-const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const { createPublisherRuntime } = require('./fixtures/publisher-runtime');
 'use strict';
 
@@ -368,8 +367,8 @@ test('request failure terminals remain visible at Errors level', () => {
   assert.equal(telemetryRecords[0].attributes.outcome, 'failed');
 });
 
-for (const deliver of [(start) => mapZLinkRequestReply(start(new ZLinkRequestResult())), createZLinkRequest]) {
-test(`node direct request records one source flow with sent and reply terminal (${deliver === createZLinkRequest ? 'submit' : 'yield'})`, async () => {
+for (const deliver of [mapZLinkRequestReply, (result) => createZLinkRequest(() => result)]) {
+test(`node direct request records one source flow with sent and reply terminal (${deliver === mapZLinkRequestReply ? 'yield' : 'submit'})`, async () => {
   const { tracer } = makeTracer(diagnostics('normal'));
   let requestParts;
   let failure = false;
@@ -378,17 +377,15 @@ test(`node direct request records one source flow with sent and reply terminal (
     isObjectClientNodeDirectTarget() { return false; }
   };
   const table = {
-    submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-      operation(resultOwner);
+    submit(operation, _signal, entry, receiver) {
+      operation();
       const header = channelEnvelope.decodeChannelHeader(requestParts.map(part => ZLinkBufferMessage.from(part)));
       const parts = failure
         ? []
         : channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map(part => ZLinkBufferMessage.from(part));
-      return Promise.resolve({ terminalResult: failure ? 101 : 0, failureErrno: 0, parts });
-
-})());
-}
+      queueMicrotask(() => receiver.operationCompleted(entry.id, { terminalResult: failure ? 101 : 0, failureErrno: 0, parts }));
+      return entry.promise;
+    }
   };
   const transport = new ZLinkRuntimeRouteTransport(
     () => undefined, undefined,
@@ -396,7 +393,7 @@ return resultOwner.observe((async () => {
     undefined, undefined, undefined, undefined, () => true, () => tracer
   );
 
-  assert.deepEqual(await deliver((entry) => transport.request(entry, 'mesh', 'target', 'Probe', { value: 1 }, 1000)), { ok: true });
+  assert.deepEqual(await deliver(transport.request('mesh', 'target', 'Probe', { value: 1 }, 1000)), { ok: true });
   assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
   assert.match(telemetryRecords[0].attributes.flow_id, /^[0-9a-f-]{36}$/i);
   assert.match(telemetryRecords[0].attributes.correlation_id, /^[0-9a-f]{32}$/i);
@@ -407,7 +404,7 @@ return resultOwner.observe((async () => {
 
   telemetryRecords.length = 0;
   failure = true;
-  await assert.rejects(() => deliver((entry) => transport.request(entry, 'mesh', 'target', 'Probe', { value: 2 }, 1000)));
+  await assert.rejects(() => deliver(transport.request('mesh', 'target', 'Probe', { value: 2 }, 1000)));
   assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
   assert.equal(telemetryRecords[1].attributes.outcome, 'failed');
   assert.equal(telemetryRecords[0].attributes.flow_id, telemetryRecords[1].attributes.flow_id);
@@ -632,7 +629,7 @@ test('channel request completion owner records one terminal for failure, cancell
 test('channel request completion owner records success and in-flight cancellation once', async () => {
   const successEvents = [];
   const successDealer = {
-    async request(parts) {
+    request: physicalFlowRequest(async function(parts) {
       const messages = parts.map((part) =>
         typeof part.data === 'function' ? part : bindingMessage(part)
       );
@@ -641,7 +638,7 @@ test('channel request completion owner records success and in-flight cancellatio
       return channelEnvelope
         .encodeChannelReplyParts(header, { ok: true })
         .map((part) => (typeof part.data === 'function' ? part : bindingMessage(part)));
-    }
+    })
   };
   const success = new ZLinkChannelOutboundOperations(
     {
@@ -680,10 +677,10 @@ test('channel request completion owner records success and in-flight cancellatio
   const cancelledEvents = [];
   const controller = new AbortController();
   const pendingDealer = {
-    request(parts) {
+    request: physicalFlowRequest(function(parts) {
       channelEnvelope.closeMessages(parts);
       return new Promise(() => {});
-    }
+    })
   };
   const pending = new ZLinkChannelOutboundOperations(
     {
@@ -1632,3 +1629,11 @@ test('MFLOW-WIRE relay JSON writes the spec lowercase flow_origin and decodes it
   legacy.flowOrigin = 'Application';
   assert.equal(boundSessionWire.decodeRemoteBoundSessionSendPayload(legacy).flowOrigin, undefined);
 });
+function physicalFlowRequest(work) {
+ return function (...args) {
+  const entry=args.at(-2),receiver=args.at(-1);
+  void work.apply(this,args).then(value=>receiver.operationCompleted(entry.id,value),error=>receiver.operationFailed(entry.id,error));
+  return entry.promise;
+ };
+}
+

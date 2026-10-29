@@ -1,3 +1,6 @@
+import type { OperationObserver } from '../../foundation/operation-registry';
+import { RequestRuntime } from '../../foundation/request-runtime';
+import type { PendingOperation } from '../../foundation/operation-registry';
 import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../../contracts/Configuration/RegistrationBuilderPolicy';
 import type { Socket } from '@zlink-systems/zlink';
 import type { ZLinkBackendObject } from '../contracts';
@@ -7,6 +10,7 @@ import {
   isContextTerminatedError,
   isRouteRecvRetryable,
   submitBindingRequest,
+  closeBindingReply,
   submitBindingPublish,
   submitBindingReply,
   submitBindingAsyncSend,
@@ -49,11 +53,40 @@ export function wrapSocket<T extends { close(): void }>(
     pollCompletion === undefined
       ? undefined
       : new ZLinkNodeEventLoopPoller(nativeInstance as unknown as Socket, pollCompletion, () => {});
+  const requests = new RequestRuntime();
+  const submitSocketRequest = (
+    operation: ZLinkBindingRequestOperation,
+    payload: unknown,
+    timeoutMs: number | undefined,
+    recordReceived: (() => void) | undefined,
+    onAdmitted: (() => void) | undefined,
+    requestOperation: PendingOperation<unknown> | undefined,
+    receiver: OperationObserver<unknown, unknown> | undefined
+  ): Promise<readonly unknown[]> => {
+    const pending = requests.begin(timeoutMs, undefined, requestOperation);
+    submitBindingRequest(
+      operation,
+      payload,
+      timeoutMs,
+      recordReceived,
+      onAdmitted,
+      pending,
+      receiver ?? {
+        operationCompleted: (_id, parts) => {
+          if (!pending.reply(parts))
+            closeBindingReply(parts as readonly import('@zlink-systems/zlink').Message[]);
+        },
+        operationFailed: (_id, error) => pending.replyFailure(error)
+      }
+    );
+    return pending.promise as Promise<readonly unknown[]>;
+  };
   const adapter = {
     nativeInstance,
     receiveAdmission: undefined as
       import('../../foundation/service-liveness-registry').ServiceLivenessConnection | undefined,
     async dispose(): Promise<void> {
+      requests.close();
       eventLoopPoller?.dispose();
       closeBindingHandle(nativeInstance);
     },
@@ -208,34 +241,42 @@ export function wrapSocket<T extends { close(): void }>(
     },
     request(...args: unknown[]): unknown {
       if (hasRoutedPeer) {
-        const [routingId, payload, timeoutMs, onAdmitted] = args as [
+        const [routingId, payload, timeoutMs, onAdmitted, requestOperation, receiver] = args as [
           unknown,
           unknown,
           number | undefined,
-          (() => void) | undefined
+          (() => void) | undefined,
+          PendingOperation<unknown> | undefined,
+          OperationObserver<unknown, unknown> | undefined
         ];
-        return submitBindingRequest(
+        return submitSocketRequest(
           (
             nativeInstance as T & { request(routingId: unknown): ZLinkBindingRequestOperation }
           ).request(toNativeRoutingId(routingId)),
           payload,
           timeoutMs,
           undefined,
-          onAdmitted
+          onAdmitted,
+          requestOperation,
+          receiver
         );
       }
       if (hasRequest) {
-        const [payload, timeoutMs, onAdmitted] = args as [
+        const [payload, timeoutMs, onAdmitted, requestOperation, receiver] = args as [
           unknown,
           number | undefined,
-          (() => void) | undefined
+          (() => void) | undefined,
+          PendingOperation<unknown> | undefined,
+          OperationObserver<unknown, unknown> | undefined
         ];
-        return submitBindingRequest(
+        return submitSocketRequest(
           (nativeInstance as T & { request(): ZLinkBindingRequestOperation }).request(),
           payload,
           timeoutMs,
           adapter.receiveAdmission?.recordReceived,
-          onAdmitted
+          onAdmitted,
+          requestOperation,
+          receiver
         );
       }
       throw new TypeError('Backend request requires a DEALER or ROUTER socket.');
@@ -315,9 +356,11 @@ export function wrapSocket<T extends { close(): void }>(
       targetSpot: unknown,
       payload: unknown,
       timeoutMs?: number,
-      onAdmitted?: () => void
+      onAdmitted?: () => void,
+      requestOperation?: PendingOperation<unknown>,
+      receiver?: OperationObserver<unknown, unknown>
     ): Promise<readonly unknown[]> {
-      return submitBindingRequest(
+      return submitSocketRequest(
         (
           nativeInstance as T & {
             requestToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingRequestOperation;
@@ -326,7 +369,9 @@ export function wrapSocket<T extends { close(): void }>(
         payload,
         timeoutMs,
         undefined,
-        onAdmitted
+        onAdmitted,
+        requestOperation,
+        receiver
       );
     },
     disconnectPeer(routingId: unknown): void {

@@ -1,3 +1,4 @@
+import type { OperationHandle } from '../foundation/operation-registry';
 import type { SubmitResult } from './runtime-values';
 
 export interface ZLinkRawSendSubmission {
@@ -70,7 +71,8 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
     onReply: (parts: readonly Buffer[]) => T,
     onFailed: (error: unknown) => T,
     recordReceived?: () => void,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    existing?: Pick<OperationHandle<unknown>, 'id' | 'deadlineMs'>
   ): Promise<T>;
   receive(dontWait?: boolean): ZLinkRawReceivedRecord | undefined;
   /** The selected route of every RID. The socket's one route observer calls it. */

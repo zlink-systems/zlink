@@ -4,7 +4,10 @@ const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
-const { submitBindingPublish, submitBindingRequest } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+const {
+  submitBindingPublish,
+  submitBindingRequest: submitOwnedBindingRequest
+} = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
 
 const OLD_SEND_TIMEOUT_MULTIPLE_MS = 3100;
 
@@ -94,7 +97,10 @@ test('request budget includes binding outbound admission', async () => {
   } finally { clearTimeout(guard); }
 });
 
-test('backpressured request timeout observes late reply and closes each native message once', async () => {
+test('backpressured request timeout observes late reply and closes each native message once', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   let completeReply;
   let closes = 0;
   const reply = new Promise(resolve => { completeReply = resolve; });
@@ -103,9 +109,26 @@ test('backpressured request timeout observes late reply and closes each native m
     timeout() { return this; },
     submit() { return { result: zlink.SubmitResult.Backpressured, admitted: Promise.resolve(), reply }; }
   };
-  await assert.rejects(submitBindingRequest(operation, Buffer.from('request'), 20),
+  const pending = submitBindingRequest(operation, Buffer.from('request'), 20);
+  now += 20;
+  t.mock.timers.tick(20);
+  await assert.rejects(pending,
     error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
   completeReply([{ close() { closes += 1; } }]);
-  await delay(0);
+  await require('node:timers/promises').setImmediate();
   assert.equal(closes, 1);
 });
+
+function submitBindingRequest(operation, parts, timeoutMs) {
+  const {
+    wrapSocket
+  } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
+  const socket = wrapSocket({
+    request() {
+      return operation;
+    },
+    close() {}
+  });
+  return socket.request(parts, timeoutMs)
+    .finally(() => socket.dispose());
+}

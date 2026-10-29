@@ -1,3 +1,6 @@
+import { RequestRuntime } from '../foundation/request-runtime';
+import type { PendingOperation } from '../foundation/operation-registry';
+import { waitRequestReply } from '../messaging/request-deadline';
 import { mapZLinkRequestReply } from '../messaging/request-result';
 import type { ServiceInstanceColdActivationTarget } from '../foundation/service-stateful-wire-codec';
 import { ZLinkFrameworkException, ZLinkSpotKind, type RoutingId } from '../../contracts';
@@ -53,6 +56,7 @@ import type {
 } from '../spots/spot-routing-internal';
 
 export interface ZLinkHostSpotAddressTransportOptions {
+  readonly requests?: RequestRuntime;
   readonly resolver: () => ZLinkSpotRouteResolver | undefined;
   readonly routed: ZLinkSpotRoutedTransport;
   readonly meshNames: () => readonly string[];
@@ -82,7 +86,10 @@ type MissingTargetSelection =
 
 /** Owns global Spot authority lookup and Missing Instance placement. */
 export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport {
-  constructor(private readonly options: ZLinkHostSpotAddressTransportOptions) {}
+  private readonly requests: RequestRuntime;
+  constructor(private readonly options: ZLinkHostSpotAddressTransportOptions) {
+    this.requests = options.requests ?? new RequestRuntime();
+  }
 
   sendToSpotAddress(
     spotId: RoutingId,
@@ -253,67 +260,76 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     call: ZLinkSpotAddressCallOptions
   ): Promise<TReply> {
     const timeoutMs = call.timeoutMs ?? this.options.defaultRequestTimeoutMs;
-    const deadline = createSpotAddressDeadline(timeoutMs, call.signal);
-    try {
-      const resolution = await this.resolveExisting(spotId, deadline.signal, call);
-      const existing = resolution !== undefined && !('kind' in resolution) ? resolution : undefined;
-      if (resolution !== undefined && 'kind' in resolution)
-        call = this.reactivationCall(resolution, call);
-      deadline.requireRemaining();
-      if (existing === undefined) {
-        return await this.requestToMissingInstance(spotId, request, call, deadline, resolution);
-      }
-      this.validateExisting(existing, call);
+    return this.requests.request(timeoutMs, call.signal, async (requestOperation) => {
+      const deadline = createSpotAddressDeadline(requestOperation, call.signal);
       try {
-        return await this.requestToExistingSpot(spotId, request, call, existing, deadline);
+        const resolution = await waitRequestReply(
+          this.resolveExisting(spotId, deadline.signal, call),
+          'Spot address resolve',
+          requestOperation,
+          () => deadline.close()
+        );
+        const existing =
+          resolution !== undefined && !('kind' in resolution) ? resolution : undefined;
+        if (resolution !== undefined && 'kind' in resolution)
+          call = this.reactivationCall(resolution, call);
+        deadline.requireRemaining();
+        if (existing === undefined) {
+          return await this.requestToMissingInstance(spotId, request, call, deadline, resolution);
+        }
+        this.validateExisting(existing, call);
+        try {
+          return await this.requestToExistingSpot(spotId, request, call, existing, deadline);
+        } catch (error) {
+          if (isSpotRouteRefreshError(error)) {
+            this.options.resolver()?.invalidate?.(spotId);
+          }
+          // Failover policy §4.4: SpotMoving is the owner's Ready owner-fence
+          // refusal, made before admission. With Instance intent, one authority
+          // read under the same deadline decides: Missing means Close released
+          // the incarnation, so the request activates a new one. Any other
+          // answer, and any message the owner admitted, keeps this terminal.
+          if (
+            call.instanceSpot &&
+            isOwnerFenceRefusal(error) &&
+            (await waitRequestReply(
+              this.resolveExisting(spotId, deadline.signal),
+              'Spot address resolve',
+              requestOperation,
+              () => deadline.close()
+            )) === undefined
+          ) {
+            deadline.requireRemaining();
+            return await this.requestToMissingInstance(spotId, request, call, deadline);
+          }
+          this.reportInstanceRequestError(
+            spotId,
+            request,
+            error,
+            existing.routerChannelId,
+            existing.targetNodeRid,
+            existing.stableType,
+            addressedInstanceErrorReason(error)
+          );
+          throw error;
+        }
       } catch (error) {
-        if (isSpotRouteRefreshError(error)) {
-          this.options.resolver()?.invalidate?.(spotId);
-        }
-        // Failover policy §4.4: SpotMoving is the owner's Ready owner-fence
-        // refusal, made before admission. With Instance intent, one authority
-        // read under the same deadline decides: Missing means Close released
-        // the incarnation, so the request activates a new one. Any other
-        // answer, and any message the owner admitted, keeps this terminal.
         if (
-          call.instanceSpot &&
-          isOwnerFenceRefusal(error) &&
-          (await this.resolveExisting(spotId, deadline.signal)) === undefined
-        ) {
-          deadline.requireRemaining();
-          return await this.requestToMissingInstance(spotId, request, call, deadline);
-        }
-        this.reportInstanceRequestError(
-          spotId,
-          request,
-          error,
-          existing.routerChannelId,
-          existing.targetNodeRid,
-          existing.stableType,
-          addressedInstanceErrorReason(error)
-        );
-        throw error;
-      }
-    } catch (error) {
-      if (
-        deadline.expired() &&
-        !(
           error instanceof ZLinkFrameworkException &&
-          internalFrameworkErrorKind(error) ===
-            ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-        )
-      ) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-          `Spot request for '${String(spotId)}' exceeded its end-to-end deadline.`,
-          true,
-          error
-        );
+          internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+        ) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+            `Spot request for '${String(spotId)}' exceeded its end-to-end deadline.`,
+            true,
+            error
+          );
+        }
+        throw error;
+      } finally {
+        deadline.close();
       }
-      throw error;
-    } finally {
-      deadline.close();
-    }
+    });
   }
 
   private async requestToExistingSpot<TReply>(
@@ -332,17 +348,20 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       existing.stableType,
       existing.targetNodeRid
     );
-    const reply = await awaitWithAbort(
+    const reply = await waitRequestReply(
       mapZLinkRequestReply(
         this.options.routed.requestToSpot<TReply>(existing, request, {
           instanceSpot: call.instanceSpot,
           timeoutMs: deadline.requireRemaining(),
+          deadlineMs: deadline.deadlineMs,
           signal: deadline.signal,
           metadata: call.metadata,
-          onAdmitted: call.onAdmitted
+          onAdmitted: call.onAdmitted,
+          requestOperation: deadline.operation
         })
       ),
-      deadline.signal
+      'Spot request',
+      deadline.operation
     );
     this.traceInstanceAddress(
       ZLinkMessageFlowOutcome.ReplyReceived,
@@ -421,10 +440,12 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           deadlineUnixMs,
           call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
           call.metadata,
-          call.onAdmitted
+          call.onAdmitted,
+          deadline.operation
         ),
-      deadline.signal
-    ).pending;
+      deadline.signal,
+      deadline.operation
+    );
     this.traceInstanceAddress(
       ZLinkMessageFlowOutcome.Sent,
       ZLinkDispatchMessageKind.Request,
@@ -434,7 +455,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       selected.target.stableType,
       selected.target.targetNodeRid
     );
-    const completion = await awaitWithAbort(completionPromise, deadline.signal);
+    const completion = await completionPromise;
     try {
       if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
         const error = missingInstanceRequestFailure(
@@ -831,41 +852,28 @@ function addressedInstanceErrorReason(error: unknown): ZLinkDispatchErrorReason 
 }
 
 interface ZLinkSpotAddressDeadline {
+  readonly operation: PendingOperation<unknown>;
   readonly deadlineUnixMs: number;
+  readonly deadlineMs: number;
   readonly signal: AbortSignal;
   requireRemaining(): number;
-  expired(): boolean;
   close(): void;
 }
 
 function createSpotAddressDeadline(
-  timeoutMs: number,
+  operation: PendingOperation<unknown>,
   parent?: AbortSignal
 ): ZLinkSpotAddressDeadline {
   const startedAtMs = performance.now();
   const startedAtUnixMs = Date.now();
-  const deadlineMs = startedAtMs + Math.max(0, timeoutMs);
+  const deadlineMs = operation.deadlineMs ?? Number.POSITIVE_INFINITY;
   const controller = new AbortController();
-  let expired = false;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const expire = () => {
-    expired = true;
-    controller.abort();
-  };
-  const arm = () => {
-    if (timeout !== undefined) clearTimeout(timeout);
-    const remainingMs = deadlineMs - performance.now();
-    if (remainingMs <= 0) {
-      expire();
-      return;
-    }
-    timeout = setTimeout(expire, remainingMs);
-  };
-  arm();
   const abort = () => controller.abort(parent?.reason);
   if (parent?.aborted === true) abort();
   else parent?.addEventListener('abort', abort, { once: true });
   return {
+    operation,
+    deadlineMs,
     get deadlineUnixMs() {
       return Math.round(startedAtUnixMs + (deadlineMs - startedAtMs));
     },
@@ -873,7 +881,6 @@ function createSpotAddressDeadline(
     requireRemaining() {
       const remainingMs = deadlineMs - performance.now();
       if (remainingMs <= 0) {
-        expired = true;
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
           'Spot address operation exceeded its end-to-end deadline.',
@@ -882,9 +889,8 @@ function createSpotAddressDeadline(
       }
       return Math.max(1, Math.ceil(remainingMs));
     },
-    expired: () => expired,
     close() {
-      if (timeout !== undefined) clearTimeout(timeout);
+      controller.abort();
       parent?.removeEventListener('abort', abort);
     }
   };

@@ -1,5 +1,5 @@
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
-const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -377,7 +377,7 @@ function contextRef(parts, options = {}) {
   );
 }
 
-function harness(messageFollowDurationMs = 30, requestReply) {
+function harness(messageFollowDurationMs = 30, requestReply, onMessageFollowRelayed) {
   const followed = [];
   const messageFollowPayloads = [];
   const markers = [];
@@ -405,10 +405,10 @@ function harness(messageFollowDurationMs = 30, requestReply) {
       messageFollowPayloads.push(payload);
       followed.push(Buffer.from(payload.payload, 'base64').toString());
     },
-    requestToSpot() { return observeZLinkRequestReply((async () => {
-      if (requestReply !== undefined) return requestReply();
+    requestToSpot(target, payload, options, destination) { return forwardFixtureReply((async () => {
+      if (requestReply !== undefined) return requestReply(target, payload, options);
       return { ok: true };
-    })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
+    })(), options, destination); }
   };
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: transport,
@@ -429,6 +429,7 @@ function harness(messageFollowDurationMs = 30, requestReply) {
       source.nodeRid === replyHostNodeRid &&
       source.nodeRidHex === replyHostNodeRidHex &&
       source.nodeGeneration === replyHostNodeGeneration,
+    onMessageFollowRelayed,
     onMarker: (marker, actorId, index) => markers.push({ marker, actorId, index })
   });
   return {
@@ -714,7 +715,7 @@ test('native ingress for a departed tenure follows that route while a successor 
 test('handoff admission requires committed source and target owner fences', () => {
   let sourceLookupCount = 0;
   const invalidGeneration = new framework.ZLinkActorHandoffCoordinator({
-    routedTransport: { async sendToSpot() {}, requestToSpot() { return observeZLinkRequestReply((async () => {})(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); } },
+    routedTransport: { async sendToSpot() {}, requestToSpot(_target, _payload, options, destination) { return forwardFixtureReply((async () => {})(), options, destination); } },
     requestSource() {
       sourceLookupCount += 1;
       return {
@@ -734,7 +735,7 @@ test('handoff admission requires committed source and target owner fences', () =
   assert.equal(invalidGeneration.isActive('actor-1'), false);
 
   const replacedSource = new framework.ZLinkActorHandoffCoordinator({
-    routedTransport: { async sendToSpot() {}, requestToSpot() { return observeZLinkRequestReply((async () => {})(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); } },
+    routedTransport: { async sendToSpot() {}, requestToSpot(_target, _payload, options, destination) { return forwardFixtureReply((async () => {})(), options, destination); } },
     requestSource: () => ({
       meshName: 'mesh',
       objectGeneration: 2n,
@@ -753,7 +754,7 @@ test('handoff admission requires committed source and target owner fences', () =
   assert.equal(replacedSource.isActive('actor-1'), false);
 
   const missingSource = new framework.ZLinkActorHandoffCoordinator({
-    routedTransport: { async sendToSpot() {}, requestToSpot() { return observeZLinkRequestReply((async () => {})(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); } },
+    routedTransport: { async sendToSpot() {}, requestToSpot(_target, _payload, options, destination) { return forwardFixtureReply((async () => {})(), options, destination); } },
     requestSource() {
       throw new Error('source fence unavailable');
     },
@@ -1555,14 +1556,14 @@ test('Message Follow rejects repeated stale packets that do not carry the origin
   assert.equal(markers.filter((entry) => entry.marker === 'message_follow_rejected').length, 2);
 });
 
-for (const raw of [false, true]) {
-  test(`Message Follow uses a local relay window (raw=${raw})`, async (t) => {
+for (const configured of [false, true]) {
+  test(`Message Follow uses a local relay window (configured=${configured})`, async (t) => {
     t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
     t.mock.method(performance, 'now', () => Date.now());
     const {
       DEFAULT_REQUEST_TIMEOUT_MS
     } = require('../../packages/framework/dist/contracts/Configuration/Registration');
-    const requestTimeoutMs = raw ? DEFAULT_REQUEST_TIMEOUT_MS / 2 : undefined;
+    const requestTimeoutMs = configured ? DEFAULT_REQUEST_TIMEOUT_MS / 2 : undefined;
     const relayWindowMs = requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     const clientTimeoutMs = 80;
     let entered;
@@ -1574,16 +1575,16 @@ for (const raw of [false, true]) {
     const coordinator = new framework.ZLinkActorHandoffCoordinator({
       routedTransport: {
         async sendToSpot() {},
-        [raw ? 'requestRawToSpot' : 'requestToSpot'](_target, payload, options) { const pending = (async () => {
+        requestToSpot(_target, payload, options, destination) { const pending = (async () => {
           requests.push({
-            payload: raw ? JSON.parse(payload.getString('utf8')) : payload,
+            payload,
             options
           });
           return await new Promise((resolve) => {
             completeRelay = resolve;
             entered();
           });
-        })(); return raw ? pending : observeZLinkRequestReply(pending, identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
+        })(); return forwardFixtureReply(pending, options, destination); }
       },
       messageFollowDurationMs: 1_000,
       requestTimeoutMs,
@@ -1662,14 +1663,9 @@ for (const raw of [false, true]) {
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(terminal?.error?.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
     } finally {
-      const late = raw
-        ? zlink.Message.from(JSON.stringify({ ok: true, response: 'late' }))
-        : undefined;
-      const closed = raw ? t.mock.method(late, 'close') : undefined;
-      completeRelay(raw ? [late] : { ok: true, response: 'late' });
+      completeRelay({ ok: true, response: 'late' });
       await observed;
       await new Promise((resolve) => setImmediate(resolve));
-      if (raw) assert.equal(closed.mock.callCount(), 1);
     }
     assert.equal(terminal.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
   });
@@ -1682,10 +1678,10 @@ test('Message Follow admits a request whose client deadline has already expired'
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      requestToSpot() { return observeZLinkRequestReply((async () => {
+      requestToSpot(_target, _payload, options, destination) { return forwardFixtureReply((async () => {
         requests += 1;
         return { ok: true, response: 'reply' };
-      })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
+      })(), options, destination); }
     },
     messageFollowDurationMs: 1_000,
     requestSource: () => ({
@@ -2031,9 +2027,9 @@ test('Message Follow notification suppression retries rejection and marks only a
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      requestToSpot() { return observeZLinkRequestReply((async () => {
+      requestToSpot(_target, _payload, options, destination) { return forwardFixtureReply((async () => {
         return { ok: true };
-      })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
+      })(), options, destination); }
     },
     messageFollowDurationMs: 1_000,
     requestSource: () => ({
@@ -2394,10 +2390,10 @@ test('positive Message Follow request returns one correlated reply and preserves
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      requestToSpot(_target, payload) { return observeZLinkRequestReply((async () => {
+      requestToSpot(_target, payload, options, destination) { return forwardFixtureReply((async () => {
         relays.push(payload);
         return response;
-      })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
+      })(), options, destination); }
     },
     messageFollowDurationMs: 1_000,
     requestSource: () => ({
@@ -2771,9 +2767,9 @@ test('Message Follow keeps opaque node identities that share the same display te
       async sendToSpot(targetRoute, payload) {
         relays.push({ targetNodeRid: String(targetRoute.targetNodeRid), payload });
       },
-      requestToSpot() { return observeZLinkRequestReply((async () => {
+      requestToSpot(_target, _payload, options, destination) { return forwardFixtureReply((async () => {
         return { ok: true };
-      })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
+      })(), options, destination); }
     },
     requestSource: () => source,
     validateReplySource: () => true
@@ -3136,5 +3132,247 @@ for (const phase of ['captured', 'relay']) {
       else releaseRelay({ ok: false, error: 'test terminal' });
       await terminal;
     }
+  });
+}
+
+
+for (const path of ['active backlog', 'Message Follow', 'departed fence']) {
+  for (const withOperation of [false, true]) {
+    for (const terminal of ['reply', 'cancel', 'error']) {
+      test(`handoff request reference: ${path}, entry=${withOperation}, ${terminal}`, async () => {
+        const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+        const runtime = new RequestRuntime();
+        const controller = new AbortController();
+        const cancelReason = new Error('reference cancellation');
+        const operation = runtime.begin(undefined, controller.signal);
+        const expected = { accepted: true };
+        let submitted;
+        const submission = new Promise((resolve) => { submitted = resolve; });
+        let finish;
+        const source = new Promise((resolve) => { finish = resolve; });
+        let observed;
+        const h = harness(undefined, (_target, payload, options) => {
+          observed = { payload, operation: options.requestOperation };
+          submitted();
+          return source;
+        });
+        h.coordinator.begin('actor-1', 1n, 'source-node', 1n, 1n);
+        if (path !== 'active backlog') {
+          h.coordinator.snapshot('actor-1');
+          h.coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+        }
+        if (path === 'departed fence') {
+          h.setCurrentGeneration(1n);
+          h.setCurrentNodeRid('source');
+          h.setCurrentOwner(sourceOwnerFence(3n));
+        }
+        const parts = frame(`reference-${path}-${terminal}`);
+        const ref = contextRef(parts, { request: true, deadlineUnixMs: Date.now() + 10_000 });
+        let captured;
+        const result = runtime.run(operation, (receiver) => {
+          captured = h.coordinator.capture('remote', 'actor-1', parts, true, undefined, ref,
+            undefined, undefined, undefined, undefined, withOperation ? operation : undefined);
+          void captured.then(
+            value => receiver.operationCompleted(operation.id, value, undefined),
+            error => receiver.operationFailed(operation.id, error, undefined)
+          );
+        }, value => value, error => error);
+        const captureOutcome = captured.then(value => ({ value }), error => ({ error }));
+        const outcome = result.then(value => ({ value }), error => ({ error }));
+        try {
+          if (path === 'active backlog') {
+            const [packet] = h.coordinator.snapshot('actor-1');
+            // The existing requestPacket spread omits the non-enumerable reference.
+            assert.equal(Object.hasOwn(packet, 'requestOperation'), false);
+            assert.equal(JSON.stringify(packet).includes('requestOperation'), false);
+            if (terminal === 'cancel') {
+              h.coordinator.cancel('actor-1');
+            } else {
+              const reply = { index: packet.index, ok: terminal === 'reply', response: expected,
+                error: 'reference remote error', errorKind: framework.ZLinkFrameworkInternalErrorKind.ActorMoving };
+              h.coordinator.complete('actor-1', target(), targetActorRef(), [reply], ownerFence('target', 2n));
+              assert.equal(h.coordinator.acceptRelocatedTerminal('actor-1', packet, reply, 'target-node', 2n), 'terminalReceived');
+            }
+          } else {
+            await submission;
+            assert.equal(JSON.stringify(observed.payload).includes('requestOperation'), false);
+            const context = actorRelayWire.decodeRemoteActorPacketRelayPayload(observed.payload).messageFollowContext;
+            assert.equal(context.operationId, '11111111111111111111111111111111');
+            assert.equal(context.replyRouteId, '33333333333333333333333333333333');
+            if (withOperation) assert.strictEqual(observed.operation, operation);
+            if (terminal === 'cancel') controller.abort(cancelReason);
+            finish(terminal === 'error'
+              ? { ok: false, error: 'reference remote error', errorKind: framework.ZLinkFrameworkInternalErrorKind.ActorMoving }
+              : { ok: true, response: expected });
+          }
+          const actual = await outcome;
+          const capture = await captureOutcome;
+          if (terminal === 'reply') {
+            assert.deepEqual(actual, { value: expected });
+            assert.deepEqual(capture, { value: expected });
+          } else {
+            assert.ok(actual.error);
+            assert.notEqual(actual.error.name, 'TypeError');
+            if (terminal === 'cancel') {
+              if (path === 'active backlog') assert.equal(actual.error.message, "Actor 'actor-1' transfer was canceled.");
+              else assert.strictEqual(actual.error, cancelReason);
+            }
+            if (terminal === 'error') {
+              if (path === 'active backlog') assert.equal(actual.error.message, 'reference remote error');
+              else {
+                assert.equal(actual.error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+                assert.equal(actual.error.message, 'reference remote error');
+              }
+            }
+            if (path !== 'active backlog' && terminal === 'cancel' && !withOperation) {
+              assert.deepEqual(capture, { value: expected });
+            } else {
+              assert.ok(capture.error);
+              assert.notEqual(capture.error.name, 'TypeError');
+              assert.strictEqual(capture.error, actual.error);
+              if (terminal === 'cancel' && path !== 'active backlog') {
+                assert.strictEqual(capture.error, cancelReason);
+              }
+            }
+          }
+        } finally {
+          finish({ ok: true, response: expected });
+          h.coordinator.cancel('actor-1');
+          parts.forEach(part => part.close());
+          runtime.close();
+          await outcome;
+          await captureOutcome;
+        }
+      });
+    }
+  }
+}
+
+function forwardFixtureReply(work, options, destination) {
+  if (destination !== undefined) {
+    void work.then(
+      value => destination.operationCompleted(options.requestOperation.id, value, undefined),
+      error => destination.operationFailed(options.requestOperation.id, error, undefined)
+    );
+  }
+  return prepareZLinkRequestReply(work, identityRequestReply);
+}
+
+
+for (const outcome of ['accepted', 'rejected', 'throws', 'cancel-notification']) {
+  test(`Message Follow typed destination awaits notification submit/${outcome}`, async () => {
+    const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+    const runtime = new RequestRuntime();
+    const controller = new AbortController();
+    const operation = runtime.begin(1000, controller.signal);
+    let release, submissions = 0;
+    const snapshots = [];
+    const notification = new Promise(resolve => { release = resolve; });
+    const expected = { ok: 'application property', response: 'application property', value: 42 };
+    const h = harness(30_000, async () => { submissions++; return { ok: true, response: expected }; },
+      async (_actor, _target, _context, _origin, messages, bytes) => {
+        snapshots.push({ messages, bytes });
+        await notification;
+        if (outcome === 'throws') throw new Error('notification submission failed');
+        return outcome !== 'rejected';
+      });
+    h.coordinator.begin('actor-1', 1n); h.coordinator.snapshot('actor-1');
+    h.coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+    const parts = frame('held notification');
+    const nextParts = frame('next notification');
+    const ref = contextRef(parts, { request: true });
+    const origin = { sourceNodeRid: zlink.RoutingId.from('ingress-source'), originalOperation: { high: 7n, low: 11n }, originalReplyRouteId: 13n };
+    const captured = h.coordinator.capture('remote', 'actor-1', parts, true, undefined, ref, undefined, origin, undefined, undefined, operation);
+    const duplicate = h.coordinator.capture('remote', 'actor-1', parts, true, undefined, ref, undefined, origin, undefined, undefined, operation);
+    let businessDone = false;
+    void captured.then(() => { businessDone = true; }, () => { businessDone = true; });
+    const caller = runtime.run(operation, receiver => {
+      void captured.then(value => receiver.operationCompleted(operation.id, value, undefined), error => receiver.operationFailed(operation.id, error, undefined));
+    }, value => value, error => error).then(value => ({ value }), error => ({ error }));
+    const reason = new Error('cancel while notification submit is pending');
+    try {
+      await new Promise(setImmediate);
+      assert.equal(submissions, 1); assert.equal(snapshots.length, 1);
+      assert.strictEqual(duplicate, captured);
+      assert.deepEqual(snapshots[0], { messages: 1, bytes: parts.reduce((sum, part) => sum + part.data().byteLength, 0) });
+      assert.ok(snapshots[0].bytes > 0);
+      assert.equal(businessDone, false);
+      if (outcome === 'cancel-notification') {
+        controller.abort(reason);
+        assert.equal((await caller).error, reason);
+        await new Promise(setImmediate);
+        assert.equal(businessDone, false); assert.equal(snapshots.length, 1);
+      }
+      release();
+      assert.deepEqual(await captured, expected); assert.deepEqual(await duplicate, expected);
+      assert.equal(businessDone, true);
+      if (outcome === 'cancel-notification') assert.equal((await caller).error, reason);
+      else assert.deepEqual((await caller).value, expected);
+      const next = h.coordinator.capture('remote', 'actor-1', nextParts, true, undefined,
+        contextRef(nextParts, { request: true, operationId: '44444444444444444444444444444444' }), undefined, origin);
+      assert.deepEqual(await next, expected);
+      assert.equal(submissions, 2);
+      const retryNotification = outcome === 'rejected' || outcome === 'throws';
+      assert.equal(snapshots.length, retryNotification ? 2 : 1);
+      if (retryNotification) {
+        assert.deepEqual(snapshots[1], { messages: 1, bytes: nextParts.reduce((sum, part) => sum + part.data().byteLength, 0) });
+      }
+      if (outcome === 'cancel-notification') assert.equal((await caller).error, reason);
+      else assert.deepEqual((await caller).value, expected);
+      assert.equal(runtime.registry.size, 0);
+    } finally { release(); h.coordinator.cancel('actor-1'); runtime.close(); [...parts, ...nextParts].forEach(part => part.close()); }
+  });
+}
+
+for (const stage of ['already-terminal', 'queued', 'awaiting-physical']) {
+  test(`Message Follow typed destination cancellation/${stage}`, async () => {
+    const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+    const runtime = new RequestRuntime();
+    const controller = new AbortController();
+    const operation = runtime.begin(1000, controller.signal);
+    const reason = new Error(stage);
+    const publicOutcome = operation.promise.then(value => ({ value }), error => ({ error }));
+    let finish, submissions = 0;
+    const snapshots = [];
+    const physical = new Promise(resolve => { finish = resolve; });
+    const h = harness(30_000, async () => { submissions++; return await physical; }, async (_actor, _target, _context, _origin, messages, bytes) => {
+      snapshots.push({ messages, bytes }); return true;
+    });
+    h.coordinator.begin('actor-1', 1n); h.coordinator.snapshot('actor-1');
+    h.coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+    const firstParts = frame('first'); const parts = frame('cancelled'); const barrierParts = frame('business barrier');
+    const ref = contextRef(parts, { request: true });
+    const origin = { sourceNodeRid: zlink.RoutingId.from('ingress-source'), originalOperation: { high: 7n, low: 11n }, originalReplyRouteId: 13n };
+    let blocker;
+    if (stage === 'queued') {
+      blocker = h.coordinator.capture('remote', 'actor-1', firstParts, true, undefined,
+        contextRef(firstParts, { request: true, operationId: '22222222222222222222222222222222' }));
+      await new Promise(setImmediate);
+    }
+    if (stage === 'already-terminal') controller.abort(reason);
+    const capture = h.coordinator.capture('remote', 'actor-1', parts, true, undefined, ref, undefined,
+      origin, undefined, undefined, operation);
+    const outcome = capture.then(value => ({ value }), error => ({ error }));
+    try {
+      if (stage === 'awaiting-physical') await new Promise(setImmediate);
+      if (stage !== 'already-terminal') controller.abort(reason);
+      assert.equal((await publicOutcome).error, reason);
+      assert.equal((await outcome).error, reason);
+      finish({ ok: true, response: 'late' });
+      if (blocker) assert.equal(await blocker, 'late');
+      await new Promise(setImmediate);
+      const originalSubmissions = stage === 'already-terminal' ? 0 : 1;
+      assert.equal(submissions, originalSubmissions);
+      assert.equal(snapshots.length, 0);
+      const barrier = h.coordinator.capture('remote', 'actor-1', barrierParts, true, undefined,
+        contextRef(barrierParts, { request: true, operationId: '55555555555555555555555555555555' }), undefined, origin);
+      assert.equal(await barrier, 'late');
+      assert.equal(submissions, originalSubmissions + 1);
+      assert.deepEqual(snapshots, [{ messages: 1, bytes: barrierParts.reduce((sum, part) => sum + part.data().byteLength, 0) }]);
+      assert.ok(snapshots[0].bytes > 0);
+      assert.equal((await publicOutcome).error, reason);
+      assert.equal((await outcome).error, reason);
+      assert.equal(runtime.registry.size, 0);
+    } finally { finish({ ok: true }); h.coordinator.cancel('actor-1'); runtime.close(); [...parts, ...firstParts, ...barrierParts].forEach(part => part.close()); }
   });
 }

@@ -1,9 +1,9 @@
 import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
 import {
-  observeZLinkRequestReply,
+  prepareZLinkRequestReply,
   mapZLinkRequestReply,
   identityRequestReply,
-  ZLinkRequestResult
+  type ZLinkRequestResult
 } from '../../packages/framework/src/runtime/messaging/request-result';
 import { encodeBoundSessionCloseCommand } from '../../packages/framework/src/runtime/protocol/service_wire_codec.generated';
 import assert from 'node:assert/strict';
@@ -31,7 +31,9 @@ import {
   OperationCancelledError,
   OperationRegistry,
   OperationTimeoutError,
-  type OperationClock
+  type OperationClock,
+  type OperationHandle,
+  type OperationObserver
 } from '../../packages/framework/src/runtime/foundation/operation-registry';
 import {
   ReadyDomain,
@@ -2324,37 +2326,39 @@ async function requestThroughCachedReadyRoute(
     }
   } as unknown as ZLinkBackendMeshNode;
   const ownerCompletions = {
-    submit(submit: () => unknown) {
-      return new ZLinkRequestResult<any>().observe(
-        (async () => {
-          submit();
-          await ownerIngress;
-          const reply = decodeStatefulReply(harness.replies[0]![0]!, 2n, 'instanceSpotRequest');
-          return {
-            terminalResult: reply.terminalResult,
-            failureErrno: reply.failureCode,
-            operationKind: 39,
-            kindData: null,
-            parts: []
-          };
-        })()
-      );
+    async submit(
+      submit: () => unknown,
+      _signal: AbortSignal | undefined,
+      requestOperation: OperationHandle<unknown>,
+      receiver: OperationObserver<unknown, unknown>
+    ) {
+      try {
+        submit();
+        await ownerIngress;
+        const reply = decodeStatefulReply(harness.replies[0]![0]!, 2n, 'instanceSpotRequest');
+        const completion = {
+          terminalResult: reply.terminalResult,
+          failureErrno: reply.failureCode,
+          operationKind: 39,
+          kindData: null,
+          parts: []
+        };
+        receiver.operationCompleted(requestOperation.id, completion, undefined);
+      } catch (error) {
+        receiver.operationFailed(requestOperation.id, error, undefined);
+      }
     }
   };
   const coldCompletions = {
-    submit(submit: () => unknown) {
-      return new ZLinkRequestResult<any>().observe(
-        (async () => {
-          submit();
-          return {
-            terminalResult: RequestResult.Ok,
-            failureErrno: 0,
-            operationKind: 39,
-            kindData: null,
-            parts: coldReply
-          };
-        })()
-      );
+    async submit(submit: () => unknown) {
+      submit();
+      return {
+        terminalResult: RequestResult.Ok,
+        failureErrno: 0,
+        operationKind: 39,
+        kindData: null,
+        parts: coldReply
+      };
     }
   };
   const address = new ZLinkHostSpotAddressTransport({
@@ -6799,13 +6803,11 @@ test('public SpotId call reaches production host Missing Instance placement with
         throw new Error('Ready route must not be used for Missing authority.');
       },
       requestToSpot() {
-        return observeZLinkRequestReply(
+        return prepareZLinkRequestReply(
           (async () => {
             throw new Error('request is not used by this test.');
           })(),
-          identityRequestReply,
-          identityRequestReply,
-          new ZLinkRequestResult()
+          identityRequestReply
         );
       }
     },
@@ -6813,32 +6815,28 @@ test('public SpotId call reaches production host Missing Instance placement with
     meshNode: () => node,
     completions: () =>
       ({
-        submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-          return new ZLinkRequestResult<any>().observe(
-            (async () => {
-              operation();
-              return {
-                terminalResult: 0,
-                failureErrno: 0,
-                operationKind: 39,
-                kindData: null,
-                parts: encodeChannelReplyParts(
-                  {
-                    formatMarker: 0xf2,
-                    kind: ZLinkChannelMessageKind.Request,
-                    channelName: 'mesh',
-                    messageName: 'Ping',
-                    contentType: 'application/json',
-                    correlationId: '1',
-                    deadline: null,
-                    topic: null,
-                    metadata: {}
-                  },
-                  'ready-reply'
-                ).map((part) => (part instanceof Message ? part : toBindingMessage(part)))
-              };
-            })()
-          );
+        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+          operation();
+          return {
+            terminalResult: 0,
+            failureErrno: 0,
+            operationKind: 39,
+            kindData: null,
+            parts: encodeChannelReplyParts(
+              {
+                formatMarker: 0xf2,
+                kind: ZLinkChannelMessageKind.Request,
+                channelName: 'mesh',
+                messageName: 'Ping',
+                contentType: 'application/json',
+                correlationId: '1',
+                deadline: null,
+                topic: null,
+                metadata: {}
+              },
+              'ready-reply'
+            ).map((part) => (part instanceof Message ? part : toBindingMessage(part)))
+          };
         }
       }) as never,
     defaultRequestTimeoutMs: 5_000
@@ -6912,13 +6910,11 @@ test('Missing Instance distinguishes unsupported types from exhausted placement 
           throw new Error('Ready route must not be used.');
         },
         requestToSpot() {
-          return observeZLinkRequestReply(
+          return prepareZLinkRequestReply(
             (async () => {
               throw new Error('Ready route must not be used.');
             })(),
-            identityRequestReply,
-            identityRequestReply,
-            new ZLinkRequestResult()
+            identityRequestReply
           );
         }
       },
@@ -6999,13 +6995,11 @@ test('Missing Instance placement capacity fails without polling or retaining a c
         throw new Error('Ready route must not be used.');
       },
       requestToSpot() {
-        return observeZLinkRequestReply(
+        return prepareZLinkRequestReply(
           (async () => {
             throw new Error('Ready route must not be used.');
           })(),
-          identityRequestReply,
-          identityRequestReply,
-          new ZLinkRequestResult()
+          identityRequestReply
         );
       }
     },
@@ -7013,32 +7007,28 @@ test('Missing Instance placement capacity fails without polling or retaining a c
     meshNode: () => node,
     completions: () =>
       ({
-        submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-          return new ZLinkRequestResult<any>().observe(
-            (async () => {
-              operation();
-              return {
-                terminalResult: 0,
-                failureErrno: 0,
-                operationKind: 39,
-                kindData: null,
-                parts: encodeChannelReplyParts(
-                  {
-                    formatMarker: 0xf2,
-                    kind: ZLinkChannelMessageKind.Request,
-                    channelName: 'mesh',
-                    messageName: 'Ping',
-                    contentType: 'application/json',
-                    correlationId: '1',
-                    deadline: null,
-                    topic: null,
-                    metadata: {}
-                  },
-                  'delayed-reply'
-                ).map((part) => (part instanceof Message ? part : toBindingMessage(part)))
-              };
-            })()
-          );
+        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+          operation();
+          return {
+            terminalResult: 0,
+            failureErrno: 0,
+            operationKind: 39,
+            kindData: null,
+            parts: encodeChannelReplyParts(
+              {
+                formatMarker: 0xf2,
+                kind: ZLinkChannelMessageKind.Request,
+                channelName: 'mesh',
+                messageName: 'Ping',
+                contentType: 'application/json',
+                correlationId: '1',
+                deadline: null,
+                topic: null,
+                metadata: {}
+              },
+              'delayed-reply'
+            ).map((part) => (part instanceof Message ? part : toBindingMessage(part)))
+          };
         }
       }) as never,
     defaultRequestTimeoutMs: 200
@@ -7094,13 +7084,11 @@ test('Missing Instance request classifies an actorLocationStale terminal as Unav
         throw new Error('Ready route must not be used.');
       },
       requestToSpot() {
-        return observeZLinkRequestReply(
+        return prepareZLinkRequestReply(
           (async () => {
             throw new Error('Ready route must not be used.');
           })(),
-          identityRequestReply,
-          identityRequestReply,
-          new ZLinkRequestResult()
+          identityRequestReply
         );
       }
     },
@@ -7108,19 +7096,15 @@ test('Missing Instance request classifies an actorLocationStale terminal as Unav
     meshNode: () => node,
     completions: () =>
       ({
-        submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-          return new ZLinkRequestResult<any>().observe(
-            (async () => {
-              operation();
-              return {
-                terminalResult: RequestResult.Conflict,
-                failureErrno: 21,
-                operationKind: 39,
-                kindData: null,
-                parts: []
-              };
-            })()
-          );
+        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+          operation();
+          return {
+            terminalResult: RequestResult.Conflict,
+            failureErrno: 21,
+            operationKind: 39,
+            kindData: null,
+            parts: []
+          };
         }
       }) as never,
     defaultRequestTimeoutMs: 200
@@ -7171,7 +7155,7 @@ test('Ready Instance request ends on a disconnected stale route without resubmis
         throw new Error('send is not used by this test.');
       },
       requestToSpot<TReply>(route: unknown): ZLinkRequestResult<TReply> {
-        return observeZLinkRequestReply(
+        return prepareZLinkRequestReply(
           (async () => {
             attempts += 1;
             if (attempts === 1) {
@@ -7182,9 +7166,7 @@ test('Ready Instance request ends on a disconnected stale route without resubmis
             }
             return 'unexpected' as TReply;
           })(),
-          identityRequestReply,
-          identityRequestReply,
-          new ZLinkRequestResult()
+          identityRequestReply
         );
       }
     },
@@ -7285,14 +7267,12 @@ test('Instance target-not-found completes once and a new call cold-activates Mis
         throw new Error('send is not used by this test.');
       },
       requestToSpot() {
-        return observeZLinkRequestReply(
+        return prepareZLinkRequestReply(
           (async () => {
             directAttempts += 1;
             throw targetFailure;
           })(),
-          identityRequestReply,
-          identityRequestReply,
-          new ZLinkRequestResult()
+          identityRequestReply
         );
       }
     },
@@ -7300,32 +7280,28 @@ test('Instance target-not-found completes once and a new call cold-activates Mis
     meshNode: () => node,
     completions: () =>
       ({
-        submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-          return new ZLinkRequestResult<any>().observe(
-            (async () => {
-              operation();
-              return {
-                terminalResult: RequestResult.Ok,
-                failureErrno: 0,
-                operationKind: 39,
-                kindData: null,
-                parts: encodeChannelReplyParts(
-                  {
-                    formatMarker: 0xf2,
-                    kind: ZLinkChannelMessageKind.Request,
-                    channelName: 'mesh',
-                    messageName: 'Lookup',
-                    contentType: 'application/json',
-                    correlationId: '1',
-                    deadline: null,
-                    topic: null,
-                    metadata: {}
-                  },
-                  'reactivated'
-                ).map((part) => (part instanceof Message ? part : toBindingMessage(part)))
-              };
-            })()
-          );
+        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+          operation();
+          return {
+            terminalResult: RequestResult.Ok,
+            failureErrno: 0,
+            operationKind: 39,
+            kindData: null,
+            parts: encodeChannelReplyParts(
+              {
+                formatMarker: 0xf2,
+                kind: ZLinkChannelMessageKind.Request,
+                channelName: 'mesh',
+                messageName: 'Lookup',
+                contentType: 'application/json',
+                correlationId: '1',
+                deadline: null,
+                topic: null,
+                metadata: {}
+              },
+              'reactivated'
+            ).map((part) => (part instanceof Message ? part : toBindingMessage(part)))
+          };
         }
       }) as never,
     defaultRequestTimeoutMs: 1_000
@@ -7392,13 +7368,11 @@ test('accepted Instance one-way admission keeps the positive route cache', async
         return { status: ZLinkSubmitStatus.Submitted };
       },
       requestToSpot() {
-        return observeZLinkRequestReply(
+        return prepareZLinkRequestReply(
           (async () => {
             throw new Error('request is not used by this test.');
           })(),
-          identityRequestReply,
-          identityRequestReply,
-          new ZLinkRequestResult()
+          identityRequestReply
         );
       }
     },
@@ -7450,13 +7424,11 @@ test('successful Instance request keeps the positive route cache', async () => {
         throw new Error('send is not used by this test.');
       },
       requestToSpot<TReply>(): ZLinkRequestResult<TReply> {
-        return observeZLinkRequestReply(
+        return prepareZLinkRequestReply(
           (async () => {
             return 'reply' as TReply;
           })(),
-          identityRequestReply,
-          identityRequestReply,
-          new ZLinkRequestResult()
+          identityRequestReply
         );
       }
     },
@@ -7507,13 +7479,11 @@ test('Instance one-way admission invalidates a route rejected by the target', as
         return { status: ZLinkSubmitStatus.RouteNotConnected };
       },
       requestToSpot() {
-        return observeZLinkRequestReply(
+        return prepareZLinkRequestReply(
           (async () => {
             throw new Error('request is not used by this test.');
           })(),
-          identityRequestReply,
-          identityRequestReply,
-          new ZLinkRequestResult()
+          identityRequestReply
         );
       }
     },
@@ -7643,19 +7613,25 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
       meshNode: () => node,
       meshCompletionTable: () =>
         ({
-          submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-            return new ZLinkRequestResult<any>().observe(
-              (async () => {
-                operation();
-                return {
-                  terminalResult: 0,
-                  failureErrno: 0,
-                  operationKind: 39,
-                  kindData: null,
-                  parts: completionParts
-                };
-              })()
-            );
+          submit(
+            operation: () => { readonly high: bigint; readonly low: bigint },
+            _signal: AbortSignal | undefined,
+            requestOperation: OperationHandle<unknown>,
+            receiver: OperationObserver<unknown, unknown>
+          ): void {
+            try {
+              operation();
+              const completion = {
+                terminalResult: 0,
+                failureErrno: 0,
+                operationKind: 39,
+                kindData: null,
+                parts: completionParts
+              };
+              receiver.operationCompleted(requestOperation.id, completion, undefined);
+            } catch (error) {
+              receiver.operationFailed(requestOperation.id, error, undefined);
+            }
           }
         }) as never
     })
@@ -7734,19 +7710,25 @@ test('stateful request failure codes preserve typed Instance route errors', asyn
         meshNode: () => node,
         meshCompletionTable: () =>
           ({
-            submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-              return new ZLinkRequestResult<any>().observe(
-                (async () => {
-                  operation();
-                  return {
-                    terminalResult: RequestResult.Conflict,
-                    failureErrno: failureCode,
-                    operationKind: 39,
-                    kindData: null,
-                    parts: []
-                  };
-                })()
-              );
+            submit(
+              operation: () => { readonly high: bigint; readonly low: bigint },
+              _signal: AbortSignal | undefined,
+              requestOperation: OperationHandle<unknown>,
+              receiver: OperationObserver<unknown, unknown>
+            ): void {
+              try {
+                operation();
+                const completion = {
+                  terminalResult: RequestResult.Conflict,
+                  failureErrno: failureCode,
+                  operationKind: 39,
+                  kindData: null,
+                  parts: []
+                };
+                receiver.operationCompleted(requestOperation.id, completion, undefined);
+              } catch (error) {
+                receiver.operationFailed(requestOperation.id, error, undefined);
+              }
             }
           }) as never
       })
@@ -8344,15 +8326,8 @@ for (const remote of [false, true]) {
             sourceNodeGeneration: 7n,
             requestSequence: value.correlation,
             parts: [frame],
-            reply: (parts: readonly (string | Uint8Array)[]) =>
-              resolve(
-                decodeStatefulReply(
-                  typeof parts[0] === 'string' ? Buffer.from(parts[0]) : parts[0]!,
-                  value.correlation,
-                  'streamUnbind',
-                  false
-                )
-              )
+            reply: (parts: readonly Uint8Array[]) =>
+              resolve(decodeStatefulReply(parts[0]!, value.correlation, 'streamUnbind', false))
           })
         ).then((result) => {
           if (result !== 'infrastructure') reject(new Error(`Close ingress rejected: ${result}`));

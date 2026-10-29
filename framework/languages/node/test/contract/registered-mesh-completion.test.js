@@ -1,4 +1,3 @@
-const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
@@ -19,20 +18,60 @@ function harness(table, checkSlot = true, stateful) {
   const promise = new Promise((done) => {
     resolve = done;
   });
+  let operationPending = true;
+  const requestOperation = {
+    id: 7n,
+    deadlineMs: undefined,
+    hasObserver() {
+      return true;
+    },
+    takeFailure() {
+      if (!operationPending) return false;
+      operationPending = false;
+      return true;
+    },
+    complete() {
+      operationPending = false;
+      return true;
+    },
+    fail() {
+      operationPending = false;
+      return true;
+    },
+    isPending() {
+      return operationPending;
+    },
+    setFailureDispatcher() {},
+    clearFailureDispatcher() {},
+    setObserver() {},
+    deferCompletion() {},
+    reply() {
+      operationPending = false;
+      return true;
+    },
+    replyFailure() {
+      operationPending = false;
+      return true;
+    },
+    setSignal() {},
+    mapCaller() {
+      return false;
+    }
+  };
   const raw = {
     mailbox: new ServiceMailbox(),
     close() {
       this.mailbox.close();
     },
-    requestToNode(_target, _payload, _timeout, _admitted, observer, kind) {
+    requestToNode(_target, _parts, _timeout, _admitted, observer, kind) {
       if (checkSlot)
         assert.equal(table.pendingCount, 1, 'completion slot exists before transport submission');
-      void promise.then(result => observer.operationCompleted(7n, result, kind));
-      return { id: 7n };
+      void promise.then((value) => observer.operationCompleted(requestOperation.id, value, kind));
+      return requestOperation;
     }
   };
   const backend = new ZLinkNodeRawMeshBackend('completion', 'local', {}, undefined, undefined, undefined, undefined, { raw, stateful });
-  if (table) backend.setCompletionTable(table);
+  if (table) backend.setCompletionHandler((terminal, materialize) => table.complete(terminal, materialize));
   let ready = 0;
   backend.setReadyHandler(() => {
     ready++;
@@ -49,7 +88,7 @@ test('registered completion reaches its caller with the infrastructure pump stop
   const h = harness(table, false);
   let result;
   const pending = table
-    .submit((entry) => h.backend.requestToNode('peer', [Buffer.from('request')], { requestEntry: entry })).pending
+    .submit(() => h.backend.requestToNode('peer', [Buffer.from('request')]))
     .then((value) => {
       result = value;
     });
@@ -70,11 +109,11 @@ for (const terminal of ['cancel', 'close']) {
     const h = harness(table);
     const controller = new AbortController();
     const pending = table.submit(
-      (entry) => h.backend.requestToNode('peer', [Buffer.from('request')], { requestEntry: entry }),
+      () => h.backend.requestToNode('peer', [Buffer.from('request')]),
       controller.signal
-    ).pending;
+    );
     const reason = new Error(terminal);
-    const rejected = assert.rejects(pending, (error) => terminal === 'cancel' ? error === reason : error.operation === 'request' && error.result === require('../../packages/framework/dist/runtime/backend/runtime-values').RequestResult.Terminated);
+    const rejected = assert.rejects(pending, (error) => error === reason);
     if (terminal === 'cancel') controller.abort(reason);
     else {
       await h.backend.close();
@@ -103,7 +142,7 @@ test('immediate terminal rejection uses the registered owner without infrastruct
   const h = harness(table, true, new ServiceStatefulRuntime({ setServiceIngress() {} }, 'local', 1n));
   const result = await table.submit(() =>
     h.backend.closeActorBoundSession({ actorId: 'missing', nodeRid: 'local', generation: 1n }, 1n)
-  ).pending;
+  );
   assert.equal(
     wireReplyFailureException(result.terminalResult, result.failureErrno).kind,
     ZLinkFrameworkErrorKind.InvalidOperation
@@ -116,7 +155,7 @@ test('immediate terminal rejection uses the registered owner without infrastruct
 test('raw pull completion uses the existing mailbox and releases its claim', async () => {
   const table = new ZLinkMeshCompletionTable();
   const h = harness(undefined, false);
-  const operation = h.backend.requestToNode('peer', [Buffer.from('request')], { requestEntry: new ZLinkRequestResult() });
+  const operation = h.backend.requestToNode('peer', [Buffer.from('request')]);
   h.resolve({ terminalResult: 0, failureCode: 0 });
   for (let i = 0; i < 8; i++) await Promise.resolve();
   const ready = h.backend.createReadyBatch(1);
@@ -142,7 +181,7 @@ test('registered materialization failure rejects its consumed slot and late resu
   const diagnostics = [];
   const table = new ZLinkMeshCompletionTable((value) => diagnostics.push(value));
   const operationId = { high: 1n, low: 9n };
-  const pending = table.submit(() => operationId).pending;
+  const pending = table.submit(() => operationId);
   const failure = new Error('invalid multipart');
   table.complete({ operationId, terminalResult: 0 }, () => {
     throw failure;
@@ -162,7 +201,7 @@ test('submission failure and cancellation release the reserved slot without remo
   await assert.rejects(
     table.submit(() => {
       throw failure;
-    }).pending,
+    }),
     (error) => error === failure
   );
   assert.equal(table.pendingCount, 0);
@@ -171,14 +210,14 @@ test('submission failure and cancellation release the reserved slot without remo
     table.submit(() => {
       controller.abort(failure);
       return { high: 1n, low: 10n };
-    }, controller.signal).pending,
+    }, controller.signal),
     (error) => error === failure
   );
   assert.equal(table.pendingCount, 0);
   const operationId = { high: 1n, low: 11n };
-  const first = table.submit(() => operationId).pending;
+  const first = table.submit(() => operationId);
   await assert.rejects(
-    table.submit(() => operationId).pending,
+    table.submit(() => operationId),
     /already pending/
   );
   assert.equal(table.pendingCount, 1);

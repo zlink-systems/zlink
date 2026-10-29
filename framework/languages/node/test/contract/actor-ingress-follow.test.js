@@ -23,8 +23,7 @@ const {
   ZLinkBufferMessage: Message
 } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const {
-  observeZLinkRequestReply,
-  ZLinkRequestResult,
+  prepareZLinkRequestReply,
   identityRequestReply
 } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
@@ -142,13 +141,16 @@ function fixture() {
     validateReplySource: () => true,
     routedTransport: {
       sendToSpot: (_route, payload) => deliver(payload),
-      requestToSpot: (_route, payload) =>
-        observeZLinkRequestReply(
-          deliver(payload).then((response) => ({ ok: true, response })),
-          identityRequestReply,
-          identityRequestReply,
-          new ZLinkRequestResult()
-        )
+      requestToSpot: (_route, payload, options, destination) => {
+        const work = deliver(payload).then((response) => ({ ok: true, response }));
+        if (destination !== undefined) {
+          void work.then(
+            value => destination.operationCompleted(options.requestOperation.id, value, undefined),
+            error => destination.operationFailed(options.requestOperation.id, error, undefined)
+          );
+        }
+        return prepareZLinkRequestReply(work, identityRequestReply);
+      }
     }
   });
   const admission = new ZLinkSpotActorAdmissionCoordinator({
@@ -246,32 +248,31 @@ function fixture() {
       invalidateActorRoute() {}
     }),
     completionTableProvider: () => ({
-      submit(submit, _signal, entry = new ZLinkRequestResult()) {
-        return entry.observe(
-          (async () => {
-            submit(entry);
-            const response = await terminal;
-            return {
-              terminalResult: 0,
-              failureErrno: 0,
-              parts: [
-                Message.from(
-                  protocol.encodeStreamFrame(
-                    {
-                      kind: protocol.ZLinkStreamMessageKind.Response,
-                      codec: protocol.ZLinkStreamCodec.Json,
-                      flags: 0,
-                      name: 'Ping',
-                      metadata: new Map()
-                    },
-                    Buffer.from(JSON.stringify(response))
-                  )
-                )
-              ]
-            };
-          })()
-        );
-      }
+      submit(submit, _signal, requestOperation, receiver) {
+      return deliverFixtureCompletion((async () => {
+        submit();
+        const response = await terminal;
+        return {
+          terminalResult: 0,
+          failureErrno: 0,
+          parts: [
+            Message.from(
+              protocol.encodeStreamFrame(
+                {
+                  kind: protocol.ZLinkStreamMessageKind.Response,
+                  codec: protocol.ZLinkStreamCodec.Json,
+                  flags: 0,
+                  name: 'Ping',
+                  metadata: new Map()
+                },
+                Buffer.from(JSON.stringify(response))
+              )
+            )
+          ]
+        };
+
+      })(), requestOperation, receiver);
+    }
     })
   });
   return {
@@ -316,10 +317,7 @@ test('Actor packet dispatch is reused for messages in one activation', async () 
     else assert.strictEqual(f.source.actorPacketDispatch, actorPacketDispatch);
   }
 
-  assert.deepEqual(
-    f.calls.map((call) => call[1]),
-    ['first', 'second']
-  );
+  assert.deepEqual(f.calls.map((call) => call[1]), ['first', 'second']);
 });
 
 for (const updated of [false, true]) {
@@ -408,15 +406,13 @@ for (const updated of [false, true]) {
         primaryMeshNode: { status: () => ({ routingId: 'session-owner' }) }
       }),
       routeTransport: {
-        request: (entry, _channel, _node, _name, payload) =>
-          observeZLinkRequestReply(
+        request: (_channel, _node, _name, payload) =>
+          prepareZLinkRequestReply(
             receiver.receiveRemoteActorPacketRelay(payload, {
               meshName: 'mesh',
               sourceNodeRid: 'session-owner'
             }),
-            identityRequestReply,
-            identityRequestReply,
-            entry
+            identityRequestReply
           )
       }
     });
@@ -594,20 +590,12 @@ for (const returnResponse of [false, true]) {
       Message.from('{}')
     ];
     try {
-      const response = dispatch.dispatch(
-        undefined,
-        'remote',
-        'alice',
-        parts,
-        returnResponse,
-        undefined,
-        {
-          actorId: 'alice',
-          objectGeneration: 1n,
-          nodeRid: 'target',
-          meshName: 'mesh'
-        }
-      );
+      const response = dispatch.dispatch(undefined, 'remote', 'alice', parts, returnResponse, undefined, {
+        actorId: 'alice',
+        objectGeneration: 1n,
+        nodeRid: 'target',
+        meshName: 'mesh'
+      });
       if (!returnResponse) {
         await assert.rejects(
           response,
@@ -625,4 +613,12 @@ for (const returnResponse of [false, true]) {
       parts.forEach((part) => part.close());
     }
   });
+}
+
+function deliverFixtureCompletion(work, operation, receiver) {
+  if (receiver === undefined) return work;
+  void work.then(
+    value => receiver.operationCompleted(operation.id, value, undefined),
+    error => receiver.operationFailed(operation.id, error, undefined)
+  );
 }

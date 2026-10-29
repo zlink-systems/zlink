@@ -1,6 +1,7 @@
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const framework = require('../../packages/framework/dist');
 const {
   RawServiceMeshRuntime
 } = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
@@ -681,7 +682,11 @@ test('peer route readiness wait uses existing admission notifications and remove
     assert.equal(h.runtime[inspectRuntime]().peerRouteObservers, 0);
     // A different lifecycle must wait even when the RID has a ready route.
     const stale = h.runtime.waitForPeerRoute('peer', 2n, BigInt(Date.now() + 10000));
-    const rejected = assert.rejects(stale, { name: 'OperationTimeoutError' });
+    const rejected = assert.rejects(stale, (error) => {
+      assert.ok(error instanceof framework.ZLinkFrameworkException);
+      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+      return true;
+    });
     h.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
     await rejected;
     assert.equal(h.runtime.pendingOperationCount, 0);

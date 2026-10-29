@@ -1,49 +1,70 @@
+import { RequestRuntime } from '../foundation/request-runtime';
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
-import { awaitWithAbort, throwIfAborted } from '../abort';
+import { throwIfAborted } from '../abort';
 import { closeMessages, ZLinkChannelMessageKind } from './channel-envelope';
 import { decodeSpotDirectReply, encodeSpotDirectEnvelope } from './spot-direct-envelope';
 
 export class ZLinkSourceSpotRouter {
-  constructor(private readonly defaultRequestTimeoutMs: number | undefined) {}
+  constructor(
+    private readonly defaultRequestTimeoutMs: number | undefined,
+    private readonly requests = new RequestRuntime()
+  ) {}
 
-  async request<TReply>(
+  request<TReply>(
     sourceSpot: ZLinkBackendSpot,
     target: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    existing?: PendingOperation<unknown>,
+    destination?: OperationObserver<unknown, unknown>
   ): Promise<TReply> {
-    throwIfAborted(signal);
-    const parts = [
-      encodeSpotDirectEnvelope(
-        ZLinkChannelMessageKind.Request,
-        target.routerChannelId,
-        packetName,
-        request
-      )
-    ] as readonly Message[];
-    const operation = sourceSpot.requestToSpot(
-      target.targetNodeRid,
-      target.spotId,
-      parts,
+    let parts: readonly Message[];
+    const operation = this.requests.begin(
       timeoutMs ?? this.defaultRequestTimeoutMs,
-      onAdmitted
+      signal,
+      existing
     );
-    const replyParts = await awaitWithAbort(operation, signal, () => {
-      void operation.then(closeMessages, () => undefined);
-    });
-    try {
-      return decodeSpotDirectReply<TReply>(replyParts);
-    } finally {
-      closeMessages(replyParts);
-      closeMessages(parts);
-    }
+    return this.requests.run<TReply>(
+      operation,
+      (receiver) => {
+        throwIfAborted(signal);
+        parts = [
+          encodeSpotDirectEnvelope(
+            ZLinkChannelMessageKind.Request,
+            target.routerChannelId,
+            packetName,
+            request
+          )
+        ] as readonly Message[];
+        sourceSpot.requestToSpot(
+          target.targetNodeRid,
+          target.spotId,
+          parts,
+          timeoutMs ?? this.defaultRequestTimeoutMs,
+          onAdmitted,
+          operation,
+          receiver
+        );
+      },
+      (value) => {
+        const replyParts = value as readonly Message[];
+        try {
+          return decodeSpotDirectReply<TReply>(replyParts);
+        } finally {
+          closeMessages(replyParts);
+          closeMessages(parts);
+        }
+      },
+      (error) => error,
+      destination
+    );
   }
-
   async send(
     sourceSpot: ZLinkBackendSpot,
     target: ZLinkSpotRouteTarget,
@@ -73,18 +94,34 @@ export class ZLinkSourceSpotRouter {
     request: Message,
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    existing?: PendingOperation<unknown>
   ): Promise<readonly Message[]> {
-    throwIfAborted(signal);
-    const operation = sourceSpot.requestToSpot(
-      target.targetNodeRid,
-      target.spotId,
-      request,
+    const operation = this.requests.begin(
       timeoutMs ?? this.defaultRequestTimeoutMs,
-      onAdmitted
+      signal,
+      existing
     );
-    return await awaitWithAbort(operation, signal, () => {
-      void operation.then(closeMessages, () => undefined);
-    });
+    return this.requests.run<readonly Message[]>(
+      operation,
+      (receiver) => {
+        throwIfAborted(signal);
+        sourceSpot.requestToSpot(
+          target.targetNodeRid,
+          target.spotId,
+          request,
+          timeoutMs ?? this.defaultRequestTimeoutMs,
+          onAdmitted,
+          operation,
+          receiver
+        );
+      },
+      (value) => {
+        const replyParts = value as readonly Message[];
+        if (!operation.isPending()) closeMessages(replyParts);
+        return replyParts;
+      },
+      (error) => error
+    );
   }
 }

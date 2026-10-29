@@ -1,5 +1,6 @@
+import { RequestRuntime } from '../foundation/request-runtime';
+import type { PendingOperation } from '../foundation/operation-registry';
 import { inspectRuntime } from '../internal-observation';
-import { mapZLinkRequestReply } from '../messaging/request-result';
 import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
 
 import type { Message } from '../../contracts/Common/Message';
@@ -22,7 +23,6 @@ import {
   internalFrameworkErrorKind,
   ZLinkFrameworkInternalErrorKind
 } from '../framework-errors-internal';
-import { waitRequestReply } from '../messaging/request-deadline';
 import {
   decodeRoutingId,
   encodeRoutingIdStorageHex,
@@ -51,7 +51,6 @@ import {
   ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
 } from './actor-packet-relay-wire';
 import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
-import { requestRoutedJsonReply } from './actor-routed-json-request';
 import type { ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
 
 export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS =
@@ -59,6 +58,7 @@ export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS =
 export const RELOCATED_REQUEST_OWNED_BY_REQUESTER = Symbol('relocated request owned by requester');
 
 export interface ZLinkActorHandoffPacket {
+  requestOperation?: PendingOperation<unknown>;
   readonly index: number;
   readonly header: string;
   readonly payload: string;
@@ -249,6 +249,7 @@ interface MessageFollowRoute {
 }
 
 export interface ZLinkActorHandoffCoordinatorOptions {
+  readonly requests?: RequestRuntime;
   readonly routedTransport: ZLinkActorRoutedJoinTransport;
   readonly messageFollowDurationMs?: number;
   readonly requestTimeoutMs?: number;
@@ -305,6 +306,7 @@ function requireExactTargetOwnerFence(
 
 /** Owns packet ordering from relocation start through Message Follow removal. */
 export class ZLinkActorHandoffCoordinator {
+  private readonly requests: RequestRuntime;
   [inspectRuntime]() {
     return Object.freeze({
       replyRouteCount: this.replyRoutes.size,
@@ -336,6 +338,7 @@ export class ZLinkActorHandoffCoordinator {
   private readonly replyRoutes = new Map<string, ReplyRoute>();
 
   constructor(private readonly options: ZLinkActorHandoffCoordinatorOptions) {
+    this.requests = options.requests ?? new RequestRuntime();
     this.messageFollowDurationMs =
       options.messageFollowDurationMs ?? DEFAULT_MESSAGE_FOLLOW_DURATION_MS;
   }
@@ -867,7 +870,8 @@ export class ZLinkActorHandoffCoordinator {
     deadlineUnixMs?: number,
     messageFollowOrigin?: ZLinkMessageFollowOrigin,
     provisionalReplay?: ZLinkActorHandoffDispatch,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<unknown> | undefined {
     let incomingContext = actorMessageFollowContext(fallbackActorRef);
     const originalDeadlineUnixMs =
@@ -942,7 +946,8 @@ export class ZLinkActorHandoffCoordinator {
         remoteBoundSessionTarget,
         fallbackActorRef,
         context,
-        messageFollowOrigin
+        messageFollowOrigin,
+        requestOperation
       );
       handoff.pendingBytes += packetBytes(packet);
       this.options.onMarker?.('handoff_backlog', actorId, packet.index);
@@ -1054,7 +1059,8 @@ export class ZLinkActorHandoffCoordinator {
               remoteBoundSessionTarget,
               fallbackActorRef,
               incomingContext,
-              messageFollowOrigin
+              messageFollowOrigin,
+              requestOperation
             );
             return this.enqueueMessageFollow(followRoute, actorId, packet, onAdmitted);
           }
@@ -1111,7 +1117,8 @@ export class ZLinkActorHandoffCoordinator {
       remoteBoundSessionTarget,
       fallbackActorRef,
       context,
-      messageFollowOrigin
+      messageFollowOrigin,
+      requestOperation
     );
     return this.enqueueMessageFollow(followRoute, actorId, packet, onAdmitted);
   }
@@ -1689,14 +1696,22 @@ export class ZLinkActorHandoffCoordinator {
       replyRouteId: context.replyRouteId,
       result
     });
+    packet.requestOperation?.setFailureDispatcher(reject);
     onAdmitted?.();
     entry.tail = entry.tail.then(async () => {
       try {
-        resolve(await this.relayMessageFollow(actorId, entry, packet));
+        if (packet.requestOperation !== undefined && !packet.requestOperation.isPending()) {
+          resolve(await packet.requestOperation.promise);
+        } else {
+          await this.relayMessageFollow(actorId, entry, packet, resolve, reject);
+        }
+        await result;
       } catch (error) {
         this.options.onMarker?.('message_follow_rejected', actorId);
         reject(error);
       } finally {
+        packet.requestOperation?.clearFailureDispatcher(reject);
+        delete packet.requestOperation;
         entry.queuedMessages--;
         entry.queuedBytes -= bytes;
       }
@@ -1707,8 +1722,10 @@ export class ZLinkActorHandoffCoordinator {
   private async relayMessageFollow(
     actorId: string,
     entry: MessageFollowRoute,
-    packet: ZLinkActorHandoffPacket
-  ): Promise<unknown> {
+    packet: ZLinkActorHandoffPacket,
+    resolve: (value: unknown) => void,
+    reject: (reason: unknown) => void
+  ): Promise<void> {
     const { target, targetActorRef } = entry;
     const context = packet.messageFollowContext;
     let advanced: ZLinkActorMessageFollowContext;
@@ -1735,55 +1752,52 @@ export class ZLinkActorHandoffCoordinator {
         packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
       });
       await this.messageFollowRelayed(actorId, entry, packet, advanced);
-      return undefined;
+      resolve(undefined);
+      return;
     }
     const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    const relayDeadlineMs = performance.now() + timeoutMs;
-    if (this.options.routedTransport.requestRawToSpot === undefined) {
-      const reply = await waitRequestReply(
-        mapZLinkRequestReply(
-          this.options.routedTransport.requestToSpot<Record<string, unknown>>(target, payload, {
-            packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-            timeoutMs
-          })
-        ),
-        actorId,
-        relayDeadlineMs
-      );
-      if (reply.ok === false) {
-        throw actorRelayError(actorId, reply.errorKind, reply.error);
-      }
-      await this.messageFollowRelayed(actorId, entry, packet, advanced);
-      return reply.response;
+    const requestOperation = packet.requestOperation ?? this.requests.begin(timeoutMs);
+    if (packet.requestOperation === undefined) {
+      // The existing business result delivers failures from this entry alias.
+      void requestOperation.promise.catch(() => {});
+      requestOperation.setFailureDispatcher(reject);
     }
-    const response = await waitRequestReply(
-      requestRoutedJsonReply(
-        this.options.routedTransport,
+    if (!requestOperation.isPending()) {
+      resolve(await requestOperation.promise);
+      return;
+    }
+    try {
+      this.options.routedTransport.requestToSpot<Record<string, unknown>>(
         target,
         payload,
-        { timeoutMs },
-        `Actor Message Follow raw request is not available for '${actorId}'.`,
-        (parts) => {
-          if (parts.length === 0) {
-            throw new Error(`Actor Message Follow reply was empty for '${actorId}'.`);
+        { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET, timeoutMs, requestOperation },
+        {
+          operationCompleted: (_id, value) => {
+            requestOperation.clearFailureDispatcher(reject);
+            if (!requestOperation.isPending()) return;
+            void (async () => {
+              const reply = value as Record<string, unknown>;
+              if (reply.ok === false) throw actorRelayError(actorId, reply.errorKind, reply.error);
+              await this.messageFollowRelayed(actorId, entry, packet, advanced);
+              if (packet.requestOperation === undefined) requestOperation.complete(reply.response);
+              resolve(reply.response);
+            })().catch((error) => {
+              if (packet.requestOperation === undefined) requestOperation.fail(error);
+              reject(error);
+            });
+          },
+          operationFailed: (_id, error) => {
+            requestOperation.clearFailureDispatcher(reject);
+            if (packet.requestOperation === undefined) requestOperation.fail(error);
+            reject(error);
           }
-          const reply = JSON.parse(parts[0].getString('utf8')) as {
-            readonly ok?: boolean;
-            readonly response?: unknown;
-            readonly error?: unknown;
-            readonly errorKind?: unknown;
-          };
-          if (reply.ok === false) {
-            throw actorRelayError(actorId, reply.errorKind, reply.error);
-          }
-          return reply.response;
         }
-      ),
-      actorId,
-      relayDeadlineMs
-    );
-    await this.messageFollowRelayed(actorId, entry, packet, advanced);
-    return response;
+      );
+    } catch (error) {
+      requestOperation.clearFailureDispatcher(reject);
+      if (packet.requestOperation === undefined) requestOperation.fail(error);
+      throw error;
+    }
   }
 
   private async messageFollowRelayed(
@@ -1934,12 +1948,13 @@ function encodePacket(
   remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
   fallbackActorRef?: ActorRef,
   messageFollowContext?: ZLinkActorMessageFollowContext,
-  messageFollowOrigin?: ZLinkMessageFollowOrigin
+  messageFollowOrigin?: ZLinkMessageFollowOrigin,
+  requestOperation?: PendingOperation<unknown>
 ): ZLinkActorHandoffPacket {
   if (messageFollowContext === undefined) {
     throw new Error('Actor handoff packet requires a Message Follow context.');
   }
-  return {
+  const packet: ZLinkActorHandoffPacket = {
     index,
     header: Buffer.from(parts[0].data()).toString('base64'),
     payload: Buffer.from(parts[1].data()).toString('base64'),
@@ -1970,6 +1985,12 @@ function encodePacket(
             nodeRid: String(fallbackActorRef.nodeRid)
           }
   };
+  if (requestOperation !== undefined)
+    Object.defineProperty(packet, 'requestOperation', {
+      value: requestOperation,
+      configurable: true
+    });
+  return packet;
 }
 
 function optionalBigInt(value: string | undefined): bigint | undefined {

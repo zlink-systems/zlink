@@ -1,3 +1,4 @@
+import type { RequestRuntime } from '../foundation/request-runtime';
 import type { ZLinkMeshDispatchAdmission } from '../admission';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { RuntimeDisposal } from '../disposal';
@@ -119,6 +120,7 @@ const ZLINK_SEND_DONT_WAIT = 1;
 const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
 
 export interface ZLinkSpotNodeRuntimeManagerOptions {
+  readonly requests?: RequestRuntime;
   readonly admission?: import('../admission').ZLinkRuntimeAdmissionGate;
   readonly errorSink: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
   readonly listenerRecords?: ZLinkListenerRecords;
@@ -308,6 +310,7 @@ export class ZLinkSpotNodeRuntimeManager {
         applicationJobReceiveFlowFailureSink: this.options.applicationJobReceiveFlowFailureSink,
         peerAdmissionSealed: () => this.options.peerAdmissionSealed?.(spotNodeName) ?? false
       });
+      if (this.options.requests !== undefined) node.setRequestRuntime?.(this.options.requests);
       if (this.options.dispatchErrors !== undefined) {
         node.setDispatchErrorReporter?.(this.options.dispatchErrors, spotNodeName);
       }

@@ -17,7 +17,7 @@ import {
   ZLinkRuntimeDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { throwIfAborted } from '../abort';
+import { awaitWithAbort, throwIfAborted } from '../abort';
 import { ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME, ZLinkSpotActorDispatcher } from '../actors';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import { ZLinkDispatchErrorReporter } from '../channels';
@@ -124,8 +124,10 @@ export class ZLinkSpotActorMembership {
   ): Promise<void> {
     throwIfAborted(signal);
     const activation = this.requireActivation(spotId, meshName);
-    await this.runLifecycleOperation(activation, () =>
-      this.leaveActorCore(activation, actor, signal, meshName)
+    await this.runLifecycleOperation(
+      activation,
+      () => this.leaveActorCore(activation, actor, undefined, meshName),
+      signal
     );
   }
 
@@ -261,9 +263,10 @@ export class ZLinkSpotActorMembership {
 
   private async runLifecycleOperation<T>(
     activation: ZLinkSpotActivation,
-    operation: () => Promise<T> | T
+    operation: () => Promise<T> | T,
+    signal?: AbortSignal
   ): Promise<T> {
-    const pending = activation.serial.executeLifecycleOperation(operation);
+    const pending = awaitWithAbort(activation.serial.executeLifecycleOperation(operation), signal);
     return activation.serial.isCurrentTurn
       ? await activation.serial.currentTurn!.yieldFrameworkPromise(pending)
       : await pending;
