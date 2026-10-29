@@ -78,9 +78,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
       ownerLeaseGeneration: 13n
     });
     backend = new ZLinkNodeRawMeshBackend('mesh', ids.owner, {}, undefined, undefined, undefined, undefined, { stateful });
-    backend.setCompletionHandler((terminal, materialize) =>
-      completions.complete(terminal, materialize)
-    );
+    backend.setCompletionTable(completions);
     sessionService = backend.createStreamSessionService({});
     sessionService.start();
   }

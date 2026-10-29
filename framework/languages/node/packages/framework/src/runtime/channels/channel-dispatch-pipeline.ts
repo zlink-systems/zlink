@@ -102,12 +102,7 @@ export class ZLinkChannelDispatchPipeline {
     admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
     if (admit !== undefined) {
-      const pipeline = this;
-      const record = dispatch;
-      return admit(
-        () => pipeline.dispatchOneWay(record),
-        (error) => pipeline.failOneWay(record.fields, error)
-      );
+      return admit(this.dispatchOneWay, this.failOneWay, this, dispatch);
     }
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
     this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
@@ -116,7 +111,7 @@ export class ZLinkChannelDispatchPipeline {
     try {
       invocation = this.invokeInFlow(dispatch, dispatch.handler);
     } catch (error) {
-      this.failOneWay(dispatch.fields, error);
+      this.failOneWay(error, dispatch);
       return;
     }
     if (!isPromiseLike(invocation)) {
@@ -129,7 +124,7 @@ export class ZLinkChannelDispatchPipeline {
       const record = dispatch;
       return Promise.resolve(invocation).then(
         (value) => pipeline.completeOneWay(record.fields, value),
-        (error: unknown) => pipeline.failOneWay(record.fields, error)
+        (error: unknown) => pipeline.failOneWay(error, record)
       );
     }
   }
@@ -149,7 +144,8 @@ export class ZLinkChannelDispatchPipeline {
     }
   }
 
-  private failOneWay(fields: ZLinkChannelDispatchFields, error: unknown): void {
+  private failOneWay(error: unknown, dispatch: ZLinkOneWayDispatch<ZLinkMessageContext>): void {
+    const fields = dispatch.fields;
     this.report(fields, this.failureReason(error), ZLinkDispatchErrorAction.Drop, error);
   }
 
@@ -163,12 +159,7 @@ export class ZLinkChannelDispatchPipeline {
     admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
     if (admit !== undefined) {
-      const pipeline = this;
-      const record = dispatch;
-      return admit(
-        () => pipeline.dispatchRequest(record),
-        (error) => pipeline.failRequest(record, error)
-      );
+      return admit(this.dispatchRequest, this.failRequest, this, dispatch);
     }
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
     this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
@@ -177,7 +168,7 @@ export class ZLinkChannelDispatchPipeline {
     try {
       invocation = this.invokeInFlow(dispatch, dispatch.handler);
     } catch (error) {
-      return this.failRequest(dispatch, error);
+      return this.failRequest(error, dispatch);
     }
     if (!isPromiseLike(invocation)) return this.completeRequest(dispatch, invocation);
     {
@@ -185,7 +176,7 @@ export class ZLinkChannelDispatchPipeline {
       const record = dispatch;
       return Promise.resolve(invocation).then(
         (value) => pipeline.completeRequest(record, value),
-        (error: unknown) => pipeline.failRequest(record, error)
+        (error: unknown) => pipeline.failRequest(error, record)
       );
     }
   }
@@ -233,11 +224,11 @@ export class ZLinkChannelDispatchPipeline {
   ): void | Promise<void> {
     if (invocation === HANDLER_FILTER_REJECTED) {
       return this.failRequest(
-        dispatch,
         createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RequestRejected,
           `A handler filter rejected '${this.options.channelName}:${dispatch.fields.packetName}'.`
-        )
+        ),
+        dispatch
       );
     }
     let written: void | Promise<void>;
@@ -273,8 +264,8 @@ export class ZLinkChannelDispatchPipeline {
   }
 
   private async failRequest<TContext extends ZLinkMessageContext>(
-    dispatch: ZLinkRequestDispatch<TContext>,
-    error: unknown
+    error: unknown,
+    dispatch: ZLinkRequestDispatch<TContext>
   ): Promise<void> {
     try {
       await dispatch.writeError(error);
@@ -352,7 +343,6 @@ export class ZLinkChannelDispatchPipeline {
     const context = dispatch.context;
     const fields = dispatch.fields;
     const signal = dispatch.signal;
-    releaseApplicationJobPermitBeforeHandler();
     if (this.filters.length === 0) {
       //  Fast path for the dominant unfiltered dispatch: skip the filter
       //  context object and chain machinery entirely.
@@ -362,6 +352,7 @@ export class ZLinkChannelDispatchPipeline {
         resolveMessageTypeForDecode(dispatch.messageType)
       );
       this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
+      releaseApplicationJobPermitBeforeHandler();
       return handler.handle(payload, context);
     }
     return this.invokeFiltered(
@@ -397,6 +388,7 @@ export class ZLinkChannelDispatchPipeline {
           resolveMessageTypeForDecode(messageType)
         );
         this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
+        releaseApplicationJobPermitBeforeHandler();
         value = await handler.handle(payload, context);
       },
       signal

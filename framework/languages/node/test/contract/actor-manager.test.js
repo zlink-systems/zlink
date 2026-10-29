@@ -1,4 +1,4 @@
-const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const { liveUserSpotAuthority } = require('../helpers/live-user-spot-authority');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -553,8 +553,9 @@ test('public Actor destroy completes terminal cleanup after route cleanup failur
     },
     nativeActorNode: node,
     nativeActorCompletionTableProvider: () => ({
-      async submit(operation) {
-        operation();
+       submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+        operation(resultOwner);
         return {
           terminalResult: RequestResult.Ok,
           failureErrno: 0,
@@ -562,7 +563,9 @@ test('public Actor destroy completes terminal cleanup after route cleanup failur
           kindData: null,
           parts: []
         };
-      }
+
+})());
+}
     }),
     actorDestroyedCleanup() {
       events.push('route');
@@ -633,8 +636,9 @@ test('transferred actor materialization creates a fresh actor before restoring s
     actorFactories: new Map([['transfer', TransferFactory]]),
     nativeActorNode: node,
     nativeActorCompletionTableProvider: () => ({
-      async submit(operation) {
-        operation();
+       submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+        operation(resultOwner);
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -642,7 +646,9 @@ test('transferred actor materialization creates a fresh actor before restoring s
           kindData: null,
           parts: []
         };
-      }
+
+})());
+}
     }),
     actorTransferRegistry: registry,
     async actorCreatedNotifier() {
@@ -809,8 +815,9 @@ test('transferred actor rollback reports native destroy failure once and retains
       }
     }),
     nativeActorCompletionTableProvider: () => ({
-      async submit(operation) {
-        operation();
+       submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+        operation(resultOwner);
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -818,7 +825,9 @@ test('transferred actor rollback reports native destroy failure once and retains
           kindData: null,
           parts: []
         };
-      }
+
+})());
+}
     }),
     actorDestroyedCleanup() {
       cleanupCount += 1;
@@ -855,10 +864,13 @@ for (const trace of ['absent', 'disabled']) {
         destroyActor() { return { high: 0n, low: 1n }; }
       }),
       nativeActorCompletionTableProvider: () => ({
-        async submit(operation) {
-          operation();
+         submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+          operation(resultOwner);
           return { terminalResult: RequestResult.Ok, failureErrno: 0, operationKind: OperationKind.ActorDestroy, kindData: null, parts: [] };
-        }
+
+})());
+}
       })
     });
     const { actor } = await manager.materializeTransferredActor(
@@ -915,8 +927,9 @@ test('concurrent transferred rollbacks share the existing Actor terminal complet
       }
     }),
     nativeActorCompletionTableProvider: () => ({
-      async submit(operation) {
-        operation();
+       submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+        operation(resultOwner);
         return {
           terminalResult: RequestResult.Ok,
           failureErrno: 0,
@@ -924,7 +937,9 @@ test('concurrent transferred rollbacks share the existing Actor terminal complet
           kindData: null,
           parts: []
         };
-      }
+
+})());
+}
     })
   });
   const { actor } = await manager.materializeTransferredActor(
@@ -2331,7 +2346,7 @@ test('ZLinkActorNativeJoinCoordinator keeps remote joins on the formal Core surf
           events.push(`canRoute:${routerChannelId}`);
           return true;
         },
-        request(routerChannelId, targetNodeRid, packetName, payload) { return prepareZLinkRequestReply((async () => {
+        request(entry, routerChannelId, targetNodeRid, packetName, payload) { return observeZLinkRequestReply((async () => {
           events.push(`routeRequest:${payload.phase}:${routerChannelId}:${targetNodeRid}:${payload.spotId}:${packetName}:${payload.actorId}:${payload.actorType}:${Buffer.from(payload.request, 'base64').toString()}`);
           if (payload.phase === 'admission') {
             assert.equal(typeof payload.transferId, 'string');
@@ -2352,7 +2367,7 @@ test('ZLinkActorNativeJoinCoordinator keeps remote joins on the formal Core surf
             actorGeneration: '2',
             reply: Buffer.from('routed-reply').toString('base64')
           };
-        })(), identityRequestReply); }
+        })(), identityRequestReply, identityRequestReply, entry); }
       },
       async remoteActorBinder(actorRef) {
         events.push(`bind:${actorRef.nodeRid}:${actorRef.actorId}:${actorRef.objectGeneration}`);
@@ -2582,7 +2597,7 @@ test('remote relocation failures before READY preserve source ownership and neve
         },
         routedTransport: {
           canRoutePacketChannel() { return true; },
-          request(_channel, _nodeRid, _packetName, payload) { return prepareZLinkRequestReply((async () => {
+          request(entry, _channel, _nodeRid, _packetName, payload) { return observeZLinkRequestReply((async () => {
             events.push(`request:${payload.phase}`);
             assert.equal(payload.phase, 'admission');
             return {
@@ -2591,7 +2606,7 @@ test('remote relocation failures before READY preserve source ownership and neve
               actorId: 'alice',
               actorGeneration: '1'
             };
-          })(), identityRequestReply); }
+          })(), identityRequestReply, identityRequestReply, entry); }
         },
         actorJoinRelocation: {
           async relocateActorJoin({ actor: joinedActor, state, signal }) {
@@ -2694,7 +2709,7 @@ test('cross-owner formal join rejection returns its typed terminal to the source
       },
       routedTransport: {
         canRoutePacketChannel() { return true; },
-        request(_channel, _nodeRid, _packetName, payload) { return prepareZLinkRequestReply((async () => {
+        request(entry, _channel, _nodeRid, _packetName, payload) { return observeZLinkRequestReply((async () => {
           return payload.phase === 'admission'
             ? {
                 accepted: true,
@@ -2708,7 +2723,7 @@ test('cross-owner formal join rejection returns its typed terminal to the source
                 actorId: 'alice',
                 actorGeneration: '1'
               };
-        })(), identityRequestReply); }
+        })(), identityRequestReply, identityRequestReply, entry); }
       },
       actorJoinRelocation: {
         async relocateActorJoin() {
@@ -2805,7 +2820,7 @@ function boundSessionCommand44Harness(overrides = {}) {
   const runtime = new ZLinkActorTransferRuntime({
     routeTransport: {
       async sendToSpot() { throw new Error('command 44 must use the service-wire path'); },
-      requestToSpot() { return prepareZLinkRequestReply((async () => { throw new Error('command 44 must not use request/reply transport'); })(), identityRequestReply); }
+      requestToSpot() { return observeZLinkRequestReply((async () => { throw new Error('command 44 must not use request/reply transport'); })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
     },
     spotManager: () => undefined,
     actorManager: () => ({ getState: () => state }),
@@ -2932,7 +2947,7 @@ test('target route opening remains a no-op when no relocation route was publishe
   let wireCalls = 0;
   const runtime = new ZLinkActorTransferRuntime({
     routeTransport: {
-      requestToSpot() { return prepareZLinkRequestReply((async () => { wireCalls++; })(), identityRequestReply); },
+      requestToSpot() { return observeZLinkRequestReply((async () => { wireCalls++; })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); },
       async sendToSpot() { wireCalls++; }
     },
     spotManager: () => undefined,
@@ -3204,7 +3219,7 @@ test('precommit abort reopens source admission and replays backlog before one-wa
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      requestToSpot() { return prepareZLinkRequestReply((async () => { return { ok: true }; })(), identityRequestReply); }
+      requestToSpot() { return observeZLinkRequestReply((async () => { return { ok: true }; })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); }
     },
     requestSource: () => ({
       meshName: 'mesh',
@@ -3400,7 +3415,7 @@ test('target route opening never submits a second route after command 44', async
   let routeSubmissions = 0;
   const runtime = new ZLinkActorTransferRuntime({
     routeTransport: {
-      requestToSpot() { return prepareZLinkRequestReply((async () => { throw new Error('route opening must not request an ACK'); })(), identityRequestReply); },
+      requestToSpot() { return observeZLinkRequestReply((async () => { throw new Error('route opening must not request an ACK'); })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult()); },
       async sendToSpot() { throw new Error('route opening must not use legacy routing'); }
     },
     spotManager: () => undefined,
@@ -5073,13 +5088,16 @@ function createMockSpotNode(overrides) {
     ...overrides
   };
   node.completionTable = {
-    async submit(operation) {
-      const operationId = operation();
+     submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
+return resultOwner.observe((async () => {
+      const operationId = operation(resultOwner);
       const completion = completions.get(operationId.low);
       if (completion === undefined) throw new Error(`missing completion ${operationId.low}`);
       completions.delete(operationId.low);
       return completion;
-    }
+
+})());
+}
   };
   node.joinActorSpot ??= (actor, targetNodeRid, targetSpotId, _targetGeneration, request, timeoutMs) => {
     const operationId = { high: 0n, low: nextOperation++ };

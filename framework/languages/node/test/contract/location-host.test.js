@@ -1523,7 +1523,7 @@ function fakeBackendAdapterFactory(calls, nodeRid) {
             createPublisher() { return { close() {} }; },
             start() {},
             setReadyHandler() {},
-            setCompletionHandler() {},
+            setCompletionTable() {},
             createReadyBatch() { return fakeReadyBatch(); },
             createReceiveBatch() { return fakeReceiveBatch(); },
             drainReady() { return { ok: false, hasResidue: false, records: [] }; },
