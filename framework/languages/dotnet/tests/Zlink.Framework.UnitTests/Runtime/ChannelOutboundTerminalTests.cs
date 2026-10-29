@@ -55,6 +55,10 @@ public sealed class ChannelOutboundTerminalTests
                 Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
                 Assert.Equal("first terminal", failure.Message);
                 Assert.Equal(1, server.GetRequiredService<TerminalProbe>().RequestCount);
+                TelemetryReceipt.Wait(() =>
+                    FlowActivities(activities, nameof(TerminalEchoRequest))
+                        .Any(activity => Equals(activity.GetTagItem("phase"), "reply_received"))
+                );
             }
             finally
             {
@@ -88,6 +92,7 @@ public sealed class ChannelOutboundTerminalTests
             terminal.Succeeded();
             terminal.Dispose();
             terminal.Dispose();
+            TelemetryReceipt.Wait(() => FlowActivities(activities, "TerminalPinPacket").Any());
         }
 
         var activity = Assert.Single(FlowActivities(activities, "TerminalPinPacket"));
@@ -134,6 +139,7 @@ public sealed class ChannelOutboundTerminalTests
             );
             failed.Failed(new ZLinkFrameworkException(kind, "terminal failure"));
             failed.Dispose();
+            TelemetryReceipt.Wait(() => FlowActivities(activities, "TerminalClassifyPacket").Any());
         }
 
         var activity = Assert.Single(FlowActivities(activities, "TerminalClassifyPacket"));
@@ -159,6 +165,9 @@ public sealed class ChannelOutboundTerminalTests
             );
             terminal.Failed(new OperationCanceledException());
             terminal.Dispose();
+            TelemetryReceipt.Wait(() =>
+                FlowActivities(activities, "TerminalRouteMeshPacket").Any()
+            );
         }
 
         var activity = Assert.Single(FlowActivities(activities, "TerminalRouteMeshPacket"));
@@ -216,6 +225,10 @@ public sealed class ChannelOutboundTerminalTests
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Async<TerminalEchoReply>();
                 Assert.Equal("ready", reply.Value);
+                TelemetryReceipt.Wait(() =>
+                    FlowActivities(activities, nameof(TerminalEchoRequest))
+                        .Any(activity => Equals(activity.GetTagItem("phase"), "reply_received"))
+                );
             }
             finally
             {

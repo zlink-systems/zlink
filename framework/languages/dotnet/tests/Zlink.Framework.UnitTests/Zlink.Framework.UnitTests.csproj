@@ -219,6 +219,7 @@
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
         <Compile Include="Runtime/ProviderRelocationRepositoryTests.cs"/>
         <Compile Include="Runtime/MessageFlowTracerTests.cs"/>
+        <Compile Include="Runtime/MessageFlowDeliveryTests.cs"/>
         <Compile Include="Runtime/MessageFollowSuppressionRegistryTests.cs"/>
         <Compile Include="Runtime/MessagePayloadOwnershipConvergenceTests.cs"/>
         <Compile Include="Runtime/MeshCompletionTableConvergenceTests.cs"/>

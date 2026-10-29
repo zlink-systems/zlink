@@ -15,14 +15,19 @@ internal static class ZLinkTelemetry
     public static void SetDiagnosticsLevel(ZLinkDiagnosticsLevel level) =>
         Volatile.Write(ref _diagnosticsLevel, (int)level);
 
-    public static void TraceMessageFlow(ZLinkMessageFlowEvent flow)
+    public static void TraceMessageFlow(
+        ZLinkMessageFlowEvent flow,
+        ActivitySource source,
+        ActivityContext parent
+    )
     {
-        if (!ActivitySource.HasListeners())
+        if (!source.HasListeners())
             return;
 
-        using var activity = ActivitySource.StartActivity(
+        using var activity = source.StartActivity(
             ZLinkTraceFormat.MessageFlowEventName,
-            ActivityKind.Internal
+            ActivityKind.Internal,
+            parent
         );
         if (activity is null)
             return;
@@ -70,18 +75,21 @@ internal static class ZLinkTelemetry
     }
 
     public static void TraceDispatchError(
-        ZLinkDispatchFailure error,
+        ZLinkDispatchErrorSnapshot error,
         ZLinkDispatchErrorDetails errorDetails,
         string? flowId,
-        ZLinkFlowOrigin? flowOrigin
+        ZLinkFlowOrigin? flowOrigin,
+        ActivitySource source,
+        ActivityContext parent
     )
     {
-        if (!ActivitySource.HasListeners())
+        if (!source.HasListeners())
             return;
 
-        using var activity = ActivitySource.StartActivity(
+        using var activity = source.StartActivity(
             ZLinkTraceFormat.DispatchErrorEventName,
-            ActivityKind.Consumer
+            ActivityKind.Consumer,
+            parent
         );
         if (activity is null)
             return;

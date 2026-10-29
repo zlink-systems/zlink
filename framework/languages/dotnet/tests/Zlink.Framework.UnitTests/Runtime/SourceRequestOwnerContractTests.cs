@@ -47,6 +47,7 @@ public sealed class SourceRequestOwnerContractTests
         Assert.Null(
             await resolver.AcceptAsync(null, RoutingId.From("sender"), 1, CancellationToken.None)
         );
+        TelemetryReceipt.Wait(() => logger.Fields.Count != 0);
         Assert.Contains(
             logger.Fields,
             field => field.Key == "error_type" && (string?)field.Value == nameof(IOException)
