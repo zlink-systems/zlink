@@ -1,8 +1,6 @@
 namespace Zlink.Framework.Runtime.Messaging;
 
-// Actor model §sender replay: only durable lifecycle callers enter this owner.
-// The binding owns admission and HANDOVER completion; received envelopes leave
-// replay before decoding, including rejected and malformed terminal replies.
+// Lifecycle callers wait for initial readiness; the binding owns the started request.
 internal static class ZLinkDurableRequest
 {
     private static readonly Task CancellationOnly = new TaskCompletionSource().Task;
@@ -25,8 +23,6 @@ internal static class ZLinkDurableRequest
     )
     {
         timeProvider ??= TimeProvider.System;
-        var admitted = false;
-        Exception? lastFailure = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -36,10 +32,14 @@ internal static class ZLinkDurableRequest
                 // The entry's owner confirms expiration. A consumed stage budget
                 // prevents another submit but does not independently take terminal authority.
                 if (terminal is not null)
+                {
                     await terminal.ConfigureAwait(false);
+                    // Only the original entry can settle the caller; stop this producer.
+                    throw new OperationCanceledException(cancellationToken);
+                }
                 else if (cancellationToken.CanBeCanceled)
                     await CancellationOnly.WaitAsync(cancellationToken).ConfigureAwait(false);
-                throw Exhausted(admitted || requestAdmission?.IsAdmitted == true, lastFailure);
+                throw Exhausted(requestAdmission?.IsAdmitted == true);
             }
             var route = observeRoute();
             if (route.ReadyGeneration == 0)
@@ -54,7 +54,7 @@ internal static class ZLinkDurableRequest
                         var ready = await Task.WhenAny(wait, terminal).ConfigureAwait(false);
                         await ready.ConfigureAwait(false);
                         if (ReferenceEquals(ready, terminal))
-                            throw Exhausted(admitted, lastFailure);
+                            throw new OperationCanceledException(cancellationToken);
                     }
                 }
                 catch (OperationCanceledException)
@@ -64,70 +64,7 @@ internal static class ZLinkDurableRequest
                 }
                 continue;
             }
-            try
-            {
-                // This source has no deadline. It is the binding contract's
-                // generation-retirement signal, not the logical timeout owner.
-                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken
-                );
-                var submittedGeneration = route.ReadyGeneration;
-                var reply = submit(wire, remaining, attempt.Token).AsTask();
-                while (!reply.IsCompleted)
-                {
-                    if (terminal is null)
-                        await Task.WhenAny(reply, route.Changed).ConfigureAwait(false);
-                    else
-                    {
-                        var observed = await Task.WhenAny(reply, route.Changed, terminal)
-                            .ConfigureAwait(false);
-                        if (ReferenceEquals(observed, terminal))
-                        {
-                            _ = DiscardLateReplyAsync(reply);
-                            await terminal.ConfigureAwait(false);
-                            throw Exhausted(admitted, lastFailure);
-                        }
-                    }
-                    if (reply.IsCompleted)
-                        break;
-                    var next = observeRoute();
-                    if (next.SelectedGeneration != submittedGeneration)
-                    {
-                        await attempt.CancelAsync().ConfigureAwait(false);
-                        break;
-                    }
-                    route = next;
-                }
-                try
-                {
-                    return await reply.ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                    when (attempt.IsCancellationRequested
-                        && !cancellationToken.IsCancellationRequested
-                    )
-                {
-                    admitted |= requestAdmission?.IsAdmitted == true;
-                }
-            }
-            catch (Exception error) when (CanReplay(error, out var requestAdmitted))
-            {
-                admitted |= requestAdmitted;
-                lastFailure = error;
-            }
-        }
-    }
-
-    private static async Task DiscardLateReplyAsync<T>(Task<T> reply)
-    {
-        try
-        {
-            if (await reply.ConfigureAwait(false) is IReadOnlyList<Message> parts)
-                ZLinkMessageParts.DisposeAll(parts);
-        }
-        catch (Exception error)
-        {
-            ZLinkFrameworkDebugLog.TaskFailure("durable-late-reply", error);
+            return await submit(wire, remaining, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -150,7 +87,7 @@ internal static class ZLinkDurableRequest
                 };
     }
 
-    private static ZLinkFrameworkException Exhausted(bool admitted, Exception? cause) =>
+    private static ZLinkFrameworkException Exhausted(bool admitted) =>
         new(
             admitted
                 ? ZLinkFrameworkErrorKind.DeadlineExceeded
@@ -158,13 +95,11 @@ internal static class ZLinkDurableRequest
             admitted
                 ? "Durable request reply was not received before its deadline."
                 : "Durable request was not admitted before its deadline.",
-            ZLinkRetryAdvice.RetryAfterBackoff,
-            cause
+            ZLinkRetryAdvice.RetryAfterBackoff
         );
 }
 
-// MeshNode owns the selected identity and readiness; consumers retain only the
-// generation used by their attempt and await the existing topology edge.
+// MeshNode owns the selected identity and readiness; waiting callers use its topology edge.
 internal readonly record struct ZLinkPeerRouteObservation(
     ulong SelectedGeneration,
     ulong ReadyGeneration,

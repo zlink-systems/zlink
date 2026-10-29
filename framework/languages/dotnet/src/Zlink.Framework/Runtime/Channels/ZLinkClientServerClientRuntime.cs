@@ -502,7 +502,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         });
 
         var failures = new ZLinkFailureCollector();
-        await _requestDeadlines.DisposeAsync().ConfigureAwait(false);
         foreach (var task in retired)
             await failures.CaptureAsync(() => new ValueTask(task)).ConfigureAwait(false);
         failures.ThrowIfAny();
@@ -521,6 +520,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         foreach (var value in values)
             await failures.CaptureAsync(value.DisposeAsync).ConfigureAwait(false);
         failures.ThrowIfAny();
+        await _requestDeadlines.DisposeAsync().ConfigureAwait(false);
         RunState(() =>
         {
             _connections.Clear();

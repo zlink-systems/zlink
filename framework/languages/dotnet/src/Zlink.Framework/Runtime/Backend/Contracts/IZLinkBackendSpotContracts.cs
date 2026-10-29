@@ -277,11 +277,13 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         );
     }
 
-    ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
+    ValueTask<TReply> RequestToActorAsync<TReply>(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
         CancellationToken cancellationToken,
+        Func<IReadOnlyList<Message>, TReply> decodeReply,
+        Func<Exception, Exception> mapFailure,
         ZLinkRequestAdmission? requestAdmission = null
     );
 

@@ -126,19 +126,18 @@ public sealed class DurableRequestTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Selected_route_change_replays_only_when_the_new_route_is_ready(
+    public async Task Selected_route_change_preserves_the_started_binding_request(
         bool readyAtObservation
     )
     {
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var route = new ZLinkPeerRouteObservation(1, 1, changed.Task);
-        var cancelled = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        using var cancellation = new CancellationTokenSource();
         var pending = new TaskCompletionSource<string>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var attempts = 0;
+        var observations = 0;
         var wire = new ReadOnlyMemory<byte>[] { new byte[] { 28, 1, 2 } };
         var request = ZLinkDurableRequest
             .RequestAsync(
@@ -149,25 +148,23 @@ public sealed class DurableRequestTests
                 {
                     Assert.Same(wire, frames);
                     Assert.True(remaining > TimeSpan.FromSeconds(3));
-                    if (++attempts == 1)
-                    {
-                        token.Register(() =>
-                        {
-                            pending.TrySetCanceled(token);
-                            cancelled.TrySetResult();
-                        });
-                        return new ValueTask<string>(pending.Task);
-                    }
-                    return ValueTask.FromResult("terminal");
+                    Assert.Equal(cancellation.Token, token);
+                    attempts++;
+                    token.Register(() => pending.TrySetCanceled(token));
+                    return new ValueTask<string>(pending.Task);
                 },
-                CancellationToken.None,
-                observeRoute: () => route
+                cancellation.Token,
+                observeRoute: () =>
+                {
+                    observations++;
+                    return route;
+                }
             )
             .AsTask();
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         route = new(2, readyAtObservation ? 2UL : 0UL, ready.Task);
         changed.SetResult();
-        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.False(request.IsCompleted);
         if (!readyAtObservation)
         {
             Assert.Equal(1, attempts);
@@ -175,8 +172,10 @@ public sealed class DurableRequestTests
             route = new(2, 2, new TaskCompletionSource().Task);
             ready.SetResult();
         }
+        pending.SetResult("terminal");
         Assert.Equal("terminal", await request.WaitAsync(TimeSpan.FromSeconds(3)));
-        Assert.Equal(2, attempts);
+        Assert.Equal(1, attempts);
+        Assert.Equal(1, observations);
     }
 
     [Fact]
@@ -233,75 +232,87 @@ public sealed class DurableRequestTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task TypedNotConnectedReplaysIdenticalWireWithWholeRemainingDeadline(
+    public async Task TypedNotConnectedPropagatesFirstBindingFailureWithOriginalBudget(
         bool wasAdmitted
     )
     {
         IReadOnlyList<ReadOnlyMemory<byte>> wire = [new byte[] { 28, 1, 47, 48, 49 }];
+        var time = new ControllableTimeProvider();
         var timeout = TimeSpan.FromSeconds(8);
-        var started = Stopwatch.GetTimestamp();
+        var started = time.GetTimestamp();
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var route = new ZLinkPeerRouteObservation(1, 0, changed.Task);
+        using var cancellation = new CancellationTokenSource();
+        Exception expected = wasAdmitted
+            ? new ZlinkRequestException(ZlinkRequestException.ErrorCode.NotConnected)
+            : new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
         var attempts = 0;
-        var firstTimeout = TimeSpan.Zero;
-        IReadOnlyList<Message> terminal = [Message.From("terminal"u8)];
-        var result = await ZLinkDurableRequest.RequestAsync(
-            wire,
-            started,
-            timeout,
-            (frames, remaining, _) =>
-            {
-                Assert.Same(wire, frames);
-                Assert.True(
-                    remaining
-                        <= timeout
-                            - Stopwatch.GetElapsedTime(started)
-                            + TimeSpan.FromMilliseconds(10)
-                );
-                if (++attempts == 1)
+        var request = ZLinkDurableRequest
+            .RequestAsync<string>(
+                wire,
+                started,
+                timeout,
+                (frames, remaining, token) =>
                 {
-                    firstTimeout = remaining;
-                    Assert.True(remaining > TimeSpan.FromSeconds(5));
-                    return ValueTask.FromException<IReadOnlyList<Message>>(
-                        wasAdmitted
-                            ? new ZlinkRequestException(
-                                ZlinkRequestException.ErrorCode.NotConnected
-                            )
-                            : new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected)
-                    );
-                }
-                Assert.True(remaining < firstTimeout);
-                return ValueTask.FromResult(terminal);
-            },
-            CancellationToken.None,
-            ReadyRoute
-        );
-        Assert.Same(terminal, result);
-        ZLinkMessageParts.DisposeAll(result);
-        Assert.Equal(2, attempts);
+                    Assert.Same(wire, frames);
+                    Assert.Equal(TimeSpan.FromSeconds(5), remaining);
+                    Assert.Equal(cancellation.Token, token);
+                    attempts++;
+                    return ValueTask.FromException<string>(expected);
+                },
+                cancellation.Token,
+                () => route,
+                timeProvider: time
+            )
+            .AsTask();
+        Assert.Equal(0, attempts);
+        time.Advance(TimeSpan.FromSeconds(3));
+        route = new(1, 1, NoTopologyChange);
+        changed.SetResult();
+        var observed = await Record.ExceptionAsync(async () => await request);
+        Assert.Same(expected, observed);
+        Assert.Equal(1, attempts);
+        Assert.Equal(0, time.ActiveTimerCount);
     }
 
     [Fact]
-    public async Task AdmittedHistorySurvivesLaterSubmitFailures()
+    public async Task ReadinessExpiryWaitsForTheExistingOwnerTerminalWithoutSubmitting()
     {
-        var attempts = 0;
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await ZLinkDurableRequest.RequestAsync(
-                [],
-                Stopwatch.GetTimestamp(),
-                TimeSpan.FromMilliseconds(100),
-                (_, _, _) =>
-                    ValueTask.FromException<IReadOnlyList<Message>>(
-                        ++attempts == 1
-                            ? new ZlinkRequestException(
-                                ZlinkRequestException.ErrorCode.NotConnected
-                            )
-                            : new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected)
-                    ),
-                CancellationToken.None,
-                ReadyRoute
-            )
+        var time = new ControllableTimeProvider();
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var route = new ZLinkPeerRouteObservation(1, 0, changed.Task);
+        var expected = new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.DeadlineExceeded,
+            "Owner deadline expired."
         );
-        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
-        Assert.True(attempts > 1);
+        var attempts = 0;
+        var request = ZLinkDurableRequest
+            .RequestAsync<string>(
+                [],
+                time.GetTimestamp(),
+                TimeSpan.FromSeconds(1),
+                (_, _, _) =>
+                {
+                    attempts++;
+                    return ValueTask.FromResult("unexpected");
+                },
+                CancellationToken.None,
+                () => route,
+                timeProvider: time,
+                terminal: terminal.Task
+            )
+            .AsTask();
+        time.Advance(TimeSpan.FromSeconds(1));
+        route = new(1, 1, NoTopologyChange);
+        changed.SetResult();
+        Assert.False(request.IsCompleted);
+        Assert.Equal(0, attempts);
+        Assert.Equal(0, time.ActiveTimerCount);
+        terminal.SetException(expected);
+        var observed = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () => await request);
+        Assert.Same(expected, observed);
+        Assert.Equal(0, attempts);
     }
 
     [Fact]

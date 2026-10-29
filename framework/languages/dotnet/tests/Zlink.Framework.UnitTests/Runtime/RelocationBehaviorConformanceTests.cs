@@ -16,6 +16,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
@@ -729,6 +730,12 @@ public sealed partial class RelocationBehaviorConformanceTests
     [Fact]
     public async Task ActorJoin_overlapping_prepare_timeout_keeps_original_waiter_owned()
     {
+        using var listener = Environment.GetEnvironmentVariable(
+            RelocationBehaviorHost.FlowPathEnvironmentVariable
+        )
+            is { } flowPath
+            ? new TestHostMessageFlowListener(flowPath)
+            : null;
         var trace = new RelocationBehaviorTrace();
         var transport = new CanonicalRelocationTransportProbe(trace, holdTargetReady: true);
         var locationStore = new RecordingLocationStore(
@@ -979,7 +986,21 @@ public sealed partial class RelocationBehaviorConformanceTests
         );
         ulong sourceRouteBefore = 0;
         ulong targetRouteBefore = 0;
-        var trace = new RelocationBehaviorTrace();
+        var trace = new RelocationBehaviorTrace
+        {
+            ExpectedJoinAccepted = replaceRouteAt != 1,
+            ExpectedDeliveryNode = replaceRouteAt == 1 ? "source" : "target",
+        };
+        var completionRelease = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        if (replaceRouteAt == 1)
+            trace.OnPublicJoinCompleted = async _ =>
+            {
+                trace.Record("completionCallbackStarted");
+                await completionRelease.Task;
+                trace.Record("completionCallbackFinished");
+            };
         var cutover = new CanonicalRelocationTransportProbe(trace);
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
@@ -992,6 +1013,7 @@ public sealed partial class RelocationBehaviorConformanceTests
         var prepareSubmitted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var prepareSubmissions = 0;
         using var progress = new ActivityListener
         {
             ShouldListenTo = static activitySource =>
@@ -1006,8 +1028,13 @@ public sealed partial class RelocationBehaviorConformanceTests
                         == nameof(ServiceWireConstants.Command.RelocationPrepare)
                     && activity.GetTagItem(ZLinkTraceFormat.PhaseField)?.ToString()
                         == ZLinkTraceFormat.OutcomeKey(ZLinkMessageFlowOutcome.Sent)
+                    && activity.GetTagItem(ZLinkTraceFormat.DetailField)?.ToString()
+                        == "prepare_submitted"
                 )
+                {
+                    Interlocked.Increment(ref prepareSubmissions);
                     prepareSubmitted.TrySetResult();
+                }
             },
         };
         ActivitySource.AddActivityListener(progress);
@@ -1121,13 +1148,56 @@ public sealed partial class RelocationBehaviorConformanceTests
                 .AsTask();
             await Task.Delay(100);
             if (replaceRouteAt == 1)
+            {
+                locationStore.HeldSourceAbort = cutover.RelocationId;
                 routeProxy!.Pause();
+            }
             cutover.ReleasePrepareCall.TrySetResult();
             if (replaceRouteAt == 1)
             {
                 await prepareSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
                 await ReleaseAutomaticConnectionsAsync();
                 routeProxy!.Resume();
+                var failure = Assert.IsType<ZLinkFrameworkException>(
+                    await cutover.PrepareFailure.Task.WaitAsync(TimeSpan.FromSeconds(3))
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+                await locationStore.SourceAbortWriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                Assert.Empty(trace.JoinCompletions);
+                Assert.Empty(trace.DeliveredMarkers);
+                Assert.False(saved.IsCompleted);
+                Assert.False(prefix.IsCompleted);
+                Assert.False(trace.HasTargetAuthorityMutation);
+                locationStore.ReleaseSourceAbortWrite.SetResult();
+                await trace.WaitAsync("completionCallbackStarted");
+                Assert.NotNull(locationStore.ConfirmedSourceAbort);
+                Assert.False(cutover.ReadyReplyReceived.Task.IsCompleted);
+                Assert.False(cutover.CutoverSendStarted.Task.IsCompleted);
+                Assert.Equal(1, prepareSubmissions);
+                Assert.False(trace.HasTargetAuthorityMutation);
+                Assert.DoesNotContain("targetLifecycleStarted", trace.Events);
+                Assert.False(saved.IsCompleted);
+                Assert.False(prefix.IsCompleted);
+                completionRelease.SetResult();
+                Assert.Equal("saved", (await saved.WaitAsync(TimeSpan.FromSeconds(10))).Marker);
+                Assert.Equal("prefix", (await prefix.WaitAsync(TimeSpan.FromSeconds(10))).Marker);
+                Assert.Equal(new[] { "saved", "prefix" }, trace.DeliveredMarkers);
+                Assert.Equal(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    Assert
+                        .IsType<ZLinkActorJoinCompletion.Failed>(
+                            Assert.Single(trace.JoinCompletions).Completion
+                        )
+                        .Kind
+                );
+                Assert.True(
+                    trace.Events.ToList().IndexOf("completionCallbackFinished")
+                        < trace.Events.ToList().IndexOf("savedWorkAdmitted")
+                );
+                await source
+                    .Runtime.WaitForAcceptedActorHandoffsAsync(CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(2));
+                return;
             }
 
             await cutover.ReadyReplyReceived.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -1224,6 +1294,8 @@ public sealed partial class RelocationBehaviorConformanceTests
         finally
         {
             routeProxy?.Resume();
+            completionRelease.TrySetResult();
+            locationStore.ReleaseSourceAbortWrite.TrySetResult();
             cutover.ReleasePrepareCall.TrySetResult();
             cutover.ReleaseCutoverSend.TrySetResult();
             trace.ReleaseTargetLifecycle.TrySetResult();
@@ -2893,6 +2965,16 @@ internal sealed class RecordingLocationStore(
 {
     private readonly ZLinkProviderLocationRepository _reader = new(inner);
 
+    internal Guid? HeldSourceAbort { get; set; }
+    internal TaskCompletionSource SourceAbortWriteStarted { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal TaskCompletionSource ReleaseSourceAbortWrite { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal ZLinkAuthoritySnapshot? ConfirmedSourceAbort { get; private set; }
+    internal ZLinkAuthoritySnapshot? CapturedSourceAbort { get; private set; }
+    internal Exception? SourceAbortWriteFailure { get; set; }
+    internal int SourceAbortWriteCount;
+
     public ValueTask<ZLinkStoreReadResult> ReadAsync(
         ZLinkStoreKey key,
         CancellationToken cancellationToken = default
@@ -2903,6 +2985,48 @@ internal sealed class RecordingLocationStore(
         CancellationToken cancellationToken = default
     )
     {
+        ZLinkAuthoritySnapshot? captured = null;
+        if (HeldSourceAbort is { } relocationId && trace.ActorId is { } heldActorId)
+        {
+            var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(heldActorId);
+            var put = request
+                .Mutations.OfType<ZLinkStoreMutation.Put>()
+                .SingleOrDefault(mutation =>
+                    mutation.Key == ZLinkProviderLocationRepository.AuthorityMetaKey(key)
+                );
+            if (
+                put is not null
+                && await _reader.ReadAuthorityAsync(key, cancellationToken)
+                    is ZLinkAuthorityReadResult.Found current
+                && ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
+                    current.Snapshot,
+                    relocationId
+                )
+                && ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                    current.Snapshot.Payload.Span,
+                    out var projection
+                )
+            )
+            {
+                using var incoming = JsonDocument.Parse(put.Bytes);
+                if (
+                    incoming
+                        .RootElement.GetProperty("payload")
+                        .GetBytesFromBase64()
+                        .AsSpan()
+                        .SequenceEqual(projection.SteadyAuthorityPayload.Span)
+                )
+                {
+                    captured = current.Snapshot;
+                    CapturedSourceAbort = captured;
+                    Interlocked.Increment(ref SourceAbortWriteCount);
+                    SourceAbortWriteStarted.TrySetResult();
+                    await ReleaseSourceAbortWrite.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    if (SourceAbortWriteFailure is { } failure)
+                        throw failure;
+                }
+            }
+        }
         var result = await inner.WriteAsync(request, cancellationToken);
         if (result is ZLinkStoreWriteResult.Applied && trace.ActorId is { } actorId)
         {
@@ -2911,7 +3035,14 @@ internal sealed class RecordingLocationStore(
                 cancellationToken
             );
             if (read is ZLinkAuthorityReadResult.Found found)
+            {
+                if (captured is not null)
+                {
+                    ConfirmedSourceAbort = found.Snapshot;
+                    trace.Record("sourcePreserveConfirmed");
+                }
                 trace.ObserveActorAuthority(found.Snapshot);
+            }
         }
         return result;
     }
@@ -3071,7 +3202,8 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         Task? reconcileReadGate = null,
         Func<IZLinkMeshNodeLocationResolver, IZLinkMeshNodeLocationResolver>? meshResolverWrapper =
             null,
-        string? spotType = null
+        string? spotType = null,
+        TimeProvider? locationTimeProvider = null
     )
     {
         var services = new ServiceCollection();
@@ -3131,6 +3263,29 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
                     }
                 );
         });
+        if (locationTimeProvider is not null)
+            services.AddSingleton(provider =>
+            {
+                var registration = provider.GetRequiredService<ZLinkFrameworkRegistration>();
+                return new ZLinkLocationRuntime(
+                    provider.GetRequiredService<ZLinkLocationOptions>(),
+                    provider.GetRequiredService<IZLinkLocationRepository>(),
+                    locationTimeProvider,
+                    metricScopes: registration
+                        .SpotNodes.Keys.Select(static name => new KeyValuePair<string, string>(
+                            "mesh",
+                            name
+                        ))
+                        .Concat(
+                            registration.Channels.Keys.Select(static name => new KeyValuePair<
+                                string,
+                                string
+                            >("channel", name))
+                        )
+                        .Distinct()
+                        .ToArray()
+                );
+            });
         if (autoConnectGate is not null)
             services.AddSingleton(provider =>
             {
