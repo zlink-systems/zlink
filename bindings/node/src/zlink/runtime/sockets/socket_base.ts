@@ -11,6 +11,12 @@ import {
 } from '../errors/native_errors';
 import { validateCString } from '../options/validation';
 import { RoutingId } from '../../contracts';
+import {
+  ConnectionAttemptState,
+  ConnectionFailureKind,
+  ConnectionFailureStage,
+  type ConnectionAttempt,
+} from '../../contracts/sockets/connection_attempt';
 import { type MonitorEventType } from '../../contracts/eventing';
 import { SOCKET_MONITOR_EVENT_ALL, type ReceiveFlowState } from '../../contracts/sockets/socket_constants';
 import { normalizeRoutingId } from '../core/routing_id';
@@ -154,6 +160,21 @@ export class SocketBase extends NativeHandle {
 }
 
 export class ConnectableSocket extends SocketBase {
+  connectionAttemptsSnapshot(): readonly ConnectionAttempt[] {
+    const rows = configCall('connection snapshot query failed', () =>
+      requireNative().socketConnectionAttemptsSnapshot(getNativeHandle(this)));
+    // Protocol validation must remain outside configCall: an unknown enum is
+    // a binding protocol violation, never a Core configuration query result.
+    for (const row of rows) {
+      if (!Object.values(ConnectionAttemptState).includes(row.state)
+          || !Object.values(ConnectionFailureKind).includes(row.lastFailure.kind)
+          || !Object.values(ConnectionFailureStage).includes(row.lastFailure.stage)) {
+        throw new Error('connection snapshot protocol violation: unknown state, failure kind or stage');
+      }
+    }
+    return rows;
+  }
+
   connect(endpoint: string): void {
     const normalizedEndpoint = validateCString(endpoint, 'endpoint');
     connectCall('socket connect failed', () => {

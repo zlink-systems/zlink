@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+export * from './connection_attempt';
+
 export {
   SocketType,
   SOCKET_MONITOR_EVENT_ALL,

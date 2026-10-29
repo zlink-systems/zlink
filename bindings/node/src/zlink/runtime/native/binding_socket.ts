@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+import type { ConnectionAttempt } from '../../contracts/sockets/connection_attempt';
+
 import type {
   NativeHandle,
   NativeReceivedRaw,
@@ -77,6 +79,7 @@ export interface SocketNativeBinding {
   socketBind: (socket: NativeHandle, endpoint: string) => void;
   socketClose: (socket: NativeHandle) => void;
   socketConnect: (socket: NativeHandle, endpoint: string) => void;
+  socketConnectionAttemptsSnapshot: (socket: NativeHandle) => ConnectionAttempt[];
   socketDisconnect: (socket: NativeHandle, endpoint: string) => void;
   socketDisconnectRid: (socket: NativeHandle, routingId: Buffer) => void;
   socketGetOpt: (socket: NativeHandle, option: number) => Buffer;

@@ -26,7 +26,7 @@ function loadNative(): NativeBinding {
     }
   }
   throw new Error([
-    'Unable to load the zlink native addon:',
+    'Unable to load the zlink native addon; Core connection snapshot/PollConnect support is required:',
     ...failures.map((failure) => `- ${describeLoadFailure(failure)}`)
   ].join('\n'));
 }
