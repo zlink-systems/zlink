@@ -475,7 +475,10 @@ internal sealed class ZLinkActorRemoteJoiner(
             try
             {
                 await runtime
-                    .RestoreStandaloneActorRelocationSourceAsync(actorState)
+                    .RestoreStandaloneActorRelocationSourceAsync(
+                        actorState,
+                        sourceAuthority.MeshName
+                    )
                     .ConfigureAwait(false);
             }
             catch (Exception exception)

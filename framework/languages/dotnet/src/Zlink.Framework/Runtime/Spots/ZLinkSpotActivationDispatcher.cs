@@ -60,7 +60,8 @@ internal sealed class ZLinkSpotActivationDispatcher
         );
         _actorPipeline = new ZLinkActorInboundPipeline(
             runtime,
-            new ZLinkUserSpotActorInboundEndpoint(runtime, actors, _actorPacketDispatcher)
+            new ZLinkUserSpotActorInboundEndpoint(runtime, actors, _actorPacketDispatcher),
+            channelName
         );
         _actorJoinDispatcher = new ZLinkSpotActorJoinDispatcher(
             runtime,

@@ -258,7 +258,12 @@ public sealed class ActorHandoffTests : IAsyncLifetime
             _ =>
             {
                 order.Add("OnJoinCompleted");
-                Assert.Null(state.ReserveDeferredJoinBarrier(out previousMove));
+                Assert.Null(
+                    state.ReserveDeferredJoinBarrier(
+                        state.Actor!.Context.MeshName,
+                        out previousMove
+                    )
+                );
                 return ValueTask.CompletedTask;
             },
             default
@@ -266,7 +271,7 @@ public sealed class ActorHandoffTests : IAsyncLifetime
         Assert.NotNull(previousMove);
         state.Handoff.Complete("previous-completion");
         await previousMove;
-        var barrier = state.ReserveDeferredJoinBarrierAfterTarget();
+        var barrier = state.ReserveDeferredJoinBarrierAfterTarget(state.Actor!.Context.MeshName);
         using (await barrier.ClaimAsync())
         {
             order.Add("next-barrier");
@@ -328,13 +333,13 @@ public sealed class ActorHandoffTests : IAsyncLifetime
         );
         state.Handoff.Complete("discard-prefix");
         await entered.Task;
-        var barrier = state.ReserveDeferredJoinBarrier(out var previous);
+        var barrier = state.ReserveDeferredJoinBarrier("handoff-target-mesh", out var previous);
         Assert.Null(previous);
         using var body = Message.From("discarded-join-Q");
         using var q = Frame(body, ActorRef("node-b", 1), "session-Q");
         Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, state.Handoff.TryCapture(q));
         Assert.Empty(state.Handoff.EndDeferredJoinCapture());
-        state.ReleaseDeferredJoinBarrier();
+        state.ReleaseDeferredJoinBarrier("handoff-target-mesh");
         barrier!.Discard();
         finish.SetResult();
         await terminal;
@@ -376,6 +381,7 @@ public sealed class ActorHandoffTests : IAsyncLifetime
                                     firstStarted.SetResult();
                                     await finishFirst.Task;
                                     var barrier = state.ReserveDeferredJoinBarrier(
+                                        "handoff-target-mesh",
                                         out var previous
                                     );
                                     Assert.Null(previous);

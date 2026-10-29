@@ -128,7 +128,10 @@ public sealed class SpotWideMemberSealCaptureTests
             // Pre-relay-ready abort: the held frame goes back to the source
             // queue in its accepted order and runs there exactly once.
             Assert.True(await activation.AbortRelocationAsync(seal));
-            await source.Runtime.RestoreStandaloneActorRelocationSourceAsync(state);
+            await source.Runtime.RestoreStandaloneActorRelocationSourceAsync(
+                state,
+                activation.MeshName
+            );
             Assert.Equal("after-seal", (await afterSeal).Payload.Marker);
             Assert.False(state.Handoff.CapturesSourceIngress);
             Assert.False(handler.Disconnected.Task.IsCompleted);

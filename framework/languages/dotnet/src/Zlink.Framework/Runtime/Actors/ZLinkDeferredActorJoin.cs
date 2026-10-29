@@ -100,6 +100,7 @@ internal sealed class ZLinkDeferredActorJoin(
     ZLinkFrameworkRuntime runtime,
     ZLinkActorRuntimeState actorState,
     IZLinkActor actor,
+    string receiverMeshName,
     ulong objectGeneration,
     string? targetSpotId,
     ZLinkMessage request,
@@ -126,7 +127,7 @@ internal sealed class ZLinkDeferredActorJoin(
                 "Actor Join cannot be deferred while the Framework runtime is shutting down."
             );
         actorState.EnsureDeferredJoinIdentity(actor, objectGeneration);
-        _barrier = actorState.ReserveDeferredJoinBarrier(out _targetCompletion);
+        _barrier = actorState.ReserveDeferredJoinBarrier(receiverMeshName, out _targetCompletion);
     }
 
     public void Activate()
@@ -167,7 +168,7 @@ internal sealed class ZLinkDeferredActorJoin(
         }
         finally
         {
-            actorState.ReleaseDeferredJoinBarrier();
+            actorState.ReleaseDeferredJoinBarrier(receiverMeshName);
         }
     }
 
@@ -201,7 +202,7 @@ internal sealed class ZLinkDeferredActorJoin(
                         $"deferred_join_target_wait_failed kind={failure} {exception}"
                     );
                 }
-                barrier ??= actorState.ReserveDeferredJoinBarrierAfterTarget();
+                barrier ??= actorState.ReserveDeferredJoinBarrierAfterTarget(receiverMeshName);
             }
 
             if (barrier is not { } reservedBarrier)
@@ -321,7 +322,7 @@ internal sealed class ZLinkDeferredActorJoin(
             try
             {
                 barrier?.Discard();
-                actorState.ReleaseDeferredJoinBarrier();
+                actorState.ReleaseDeferredJoinBarrier(receiverMeshName);
             }
             finally
             {

@@ -232,7 +232,8 @@ public sealed partial class EntrySpotActorDispatchTests
             ]);
             await new ZLinkActorInboundPipeline(
                 runtime,
-                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
             ).DispatchAsync(frames, CancellationToken.None);
             Assert.Equal(1, entry.DisconnectCount);
             Assert.Equal(request ? true : (bool?)null, callbackReply);

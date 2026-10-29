@@ -34,6 +34,282 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Theory]
+    [InlineData(false, ZLinkDiagnosticsLevel.Off, false, false)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Off, false, true)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Off, true, false)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Off, true, true)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Errors, false, false)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Errors, false, true)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Errors, true, false)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Errors, true, true)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Normal, false, false)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Normal, false, true)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Normal, true, false)]
+    [InlineData(false, ZLinkDiagnosticsLevel.Normal, true, true)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Off, false, false)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Off, false, true)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Off, true, false)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Off, true, true)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Errors, false, false)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Errors, false, true)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Errors, true, false)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Errors, true, true)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Normal, false, false)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Normal, false, true)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Normal, true, false)]
+    [InlineData(true, ZLinkDiagnosticsLevel.Normal, true, true)]
+    public async Task MissingActorSend_RecordsTerminalStaleTarget(
+        bool disconnected,
+        ZLinkDiagnosticsLevel diagnosticsLevel,
+        bool metricsEnabled,
+        bool replay
+    )
+    {
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            observer,
+            diagnosticsLevel,
+            includeActorFactory: false
+        );
+        var drops = new List<(long Count, Dictionary<string, object?> Tags)>();
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, owner) =>
+            {
+                if (
+                    metricsEnabled
+                    && instrument.Meter.Name == ZLinkMeters.Framework
+                    && instrument.Name == "zlink.mesh_node.messages.dropped"
+                )
+                    owner.EnableMeasurementEvents(instrument);
+            },
+        };
+        listener.SetMeasurementEventCallback<long>(
+            (_, count, tags, _) =>
+                drops.Add((count, tags.ToArray().ToDictionary(tag => tag.Key, tag => tag.Value)))
+        );
+        listener.Start();
+        try
+        {
+            var flowId = ZlinkStreamFlowId.Create();
+            var packet = disconnected
+                ? ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName
+                : "missing-actor-send";
+            // The Actor route and preserved reply route differ from the receiving Entry node.
+            var replyActor = actorRef with
+            {
+                NodeRid = RoutingId.From("previous-source-node"),
+            };
+            using var frame = new ZLinkSpotActorFrame(
+                ZLinkApplicationJobOrigin.Remote,
+                actorRef,
+                replyActor,
+                RoutingId.From("message-source"),
+                RoutingId.From("message-session"),
+                0,
+                ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                new ZLinkBackendActorRouteContext(default, 0, 0, 0, 0),
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Send,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    packet,
+                    ZlinkStreamMetadata.Empty,
+                    CorrelationId: "terminal-correlation",
+                    FlowId: flowId,
+                    FlowOrigin: ZlinkStreamFlowOrigin.Inbound
+                ),
+                Message.From("payload"),
+                requestSource: AcceptedRequestSource(RoutingId.From("message-source"))
+            );
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            var actor = RegisterProbeActor(runtime, actorRef);
+            Assert.NotNull(state.Context);
+            state.ClearAfterDestroy();
+            Assert.Null(state.Actor);
+            Assert.Null(state.Context);
+            Assert.Null(state.Activation);
+            var pipeline = new ZLinkActorInboundPipeline(
+                runtime,
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
+            );
+            if (replay)
+                await pipeline.DispatchOwnedFrameAsync(
+                    new ZLinkSpotActorFrameBatch([frame]),
+                    null,
+                    default
+                );
+            else
+                await pipeline.DispatchAsync(new ZLinkSpotActorFrameBatch([frame]), default);
+
+            var errors = observer
+                .Events.Where(flow => flow.PacketName == packet && flow.Outcome == "failed")
+                .ToArray();
+            Assert.Equal(diagnosticsLevel == ZLinkDiagnosticsLevel.Off ? 0 : 1, errors.Length);
+            if (diagnosticsLevel != ZLinkDiagnosticsLevel.Off)
+            {
+                var error = Assert.Single(errors);
+                Assert.Equal("actor", error.Surface);
+                Assert.Equal("send", error.MessageKind);
+                Assert.Equal("stale_target", error.Reason);
+                Assert.Equal("drop", error.Action);
+                Assert.Equal(actorRef.ActorId, error.ActorId);
+                Assert.Equal("entry", error.MeshName);
+                Assert.Equal(
+                    diagnosticsLevel == ZLinkDiagnosticsLevel.Normal ? flowId : null,
+                    error.FlowId
+                );
+                Assert.Equal(
+                    diagnosticsLevel == ZLinkDiagnosticsLevel.Normal ? "inbound" : null,
+                    error.FlowOrigin
+                );
+                Assert.Equal("terminal-correlation", error.CorrelationId);
+            }
+            if (diagnosticsLevel is ZLinkDiagnosticsLevel.Off or ZLinkDiagnosticsLevel.Errors)
+                Assert.DoesNotContain(
+                    observer.Events,
+                    flow =>
+                        flow.PacketName == packet
+                        && (flow.FlowId is not null || flow.FlowOrigin is not null)
+                );
+            Assert.Equal(metricsEnabled ? 1 : 0, drops.Sum(drop => drop.Count));
+            if (metricsEnabled)
+            {
+                var drop = Assert.Single(drops);
+                Assert.Equal("entry", drop.Tags["mesh_name"]);
+                Assert.Equal("actor", drop.Tags["surface"]);
+                Assert.Equal("send", drop.Tags["message_kind"]);
+                Assert.Equal("stale_target", drop.Tags["reason"]);
+            }
+        }
+        finally
+        {
+            await runtime.StopAsync(default);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MissingActorSend_FollowOrPrewarmKeepsTheMessage(bool prewarm)
+    {
+        var node = new CapturingSpotNode();
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, observer);
+        long dropped = 0;
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, owner) =>
+            {
+                if (
+                    instrument.Meter.Name == ZLinkMeters.Framework
+                    && instrument.Name == "zlink.mesh_node.messages.dropped"
+                )
+                    owner.EnableMeasurementEvents(instrument);
+            },
+        };
+        listener.SetMeasurementEventCallback<long>(
+            (_, count, _, _) => Interlocked.Add(ref dropped, count)
+        );
+        listener.Start();
+        try
+        {
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            Assert.Null(state.Actor);
+            var target = actorRef;
+            var inboundActor = prewarm
+                ? actorRef
+                : actorRef with
+                {
+                    NodeRid = RoutingId.From("old-owner"),
+                };
+            if (prewarm)
+                await runtime.RegisterActorJoinPrewarmAsync(
+                    "kept-prewarm",
+                    actorRef.ActorId,
+                    actorRef.Generation,
+                    DateTimeOffset.UtcNow.AddSeconds(30),
+                    default
+                );
+            else
+            {
+                state.Handoff.BeginCapture();
+                Assert.Empty(
+                    state.Handoff.CutoverCaptureToMessageFollow(
+                        0,
+                        inboundActor,
+                        target,
+                        "entry",
+                        31,
+                        32,
+                        41,
+                        42,
+                        51,
+                        52,
+                        TimeSpan.FromSeconds(5)
+                    )
+                );
+            }
+            var sourceNodeRid = prewarm ? RoutingId.From("kept-source") : node.RoutingId;
+            var frame = new ZLinkSpotActorFrame(
+                ZLinkApplicationJobOrigin.Remote,
+                inboundActor,
+                inboundActor,
+                sourceNodeRid,
+                RoutingId.From("kept-session"),
+                0,
+                ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                prewarm
+                    ? new ZLinkBackendActorRouteContext(default, 0, 0, 0, 0)
+                    : new ZLinkBackendActorRouteContext(new MeshOperationId(11, 13), 0, 31, 41, 51),
+                CreateHeader("kept-send"),
+                Message.From("kept-body"),
+                requestSource: AcceptedRequestSource(sourceNodeRid)
+            );
+            await new ZLinkActorInboundPipeline(
+                runtime,
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
+            ).DispatchAsync(new ZLinkSpotActorFrameBatch([frame]), default);
+            if (prewarm)
+            {
+                Assert.True(
+                    state.Handoff.Import(
+                        PrewarmJoinRequest("kept-prewarm", actorRef.ActorId, actorRef.Generation),
+                        out _
+                    )
+                );
+                runtime.CompleteActorJoinPrewarmMigration("kept-prewarm", state);
+                var replay = state.Handoff.PrepareImportedReplay([]);
+                Assert.Equal("kept-body", Encoding.UTF8.GetString(Assert.Single(replay).Body));
+            }
+            else
+            {
+                await node.FinalPartAttempted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                Assert.Equal(target, node.LastMessageFollowActor);
+                Assert.Equal(
+                    Encoding.UTF8.GetBytes("kept-body"),
+                    node.MessageFollowParts[1].Payload
+                );
+                state.Handoff.CompleteSourceMigration();
+            }
+            Assert.Empty(
+                observer.Events.Where(flow =>
+                    flow.PacketName == "kept-send" && flow.Outcome == "failed"
+                )
+            );
+            Assert.Equal(0, Interlocked.Read(ref dropped));
+        }
+        finally
+        {
+            await runtime.StopAsync(default);
+        }
+    }
+
+    [Theory]
     [InlineData("normal", false, false)]
     [InlineData("cancel", false, false)]
     [InlineData("deadline", false, false)]
@@ -354,7 +630,8 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             var pipeline = new ZLinkActorInboundPipeline(
                 runtime,
-                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
             );
             var replies = new List<ZLinkActorReply?>();
             var terminals = state.AdmitDurablePrefix([
@@ -583,7 +860,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             await state.ExecuteDispatchAsync(
                 ct =>
-                    new ZLinkActorInboundPipeline(runtime, endpoint).DispatchAsync(
+                    new ZLinkActorInboundPipeline(runtime, endpoint, "entry").DispatchAsync(
                         new ZLinkSpotActorFrameBatch([frame]),
                         ct
                     ),
@@ -2489,7 +2766,8 @@ public sealed partial class EntrySpotActorDispatchTests
                             Interlocked.Increment(ref directReplyCount);
                             return SubmitResult.Ok;
                         }
-                    )
+                    ),
+                    "entry"
                 )
             );
             Assert.True(
@@ -2501,7 +2779,8 @@ public sealed partial class EntrySpotActorDispatchTests
                         sendOperation,
                         sendMessages,
                         flags: 0
-                    )
+                    ),
+                    "entry"
                 )
             );
 
@@ -4910,7 +5189,8 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             var pipeline = new ZLinkActorInboundPipeline(
                 runtime,
-                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
             );
 
             // The bound-session frame lacks its request-source fence, so it
@@ -5964,7 +6244,7 @@ public sealed partial class EntrySpotActorDispatchTests
             CancellationToken.None
         );
         await runner.StopAsync();
-        var pump = new ZLinkEntrySpotDispatchPump(runtime, activation: null, runner);
+        var pump = new ZLinkEntrySpotDispatchPump(runtime, activation: null, runner, "entry");
         pump.Attach(spot);
 
         var actorParts = CreateActorRequestParts(
@@ -6015,7 +6295,12 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation: null, runner);
+        await using var pump = new ZLinkEntrySpotDispatchPump(
+            runtime,
+            activation: null,
+            runner,
+            "entry"
+        );
         pump.Attach(spot);
         var parts = CreateActorRequestParts(
             actorRef,
@@ -6062,7 +6347,12 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation: null, runner);
+        await using var pump = new ZLinkEntrySpotDispatchPump(
+            runtime,
+            activation: null,
+            runner,
+            "entry"
+        );
         pump.Attach(spot);
 
         await spot.RaiseDispatch(
@@ -6144,7 +6434,12 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation: null, runner);
+        await using var pump = new ZLinkEntrySpotDispatchPump(
+            runtime,
+            activation: null,
+            runner,
+            "entry"
+        );
         pump.Attach(spot);
         var firstBatch = new[] { "first", "second" }
             .SelectMany(value =>
@@ -6225,7 +6520,12 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation: null, runner);
+        await using var pump = new ZLinkEntrySpotDispatchPump(
+            runtime,
+            activation: null,
+            runner,
+            "entry"
+        );
         pump.Attach(spot);
         var firstBatch = Parts("first", "first").Concat(Parts("second", "second")).ToArray();
         var secondBatch = Parts("second", "third").Concat(Parts("second", "fourth")).ToArray();
@@ -6363,7 +6663,8 @@ public sealed partial class EntrySpotActorDispatchTests
         var pump = new ZLinkEntrySpotDispatchPump(
             runtime,
             activation,
-            new ZLinkRuntimeTaskRunner(new ThrowingRuntimeErrorSink(), CancellationToken.None)
+            new ZLinkRuntimeTaskRunner(new ThrowingRuntimeErrorSink(), CancellationToken.None),
+            "entry"
         );
         pump.Attach(spot);
 
@@ -6405,7 +6706,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation, runner);
+        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation, runner, "entry");
         pump.Attach(spot);
         var first = CreateRoutedReceived("first");
         if (!alreadyDrained)
@@ -6463,7 +6764,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             new CancellationToken(canceled: true)
         );
-        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation, runner);
+        await using var pump = new ZLinkEntrySpotDispatchPump(runtime, activation, runner, "entry");
         pump.Attach(spot);
         using var first = CreateRoutedReceived("first");
         using var second = CreateRoutedReceived("second");
@@ -8226,7 +8527,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
             var pipeline = new ZLinkActorInboundPipeline(
                 runtime,
-                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
             );
             await pipeline.DispatchAsync(frames, CancellationToken.None);
 
@@ -10188,7 +10490,8 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             var pipeline = new ZLinkActorInboundPipeline(
                 runtime,
-                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
             );
             await pipeline.DispatchAsync(
                 new ZLinkSpotActorFrameBatch([earlyFrame]),
@@ -10352,7 +10655,8 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             var pipeline = new ZLinkActorInboundPipeline(
                 runtime,
-                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
             );
 
             await pipeline.DispatchAsync(
@@ -10933,6 +11237,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime,
                 runtime.GetOrCreateActorState(actor.ActorId),
                 actor,
+                actor.Context.MeshName,
                 actorRef.Generation,
                 "spot-ready",
                 ZLinkMessage.Empty,
@@ -10999,6 +11304,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime,
                 runtime.GetOrCreateActorState(actor.ActorId),
                 actor,
+                actor.Context.MeshName,
                 actorRef.Generation,
                 target.Spot.SpotId,
                 ZLinkMessage.Empty,
@@ -11165,6 +11471,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime,
                 runtime.GetOrCreateActorState(actor.ActorId),
                 actor,
+                actor.Context.MeshName,
                 actorRef.Generation,
                 "missing-spot",
                 ZLinkMessage.Empty,
@@ -12069,7 +12376,8 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var pipeline = new ZLinkActorInboundPipeline(
             runtime,
-            new ZLinkEntrySpotActorInboundEndpoint(runtime)
+            new ZLinkEntrySpotActorInboundEndpoint(runtime),
+            "entry"
         );
         var frames = ZLinkActorHandoffIngress.CaptureMovingFrames(
             Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,
@@ -15844,7 +16152,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 Normalize(Tag("action") ?? Tag("zlink.action")),
                 Tag("stream_session_id"),
                 Tag("error_type"),
-                Tag("error_message")
+                Tag("error_message"),
+                Tag("mesh_name")
             );
             _events.Enqueue(flow);
             _observed.TrySetResult(flow);
@@ -15886,7 +16195,8 @@ public sealed partial class EntrySpotActorDispatchTests
         string? Action,
         string? StreamSessionId,
         string? ErrorType,
-        string? ErrorMessage
+        string? ErrorMessage,
+        string? MeshName
     );
 
     private sealed class ThrowingBackendAdapterFactory : IZLinkBackendAdapterFactory

@@ -131,6 +131,7 @@ internal sealed class ZLinkActorJoinCall : IZLinkActorJoinSpotCall, IZLinkActorJ
             _runtime,
             _actorState,
             _actor,
+            _actor.Context.MeshName,
             _actorState.NativeActorRef?.Generation
                 ?? throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NotFound,

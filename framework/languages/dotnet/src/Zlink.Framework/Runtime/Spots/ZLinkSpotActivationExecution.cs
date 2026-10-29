@@ -1950,7 +1950,7 @@ internal abstract partial class ZLinkSpotActivation
             _timers.Resume();
             foreach (var state in capturedMembers)
                 await _runtime
-                    .RestoreStandaloneActorRelocationSourceAsync(state)
+                    .RestoreStandaloneActorRelocationSourceAsync(state, MeshName)
                     .ConfigureAwait(false);
             throw;
         }

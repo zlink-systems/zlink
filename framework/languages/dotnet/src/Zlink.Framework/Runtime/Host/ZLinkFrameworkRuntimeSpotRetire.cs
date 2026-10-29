@@ -721,7 +721,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
         var pipeline = new ZLinkActorInboundPipeline(
             this,
-            new ZLinkEntrySpotActorInboundEndpoint(this)
+            new ZLinkEntrySpotActorInboundEndpoint(this),
+            stage.TargetMeshName
         );
         foreach (
             var actorState in stage.ActorStates.OrderBy(
@@ -841,7 +842,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         var handoffId = stage.Envelope.AggregateId.ToString("N");
         var pipeline = new ZLinkActorInboundPipeline(
             this,
-            new ZLinkEntrySpotActorInboundEndpoint(this)
+            new ZLinkEntrySpotActorInboundEndpoint(this),
+            stage.TargetMeshName
         );
         foreach (
             var actorState in stage.ActorStates.OrderBy(
@@ -936,7 +938,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         var handoffId = stage.Envelope.AggregateId.ToString("N");
         var pipeline = new ZLinkActorInboundPipeline(
             this,
-            new ZLinkEntrySpotActorInboundEndpoint(this)
+            new ZLinkEntrySpotActorInboundEndpoint(this),
+            stage.TargetMeshName
         );
         var actorDrains = new List<Task>();
 

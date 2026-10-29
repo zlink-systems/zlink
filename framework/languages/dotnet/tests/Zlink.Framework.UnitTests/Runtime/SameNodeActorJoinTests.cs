@@ -22,9 +22,10 @@ public sealed partial class EntrySpotActorDispatchTests
         var callback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         ZLinkActorSerialExecutor.BarrierReservation? nextClaim = null;
         ZLinkActorRuntimeState? state = null;
+        var actor = RegisterProbeActor(runtime, actorRef);
+        var receiverMeshName = actor.Context.MeshName;
         try
         {
-            var actor = RegisterProbeActor(runtime, actorRef);
             state = runtime.GetOrCreateActorState(actor.ActorId);
             actor.JoinCompletionCallback = async () =>
             {
@@ -36,6 +37,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime,
                 state,
                 actor,
+                actor.Context.MeshName,
                 actorRef.Generation,
                 null,
                 ZLinkMessage.Empty,
@@ -61,7 +63,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     .GetField("_released", fields)!
                     .GetValue(waiter)!;
             var nextTurn = released.Task.ContinueWith(
-                _ => nextClaim = state.ReserveDeferredJoinBarrier(out var target),
+                _ => nextClaim = state.ReserveDeferredJoinBarrier(receiverMeshName, out var target),
                 CancellationToken.None,
                 TaskContinuationOptions.None,
                 new JoinClaimBoundaryScheduler()
@@ -70,12 +72,16 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.IsType<ZLinkActorJoinCompletion.Accepted>(
                 await actor.JoinCompletion.Task.WaitAsync(timeout)
             );
-            Assert.Throws<ZLinkFrameworkException>(() => state.ReserveDeferredJoinBarrier(out _));
+            Assert.Throws<ZLinkFrameworkException>(() =>
+                state.ReserveDeferredJoinBarrier(receiverMeshName, out _)
+            );
             Assert.False(nextTurn.IsCompleted);
             callback.SetResult();
             await nextTurn.WaitAsync(timeout);
             Assert.NotNull(nextClaim);
-            Assert.Throws<ZLinkFrameworkException>(() => state.ReserveDeferredJoinBarrier(out _));
+            Assert.Throws<ZLinkFrameworkException>(() =>
+                state.ReserveDeferredJoinBarrier(receiverMeshName, out _)
+            );
         }
         finally
         {
@@ -84,7 +90,7 @@ public sealed partial class EntrySpotActorDispatchTests
             {
                 nextClaim.Discard();
                 _ = state!.Handoff.EndDeferredJoinCapture();
-                state.ReleaseDeferredJoinBarrier();
+                state.ReleaseDeferredJoinBarrier(receiverMeshName);
             }
             await runtime.StopAsync(CancellationToken.None);
         }
@@ -136,7 +142,8 @@ public sealed partial class EntrySpotActorDispatchTests
             var sourceSpot = Assert.IsType<DurableJoinSpot>(state.LiveActivation!.Spot);
             var pipeline = new ZLinkActorInboundPipeline(
                 runtime,
-                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                new ZLinkEntrySpotActorInboundEndpoint(runtime),
+                "entry"
             );
             using var incoming = ZLinkActorHandoffIngress.CaptureMovingFrames(
                 ZLinkApplicationJobOrigin.Remote,
