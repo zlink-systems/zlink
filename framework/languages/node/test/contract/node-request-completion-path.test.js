@@ -1,7 +1,14 @@
 const { rawMeshBinding } = require('./fixtures/raw-mesh-binding');
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const {
+  inspectRuntime
+} = require('../../packages/framework/dist/runtime/internal-observation');
 
+const {
+  ZLinkFrameworkException,
+  ZLinkFrameworkErrorKind
+} = require('../../packages/framework/dist');
 const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
@@ -140,18 +147,18 @@ test('an observed remote request registers once without a registry Promise', asy
 });
 
 for (const method of ['requestToNode', 'requestToChannel']) {
-  test(`observed remote ${method} expires through Framework maintenance exactly once`, (t) => {
+  test(`observed remote ${method} expires through Framework maintenance exactly once`, async (t) => {
     t.mock.method(performance, 'now', () => 100);
-    const runtime = createRuntime();
     const events = [];
     let failBinding;
     let submissions = 0;
-    runtime.router = {
+    const { bindingPort } = rawMeshBinding({
       request(_target, _parts, _timeout, _reply, fail) {
         submissions++;
         failBinding = fail;
       }
-    };
+    });
+    const runtime = createRuntime(bindingPort);
     const peer = { descriptor: { nodeRoutingId: 'target' } };
     runtime.topology.readyPeer = () => peer;
     runtime.topology.selectChannel = () => peer;
@@ -164,7 +171,9 @@ for (const method of ['requestToNode', 'requestToChannel']) {
       const pending = runtime[method]('target', payload(), 10, undefined, observer, 7);
       assert.equal(submissions, 1);
       assert.equal(runtime.pendingOperationCount, 1);
-      assert.equal(runtime.operations.nextDeadlineMs(), 110);
+      assert.equal(runtime[inspectRuntime]().pendingControlSends, 0);
+      assert.equal(runtime.nextMaintenanceDeadlineMs(100), 110);
+      assert.equal(runtime.liveness.nextDeadlineMs(), Infinity);
       assert.equal(runtime.expireOperations(109, Infinity), 0);
       assert.equal(events.length, 0);
       assert.equal(runtime.expireOperations(110, Infinity), 1);
@@ -172,13 +181,14 @@ for (const method of ['requestToNode', 'requestToChannel']) {
       assert.equal(events.length, 1);
       assert.equal(events[0].id, pending.id);
       assert.equal(events[0].kind, 7);
-      assert.equal(events[0].error.name, 'OperationTimeoutError');
+      assert.ok(events[0].error instanceof ZLinkFrameworkException);
+      assert.equal(events[0].error.kind, ZLinkFrameworkErrorKind.DeadlineExceeded);
       failBinding(new Error('late binding failure'));
+      await Promise.resolve();
       assert.equal(runtime.expireOperations(120, Infinity), 0);
       assert.equal(events.length, 1);
     } finally {
-      runtime.operations.close();
-      runtime.mailbox.close();
+      runtime.close();
     }
   });
 }
