@@ -458,5 +458,12 @@ public enum PollEventFlags
     ///     <see cref="IRouterSocket.RoutesSnapshot" /> returns a snapshot that
     ///     reflects every change. Keep one route observer per socket.
     /// </summary>
-    PollRoute = 64
+    PollRoute = 64,
+
+    /// <summary>
+    ///     An outbound connection intent was added, removed or changed. Level
+    ///     readiness clears when the socket's single observer successfully reads
+    ///     <see cref="IConnectableSocket.ConnectionAttemptsSnapshot" />.
+    /// </summary>
+    PollConnect = 128
 }

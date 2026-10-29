@@ -89,6 +89,7 @@ internal static partial class NativeMethods
         "zlink_set_tls_server",
         "zlink_sleep",
         "zlink_socket",
+        "zlink_socket_connection_attempts_snapshot",
         "zlink_socket_monitor_open",
         "zlink_socket_monitor_recv",
         "zlink_socket_set_receive_flow_state",

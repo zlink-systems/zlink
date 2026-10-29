@@ -29,6 +29,29 @@ internal struct ZlinkRouterRoute
     public ulong RouteGeneration;
 }
 
+/// <summary>Mirrors <c>zlink_connection_failure_t</c>.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct ZlinkConnectionFailure
+{
+    public ConnectionFailureKind Kind;
+    public ConnectionFailureStage Stage;
+    public int NormalizedErrno;
+    public uint DisconnectReason;
+}
+
+/// <summary>Mirrors <c>zlink_connection_attempt_t</c>.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct ZlinkConnectionAttempt
+{
+    public nuint EndpointOffset;
+    public nuint EndpointLength;
+    public ulong IntentId;
+    public ulong Revision;
+    public ulong LastFailureId;
+    public ConnectionAttemptState State;
+    public ZlinkConnectionFailure LastFailure;
+}
+
 internal enum ZlinkSendCompleteResult
 {
     Admitted = 0,

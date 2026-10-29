@@ -29,6 +29,11 @@ internal sealed class RouterSocket : RoutedReceivingSocketBase, IRouterSocket
         return RoutingId.From(Kernel.GetOption(SocketOptions.RoutingId));
     }
 
+    public IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot()
+    {
+        return SocketConnectionOperations.ConnectionAttemptsSnapshot(Kernel);
+    }
+
     public void Connect(string address)
     {
         SocketConnectionOperations.Connect(Kernel, address);

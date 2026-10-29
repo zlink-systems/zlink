@@ -18,6 +18,11 @@ internal abstract class ConnectableSocketBase : SocketBase, IConnectableSocket
     {
     }
 
+    public IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot()
+    {
+        return SocketConnectionOperations.ConnectionAttemptsSnapshot(Kernel);
+    }
+
     public void Connect(string address)
     {
         SocketConnectionOperations.Connect(Kernel, address);
