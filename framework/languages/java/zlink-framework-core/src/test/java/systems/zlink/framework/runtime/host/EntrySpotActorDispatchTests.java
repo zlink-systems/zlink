@@ -746,10 +746,40 @@ final class EntrySpotActorDispatchTests {
         }
     }
 
-    @Test
-    void entrySpotActorSendMissingActorRecordsOneWayDropAtDefaultDiagnostics() throws Exception {
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(
+            strings = {
+                "follow-send",
+                systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets
+                        .SESSION_DISCONNECTED_PACKET_NAME
+            })
+    void entrySpotActorSendMissingActorRecordsStaleTarget(String packetName) throws Exception {
         TestBackend backend = startBackend();
         LinkedBlockingQueue<Map<String, String>> drops = new LinkedBlockingQueue<>();
+        var logger =
+                java.util.logging.Logger.getLogger(
+                        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                .getName());
+        LinkedBlockingQueue<String> errors = new LinkedBlockingQueue<>();
+        var observer =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        String line = record.getMessage();
+                        if (line.contains(" event_id=zlink.dispatch_error ")
+                                && line.contains(" actor=missing ")
+                                && line.contains(" packet=" + packetName + " ")) {
+                            errors.add(line);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(observer);
         try (var metrics =
                         ZLinkRuntimeMetrics.install(
                                 new ZLinkRuntimeMetrics.Sink() {
@@ -761,16 +791,26 @@ final class EntrySpotActorDispatchTests {
                                     }
                                 });
                 ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
-            backend.entrySpot.raiseActorReadable(
-                    actorSendParts("missing", "follow-send", "missing"));
+            backend.entrySpot.raiseActorReadable(actorSendParts("missing", packetName, "missing"));
 
+            String diagnostic = errors.poll(5, TimeUnit.SECONDS);
+            assertTrue(diagnostic != null, "missing Actor must produce a dispatch error");
+            assertTrue(diagnostic.contains(" surface=actor "), diagnostic);
+            assertTrue(diagnostic.contains(" kind=send "), diagnostic);
+            assertTrue(diagnostic.contains(" reason=stale_target "), diagnostic);
+            assertTrue(diagnostic.contains(" action=drop"), diagnostic);
             assertEquals(
                     Map.of(
                             "mesh_name", "entry",
                             "surface", "actor",
                             "message_kind", "send",
-                            "reason", "no_handler"),
+                            "reason", "stale_target"),
                     drops.poll(5, TimeUnit.SECONDS));
+            assertTrue(errors.isEmpty(), "one absent target must produce one dispatch error");
+            assertTrue(drops.isEmpty(), "one absent target must produce one drop metric");
+        } finally {
+            logger.removeHandler(observer);
+            observer.close();
         }
     }
 

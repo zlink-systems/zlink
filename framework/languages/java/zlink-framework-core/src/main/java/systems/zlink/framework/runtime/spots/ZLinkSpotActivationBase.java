@@ -252,8 +252,9 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                     Optional<ZLinkActor> localActor =
                             host.actorSessions().localActor(headerPart.actor().actorId());
                     if (localActor.isEmpty()) {
-                        host.reportSpotActorHandlerMissing(
+                        host.reportSpotActorDispatchFailure(
                                 packetHeader,
+                                ZLinkDispatchErrorReason.STALE_TARGET,
                                 context.spotId(),
                                 headerPart.actor().actorId(),
                                 headerPart.sourceNodeRid());
