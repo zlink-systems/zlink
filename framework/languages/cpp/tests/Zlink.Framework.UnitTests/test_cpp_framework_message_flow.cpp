@@ -171,8 +171,112 @@ bool file_provider_failure_does_not_change_message_result ()
 
 } // namespace
 
-int main ()
+int dispatch_error_observer_failures_preserve_operation ()
 {
+    bool passed = true;
+    for (const bool factory_failure : {false, true}) {
+        auto options = options_with_mode (message_flow_log_mode_t::normal);
+        unsigned observer_calls = 0;
+        unsigned factory_calls = 0;
+        zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          options, [&] (const auto &) {
+              ++observer_calls;
+              if (!factory_failure)
+                  throw std::runtime_error ("dispatch observer failed");
+          });
+        const auto before = dispatch_error_reporter_t::observer_failures ();
+        const auto operation = [&] {
+            dispatch_error_reporter_t reporter (options);
+            if (factory_failure)
+                reporter.report_lazy ([&] () -> message_dispatch_error_event_t {
+                    ++factory_calls;
+                    throw std::runtime_error ("dispatch event factory failed");
+                });
+            else
+                reporter.report (error_event ());
+            return factory_failure ? result_t<void>::failure (framework_error_kind_t::rejected,
+                                                              "operation rejected")
+                                   : result_t<void>::success ();
+        }();
+        const auto delta = dispatch_error_reporter_t::observer_failures () - before;
+        const bool unchanged =
+          factory_failure
+            ? !operation && operation.error_kind () == framework_error_kind_t::rejected
+                && std::string (operation.error ()->what ()) == "operation rejected"
+            : static_cast<bool> (operation);
+        std::cout << "dispatch_failure=" << (factory_failure ? "factory" : "observer")
+                  << " observer_calls=" << observer_calls << " factory_calls=" << factory_calls
+                  << " failure_delta=" << delta << " operation_unchanged=" << unchanged
+                  << std::endl;
+        passed = passed && delta == 1 && unchanged && observer_calls == (factory_failure ? 0u : 1u)
+                 && factory_calls == (factory_failure ? 1u : 0u);
+    }
+    return passed ? 0 : 1;
+}
+
+int dispatch_error_logger_failures_preserve_operation ()
+{
+    namespace fs = std::filesystem;
+    bool passed = true;
+    for (const bool file_failure : {false, true}) {
+        fs::path failed_log_path;
+        if (file_failure) {
+            failed_log_path =
+              fs::temp_directory_path ()
+              / ("zlink-dispatch-log-provider-failure-"
+                 + std::to_string (std::chrono::steady_clock::now ().time_since_epoch ().count ()));
+            if (!fs::create_directory (failed_log_path))
+                return 2;
+        }
+        app_t app;
+        logging_builder_t logging;
+        unsigned provider_calls = 0;
+        unsigned observer_calls = 0;
+        auto options = options_with_mode (message_flow_log_mode_t::normal);
+        if (file_failure) {
+            app.logging ().use_file (failed_log_path.string ());
+            zlink::framework::detail::dispatch_options_access_t::set_logger (
+              options, app.logging ().factory ().create ("dispatch-file-failure"));
+        } else {
+            logging.use_provider ("throwing-dispatch-provider", [&] (const log_record_t &) {
+                ++provider_calls;
+                throw std::runtime_error ("dispatch logging provider failed");
+            });
+            zlink::framework::detail::dispatch_options_access_t::set_logger (
+              options, logging.create_logger ("dispatch-provider-failure"));
+        }
+        zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          options, [&] (const auto &) { ++observer_calls; });
+        const auto before = dispatch_error_reporter_t::observer_failures ();
+        const auto operation_result = [&] {
+            dispatch_error_reporter_t (options).report (error_event ());
+            return message_flow_result_t::succeeded;
+        }();
+        const auto delta = dispatch_error_reporter_t::observer_failures () - before;
+        const bool unchanged = operation_result == message_flow_result_t::succeeded;
+        std::error_code cleanup_error;
+        if (file_failure)
+            fs::remove_all (failed_log_path, cleanup_error);
+        std::cout << "logger_failure=" << (file_failure ? "file_path" : "throw_provider")
+                  << " provider_calls=" << provider_calls << " observer_calls=" << observer_calls
+                  << " failure_delta=" << delta << " operation_unchanged=" << unchanged
+                  << " cleanup_error=" << cleanup_error.value () << std::endl;
+        passed = passed && delta == 1 && unchanged && observer_calls == 1 && !cleanup_error
+                 && (file_failure || provider_calls == 1);
+    }
+    return passed ? 0 : 1;
+}
+
+int main (int argc, char **argv)
+{
+    if (argc == 2 && std::string (argv[1]) == "--logger-failures")
+        return dispatch_error_logger_failures_preserve_operation ();
+    if (argc == 2 && std::string (argv[1]) == "--observer-failures")
+        return dispatch_error_observer_failures_preserve_operation ();
+    if (const auto result = dispatch_error_observer_failures_preserve_operation (); result != 0)
+        return result;
+    if (const auto result = dispatch_error_logger_failures_preserve_operation (); result != 0)
+        return result;
     // off silences every success transition, including drops.
     {
         const auto out = capture_logs ([] {

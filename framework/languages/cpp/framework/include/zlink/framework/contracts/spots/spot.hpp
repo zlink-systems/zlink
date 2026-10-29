@@ -1672,7 +1672,8 @@ class spot_handler_registry_t
       std::function<std::optional<bool> (std::function<bool ()>)> admit_actor_queue = {},
       std::shared_ptr<const void> retained_message = {},
       std::shared_ptr<runtime::serial_application_record_t> application_record = {},
-      std::function<void ()> on_application_export = {}) const;
+      std::function<void ()> on_application_export = {},
+      std::string_view actor_execution_id = {}) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);

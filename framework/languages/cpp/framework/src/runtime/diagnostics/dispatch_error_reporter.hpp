@@ -68,7 +68,7 @@ class dispatch_error_reporter_t
             dispatch_options_access_t::observe_dispatch_error (*_options, event);
         }
         catch (...) {
-            (void) observer_failures ();
+            message_flow_tracer_t::record_observer_failure ();
         }
     }
 
@@ -83,7 +83,7 @@ class dispatch_error_reporter_t
             report (std::forward<Fn> (build_event) ());
         }
         catch (...) {
-            (void) observer_failures ();
+            message_flow_tracer_t::record_observer_failure ();
         }
     }
 
@@ -190,12 +190,13 @@ class dispatch_error_reporter_t
                 add (dispatch_event_field::error_message, *event.error_message);
             }
             // Structured fields through the configured framework logger.
-            diagnostic_event_sink_t::log_if_configured (
-              dispatch_options_access_t::logger (*_options), default_log_level (event),
-              "dispatch error", std::move (fields));
+            if (!diagnostic_event_sink_t::log_if_configured (
+                  dispatch_options_access_t::logger (*_options), default_log_level (event),
+                  "dispatch error", std::move (fields)))
+                message_flow_tracer_t::record_observer_failure ();
         }
         catch (...) {
-            (void) observer_failures ();
+            message_flow_tracer_t::record_observer_failure ();
         }
     }
 

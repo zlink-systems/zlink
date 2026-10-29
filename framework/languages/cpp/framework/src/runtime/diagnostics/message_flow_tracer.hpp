@@ -116,7 +116,7 @@ class message_flow_tracer_t
             emit (std::move (event), effective_mode);
         }
         catch (...) {
-            observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
+            record_observer_failure ();
         }
     }
 
@@ -154,7 +154,7 @@ class message_flow_tracer_t
             emit (std::move (event), effective_mode);
         }
         catch (...) {
-            observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
+            record_observer_failure ();
         }
     }
 
@@ -178,7 +178,7 @@ class message_flow_tracer_t
             emit (std::move (event), effective_mode);
         }
         catch (...) {
-            observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
+            record_observer_failure ();
         }
     }
 
@@ -214,13 +214,13 @@ class message_flow_tracer_t
     {
         traced_count ().fetch_add (1, std::memory_order_relaxed);
         if (dispatch_options_access_t::logger (*_options) && !log_default (event, effective_mode)) {
-            observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
+            record_observer_failure ();
         }
         try {
             dispatch_options_access_t::observe (*_options, event);
         }
         catch (...) {
-            observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
+            record_observer_failure ();
         }
     }
 
@@ -228,6 +228,11 @@ class message_flow_tracer_t
     static std::uint64_t traced () noexcept
     {
         return traced_count ().load (std::memory_order_relaxed);
+    }
+
+    static void record_observer_failure () noexcept
+    {
+        observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
     }
 
     static std::uint64_t observer_failures () noexcept

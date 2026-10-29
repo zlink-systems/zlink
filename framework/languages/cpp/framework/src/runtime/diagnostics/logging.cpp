@@ -2,6 +2,7 @@
 
 #include <zlink/framework/contracts/configuration/logging.hpp>
 
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
 
@@ -202,6 +203,7 @@ void emit_log (const std::shared_ptr<logging_state_t> &state,
         catch (...) {
             // A logging provider is an observation boundary.  Its failure
             // must not escape into the dispatch or lifecycle owner.
+            message_flow_tracer_t::record_observer_failure ();
         }
     }
 }
