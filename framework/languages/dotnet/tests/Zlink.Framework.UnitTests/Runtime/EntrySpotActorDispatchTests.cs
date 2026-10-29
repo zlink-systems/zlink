@@ -9184,6 +9184,55 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
+    //  Origin values: 0 Unspecified (local failure), 1 Framework, 2 Application
+    //  (the internal enum cannot appear in a public theory signature).
+    [Theory]
+    [InlineData(ZLinkFrameworkErrorKind.NotFound, 1, true)]
+    [InlineData(ZLinkFrameworkErrorKind.Unavailable, 1, true)]
+    [InlineData(ZLinkFrameworkErrorKind.NotFound, 2, false)]
+    [InlineData(ZLinkFrameworkErrorKind.Unavailable, 2, false)]
+    [InlineData(ZLinkFrameworkErrorKind.NotFound, 0, true)]
+    [InlineData(ZLinkFrameworkErrorKind.Unavailable, 0, true)]
+    [InlineData(ZLinkFrameworkErrorKind.Rejected, 1, false)]
+    [InlineData(ZLinkFrameworkErrorKind.InternalFailure, 0, false)]
+    public async Task Actor_Request_Stale_Route_Judgement_Uses_Cache_Effect(
+        ZLinkFrameworkErrorKind kind,
+        int origin,
+        bool expectedInvalidation
+    )
+    {
+        var failure = new ZLinkFrameworkException(kind, "actor route result")
+        {
+            Origin = (ZLinkErrorOrigin)origin,
+        };
+        var node = new CapturingSpotNode { ActorRequestHandler = _ => throw failure };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node, includeActorFactory: false);
+        try
+        {
+            var rows = runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+            var key = new ZLinkActorLocationKey(actor.ActorId);
+            Assert.NotNull(await rows.ResolveActorRowAsync(key));
+            Assert.True(rows.HasCachedActorRoute(key));
+
+            IZLinkActorClient client = new ZLinkActorClient(runtime);
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await client
+                    .RequestToActor(actor.ActorId, new ProbeRouteMessage("request"))
+                    .Async<ProbeReply>()
+            );
+
+            Assert.Same(failure, error);
+            Assert.Equal(kind, error.Kind);
+            Assert.Equal((ZLinkErrorOrigin)origin, error.Origin);
+            Assert.Equal(!expectedInvalidation, rows.HasCachedActorRoute(key));
+            Assert.Single(node.ActorRequests);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Theory]
     [InlineData(ZlinkSubmitException.ErrorCode.Backpressured, "submission capacity is unavailable")]
     [InlineData(ZlinkSubmitException.ErrorCode.NotConnected, "target route is not connected")]
