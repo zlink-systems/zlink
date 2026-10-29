@@ -7016,8 +7016,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     : ZLinkScannedHandlerKind.ACTOR_SEND);
                             if (handler == null) {
                                 boolean request = packetHeader.requestSeq().isPresent();
-                                reportSpotActorHandlerMissing(
+                                reportSpotActorDispatchFailure(
                                         packetHeader,
+                                        ZLinkDispatchErrorReason.HANDLER_MISSING,
                                         currentDispatchLine.spotId(),
                                         actor.context().actorId(),
                                         headerCopy.sourceNodeRid());
@@ -7265,14 +7266,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         .spotId(spotId));
     }
 
-    void reportSpotActorHandlerMissing(
+    void reportSpotActorDispatchFailure(
             ActorPacketFrames.Header packetHeader,
+            ZLinkDispatchErrorReason reason,
             String spotId,
             String actorId,
             RoutingId sourceRid) {
         boolean request = packetHeader.requestSeq().isPresent();
         if (!request && ZLinkRuntimeMetrics.enabled()) {
-            ZLinkMeshMessageMetrics.forMesh(meshNameForSpot(spotId)).dropped("actor", "no_handler");
+            ZLinkMeshMessageMetrics.forMesh(meshNameForSpot(spotId))
+                    .dropped("actor", reason.traceName());
         }
         reportDispatchError(
                 DispatchFailureReport.of(
@@ -7280,7 +7283,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 request
                                         ? ZLinkDispatchMessageKind.ACTOR_REQUEST
                                         : ZLinkDispatchMessageKind.ACTOR_SEND,
-                                ZLinkDispatchErrorReason.HANDLER_MISSING,
+                                reason,
                                 request
                                         ? ZLinkDispatchErrorAction.REPLY_ERROR
                                         : ZLinkDispatchErrorAction.DROP)
