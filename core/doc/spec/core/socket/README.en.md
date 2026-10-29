@@ -905,6 +905,12 @@ Binds the socket to a local endpoint. The endpoint string uses the format
 - `wss://interface:port` (WebSocket over TLS; only in `ZLINK_HAVE_WSS` builds)
 - `tls://interface:port` (TLS-encrypted TCP; only in `ZLINK_HAVE_TLS` builds)
 
+First parse the address portion of an IP-based bind address as a numeric IP
+address. If it parses, use that address without looking up a NIC address or
+performing a DNS lookup. Otherwise, look it up as a NIC name; if no matching
+NIC exists, perform the permitted address-name resolution. The wildcard `*`
+and bracketed IPv6 addresses remain supported.
+
 A socket can be bound to multiple endpoints. For TCP, if port 0 is specified
 the system assigns an ephemeral port; use `ZLINK_OPT_LAST_ENDPOINT` to retrieve
 the actual endpoint.

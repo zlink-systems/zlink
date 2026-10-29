@@ -319,6 +319,16 @@ int zlink::ip_resolver_t::resolve (ip_addr_t *ip_addr_, const char *name_)
     }
 
     if (!resolved && _options.allow_nic_name ()) {
+        const int rc = resolve_getaddrinfo (ip_addr_, addr_str, true);
+
+        if (rc == 0) {
+            resolved = true;
+        } else if (errno == ENOMEM) {
+            return rc;
+        }
+    }
+
+    if (!resolved && _options.allow_nic_name ()) {
         //  Try to resolve the string as a NIC name.
         const int rc = resolve_nic_name (ip_addr_, addr_str);
 
@@ -352,7 +362,9 @@ int zlink::ip_resolver_t::resolve (ip_addr_t *ip_addr_, const char *name_)
     return 0;
 }
 
-int zlink::ip_resolver_t::resolve_getaddrinfo (ip_addr_t *ip_addr_, const char *addr_)
+int zlink::ip_resolver_t::resolve_getaddrinfo (ip_addr_t *ip_addr_,
+                                               const char *addr_,
+                                               bool numeric_only_)
 {
 #if defined ZLINK_HAVE_OPENVMS && defined __ia64
     __addrinfo64 *res = NULL;
@@ -377,7 +389,7 @@ int zlink::ip_resolver_t::resolve_getaddrinfo (ip_addr_t *ip_addr_, const char *
         req.ai_flags |= AI_PASSIVE;
     }
 
-    if (!_options.allow_dns ()) {
+    if (numeric_only_ || !_options.allow_dns ()) {
         req.ai_flags |= AI_NUMERICHOST;
     }
 
