@@ -1,5 +1,5 @@
 import type { ZLinkActorSessionAuthorityFence } from '../streams/actor-session-binding-registry';
-import { mapZLinkRequestReply, ZLinkRequestResult } from '../messaging/request-result';
+import { mapZLinkRequestReply } from '../messaging/request-result';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -746,7 +746,6 @@ export class ZLinkActorPacketRelay {
     if ((spotKind ?? ZLinkSpotKind.Entry) === ZLinkSpotKind.Entry) {
       await mapZLinkRequestReply(
         this.options.routeTransport.request(
-          new ZLinkRequestResult(),
           remoteTarget.routerChannelId,
           String(remoteTarget.targetNodeRid),
           ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
@@ -840,7 +839,6 @@ export class ZLinkActorPacketRelay {
       try {
         return await mapZLinkRequestReply(
           this.options.routeTransport.request<TReply>(
-            new ZLinkRequestResult<TReply>(),
             target.routerChannelId,
             String(target.targetNodeRid),
             ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,

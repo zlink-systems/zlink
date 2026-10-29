@@ -2,7 +2,7 @@ const { rawMeshFixture } = require('./fixtures/raw-mesh-binding');
 const { createRelayMeshHost } = require('./fixtures/relay-host');
 const { createMeshHost } = require('./fixtures/mesh-host');
 const { createRelayHost } = require('./fixtures/relay-host');
-const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -383,7 +383,10 @@ test('clearing an Actor packet target preserves Session relocation terminal owne
   assert.equal(ownershipClears, 0);
 });
 
-test('managed stream binds Session Actors through the Framework service without binding service APIs', async (t) => {
+for (const notConnected of [false, true]) {
+  test(notConnected
+    ? 'managed stream propagates the first service NotConnected without resubmitting'
+    : 'managed stream binds Session Actors through the Framework service without binding service APIs', async (t) => {
   const actor = {
     actorId: 'actor-framework-service',
     generation: 7n,
@@ -393,7 +396,9 @@ test('managed stream binds Session Actors through the Framework service without 
   const bindings = [];
   const bindAuthorities = [];
   let bindAttempts = 0;
+  let bindOperationId;
   const transportAttempts = [];
+  const firstFailure = new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
   const serviceRuntime = withTestSessionOwners(
     new ServiceStatefulRuntime(
       {
@@ -403,11 +408,10 @@ test('managed stream binds Session Actors through the Framework service without 
           return () => {};
         },
         setServiceIngress() {},
-        async requestService(_targetNodeRid, parts) {
+        async requestService(targetNodeRid, parts) {
+          assert.equal(targetNodeRid, actor.nodeRid);
           transportAttempts.push(Buffer.from(parts[0]));
-          if (transportAttempts.length === 1) {
-            throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
-          }
+          if (notConnected) throw firstFailure;
           const request = serviceStatefulWire.decodeStatefulHeader(parts[0]);
           return [
             serviceStatefulWire.encodeStatefulReply(request.correlation, RequestResult.Ok, 0, {
@@ -460,6 +464,7 @@ test('managed stream binds Session Actors through the Framework service without 
         onBindingReplaced,
         actorAuthority
       );
+      bindOperationId = pending.id;
       return operation('bind', pending.promise);
     },
     unbindActor() {
@@ -473,9 +478,8 @@ test('managed stream binds Session Actors through the Framework service without 
     }
   };
   const completions = {
-     submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-      const id = operation(resultOwner);
+    async submit(operation) {
+      const id = operation();
       const { kind, promise } = operations.get(id.low);
       const result = await promise;
       if (kind === 'bind') bindings.push(...serviceRuntime.allSessionBindings());
@@ -486,9 +490,7 @@ return resultOwner.observe((async () => {
         kindData: kind === 'lookup' ? { kind: 'actorLookupCompletion', location: { actor } } : null,
         parts: []
       };
-
-})());
-}
+    }
   };
   const rawStreamSocket = {
     sendTimeoutMs: 1000,
@@ -516,7 +518,7 @@ return resultOwner.observe((async () => {
     ownerLeaseGeneration: 10n,
     ownerNodeGeneration: 3n
   };
-  await stream.bindActor(
+  const bind = stream.bindActor(
     {
       actorId: actor.actorId,
       objectGeneration: actor.generation,
@@ -529,10 +531,29 @@ return resultOwner.observe((async () => {
     actorAuthority
   );
 
-  assert.equal(bindings.length, 1);
+  if (notConnected) {
+    await assert.rejects(bind, (error) => {
+      assert.equal(error, firstFailure);
+      assert.ok(error instanceof ZLinkBackendResultError);
+      assert.equal(error.operation, 'submit');
+      assert.equal(error.result, SubmitResult.NotConnected);
+      assert.equal(error.phase, 'completion');
+      return true;
+    });
+  } else {
+    await bind;
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(bindings.length, notConnected ? 0 : 1);
+  assert.equal(serviceRuntime.allSessionBindings().length, notConnected ? 0 : 1);
   assert.equal(bindAttempts, 1);
-  assert.equal(transportAttempts.length, 2);
-  assert.deepEqual(transportAttempts[1], transportAttempts[0]);
+  assert.equal(transportAttempts.length, 1);
+  assert.deepEqual(transportAttempts[0], serviceStatefulWire.encodeBoundSessionBindHeader(
+    bindOperationId,
+    { actor, targetNodeGeneration: 3n, authorityOwnerGeneration: 9n, ownerLeaseGeneration: 10n },
+    'session-rid',
+    { state: 'active', generation: 1n }
+  ));
   assert.deepEqual(serviceStatefulWire.decodeStatefulHeader(transportAttempts[0]).actor, {
     actor,
     targetNodeGeneration: 3n,
@@ -549,7 +570,8 @@ return resultOwner.observe((async () => {
   assert.equal(typeof rawStreamSocket.bindActor, 'undefined');
   assert.equal(typeof rawStreamSocket.unbindActor, 'undefined');
   assert.equal(typeof rawStreamSocket.sendBoundActor, 'undefined');
-});
+  });
+}
 
 test('session Actor bind forwards the resolved Location authority to the native bind', async () => {
   const stream = new framework.ZLinkManagedStream(
@@ -637,9 +659,8 @@ test('managed stream preserves synchronous service failure without reserving ano
     undefined,
     service,
     {
-      submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-        const result = operation(resultOwner);
+      submit(operation) {
+        const result = operation();
         return Promise.resolve({
           terminalResult: 0,
           failureErrno: 0,
@@ -655,9 +676,7 @@ return resultOwner.observe((async () => {
               : null,
           parts: []
         });
-
-})());
-}
+      }
     }
   );
 
@@ -760,9 +779,8 @@ test('managed stream treats an actor-destroy stale unbind as idempotent cleanup'
     }
   };
   const completions = {
-     submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-      const id = operation(resultOwner);
+    async submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
       return {
         terminalResult: kind === 'unbind' ? RequestResult.NotFound : RequestResult.Ok,
@@ -777,9 +795,7 @@ return resultOwner.observe((async () => {
             : null,
         parts: []
       };
-
-})());
-}
+    }
   };
   const stream = new framework.ZLinkManagedStream(
     {
@@ -984,9 +1000,8 @@ test('managed stream skips native unbind after transport teardown', async () => 
     }
   };
   const completions = {
-     submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-      const id = operation(resultOwner);
+    async submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
       return {
         terminalResult: 0,
@@ -1007,9 +1022,7 @@ return resultOwner.observe((async () => {
             : null,
         parts: []
       };
-
-})());
-}
+    }
   };
   const stream = new framework.ZLinkManagedStream(
     {
@@ -1099,9 +1112,8 @@ test('managed stream fences a native bind that completes after transport teardow
     }
   };
   const completions = {
-     submit(work, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-      const id = work(resultOwner);
+    async submit(work) {
+      const id = work();
       const kind = operations.get(id.low);
       if (kind === 'bind') await bindCanFinish;
       return {
@@ -1123,9 +1135,7 @@ return resultOwner.observe((async () => {
             : null,
         parts: []
       };
-
-})());
-}
+    }
   };
   const stream = new framework.ZLinkManagedStream(
     {
@@ -1221,9 +1231,8 @@ test('managed stream accepts an internal unbind result after the exact delivery 
     }
   };
   const completions = {
-     submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-      const id = operation(resultOwner);
+    async submit(operation) {
+      const id = operation();
       const kind = operations.get(id.low);
       return {
         terminalResult: kind === 'unbind' ? RequestResult.InternalError : 0,
@@ -1244,9 +1253,7 @@ return resultOwner.observe((async () => {
             : null,
         parts: []
       };
-
-})());
-}
+    }
   };
   const stream = new framework.ZLinkManagedStream(
     {
@@ -1525,10 +1532,10 @@ test('remote actor session binding uses a non-correlated command over the actor 
       };
     }
   });
-  host.routeTransport.request = (entry, meshName, targetNodeRid, packetName, request) => observeZLinkRequestReply((async () => {
+  host.routeTransport.request = (meshName, targetNodeRid, packetName, request) => prepareZLinkRequestReply((async () => {
     routed.push({ meshName, targetNodeRid, packetName, request });
     return { ok: true, response: { acknowledged: true } };
-  })(), identityRequestReply, identityRequestReply, entry);
+  })(), identityRequestReply);
 
   await hostRelay.actorPackets.confirmRemoteSessionBinding(
     actorRef,
@@ -1628,11 +1635,11 @@ test('acknowledged remote actor session bind nack surfaces the remote failure cl
   });
   const lastFailure = 'actor does not hold a current session binding';
   let replyErrorKind = framework.ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
-  host.routeTransport.request = (entry) => observeZLinkRequestReply((async () => ({
+  host.routeTransport.request = () => prepareZLinkRequestReply((async () => ({
     ok: false,
     error: lastFailure,
     ...(replyErrorKind === undefined ? {} : { errorKind: replyErrorKind })
-  }))(), identityRequestReply, identityRequestReply, entry);
+  }))(), identityRequestReply);
 
   await assert.rejects(
     hostRelay.actorPackets.confirmRemoteSessionBinding(
@@ -2373,14 +2380,11 @@ test('runtime host bound session disconnect awaits the native close terminal for
   });
   Object.assign(hostMesh, {
     primaryMeshCompletions: {
-       submit(start, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-        start(resultOwner);
+      async submit(start) {
+        start();
         await closed;
         return { terminalResult: 0, failureErrno: 0, parts: [] };
-
-})());
-}
+      }
     },
     primaryMeshNode: {
       closeActorBoundSession(actor, generation, timeoutMs) {
@@ -2474,10 +2478,10 @@ test('runtime host local actor keeps its current stream route when a remote pack
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration()
   });
-  host.routeTransport.requestToSpot = (...args) => observeZLinkRequestReply((async () => {
+  host.routeTransport.requestToSpot = (...args) => prepareZLinkRequestReply((async () => {
     routeCalls.push(args);
     return { ok: true };
-  })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult());
+  })(), identityRequestReply);
   const stream = recordingStream('session-current', 'rid-current');
   const context = host.streamBindingRuntime.createSessionContext(stream);
   await context.actors.bind(actorRef);
@@ -2855,9 +2859,9 @@ test('runtime host remote bound session send submits a routed Session command', 
     registration: framework.createFrameworkRegistration()
   });
   const routeCalls = [];
-  host.routeTransport.requestToSpot = () => observeZLinkRequestReply((async () => {
+  host.routeTransport.requestToSpot = () => prepareZLinkRequestReply((async () => {
     throw new Error('bound session send must not wait for a routed reply');
-  })(), identityRequestReply, identityRequestReply, new ZLinkRequestResult());
+  })(), identityRequestReply);
   host.routeTransport.submitInfrastructure = async (
     routerChannelId,
     targetNodeRid,
@@ -8504,12 +8508,12 @@ test('runtime host awaits routed actor disconnect notification before session cl
       routeChannels: ['spot.service']
     })
   });
-  runtime.routeTransport.request = (entry) => observeZLinkRequestReply((async () => {
+  runtime.routeTransport.request = () => prepareZLinkRequestReply((async () => {
     sendStarted = true;
     await new Promise((resolve) => {
       releaseSend = resolve;
     });
-  })(), identityRequestReply, identityRequestReply, entry);
+  })(), identityRequestReply);
 
   let disconnectCompleted = false;
   const disconnecting = runtimeRelay.actorPackets

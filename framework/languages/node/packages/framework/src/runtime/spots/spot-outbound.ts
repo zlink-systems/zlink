@@ -1,7 +1,8 @@
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import {
   createZLinkRequest,
   mapZLinkRequestReply,
-  observeZLinkRequestReply,
+  prepareZLinkRequestReply,
   identityRequestReply,
   type ZLinkRequestResult
 } from '../messaging/request-result';
@@ -187,6 +188,7 @@ export interface ZLinkSpotAddressCallOptions {
   readonly instanceSpotType?: string;
   readonly initialMeshName?: string;
   readonly timeoutMs?: number;
+  readonly requestOperation?: PendingOperation<unknown>;
   readonly signal?: AbortSignal;
   readonly sourceSpot?: ZLinkBackendSpot;
 }
@@ -223,13 +225,15 @@ export interface ZLinkSpotRoutedTransport {
   requestToSpot<TReply = unknown>(
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
-    options: ZLinkSpotRoutedRequestOptions
+    options: ZLinkSpotRoutedRequestOptions,
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<TReply>;
   requestFromSpotToSpot?<TReply = unknown>(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
-    options: ZLinkSpotRoutedRequestOptions
+    options: ZLinkSpotRoutedRequestOptions,
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<TReply>;
 }
 
@@ -240,8 +244,10 @@ export interface ZLinkSpotRoutedSendOptions {
 }
 
 export interface ZLinkSpotRoutedRequestOptions extends ZLinkSpotRoutedSendOptions {
+  readonly deadlineMs?: number;
   readonly onAdmitted?: () => void;
   readonly timeoutMs?: number;
+  readonly requestOperation?: PendingOperation<unknown>;
   readonly signal?: AbortSignal;
 }
 
@@ -366,14 +372,9 @@ function createAddressedSpotRequestCall(
     submit<TReply>(signal?: AbortSignal) {
       markSubmitted(options);
       rejectSameSpotAsyncRequest(serial, spotId, 'async');
-      return createZLinkRequest<TReply>(
-        (entry) =>
-          observeZLinkRequestReply(
-            begin<TReply>(signal, entry.confirm),
-            identityRequestReply,
-            identityRequestReply,
-            entry
-          ),
+      return createZLinkRequest(
+        (onAdmitted) =>
+          prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -512,14 +513,9 @@ function wrapRequestCall(
       return this;
     },
     submit<TReply>(signal?: AbortSignal) {
-      return createZLinkRequest<TReply>(
-        (entry) =>
-          observeZLinkRequestReply(
-            begin<TReply>(signal, entry.confirm),
-            identityRequestReply,
-            identityRequestReply,
-            entry
-          ),
+      return createZLinkRequest(
+        (onAdmitted) =>
+          prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -635,14 +631,9 @@ function wrapRoutedSpotRequestCall(
     },
     submit<TReply>(signal?: AbortSignal) {
       rejectSameSpotAsyncRequest(serial, spot.spotId, 'async');
-      return createZLinkRequest<TReply>(
-        (entry) =>
-          observeZLinkRequestReply(
-            begin<TReply>(signal, entry.confirm),
-            identityRequestReply,
-            identityRequestReply,
-            entry
-          ),
+      return createZLinkRequest(
+        (onAdmitted) =>
+          prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -673,6 +664,7 @@ export interface ZLinkSpotHandleCallOptions {
   readonly onAdmitted?: () => void;
   readonly metadata?: ReadonlyMap<string, string>;
   readonly timeoutMs?: number;
+  readonly requestOperation?: PendingOperation<unknown>;
   readonly signal?: AbortSignal;
   readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
   readonly sourceSpot?: ZLinkBackendSpot;

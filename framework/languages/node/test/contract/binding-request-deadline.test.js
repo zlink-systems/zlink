@@ -1,6 +1,6 @@
 'use strict';
 
-const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -13,6 +13,10 @@ const {
 } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
 const framework = require('../../packages/framework/dist/internal');
 
+const {
+  RequestRuntime
+} = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+
 const REQUEST_BUDGET_MS = 50;
 
 function deferred() {
@@ -22,6 +26,10 @@ function deferred() {
 }
 
 function requestFixture(t, submission) {
+  const clock = performance.now();
+  t.mock.method(performance, 'now', () => clock);
+  const requests = new RequestRuntime();
+  t.after(() => requests.close());
   const operation = {
     message() { return this; },
     timeout(value) {
@@ -45,26 +53,53 @@ function requestFixture(t, submission) {
   t.after(() => { host.close(); context.close(); });
   const parts = [Buffer.from('request')];
   return {
-    adapter: (onAdmitted) => submitBindingRequest(operation, parts, REQUEST_BUDGET_MS, undefined, onAdmitted),
+    adapter: (onAdmitted) =>
+      {
+      const entry = requests.begin(REQUEST_BUDGET_MS);
+      return requests.run(
+        entry,
+        (receiver) => {
+          submitBindingRequest(
+            operation,
+            parts,
+            REQUEST_BUDGET_MS,
+            undefined,
+            onAdmitted,
+            entry,
+            receiver
+          );
+        },
+        (parts) => {
+          if (!entry.isPending()) for (const part of parts) part.close();
+          return parts;
+        },
+        (error) => error
+      );
+    },
     router: () => new Promise((resolve, reject) => router.request('target', parts, REQUEST_BUDGET_MS, resolve, reject)),
     dealer: () => dealer.request(parts, REQUEST_BUDGET_MS)
   };
 }
 
 for (const path of ['adapter', 'router', 'dealer']) {
-  test(`${path} immediately admitted request creates no Framework timer`, async t => {
+  test(`${path} immediately admitted requests share their owner timer`, async (t) => {
     const fixture = requestFixture(t, {
       result: zlink.SubmitResult.Ok,
       admitted: new Promise(() => {}),
       reply: Promise.resolve([])
     });
     const timer = t.mock.method(globalThis, 'setTimeout');
-    assert.deepEqual(await fixture[path](), []);
-    assert.equal(timer.mock.callCount(), 0);
+    const replies = await Promise.all(Array.from({ length: 1000 }, () => fixture[path]()));
+    assert.ok(replies.every((parts) => parts.length === 0));
+    assert.equal(
+      timer.mock.callCount(),
+      1,
+      '1000 logical requests share one owner visit reservation'
+    );
   });
 
   for (const admitBeforeDeadline of [false, true]) {
-    test(`${path} pending request expires and closes late reply (admitted early=${admitBeforeDeadline})`, async t => {
+    test(`${path} pending request expires and closes late reply (admitted early=${admitBeforeDeadline})`, async (t) => {
       const admitted = deferred();
       const reply = deferred();
       const fixture = requestFixture(t, {
@@ -73,6 +108,8 @@ for (const path of ['adapter', 'router', 'dealer']) {
         reply: reply.promise
       });
       t.mock.timers.enable({ apis: ['setTimeout'] });
+      let now = performance.now();
+      t.mock.method(performance, 'now', () => now);
       const timer = t.mock.method(globalThis, 'setTimeout');
       const pending = fixture[path]();
       const terminal = assert.rejects(pending,
@@ -82,6 +119,7 @@ for (const path of ['adapter', 'router', 'dealer']) {
         admitted.resolve();
         await Promise.resolve();
       }
+      now += REQUEST_BUDGET_MS;
       t.mock.timers.tick(REQUEST_BUDGET_MS);
       await terminal;
       assert.equal(timer.mock.callCount(), 1);
@@ -106,7 +144,7 @@ for (const backpressured of [false, true]) {
     const registration = framework.createFrameworkRegistration({
       spotNodes: { mesh: { router: { bind: 'inproc://binding-admission' } } }
     });
-    const client = new framework.DefaultZLinkRouteClient(registration, { request(entry, _mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) { return observeZLinkRequestReply(fixture.adapter(onAdmitted), identityRequestReply, identityRequestReply, entry); } });
+    const client = new framework.DefaultZLinkRouteClient(registration, { request(_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) { return prepareZLinkRequestReply(fixture.adapter(onAdmitted), identityRequestReply); } });
     const pending = client.requestToNode('mesh', 'peer', {}).submit();
     assert.ok(pending.admitted instanceof Promise);
     let accepted = false;
@@ -125,7 +163,7 @@ for (const backpressured of [false, true]) {
 }
 
 for (const terminal of ['timeout', 'cancellation']) {
-  test(`public pending binding admission and reply share ${terminal} failure`, async t => {
+  test(`public pending binding admission and reply share ${terminal} failure`, async (t) => {
     const admitted = deferred();
     const reply = deferred();
     const fixture = requestFixture(t, {
@@ -139,16 +177,20 @@ for (const terminal of ['timeout', 'cancellation']) {
     });
     const controller = new AbortController();
     const client = new framework.DefaultZLinkRouteClient(registration, {
-      request(entry, _mesh, _rid, _packet, _request, _timeout, signal, _metadata, onAdmitted) {
-        return observeZLinkRequestReply(awaitWithAbort(fixture.adapter(onAdmitted), signal), identityRequestReply, identityRequestReply, entry);
+      request(_mesh, _rid, _packet, _request, _timeout, signal, _metadata, onAdmitted) {
+        return prepareZLinkRequestReply(awaitWithAbort(fixture.adapter(onAdmitted), signal), identityRequestReply);
       }
     });
     t.mock.timers.enable({ apis: ['setTimeout'] });
+    let now = performance.now();
+    t.mock.method(performance, 'now', () => now);
     const pending = client.requestToNode('mesh', 'peer', {}).submit(controller.signal);
     assert.ok(pending.admitted instanceof Promise);
     const results = Promise.allSettled([pending.admitted, pending]);
-    if (terminal === 'timeout') t.mock.timers.tick(REQUEST_BUDGET_MS);
-    else controller.abort(new Error('cancel-before-admission'));
+    if (terminal === 'timeout') {
+      now += REQUEST_BUDGET_MS;
+      t.mock.timers.tick(REQUEST_BUDGET_MS);
+    } else controller.abort(new Error('cancel-before-admission'));
     const stages = await results;
     assert.equal(stages[0].status, 'rejected');
     assert.equal(stages[1].status, 'rejected');

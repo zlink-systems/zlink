@@ -2,9 +2,9 @@ import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Regist
 import {
   createZLinkRequest,
   mapZLinkRequestReply,
-  observeZLinkRequestReply,
+  prepareZLinkRequestReply,
   identityRequestReply,
-  ZLinkRequestResult
+  type ZLinkRequestResult
 } from '../messaging/request-result';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 import type {
@@ -225,9 +225,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
     if (prepared === undefined) {
       prepared = {
         validate: () => this.requireMesh(meshName),
-        submit: (entry, packetName, timeoutMs, metadata, signal, onAdmitted, message) =>
+        submit: (packetName, timeoutMs, metadata, signal, onAdmitted, message) =>
           this.requireTransport().request(
-            entry,
             meshName,
             targetNodeRid,
             packetName,
@@ -274,11 +273,10 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   requestToChannel(channelName: string, request: unknown): ZLinkChannelRequestCall {
     return new DefaultZLinkRequestCall(
       () => this.requireChannelRoute(channelName),
-      (entry, packetName, timeoutMs, metadata, signal, onAdmitted) => {
+      (packetName, timeoutMs, metadata, signal, onAdmitted) => {
         const route = this.requireChannelRoute(channelName);
         if (route.kind === 'route-mesh') {
           return this.requireTransport().requestToChannel(
-            entry,
             route.meshName,
             channelName,
             packetName,
@@ -290,7 +288,6 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
           );
         }
         return this.requireChannelTransport().request(
-          entry,
           channelName,
           packetName,
           request,
@@ -325,14 +322,13 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
         this.requireSpotTransport();
       },
       <TReply>(
-        entry: ZLinkRequestResult<TReply>,
         _packetName: string | undefined,
         timeoutMs: number | undefined,
         metadata: ReadonlyMap<string, string>,
         signal?: AbortSignal,
         onAdmitted?: () => void
       ) =>
-        observeZLinkRequestReply(
+        prepareZLinkRequestReply(
           requestToSpotHandle<TReply>(this.requireSpotTransport(), spot, request, {
             timeoutMs,
             signal,
@@ -340,9 +336,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
             onAdmitted,
             spotRouterChannelIdForMesh: this.spotRouterChannelIdForMesh
           }),
-          identityRequestReply,
-          identityRequestReply,
-          entry
+          identityRequestReply
         ),
       this.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
@@ -543,7 +537,6 @@ function normalizeSubmitResult(
 }
 
 type ZLinkRequestSubmitter = <TReply>(
-  entry: ZLinkRequestResult<TReply>,
   packetName: string | undefined,
   timeoutMs: number | undefined,
   metadata: ReadonlyMap<string, string>,
@@ -585,16 +578,15 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
   }
 
   submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply> {
-    return createZLinkRequest<TReply>((entry) => {
+    return createZLinkRequest((onAdmitted) => {
       throwIfAborted(signal);
       this.validate();
       return this.submitter<TReply>(
-        entry,
         undefined,
         this.timeoutMs ?? this.defaultRequestTimeoutMs,
         this.selectedMetadata === undefined ? EMPTY_CALL_METADATA : new Map(this.selectedMetadata),
         signal,
-        entry.confirm,
+        onAdmitted,
         this.message
       );
     });
@@ -605,7 +597,6 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
     throwIfAborted(signal);
     this.validate();
     const pending = this.submitter<TReply>(
-      new ZLinkRequestResult<TReply>(),
       undefined,
       this.timeoutMs ?? this.defaultRequestTimeoutMs,
       this.selectedMetadata === undefined ? EMPTY_CALL_METADATA : new Map(this.selectedMetadata),

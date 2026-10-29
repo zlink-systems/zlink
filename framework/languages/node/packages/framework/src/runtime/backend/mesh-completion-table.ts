@@ -1,4 +1,9 @@
-import { ZLinkRequestResult } from '../messaging/request-result';
+import { requestTerminalError } from '../messaging/request-deadline';
+import {
+  OperationCancelledError,
+  type OperationHandle,
+  type OperationObserver
+} from '../foundation/operation-registry';
 import { ZLinkBufferMessage as Message } from './runtime-message';
 import type { Message as ZLinkMessage } from '../../contracts/Common/Message';
 import type {
@@ -29,14 +34,21 @@ const COMPLETION_HASH_MULTIPLIER = 0x9e37_79b1;
 const COMPLETION_ABORT_OPTIONS = Object.freeze({ once: true });
 
 class CompletionSlot {
+  generation = 0;
   next = -1;
   high?: bigint;
   low?: bigint;
   hashNext = -1;
-  entry?: ZLinkRequestResult<any>;
+  resolve?: (completion: ZLinkMeshCompletion) => void;
+  reject?: (error: unknown) => void;
   signal?: AbortSignal;
+  operation?: OperationHandle<unknown>;
 
   constructor(readonly abort: () => void) {}
+}
+
+export interface MeshOperationSubmission extends MeshOperationId {
+  readonly requestOperation?: OperationHandle<unknown>;
 }
 
 export type ZLinkMeshCompletionTerminal = Pick<ReceiveRecord, 'operationId' | 'terminalResult'>;
@@ -60,11 +72,15 @@ export class ZLinkMeshCompletionTable {
     const start = this.slots.length;
     for (let index = start; index < start + COMPLETION_SLOT_BLOCK_SIZE; index++) {
       const slot = new CompletionSlot(() => {
-        const entry = slot.entry;
+        const reject = slot.reject;
         const signal = slot.signal;
-        if (entry === undefined) return;
+        if (reject === undefined || (slot.high === undefined && slot.operation === undefined))
+          return;
+        const reason =
+          signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError');
+        if (slot.operation !== undefined && !slot.operation.takeFailure(reason)) return;
         this.releaseSlot(index);
-        entry.fail(signal?.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+        reject(reason);
       });
       slot.next = this.free;
       this.slots.push(slot);
@@ -135,10 +151,12 @@ export class ZLinkMeshCompletionTable {
     slot.low = undefined;
     slot.hashNext = -1;
     slot.signal = undefined;
-    slot.entry = undefined;
-    this.activeCount--;
+    slot.operation = undefined;
+    slot.resolve = undefined;
+    slot.reject = undefined;
     slot.next = this.free;
     this.free = index;
+    this.activeCount--;
   }
 
   /**
@@ -146,45 +164,105 @@ export class ZLinkMeshCompletionTable {
    * observes native terminals through Promises, so identity binding finishes
    * before the terminal callback can run, without an infrastructure pump.
    */
-  submit<TReply = ZLinkMeshCompletion>(
-    operation: (entry: ZLinkRequestResult<TReply>) => MeshOperationId,
+  submit(
+    operation: (completion?: ZLinkMeshCompletionHandler) => MeshOperationSubmission,
+    signal: AbortSignal | undefined,
+    requestOperation: OperationHandle<unknown>,
+    receiver: OperationObserver<unknown, unknown>
+  ): void;
+  submit(
+    operation: () => MeshOperationSubmission,
     signal?: AbortSignal,
-    entry = new ZLinkRequestResult<TReply>()
-  ): ZLinkRequestResult<any> {
-    void entry.pending;
+    requestOperation?: OperationHandle<unknown>
+  ): Promise<ZLinkMeshCompletion>;
+  submit(
+    operation: (completion?: ZLinkMeshCompletionHandler) => MeshOperationSubmission,
+    signal?: AbortSignal,
+    requestOperation?: OperationHandle<unknown>,
+    receiver?: OperationObserver<unknown, unknown>
+  ): Promise<ZLinkMeshCompletion> | void {
+    if (receiver !== undefined && requestOperation?.promise !== undefined) {
+      if (requestOperation.isPending()) {
+        try {
+          operation((_terminal, materialize) => {
+            try {
+              receiver.operationCompleted(
+                requestOperation.id,
+                retainCompletion(materialize()),
+                undefined
+              );
+            } catch (error) {
+              receiver.operationFailed(requestOperation.id, error, undefined);
+            }
+          });
+        } catch (error) {
+          receiver.operationFailed(requestOperation.id, error, undefined);
+        }
+      }
+      return;
+    }
+    if (requestOperation?.promise !== undefined && !requestOperation.isPending()) {
+      return requestOperation.promise.then(() => {
+        throw new OperationCancelledError(requestOperation.id, 'Request is already terminal.');
+      });
+    }
     if (this.isDisposed()) {
-      entry.fail(new Error('Mesh completion table is disposed.'));
-      return entry;
+      requestOperation?.takeFailure(new Error('Mesh completion table is disposed.'));
+      return Promise.reject(new Error('Mesh completion table is disposed.'));
     }
     if (signal?.aborted === true) {
-      entry.fail(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
-      return entry;
+      requestOperation?.takeFailure(
+        signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
+      );
+      return Promise.reject(
+        signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
+      );
     }
-    if (this.free === -1) this.prepareSlots();
-    const index = this.free;
-    const slot = this.slots[index]!;
-    this.free = slot.next;
-    slot.entry = entry;
-    slot.signal = signal;
-    this.activeCount++;
-    try {
-      signal?.addEventListener('abort', slot.abort, COMPLETION_ABORT_OPTIONS);
-      const operationId = operation(entry);
-      if (slot.entry !== entry) return entry;
-      if (this.findSlot(operationId) !== -1)
-        throw new Error(
-          `Mesh operation '${operationIdentityKey(operationId)}' is already pending.`
-        );
-      slot.high = operationId.high;
-      slot.low = operationId.low;
-      this.indexSlot(index);
-    } catch (error) {
-      if (slot.entry === entry) {
+    return new Promise((resolve, reject) => {
+      if (this.free === -1) this.prepareSlots();
+      const index = this.free;
+      const slot = this.slots[index]!;
+      this.free = slot.next;
+      const generation = ++slot.generation;
+      slot.resolve = resolve;
+      slot.reject = reject;
+      slot.signal = signal;
+      slot.operation = requestOperation;
+      this.activeCount++;
+      try {
+        signal?.addEventListener('abort', slot.abort, COMPLETION_ABORT_OPTIONS);
+        const bind = (entry: OperationHandle<unknown>, observeFailure = true): void => {
+          slot.operation = entry;
+          if (!observeFailure) return;
+          entry.setFailureDispatcher((reason) => {
+            if (slot.generation !== generation || slot.resolve !== resolve) return;
+            this.releaseSlot(index);
+            reject(requestTerminalError('Request', reason));
+          });
+        };
+        if (requestOperation !== undefined) bind(requestOperation);
+        const operationId = operation();
+        // A reentrant abort may release and reuse this slot during submission.
+        if (slot.generation !== generation || slot.resolve !== resolve) return;
+        if (this.findSlot(operationId) !== -1) {
+          throw new Error(
+            `Mesh operation '${operationIdentityKey(operationId)}' is already pending.`
+          );
+        }
+        slot.high = operationId.high;
+        slot.low = operationId.low;
+        this.indexSlot(index);
+        if (requestOperation === undefined && operationId.requestOperation !== undefined)
+          bind(operationId.requestOperation, false);
+        Reflect.deleteProperty(operationId, 'requestOperation');
+        if (signal?.aborted === true) slot.abort();
+      } catch (error) {
+        if (slot.generation !== generation || slot.resolve !== resolve) return;
+        if (slot.operation !== undefined && !slot.operation.replyFailure(error)) return;
         this.releaseSlot(index);
-        entry.fail(error);
+        reject(error);
       }
-    }
-    return entry;
+    });
   }
 
   private isDisposed(): boolean {
@@ -204,15 +282,24 @@ export class ZLinkMeshCompletionTable {
       return;
     }
     const slot = this.slots[index]!;
-    const entry = slot.entry!;
-    this.releaseSlot(index);
-    try {
-      const completion = retainCompletion(
-        materialize === undefined ? (record as ReceiveRecord) : materialize()
-      );
-      entry.complete(completion);
-    } catch (error) {
-      entry.fail(error);
+    const generation = slot.generation;
+    const deliver = (): void => {
+      if (slot.generation !== generation || slot.resolve === undefined) return;
+      const resolve = slot.resolve;
+      const reject = slot.reject!;
+      this.releaseSlot(index);
+      try {
+        resolve(
+          retainCompletion(materialize === undefined ? (record as ReceiveRecord) : materialize())
+        );
+      } catch (error) {
+        reject(error);
+      }
+    };
+    if (slot.operation === undefined) deliver();
+    else {
+      slot.operation.reply(record);
+      deliver();
     }
   }
 
@@ -222,11 +309,12 @@ export class ZLinkMeshCompletionTable {
     }
     this.disposed = true;
     for (let index = 0; index < this.slots.length; index++) {
+      const reject = this.slots[index]!.reject;
+      if (reject === undefined) continue;
       const slot = this.slots[index]!;
-      const entry = slot.entry;
-      if (entry === undefined) continue;
+      if (slot.operation !== undefined && !slot.operation.takeFailure(reason)) continue;
       this.releaseSlot(index);
-      entry.fail(reason);
+      reject(reason);
     }
   }
 

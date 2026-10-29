@@ -31,7 +31,7 @@ export interface ServiceRelocationCaptureUnit {
   seal(signal?: AbortSignal): Promise<ServiceRelocationSealedWork>;
   captureApplicationState(signal?: AbortSignal): Promise<Uint8Array>;
   commitSeal(followAuthorities: ReadonlyMap<string, ZLinkAuthoritySnapshot>): Promise<void> | void;
-  abortSeal(): Promise<void> | void;
+  abortSeal(onCleanupError?: (error: unknown) => void): Promise<void> | void;
   /** Expired-owner terminal: pending requests fail once and dispatch stays closed. */
   discardSeal?(reason: unknown): Promise<void> | void;
 }
@@ -55,13 +55,13 @@ export class ServiceCapturedObjectRelocation {
     this.terminal = 'committed';
   }
 
-  async abortSource(): Promise<void> {
+  async abortSource(onCleanupError?: (error: unknown) => void): Promise<void> {
     if (this.terminal === 'aborted') return;
     if (this.terminal !== 'open') {
       throw new Error(`A ${this.terminal} relocation source capture cannot be aborted.`);
     }
     try {
-      await abortSourceSeals(this.units);
+      await abortSourceSeals(this.units, onCleanupError);
     } finally {
       this.terminal = 'aborted';
     }
@@ -218,17 +218,32 @@ export class ServiceRelocationObjectCaptureOwner {
   }
 }
 
-async function abortSourceSeals(units: readonly ServiceRelocationCaptureUnit[]): Promise<void> {
+async function abortSourceSeals(
+  units: readonly ServiceRelocationCaptureUnit[],
+  onCleanupError?: (error: unknown) => void
+): Promise<void> {
   const failures: unknown[] = [];
+  const cleanupFailures: unknown[] = [];
   for (const unit of [...units].reverse()) {
     try {
-      await unit.abortSeal();
+      await unit.abortSeal((error) => cleanupFailures.push(error));
     } catch (error) {
       failures.push(error);
     }
   }
   if (failures.length !== 0) {
-    throw new AggregateError(failures, 'Relocation source rollback was incomplete.');
+    throw new AggregateError(
+      [...failures, ...cleanupFailures],
+      'Relocation source rollback was incomplete.'
+    );
+  }
+  if (cleanupFailures.length !== 0) {
+    const cleanup = new AggregateError(
+      cleanupFailures,
+      'Relocation source rollback was incomplete.'
+    );
+    if (onCleanupError === undefined) throw cleanup;
+    onCleanupError(cleanup);
   }
 }
 

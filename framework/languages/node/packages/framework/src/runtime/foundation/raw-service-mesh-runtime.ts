@@ -1,4 +1,6 @@
-import type { ZLinkRequestResult } from '../messaging/request-result';
+import { requestTerminalError } from '../messaging/request-deadline';
+import type { OperationHandle } from './operation-registry';
+import type { RequestRuntime } from './request-runtime';
 import { inspectRuntime } from '../internal-observation';
 import { constants as osConstants } from 'node:os';
 import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
@@ -76,26 +78,14 @@ export interface RawServiceRequestResult {
 }
 
 /** Receives observed request terminals; the context is the caller's operation kind. */
-export interface RawServiceRequestObserver extends OperationObserver<
-  RawServiceRequestResult,
-  number
-> {
-  /** Observes a late reply for diagnostics without delivering a second terminal. */
-  operationDiscarded?(
-    id: bigint,
-    result: RawServiceRequestResult,
-    operationKind: number | undefined
-  ): void;
-}
+export type RawServiceRequestObserver = OperationObserver<RawServiceRequestResult, number>;
 
 /**
- * A registered request. Observed requests share the deadline registry and
- * receive their terminal without a Promise.
+ * A registered request. An observed remote request has no Promise; its
+ * terminal reaches the observer. Local and Promise-contract requests carry
+ * the Promise.
  */
-export interface RawServiceObservedRequest {
-  readonly id: bigint;
-  readonly promise?: Promise<RawServiceRequestResult>;
-}
+export interface RawServiceObservedRequest extends OperationHandle<RawServiceRequestResult> {}
 
 type RawServiceChannelTargetSelection =
   | { readonly kind: 'selected'; readonly peer: AdmittedServicePeer }
@@ -123,7 +113,7 @@ export interface RawServiceIngressRecord {
   readonly sourceNodeGeneration?: bigint;
   readonly sourceRoute?: Uint8Array;
   readonly requestSequence?: bigint;
-  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
+  readonly reply?: (parts: readonly Uint8Array[]) => void;
   readonly parts: readonly Buffer[];
   readonly applicationJobOwner?: ApplicationIngressRecordOwner;
 }
@@ -133,6 +123,7 @@ export type RawServiceIngressHandler = (
 ) => RawServicePumpResult | undefined | Promise<RawServicePumpResult | undefined>;
 
 export interface RawServiceMeshRuntimeOptions {
+  readonly requests?: RequestRuntime;
   readonly onReceiveReady?: () => void;
   readonly infrastructureTaskRunner?: import('../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner;
   readonly onPendingOperationsChanged?: () => void;
@@ -203,6 +194,9 @@ export class RawServiceMeshRuntime {
   readonly mailbox: ServiceMailbox;
   readonly liveness: ServiceLivenessRegistry;
 
+  private readonly requestOwner: RequestRuntime | undefined;
+  private readonly releaseOperations: () => void;
+
   private readonly operations: OperationRegistry<RawServiceRequestResult, number>;
   private readonly expectedPeers = new Map<
     string,
@@ -248,9 +242,18 @@ export class RawServiceMeshRuntime {
   private closed = false;
 
   constructor(options: RawServiceMeshRuntimeOptions) {
+    this.requestOwner = options.requests;
     this.onReceiveReady = options.onReceiveReady;
     this.infrastructureTaskRunner = options.infrastructureTaskRunner;
-    this.operations = new OperationRegistry(undefined, options.onPendingOperationsChanged);
+    this.operations =
+      options.requests?.operations<RawServiceRequestResult, number>() ??
+      new OperationRegistry(undefined, options.onPendingOperationsChanged, (reason) =>
+        requestTerminalError('Request', reason)
+      );
+    this.releaseOperations =
+      options.requests === undefined
+        ? () => this.operations.close('Raw service runtime closed.')
+        : () => {};
     this.descriptor = options.descriptor;
     this.nodeMailboxOwner = `node:${options.descriptor.nodeRoutingId}`;
     this.topology = new ServiceTopologyRegistry(options.descriptor);
@@ -455,13 +458,13 @@ export class RawServiceMeshRuntime {
     const pending = this.operations.register(Number(remaining));
     const check = () => {
       if (this.isPeerRouteReady(nodeRoutingId, lifecycleGeneration)) {
-        this.operations.complete(pending.id, { terminalResult: RequestResult.Ok, failureCode: 0 });
+        pending.reply({ terminalResult: RequestResult.Ok, failureCode: 0 });
       }
     };
     const unsubscribe = this.observePeerRouteChanged((rid) => {
       if (rid === nodeRoutingId) check();
     });
-    const abort = () => this.operations.fail(pending.id, signal?.reason);
+    const abort = () => pending.replyFailure(signal?.reason);
     signal?.addEventListener('abort', abort, { once: true });
     try {
       if (signal?.aborted === true) abort();
@@ -645,7 +648,7 @@ export class RawServiceMeshRuntime {
     onAdmitted: (() => void) | undefined,
     observer: RawServiceRequestObserver,
     operationKind: number,
-    entry: ZLinkRequestResult<any>
+    requestOperation?: PendingOperation<unknown>
   ): RawServiceObservedRequest;
   requestToNode(
     targetNodeRoutingId: string,
@@ -654,7 +657,7 @@ export class RawServiceMeshRuntime {
     onAdmitted?: () => void,
     observer?: RawServiceRequestObserver,
     operationKind?: number,
-    entry?: ZLinkRequestResult<any>
+    requestOperation?: PendingOperation<unknown>
   ): RawServiceObservedRequest {
     return this.requestToTarget(
       targetNodeRoutingId,
@@ -664,7 +667,7 @@ export class RawServiceMeshRuntime {
       onAdmitted,
       observer,
       operationKind,
-      entry
+      requestOperation
     );
   }
 
@@ -681,7 +684,7 @@ export class RawServiceMeshRuntime {
     onAdmitted: (() => void) | undefined,
     observer: RawServiceRequestObserver,
     operationKind: number,
-    entry: ZLinkRequestResult<any>
+    requestOperation?: PendingOperation<unknown>
   ): RawServiceObservedRequest;
   requestToChannel(
     channelName: string,
@@ -690,12 +693,17 @@ export class RawServiceMeshRuntime {
     onAdmitted?: () => void,
     observer?: RawServiceRequestObserver,
     operationKind?: number,
-    entry?: ZLinkRequestResult<any>
+    requestOperation?: PendingOperation<unknown>
   ): RawServiceObservedRequest {
     const selection = this.selectChannelTarget(channelName);
     if (selection.kind !== 'selected') {
-      const pending = this.registerRequest(timeoutMs, observer, operationKind);
-      queueMicrotask(() => this.completeRequest(pending, selection.requestResult));
+      const pending = this.registerRequest(timeoutMs, observer, operationKind, requestOperation);
+      this.completeRequest(
+        pending,
+        selection.requestResult,
+        requestOperation === undefined ? undefined : observer,
+        operationKind
+      );
       return pending;
     }
     return this.requestToTarget(
@@ -705,9 +713,18 @@ export class RawServiceMeshRuntime {
       channelName,
       onAdmitted,
       observer,
-      operationKind,
-      entry
+      operationKind
     );
+  }
+
+  beginInfrastructureRequest(
+    timeoutMs: number,
+    signal?: AbortSignal,
+    absoluteDeadlineMs = performance.now() + timeoutMs
+  ): PendingOperation<readonly Uint8Array[]> {
+    const pending = this.operations.register(timeoutMs, 'registry', undefined, absoluteDeadlineMs);
+    pending.setSignal(signal);
+    return pending as unknown as PendingOperation<readonly Uint8Array[]>;
   }
 
   /**
@@ -717,11 +734,19 @@ export class RawServiceMeshRuntime {
   private registerRequest(
     timeoutMs: number,
     observer: RawServiceRequestObserver | undefined,
-    operationKind: number | undefined
+    operationKind: number | undefined,
+    requestOperation?: PendingOperation<unknown>
   ): RawServiceObservedRequest {
+    if (requestOperation !== undefined) {
+      return requestOperation as PendingOperation<RawServiceRequestResult>;
+    }
     return observer === undefined
       ? this.operations.register(timeoutMs)
-      : { id: this.operations.registerObserved(timeoutMs, observer, operationKind) };
+      : this.observedRequest(this.operations.registerObserved(timeoutMs, observer, operationKind));
+  }
+
+  private observedRequest(id: bigint): RawServiceObservedRequest {
+    return this.operations.handle(id);
   }
 
   /**
@@ -734,12 +759,27 @@ export class RawServiceMeshRuntime {
     observer?: RawServiceRequestObserver,
     operationKind?: number
   ): void {
-    if (!this.operations.complete(pending.id, result))
-      observer?.operationDiscarded?.(pending.id, result, operationKind);
+    if (observer !== undefined) {
+      queueMicrotask(() => observer.operationCompleted(pending.id, result, operationKind));
+      return;
+    }
+    if (pending.promise === undefined || pending.hasObserver())
+      queueMicrotask(() => pending.reply(result));
+    else pending.reply(result);
   }
 
-  private failRequest(pending: RawServiceObservedRequest, error: unknown): void {
-    this.operations.fail(pending.id, error);
+  private failRequest(
+    pending: RawServiceObservedRequest,
+    error: unknown,
+    observer?: RawServiceRequestObserver,
+    operationKind?: number
+  ): void {
+    if (observer !== undefined) {
+      queueMicrotask(() => observer.operationFailed(pending.id, error, operationKind));
+      return;
+    }
+    if (pending.promise === undefined) queueMicrotask(() => pending.replyFailure(error));
+    else pending.replyFailure(error);
   }
 
   private selectChannelTarget(channelName: string): RawServiceChannelTargetSelection {
@@ -794,11 +834,48 @@ export class RawServiceMeshRuntime {
     targetNodeRoutingId: string,
     parts: readonly Uint8Array[],
     timeoutMs: number,
-    onAdmitted?: () => void
-  ): Promise<readonly Buffer[]> {
+    onAdmitted?: () => void,
+    existing?: Pick<PendingOperation<unknown>, 'id' | 'deadlineMs'>,
+    receiver?: undefined,
+    onSubmitted?: () => void
+  ): Promise<readonly Buffer[]>;
+  requestService(
+    targetNodeRoutingId: string,
+    parts: readonly Uint8Array[],
+    timeoutMs: number,
+    onAdmitted: (() => void) | undefined,
+    existing: Pick<PendingOperation<unknown>, 'id' | 'deadlineMs'> | undefined,
+    receiver: import('./operation-registry').OperationObserver<readonly Buffer[], unknown>
+  ): void;
+  requestService(
+    targetNodeRoutingId: string,
+    parts: readonly Uint8Array[],
+    timeoutMs: number,
+    onAdmitted?: () => void,
+    existing?: Pick<PendingOperation<unknown>, 'id' | 'deadlineMs'>,
+    receiver?: import('./operation-registry').OperationObserver<readonly Buffer[], unknown>,
+    onSubmitted?: () => void
+  ): Promise<readonly Buffer[]> | void {
+    if (receiver !== undefined) {
+      try {
+        this.requireStarted().request(
+          targetNodeRoutingId,
+          parts,
+          timeoutMs,
+          (reply) => receiver.operationCompleted(existing?.id ?? 0n, reply, undefined),
+          (error) => receiver.operationFailed(existing?.id ?? 0n, error, undefined),
+          this.topology.admittedPeer(targetNodeRoutingId)?.liveness?.recordReceived,
+          onAdmitted,
+          existing
+        );
+      } catch (error) {
+        receiver.operationFailed(existing?.id ?? 0n, error, undefined);
+      }
+      return;
+    }
     const admission = this.topology.admittedPeer(targetNodeRoutingId)?.liveness;
     try {
-      return this.requireStarted().request(
+      const reply = this.requireStarted().request(
         targetNodeRoutingId,
         parts,
         timeoutMs,
@@ -807,8 +884,11 @@ export class RawServiceMeshRuntime {
           throw error;
         },
         admission?.recordReceived,
-        onAdmitted
+        onAdmitted,
+        existing
       );
+      onSubmitted?.();
+      return reply;
     } catch (error) {
       return Promise.reject(error);
     }
@@ -819,7 +899,7 @@ export class RawServiceMeshRuntime {
       RawServiceIngressRecord,
       'sourceRoutingId' | 'sourceRoute' | 'requestSequence' | 'reply'
     >,
-    parts: readonly (Uint8Array | string)[]
+    parts: readonly Uint8Array[]
   ): void {
     if (record.requestSequence === undefined) {
       throw new TypeError('Service reply requires a request sequence.');
@@ -1417,7 +1497,9 @@ export class RawServiceMeshRuntime {
   }
 
   expireOperations(nowMs: number, turnDeadlineMs: number): number {
-    return this.operations.expire(nowMs, turnDeadlineMs);
+    return this.requestOwner === undefined && nowMs >= this.operations.nextDeadlineMs()
+      ? this.operations.expire(nowMs, turnDeadlineMs)
+      : 0;
   }
 
   get pendingOperationCount(): number {
@@ -1435,7 +1517,10 @@ export class RawServiceMeshRuntime {
    */
   nextMaintenanceDeadlineMs(nowMs: number): number {
     this.progressPeerAdmission(nowMs);
-    return Math.min(this.operations.nextDeadlineMs(), this.liveness.nextDeadlineMs());
+    return Math.min(
+      this.requestOwner === undefined ? this.operations.nextDeadlineMs() : Infinity,
+      this.liveness.nextDeadlineMs()
+    );
   }
 
   private progressPeerAdmission(nowMs: number): void {
@@ -1532,7 +1617,7 @@ export class RawServiceMeshRuntime {
     for (const send of this.controlSends.values()) delete send.next;
     this.controlSends.clear();
     this.mailbox.close();
-    this.operations.close('Raw service runtime closed.');
+    this.releaseOperations();
     this.serviceIngress = undefined;
     const router = this.router;
     if (router !== undefined) {
@@ -1552,7 +1637,7 @@ export class RawServiceMeshRuntime {
     onAdmitted?: () => void,
     observer?: RawServiceRequestObserver,
     operationKind?: number,
-    entry?: ZLinkRequestResult<any>
+    requestOperation?: PendingOperation<unknown>
   ): RawServiceObservedRequest {
     const correlation = this.nextCorrelation++;
     const header =
@@ -1587,26 +1672,29 @@ export class RawServiceMeshRuntime {
       }
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
-      // The registry owns local and remote expiry. The completion entry
-      // cancels the capacity wait when its terminal is taken.
-      const pending = this.registerRequest(timeoutMs, observer, operationKind);
+      // The local admission path aborts its capacity wait on the terminal
+      // Promise, so a local request always keeps the Promise entry.
+      const pending =
+        requestOperation === undefined
+          ? this.operations.register(timeoutMs)
+          : (this.registerRequest(
+              timeoutMs,
+              observer,
+              operationKind,
+              requestOperation
+            ) as PendingOperation<RawServiceRequestResult>);
       const parts = [header, encodedPayload];
       const capacityStop = new AbortController();
-      if (entry !== undefined) {
-        entry.capacityStop = capacityStop;
-      } else {
-        void pending.promise!.finally(() => capacityStop.abort()).catch(() => undefined);
-      }
+      void pending.promise.finally(() => capacityStop.abort()).catch(() => undefined);
       void (async () => {
         const applicationJobOwner = await this.reserveLocalIngress(capacityStop.signal);
         try {
-          if (!(entry === undefined ? this.operations.isPending(pending.id) : entry.isPending))
-            return;
+          if (!pending.isPending()) return;
           const applicationJob = await applicationJobOwner.acquire(
             'application',
             capacityStop.signal
           );
-          if (!(entry === undefined ? this.operations.isPending(pending.id) : entry.isPending)) {
+          if (!pending.isPending()) {
             applicationJob.close();
             return;
           }
@@ -1619,38 +1707,57 @@ export class RawServiceMeshRuntime {
             localReply: (terminalResult, failureCode, reply) =>
               this.completeRequest(
                 pending,
-                { terminalResult, failureCode, ...(reply === undefined ? {} : { payload: reply }) },
-                observer,
+                {
+                  terminalResult,
+                  failureCode,
+                  ...(reply === undefined ? {} : { payload: reply })
+                },
+                requestOperation === undefined ? undefined : observer,
                 operationKind
               ),
             applicationJob
           });
           if (!accepted) {
             applicationJob.close();
-            this.completeRequest(pending, {
-              terminalResult: RequestResult.NotConnected,
-              failureCode: 0
-            });
+            this.completeRequest(
+              pending,
+              {
+                terminalResult: RequestResult.NotConnected,
+                failureCode: 0
+              },
+              requestOperation === undefined ? undefined : observer,
+              operationKind
+            );
           } else {
             onAdmitted?.();
           }
         } finally {
           applicationJobOwner.close();
         }
-      })().catch((error) => this.failRequest(pending, error));
+      })().catch((error) =>
+        this.failRequest(
+          pending,
+          error,
+          requestOperation === undefined ? undefined : observer,
+          operationKind
+        )
+      );
       return pending;
     }
-    const pending = this.registerRequest(timeoutMs, observer, operationKind);
+    const pending = this.registerRequest(timeoutMs, observer, operationKind, requestOperation);
     const selectedPeer = this.topology.readyPeer(selectedTargetNodeRoutingId);
     if (selectedPeer === undefined) {
       // Logical target selection is the requester's decision: an RID that is
       // not an admitted peer is not a target. Whether an admitted target's
       // route can carry the request is Core's REQUEST result.
-      queueMicrotask(() =>
-        this.completeRequest(pending, {
+      this.completeRequest(
+        pending,
+        {
           terminalResult: RequestResult.NotFound,
           failureCode: REQUEST_TARGET_NOT_FOUND_FAILURE_CODE
-        })
+        },
+        requestOperation === undefined ? undefined : observer,
+        operationKind
       );
       return pending;
     }
@@ -1683,26 +1790,41 @@ export class RawServiceMeshRuntime {
               terminalResult: reply.terminalResult,
               failureCode: reply.failureCode
             };
-            this.completeRequest(
-              pending,
+            const value =
               reply.terminalResult === 0
                 ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
-                : result,
-              observer,
+                : result;
+            if (requestOperation !== undefined && observer !== undefined)
+              observer.operationCompleted(pending.id, value, operationKind);
+            else pending.reply(value);
+          } catch (error) {
+            this.failRequest(
+              pending,
+              error,
+              requestOperation === undefined ? undefined : observer,
               operationKind
             );
-          } catch (error) {
-            this.failRequest(pending, error);
           }
         },
         (error) => {
-          this.failRequest(pending, error);
+          this.failRequest(
+            pending,
+            error,
+            requestOperation === undefined ? undefined : observer,
+            operationKind
+          );
         },
         selectedPeer.liveness?.recordReceived,
-        onAdmitted
+        onAdmitted,
+        pending
       );
     } catch (error) {
-      queueMicrotask(() => this.failRequest(pending, error));
+      this.failRequest(
+        pending,
+        error,
+        requestOperation === undefined ? undefined : observer,
+        operationKind
+      );
     }
     return pending;
   }

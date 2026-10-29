@@ -1,3 +1,4 @@
+const { OperationRegistry } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const net = require('node:net');
@@ -41,7 +42,7 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
   stateful.rememberActorRoute({ ...fence, actor: nextActor });
   const backend = new ZLinkNodeRawMeshBackend('play', 'session-node', {}, undefined, undefined, undefined, undefined, { stateful });
   const completions = new ZLinkMeshCompletionTable();
-  backend.setCompletionTable(completions);
+  backend.setCompletionHandler((terminal, materialize) => completions.complete(terminal, materialize));
   let dropped = false;
   let disconnectCalls = 0;
   const delivered = [];
@@ -71,11 +72,15 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
   };
   const service = backend.createStreamSessionService(native);
   service.start();
-  stateful.lookupRemoteActor = (_node, actorId) => ({
-    id: 100n,
-    promise: Promise.resolve({ terminalResult: zlink.RequestResult.Ok, failureCode: 0,
-      kindData: { kind: 'actorLookupCompletion', location: { actor: actorId === actor.actorId ? actor : nextActor } } })
-  });
+  const lookups = new OperationRegistry();
+  stateful.lookupRemoteActor = (_node, actorId, timeoutMs) => {
+    const pending = lookups.register(timeoutMs);
+    queueMicrotask(() => pending.complete({
+      terminalResult: zlink.RequestResult.Ok, failureCode: 0,
+      kindData: { kind: 'actorLookupCompletion', location: { actor: actorId === actor.actorId ? actor : nextActor } }
+    }));
+    return pending;
+  };
   let closed = 0;
   let removed = 0;
   let resolveRemoved;
@@ -191,7 +196,6 @@ for (const error of [
     } finally { await fixture.dispose(); }
   });
 }
-
 
 test('raw bound delivery survives a RID already removed by installed Core', { timeout: 5000 }, async () => {
   const context = zlink.createContext();

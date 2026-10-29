@@ -1,4 +1,4 @@
-const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { prepareZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate } = require('node:timers/promises');
@@ -37,34 +37,51 @@ for (const path of [
     const admission = deferred();
     const reply = deferred();
     const submitted = deferred();
-    const start = (onAdmitted) => {
-      const pending = submitBindingRequest(
-        {
-          message() {
-            return this;
-          },
-          submit: () => ({
-            result: zlink.SubmitResult.Backpressured,
-            admitted: admission.promise,
-            reply: reply.promise
-          })
+    const {
+      RequestRuntime
+    } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+    const requests = new RequestRuntime();
+    const start = (onAdmitted, requestOperation, decode = (value) => value) => {
+      const entry = requests.begin(undefined, undefined, requestOperation);
+      const pending = requests.run(
+        entry,
+        (receiver) => {
+          submitBindingRequest(
+            {
+              message() {
+                return this;
+              },
+              submit: () => ({
+                result: zlink.SubmitResult.Backpressured,
+                admitted: admission.promise,
+                reply: reply.promise
+              })
+            },
+            [],
+            undefined,
+            undefined,
+            onAdmitted,
+            entry,
+            receiver
+          );
         },
-        [],
-        undefined,
-        undefined,
-        onAdmitted
+        decode,
+        (error) => error
       );
       submitted.resolve();
       return pending;
     };
     const transport = {
       async sendToSpot() {},
-      request: (entry, _mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
-        observeZLinkRequestReply(start(onAdmitted), () => 'reply', identityRequestReply, entry),
-      requestToChannel: (entry, _mesh, _channel, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
-        observeZLinkRequestReply(start(onAdmitted), () => 'reply', identityRequestReply, entry),
+      request: (_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
+        prepareZLinkRequestReply(start(onAdmitted, undefined, () => 'reply'), (value) => value),
+      requestToChannel: (_mesh, _channel, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
+        prepareZLinkRequestReply(start(onAdmitted, undefined, () => 'reply'), (value) => value),
       requestToSpot: (_target, _request, options) =>
-        observeZLinkRequestReply(start(options.onAdmitted), () => 'reply', identityRequestReply, new ZLinkRequestResult()),
+        prepareZLinkRequestReply(
+          start(options.onAdmitted, options.requestOperation, () => 'reply'),
+          (value) => value
+        ),
       requestRawToSpot: (_target, _request, options) => start(options.onAdmitted)
     };
     const registration = framework.createFrameworkRegistration({
@@ -141,9 +158,7 @@ for (const path of [
     const pending = call.submit();
     let admitted = false;
     let replied = false;
-    void pending.admitted.then(() => {
-      admitted = true;
-    });
+    void pending.admitted.then(() => { admitted = true; });
     const terminal = pending.then((value) => {
       replied = true;
       return value;
@@ -209,7 +224,7 @@ test('Instance activation public request observes existing remote submission adm
     completions: () => ({
       submit(start) {
         start();
-        return new ZLinkRequestResult().observe(operation.promise);
+        return operation.promise;
       }
     }),
     defaultRequestTimeoutMs: 1000
@@ -247,7 +262,6 @@ test('Instance activation public request observes existing remote submission adm
   }
 });
 
-
 test('public routed local Spot request observes serial queue acceptance before handler reply', async () => {
   const { ZLinkRoutedSpotPacketDispatch } = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');
   const reply = deferred();
@@ -263,7 +277,7 @@ test('public routed local Spot request observes serial queue acceptance before h
   const client = new framework.DefaultZLinkRouteClient(
     framework.createFrameworkRegistration({ spotNodes: { mesh: { router: { bind: 'inproc://local-stage' } } } }),
     { async sendToSpot() {}, requestToSpot(_target, request, options) {
-      return observeZLinkRequestReply(dispatcher.request('room', 'Query', request, { channelName: 'mesh', onAdmitted: options.onAdmitted }), (reply) => reply, identityRequestReply, new ZLinkRequestResult());
+      return prepareZLinkRequestReply(dispatcher.request('room', 'Query', request, { channelName: 'mesh', onAdmitted: options.onAdmitted }), (reply) => reply);
     } }
   );
   const handle = framework.createSpotHandle('room', async () => ({

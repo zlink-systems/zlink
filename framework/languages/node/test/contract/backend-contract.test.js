@@ -27,8 +27,8 @@ const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
 );
 const {
   submitBindingPublish,
-  submitBindingRequest,
-  submitBindingSyncSend,
+  submitBindingRequest: submitOwnedBindingRequest,
+  submitBindingSyncSend
 } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
 const {
   nodeEventLoopPollerOf,
@@ -57,7 +57,6 @@ function deferred() {
   const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
   return { promise, resolve, reject };
 }
-
 
 function applicationJobQueue(maxQueuedApplicationJobs) {
   return new ApplicationJobQueue(resolveApplicationJobQueueConfiguration(
@@ -1490,7 +1489,7 @@ test('mesh completion submission registers before a completion can arrive', asyn
   const completion = table.submit(() => {
     queueMicrotask(() => complete(1n, 'first'));
     return { high: 1n, low: 1n };
-  }).pending;
+  });
   const retained = await completion;
   try {
     assert.equal(retained.parts[0].data().toString(), 'first');
@@ -1508,7 +1507,7 @@ test('mesh completion submission rejects when submit synchronously disposes the 
     table.submit(() => {
       table.dispose();
       return { high: 1n, low: 2n };
-    }).pending,
+    }),
     /Mesh completion table is disposed/
   );
 });
@@ -2756,3 +2755,17 @@ test('channel backend exposes receive flow only on ROUTER sockets', async () => 
     await context.dispose();
   }
 });
+
+function submitBindingRequest(operation, parts, timeoutMs) {
+  const {
+    wrapSocket
+  } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
+  const socket = wrapSocket({
+    request() {
+      return operation;
+    },
+    close() {}
+  });
+  return socket.request(parts, timeoutMs)
+    .finally(() => socket.dispose());
+}

@@ -1,5 +1,4 @@
 const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
-const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 'use strict';
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -13,14 +12,14 @@ test('terminal records reuse stateless rejection callbacks across operations', a
   const completed = new Promise(resolve => { done = resolve; });
   const count = 64;
   const table = new ZLinkMeshCompletionTable();
-  f.backend.setCompletionTable(table);
+  f.backend.setCompletionHandler((terminal, materialize) => table.complete(terminal, materialize));
   t.mock.method(table, 'complete', (_terminal, materialize) => {
     records.push(materialize());
     if (records.length === count) done();
   });
   try {
     for (let index = 0; index < count; index++)
-      f.backend.requestToNode('missing', [Buffer.from('request')], { requestEntry: new ZLinkRequestResult() });
+      f.backend.requestToNode('missing', [Buffer.from('request')], {});
     await completed;
     for (const record of records) {
       assert.equal(record.reply([]), SubmitResult.InvalidState);

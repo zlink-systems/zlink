@@ -1,3 +1,11 @@
+import { MessageChannel } from 'node:worker_threads';
+import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
+import { ZLinkSpotActorMembership } from '../../packages/framework/src/runtime/spots/spot-actor-membership';
+import { resolveActorIngress } from '../../packages/framework/src/runtime/spots/spot-actor-ingress-admission';
+import { ZLinkActorRuntimeState } from '../../packages/framework/src/runtime/actors/actor-runtime-state';
+import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
+import { ZLinkUserSpotExecutionMode } from '../../packages/framework/src/contracts';
 import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
 import { ZLinkSpotActorPacketDispatch } from '../../packages/framework/src/runtime/spots/spot-actor-packet-dispatch';
 import {
@@ -11,7 +19,9 @@ import { setImmediate as turn } from 'node:timers/promises';
 import { requestDurableService } from '../../packages/framework/src/runtime/foundation/durable-service-request';
 import { ZLinkBackendResultError } from '../../packages/framework/src/runtime/backend/runtime-values';
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, afterEach } from 'node:test';
+import { RequestRuntime } from '../../packages/framework/src/runtime/foundation/request-runtime';
+import type { PendingOperation } from '../../packages/framework/src/runtime/foundation/operation-registry';
 import { frameworkErrorMappingFixture } from './framework-error-mapping-fixture';
 import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
@@ -34,7 +44,6 @@ import {
 import {
   decodeSessionRelocationRoute,
   decodeSessionRelocationSealed,
-  encodeServiceWireFrozenActorApplicationRecord,
   encodeSessionRelocationRoute,
   encodeSessionRelocationSeal,
   type ServiceMaintenanceRelocationControl,
@@ -85,6 +94,17 @@ import {
   ZLinkFrameworkException
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
 import { ZLINK_INTERNAL_RELOCATION_INTEGRITY_FAULT_GATE } from '../../packages/framework/src/runtime/host/relocation-integrity-fault-gate';
+
+const fixtureRequests = new Set<RequestRuntime>();
+function fixtureRequestRuntime(): RequestRuntime {
+  const requests = new RequestRuntime();
+  fixtureRequests.add(requests);
+  return requests;
+}
+afterEach(() => {
+  for (const requests of fixtureRequests) requests.close();
+  fixtureRequests.clear();
+});
 
 const coordinator = {
   ownerId: 'source-owner',
@@ -449,6 +469,7 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
   let ownerAvailable = true;
   const rejectedControls: Array<{ outcome: string; errorReason: string }> = [];
   const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
     currentOwner: () =>
       ownerAvailable ? { ownerId: 'session-owner-id', leaseGeneration: 8n } : undefined,
     messageFlow: () => ({
@@ -564,136 +585,80 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
 });
 
 test('exact duplicate Prepare shares restore while Data and Cutover stay one-way', async () => {
-  const prepare: ServiceMaintenanceRelocationPrepare = {
-    kind: 'prepare',
-    deadlineUnixMs: 1700000000000n,
-    relocation: { high: 17n, low: 19n },
-    targetAttemptGeneration: 1n,
-    coordinator,
-    target,
-    initiatorRole: 'source',
-    object,
-    sourceNodeRid: 'source',
-    sourceNodeGeneration: 2n,
-    payloadTotalLength: 24n,
-    payloadChunkCount: 1,
-    payloadChecksumCrc32c: 123,
-    applicationVersion: 4n
+  const harness = createActorJoinHostHarness({ dropCutover: true });
+  harness.location.liveLeases.set('source-owner', 3n);
+  let preparations = 0;
+  const prepareAggregate = harness.location.prepareAggregate.bind(harness.location);
+  harness.location.prepareAggregate = async (request) => {
+    preparations++;
+    return prepareAggregate(request);
   };
-  const ready: ServiceMaintenanceRelocationReady = {
-    kind: 'ready',
-    relocation: prepare.relocation,
-    targetAttemptGeneration: prepare.targetAttemptGeneration,
-    coordinator,
-    target,
-    object,
-    senderRole: 'target'
-  };
-  const sent: Buffer[] = [];
-  const oneWay: string[] = [];
-  let prepareCalls = 0;
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => {
+  let release!: () => void, restoreEntered!: () => void;
+  const heldRestore = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const runtime = new ZLinkHostServiceRelocationRuntime({ meshNode: () => ({}) } as never);
-  const internals = runtime as unknown as {
-    handlePrepareControl: () => Promise<ServiceMaintenanceRelocationReady>;
-    handleOneWayControl: (
-      meshName: string,
-      request: Extract<ServiceMaintenanceRelocationControl, { kind: 'data' | 'cutover' }>
-    ) => Promise<void>;
+  const restoring = new Promise<void>((resolve) => {
+    restoreEntered = resolve;
+  });
+  let materializations = 0;
+  const restore = harness.targetActorManager.prepareRelocationActor.bind(
+    harness.targetActorManager
+  );
+  harness.targetActorManager.prepareRelocationActor = async (...args) => {
+    materializations++;
+    restoreEntered();
+    await heldRestore;
+    return restore(...args);
   };
-  internals.handlePrepareControl = async () => {
-    prepareCalls += 1;
-    await held;
-    return ready;
-  };
-  internals.handleOneWayControl = async (_meshName, request) => {
-    oneWay.push(request.kind);
-  };
-  const dispatch = async (request: ServiceMaintenanceRelocationControl) => {
-    const part = Message.from(encodeServiceRelocationControlRequest(request));
-    try {
-      return await runtime.tryHandleControl('mesh-a', {
-        kind: request.kind === 'prepare' ? ReceiveKind.NodeRequest : ReceiveKind.NodeSend,
-        sourceNodeRid: 'source',
-        parts: [part],
-        reply: (reply: Uint8Array | readonly Uint8Array[]) => {
-          sent.push(Buffer.from(Array.isArray(reply) ? reply[0]! : reply));
-          return SubmitResult.Ok;
-        }
-      } as never);
-    } finally {
-      part.close();
-    }
-  };
-
+  const relocation = harness.relocate();
+  void relocation.catch(() => undefined);
   try {
-    const first = dispatch(prepare);
-    const second = dispatch(prepare);
-    assert.equal(prepareCalls, 1);
+    await restoring;
+    const replies = await harness.deliverPrepareAgain(undefined, false);
+    const foreignReplies = await harness.deliverPrepareAgain(4n, false);
+    const conflicts = await harness.deliverPrepareAgain(undefined, true, true);
+    const conflict = decodeServiceRelocationControlResponse(conflicts[0]!);
+    assert.equal(conflict.kind, 'failed');
+    if (conflict.kind === 'failed') assert.equal(conflict.failureCode, 35);
+    await turn();
+    assert.equal(materializations, 1);
+    assert.equal(replies.length, 0, 'duplicate awaits the same in-flight restore');
     assert.equal(
-      await dispatch({ ...prepare, coordinator: { ...coordinator, leaseGeneration: 4n } }),
-      true
+      foreignReplies.length,
+      0,
+      'different exact identity is discarded (relocation §4.2)'
     );
-    assert.equal(sent.length, 0, 'a different exact identity must not receive the active reply');
+    assert.equal(harness.readyReplies.length, 0);
     release();
-    assert.deepEqual(await Promise.all([first, second]), [true, true]);
-    assert.equal(prepareCalls, 1);
-    // The Ready reply is delivered asynchronously once the shared restore
-    // operation completes; each exact Prepare receipt answers once.
-    await waitUntil(() => sent.length === 2);
-    for (const bytes of sent) {
-      assert.deepEqual(decodeServiceRelocationControlResponse(bytes), ready);
-    }
-
-    const frozenRecord = encodeServiceWireFrozenActorApplicationRecord({
-      source: coordinator,
-      target: {
-        actorId: object.actorId,
-        objectGeneration: object.objectGeneration,
-        nodeRid: target.nodeRid,
-        nodeGeneration: target.nodeGeneration,
-        authorityOwnerGeneration: 12n,
-        ownerLeaseGeneration: target.ownerLeaseGeneration
-      },
-      operationId: { high: 23n, low: 29n },
-      payload: {
-        packetName: '__zlink.actor.handoff.accepted',
-        contentType: 'application/json',
-        bytes: Buffer.from('{}')
-      }
-    });
-    assert.equal(
-      await dispatch({
-        kind: 'data',
-        relocation: prepare.relocation,
-        targetAttemptGeneration: 1n,
-        coordinator,
-        senderRole: 'source',
-        object,
-        frozenRecord
-      }),
-      true
+    await waitUntil(() => replies.length === 1 && harness.controlKinds.includes('cutover'));
+    assert.equal(materializations, 1);
+    assert.equal(harness.readyReplies.length, 1);
+    assert.deepEqual(
+      replies[0],
+      harness.readyReplies[0],
+      'both exact receipts share the same validated READY'
     );
+    assert.equal(foreignReplies.length, 0);
+    assert.equal(harness.targetStageCount(), 1);
+    assert.equal(replies.length, 1);
+    assert.equal(decodeServiceRelocationControlResponse(replies[0]!).kind, 'ready');
+    assert.equal(harness.events.filter((value) => value === 'restore:hidden').length, 1);
+    assert.equal(preparations, 1, 'duplicate receipt cannot prepare another reservation');
+    assert.equal(harness.targetStageCount(), 1);
+    assert.equal(harness.controlKinds.filter((kind) => kind === 'data').length, 1);
+    assert.equal(harness.controlKinds.filter((kind) => kind === 'cutover').length, 1);
     assert.equal(
-      await dispatch({
-        kind: 'cutover',
-        relocation: prepare.relocation,
-        targetAttemptGeneration: 1n,
-        coordinator,
-        senderRole: 'source',
-        object,
-        boundaryRecordCount: 1n,
-        boundaryChecksumCrc32c: 0
-      }),
-      true
+      harness.events.filter((value) => value === 'ready:submit').length,
+      1,
+      'one-way DATA/CUTOVER have no reply callback'
     );
-    assert.deepEqual(oneWay, ['data', 'cutover']);
-    assert.equal(sent.length, 2, 'commands 31 and 34 must not send responses');
+    assert.equal(harness.prepareFingerprints.length, 1);
+    await harness.reachRestoreDeadline();
+    await assert.rejects(relocation, /Preserve fence/);
+    assert.equal(harness.location.preserves, 1);
   } finally {
-    await runtime.dispose();
+    release();
+    await harness.dispose();
   }
 });
 
@@ -722,7 +687,10 @@ for (const restoreOutcome of ['ready', 'failed'] as const) {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const runtime = new ZLinkHostServiceRelocationRuntime({ meshNode: () => ({}) } as never);
+    const runtime = new ZLinkHostServiceRelocationRuntime({
+      requests: fixtureRequestRuntime(),
+      meshNode: () => ({})
+    } as never);
     const internals = runtime as unknown as {
       handlePrepareControl: () => Promise<ServiceMaintenanceRelocationReady>;
     };
@@ -810,6 +778,7 @@ test('the integrity fault gate fails the original Prepare with replayable DataLo
     consumeIdentityConflict: () => true
   };
   const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
     meshNode: () => ({}),
     providerResolver: {
       get: (token: unknown) =>
@@ -848,84 +817,25 @@ test('the integrity fault gate fails the original Prepare with replayable DataLo
 });
 
 test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its classified failure', async () => {
-  // Spec 28 §9: an explicit Failed reply restores source memory promptly —
-  // the source must not learn the outcome only from its own resend-loop
-  // deadline. Node's wire failureCode vocabulary distinguishes DataLost(35)
-  // from the generic InternalFailure code requestFailed(17); the source-side
-  // classification must track whichever one the target actually sent.
-  const buildPrepare = (relocation: {
-    high: bigint;
-    low: bigint;
-  }): ServiceMaintenanceRelocationPrepare => ({
-    kind: 'prepare',
-    deadlineUnixMs: 1700000000000n,
-    relocation,
-    targetAttemptGeneration: 1n,
-    coordinator,
-    target,
-    initiatorRole: 'source',
-    object,
-    sourceNodeRid: 'source',
-    sourceNodeGeneration: 2n,
-    payloadTotalLength: 24n,
-    payloadChunkCount: 1,
-    payloadChecksumCrc32c: 123,
-    applicationVersion: 4n
-  });
   for (const [failureCode, expectedKind] of [
     [35, ZLinkFrameworkErrorKind.DataLost],
     [17, ZLinkFrameworkErrorKind.InternalFailure]
   ] as const) {
-    const prepare = buildPrepare({ high: 71n, low: BigInt(failureCode) });
-    const failed: ServiceMaintenanceRelocationFailed = {
-      kind: 'failed',
-      relocation: prepare.relocation,
-      targetAttemptGeneration: prepare.targetAttemptGeneration,
-      coordinator,
-      target,
-      object,
-      senderRole: 'target',
-      failureCode
-    };
-    const runtime = new ZLinkHostServiceRelocationRuntime({
-      meshNode: () => ({
-        async requestInfrastructureControlFrames() {
-          return [encodeServiceRelocationControlResponse(failed)];
-        }
-      })
-    } as never);
-    const internals = runtime as unknown as {
-      sendControl: (
-        meshName: string,
-        targetNodeRid: string,
-        request: ServiceMaintenanceRelocationPrepare,
-        signal: AbortSignal | undefined,
-        deadlineAtMs: number
-      ) => Promise<unknown>;
-    };
+    const harness = createActorJoinHostHarness({ explicitFailureCode: failureCode });
     try {
       const started = performance.now();
-      await assert.rejects(
-        internals.sendControl('mesh-a', 'target', prepare, undefined, performance.now() + 60_000),
-        (error: unknown) => {
-          assert.ok(
-            error instanceof ZLinkFrameworkException,
-            'must reject with a typed framework exception'
-          );
-          assert.equal(
-            error.kind,
-            expectedKind,
-            `failureCode ${failureCode} must classify as ${expectedKind}`
-          );
-          return true;
-        }
-      );
-      assert.ok(
-        performance.now() - started < 1_000,
-        'the explicit Failed must resolve the ACK promptly, not via the 60s deadline'
-      );
+      await assert.rejects(harness.relocate(), (error: unknown) => {
+        assert(error instanceof ZLinkFrameworkException);
+        assert.equal(error.kind, expectedKind, `failureCode ${failureCode}`);
+        return true;
+      });
+      assert(performance.now() - started < 1_000);
+      assert(harness.events.includes('source:rolled-back'));
+      assert.equal(harness.prepareFingerprints.length, 1);
+      assert.equal(harness.location.preserves, 0);
+      assert.equal(harness.location.commits, 0);
     } finally {
-      await runtime.dispose();
+      await harness.dispose();
     }
   }
 });
@@ -949,7 +859,9 @@ test('cutover boundary reconciliation replaces a stale pre-reconnect span with t
   // from before the disconnect, the retransmitted batch (declared by the
   // cutover's boundaryRecordCount/boundaryChecksumCrc32c) must replace it as
   // a whole rather than being appended after it.
-  const runtime = new ZLinkHostServiceRelocationRuntime({} as never);
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime()
+  } as never);
   const internals = runtime as unknown as {
     reconcileBoundaryRelay: (
       stage: { boundaryRelay: ServiceMaintenanceRelocationData[] },
@@ -995,7 +907,9 @@ test('cutover boundary reconciliation replaces a stale pre-reconnect span with t
 });
 
 test('cutover boundary reconciliation throws on an unordered-connection defect that no retransmission can explain', async () => {
-  const runtime = new ZLinkHostServiceRelocationRuntime({} as never);
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime()
+  } as never);
   const internals = runtime as unknown as {
     reconcileBoundaryRelay: (
       stage: { boundaryRelay: ServiceMaintenanceRelocationData[] },
@@ -1189,6 +1103,7 @@ for (const operation of ['read', 'lease', 'preserve'] as const) {
       const fixture = targetCasFixture();
       let calls = 0;
       const runtime = new ZLinkHostServiceRelocationRuntime({
+        requests: fixtureRequestRuntime(),
         locationStore: () => ({
           readAuthority: async () => {
             if (operation === 'read' && ++calls === 1) throw error;
@@ -1230,6 +1145,7 @@ test('source settlement retains its fence after a provider read failure', async 
   const fixture = targetCasFixture();
   let reads = 0;
   const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
     locationStore: () => ({
       readAuthority: async () => {
         if (++reads === 1) throw new Error('Store response lost');
@@ -1257,6 +1173,7 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
   let current = fixture.expected;
   let writes = 0;
   const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
     locationStore: () => ({
       commitAggregate: async () => {
         writes += 1;
@@ -1275,7 +1192,10 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
 
 test('target CAS propagates public Store invalid key during reconciliation', async () => {
   const store = new ZLinkInMemoryLocationStore();
-  const runtime = new ZLinkHostServiceRelocationRuntime({ locationStore: () => store } as never);
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
+    locationStore: () => store
+  } as never);
   const read = runtime as unknown as {
     readAggregateForCommitRetry(prepared: unknown): Promise<unknown>;
   };
@@ -1294,6 +1214,7 @@ for (const validationError of [
       const fixture = targetCasFixture();
       let calls = 0;
       const runtime = new ZLinkHostServiceRelocationRuntime({
+        requests: fixtureRequestRuntime(),
         locationStore: () => ({
           commitAggregate: async () => {
             if (operation === 'commit' && ++calls === 1) throw validationError;
@@ -1321,6 +1242,7 @@ test('target CAS resubmits indeterminate results with no deadline while the targ
   let current = fixture.expected;
   let writes = 0;
   const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
     locationStore: () => ({
       commitAggregate: async () => {
         writes += 1;
@@ -1349,6 +1271,7 @@ test(
     const fixture = targetCasFixture();
     let writes = 0;
     const runtime = new ZLinkHostServiceRelocationRuntime({
+      requests: fixtureRequestRuntime(),
       locationStore: () => ({
         commitAggregate: async () => {
           writes += 1;
@@ -1370,6 +1293,7 @@ test(
     const fixture = targetCasFixture();
     let writes = 0;
     const runtime = new ZLinkHostServiceRelocationRuntime({
+      requests: fixtureRequestRuntime(),
       locationStore: () => ({
         commitAggregate: async () => {
           writes += 1;
@@ -1392,6 +1316,7 @@ test(
 test('host relocation reports units settled on both sides as an authority error, all-source as a plain block', async () => {
   const run = async (committed: ReadonlySet<string>) => {
     const runtime = new ZLinkHostServiceRelocationRuntime({
+      requests: fixtureRequestRuntime(),
       spotManager: () => ({ relocationActivations: () => [] }),
       actorManager: () => ({
         snapshotStates: () =>
@@ -1423,7 +1348,9 @@ test('host relocation reports units settled on both sides as an authority error,
 });
 
 test('target-ready authority keeps aggregate, attempt and coordinator StoreVersion distinct', () => {
-  const runtime = new ZLinkHostServiceRelocationRuntime({} as never);
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime()
+  } as never);
   const sourceAuthority = encodeActorAuthorityIdentity({
     actorType: 'Player',
     actor: {
@@ -1510,6 +1437,7 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
     storeNow: new Date()
   } as ZLinkAuthoritySnapshot;
   const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
     actorManager: () => ({ getState: () => ({ nativeActorRef: nativeRef }) }),
     spotManager: () => ({
       async finalizeActorJoinRelocation(
@@ -1652,6 +1580,7 @@ test('target admission opens after one publication-clear conflict and a later cl
   let clearAttempts = 0;
   let actorAvailable = false;
   const runtime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
     spotManager: () => undefined,
     locationStore: () => ({
       async readAuthority() {
@@ -2142,7 +2071,7 @@ test('the 1000ms cutover wait records a Warning only; the source Preserve fence 
 
     // Restore deadline: the source settles with its Preserve fence and keeps
     // the authority; the target observes the fence and discards its staging.
-    harness.reachRestoreDeadline();
+    await harness.reachRestoreDeadline();
     await assert.rejects(relocation, /Preserve fence/);
     assert.equal(
       harness.events.includes('source:rolled-back'),
@@ -2374,7 +2303,7 @@ test('an expired source owner lease at the Restore deadline ends the unit as an 
     const relocation = harness.relocate();
     relocation.catch(() => undefined);
     await waitUntil(() => harness.controlKinds.includes('cutover'));
-    harness.reachRestoreDeadline();
+    await harness.reachRestoreDeadline();
     await assert.rejects(
       relocation,
       (error: unknown) => error instanceof Error && error.name === 'ServiceRelocationAuthorityError'
@@ -2388,68 +2317,59 @@ test('an expired source owner lease at the Restore deadline ends the unit as an 
   }
 });
 
-test('ActorJoin READY submit failure re-submits Ready against the retained staging on every Prepare resend', async () => {
-  //  Spec 28: a READY reply that fails to submit is not a restore failure —
-  //  the restored staging is retained, and an exact-identity Prepare resend
-  //  re-submits READY against it instead of rolling back or terminating.
-  //  Permanent non-delivery is bounded by the existing Restore validity
-  //  window, not by this delivery path.
-  const harness = createActorJoinHostHarness({ readyResult: SubmitResult.NotConnected });
-  const relocatePromise = harness.relocate();
-  relocatePromise.catch(() => undefined);
+test('ActorJoin READY submit failure retains staging without automatic PREPARE resend', async () => {
+  const harness = createActorJoinHostHarness({ readyResults: [SubmitResult.NotConnected] });
+  harness.location.liveLeases.set('source-owner', 3n);
+  const relocation = harness.relocate();
+  void relocation.catch(() => undefined);
   try {
     await harness.waitForReadyAttempt(1);
     harness.restoreSourceRoute();
-    await harness.waitForReadyAttempt(2);
-    assert.ok(
-      harness.events.filter((value) => value === 'ready:submit').length >= 2,
-      'a Prepare resend must re-submit Ready against the retained staging'
+    await turn();
+    assert.equal(harness.prepareFingerprints.length, 1);
+    assert.equal(harness.events.filter((value) => value === 'ready:submit').length, 1);
+    assert.equal(harness.location.commits, 0);
+    assert.equal(harness.targetStageCount(), 1);
+    assert.equal(harness.location.aborts, 0);
+    assert.equal(harness.targetActorManager.aborted, 0);
+    assert(!harness.events.includes('source:rolled-back'));
+    await harness.reachRestoreDeadline();
+    await assert.rejects(
+      relocation,
+      (error) =>
+        error instanceof ZLinkBackendResultError && error.result === RequestResult.NotConnected
     );
-    assert.equal(harness.location.commits, 0, 'an undelivered Ready must never arm CAS fallback');
-    assert.equal(
-      harness.targetStageCount(),
-      1,
-      'the restored staging must be retained, not erased'
-    );
-    assert.equal(
-      harness.location.aborts,
-      0,
-      'a delivery retry must not roll back the restored staging'
-    );
-    assert.equal(
-      harness.targetActorManager.aborted,
-      0,
-      'hidden target restore must not roll back on a delivery retry'
-    );
+    assert.equal(harness.location.preserves, 1);
+    assert(harness.events.includes('source:rolled-back'));
   } finally {
     await harness.dispose();
   }
 });
 
-test('exact ActorJoin Prepare can restore again and arm fallback only after READY resend succeeds', async () => {
-  const harness = createActorJoinHostHarness({
-    readyResults: [SubmitResult.NotConnected, SubmitResult.Ok]
-  });
+test('exact ActorJoin Prepare via public ingress reuses staging after an undelivered READY', async () => {
+  const harness = createActorJoinHostHarness({ readyResults: [SubmitResult.NotConnected] });
+  harness.location.liveLeases.set('source-owner', 3n);
+  const relocation = harness.relocate();
+  void relocation.catch(() => undefined);
   try {
-    const relocation = harness.relocate();
     await harness.waitForReadyAttempt(1);
-    harness.restoreSourceRoute();
-    await relocation;
-    harness.clearDeliveryErrors();
-    await harness.targetIdle();
-    assert.ok(harness.prepareFingerprints.length >= 2);
-    assert.equal(
-      new Set(harness.prepareFingerprints).size,
-      1,
-      'every Prepare retry must preserve the exact frozen bytes'
+    assert.equal(harness.targetStageCount(), 1);
+    const restored = harness.events.filter((value) => value === 'restore:hidden').length;
+    const duplicateReplies = await harness.deliverPrepareAgain();
+    assert.equal(duplicateReplies.length, 1);
+    assert.equal(decodeServiceRelocationControlResponse(duplicateReplies[0]!).kind, 'ready');
+    assert.equal(harness.events.filter((value) => value === 'restore:hidden').length, restored);
+    assert.equal(harness.prepareFingerprints.length, 1, 'sender never resubmits PREPARE');
+    assert.equal(harness.targetStageCount(), 1);
+    assert.equal(harness.targetActorManager.aborted, 0);
+    assert.equal(harness.location.commits, 0);
+    await harness.reachRestoreDeadline();
+    await assert.rejects(
+      relocation,
+      (error) =>
+        error instanceof ZLinkBackendResultError && error.result === RequestResult.NotConnected
     );
-    assert.equal(
-      harness.targetActorManager.aborted,
-      0,
-      'a Ready-delivery retry reuses staging, never rolling it back'
-    );
-    assert.equal(harness.targetActorManager.published, 1);
-    assert.equal(harness.location.commits, 1);
+    assert.equal(harness.location.preserves, 1);
   } finally {
     await harness.dispose();
   }
@@ -2729,6 +2649,11 @@ interface NativeRouteChangePeers {
 }
 
 interface ActorJoinHarnessOptions {
+  readonly realSourceCapture?: boolean;
+  readonly sourceQuiescenceChanged?: (safe: boolean) => void;
+  readonly explicitFailureCode?: number;
+  readonly submitFailure?: unknown;
+  readonly rollbackFailure?: unknown;
   readonly sessionOwnerRouteReady?: () => boolean;
   readonly waitSessionOwnerRoute?: (signal?: AbortSignal) => Promise<void>;
   readonly requestPeerReconcile?: () => Promise<void>;
@@ -2758,6 +2683,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   const events: string[] = [];
   const controlKinds: string[] = [];
   const prepareFingerprints: string[] = [];
+  const readyReplies: Buffer[] = [];
   const relocationId = '00000000-0000-0000-0000-000000000091';
   let canonicalHandoffId: string | undefined;
   const actorId = 'actor-host-profile';
@@ -2818,17 +2744,31 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       ]
     ])
   };
-  const sourceState = {
-    actorId,
-    actorType: 'Player',
-    actor: sourceActor,
-    meshName: 'mesh-a',
-    spotId: options.canonicalRecovery === true ? 'entry-spot-estimate' : 'source-room',
-    spotMembershipEpoch: 8n,
-    nativeActorRef: { actorId, generation: 5n, nodeRid: 'source' },
-    locationGeneration: 11n,
-    ownerLeaseGeneration: 3n
-  };
+  const sourceState: any = options.realSourceCapture
+    ? new ZLinkActorRuntimeState(actorId)
+    : {
+        actorId,
+        actorType: 'Player',
+        actor: sourceActor,
+        meshName: 'mesh-a',
+        spotId: options.canonicalRecovery === true ? 'entry-spot-estimate' : 'source-room',
+        spotMembershipEpoch: 8n,
+        nativeActorRef: { actorId, generation: 5n, nodeRid: 'source' },
+        locationGeneration: 11n,
+        ownerLeaseGeneration: 3n
+      };
+  if (options.realSourceCapture) {
+    sourceState.rememberMeshName('mesh-a');
+    sourceState.getOrStartCreation('Player', false, async () => ({
+      status: 'created',
+      actor: sourceActor
+    }));
+    sourceState.bindActor(sourceActor, sourceActor.context);
+    sourceState.setNativeActorRef({ actorId, generation: 5n, nodeRid: 'source' });
+    sourceState.setJoinedSpot('source-room', undefined, 8n, 4n);
+    sourceState.setLocationGeneration(11n);
+    sourceState.setOwnerLeaseGeneration(3n);
+  }
   const packets = ['B1', 'B2', 'D1'].map((label, index) => actorJoinHandoffPacket(index, label));
   let releaseAccepted = () => {};
   const acceptedGate =
@@ -2881,68 +2821,198 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     isCurrentActorRef: () => false
   });
   const sourceCommits: unknown[][] = [];
-  const sourceActorTransfer = {
-    async prepareMaintenanceSession(
-      _actor: unknown,
-      _state: unknown,
-      _signal: unknown,
-      _retainSource: unknown,
-      relocation: { high: bigint; low: bigint }
-    ) {
-      sourceHandoff.begin(actorId, 5n);
-      return {
-        target: {
-          routerChannelId: 'session.route',
-          targetNodeRid: 'session-owner',
-          spotId: 'session-entry',
-          sessionNodeRid: 'session-owner',
-          sessionRid: 'session-1',
-          bindingGeneration: 5n,
-          serviceWireRelocation: {
-            relocation,
-            coordinator: {
-              ownerId: sourceAuthority.ownerId,
-              leaseGeneration: sourceAuthority.ownerLeaseGeneration,
-              nodeRid: 'source',
-              nodeGeneration: 2n,
-              expectedAuthorityStoreVersion: sourceAuthority.storeVersion.value
-            },
-            session: {
-              sessionOwnerNodeRid: 'session-owner',
-              sessionOwnerNodeGeneration: 7n,
-              sessionOwnerId: 'session-owner-id',
-              sessionOwnerLeaseGeneration: 8n,
-              sessionRid: 'session-1',
-              bindingGeneration: 5n
-            }
-          }
-        },
-        handoffBacklog: packets.slice(0, 2),
-        takeRelocationRelay: () => packets.slice(2),
-        setReplayResults() {},
-        async commit(...args: unknown[]) {
-          sourceCommits.push(args);
-          sourceHandoff.complete(actorId, args[0] as never, args[1] as never, [], args[2] as never);
-          events.push('source:committed');
-          await options.commitSource?.();
-        },
-        async rollback() {
-          sourceHandoff.cancel(actorId);
-          events.push('source:rolled-back');
-        },
-        discard() {
-          events.push('source:discarded');
-        }
-      };
-    },
-    async completeRelocationSourceLeave(_actor: unknown, sourceSpotId: unknown) {
-      sourceLeaveSpotIds.push(sourceSpotId);
-      events.push('source:onLeave:started');
-      await sourceLeaveGate;
-      if (options.sourceLeaveFailure !== undefined) throw options.sourceLeaveFailure;
-      events.push('source:onLeave:completed');
+  const sourceSerial = new ZLinkSpotSerialExecutor(
+    new ZLinkSpotSerialTurnExecutor(true, 'source-room' as never),
+    ZLinkUserSpotExecutionMode.PerActor,
+    'source-room'
+  );
+  const pendingCaptures: Promise<unknown>[] = [];
+  const fifoAdmissions: Promise<void>[] = [];
+  const resumeObservations: Array<{ label: string; preserves: number; moving: boolean }> = [];
+  const originalRequests: Array<{ id?: bigint; deadlineMs?: number; timeoutMs: number }> = [];
+  const capture = (label: string, index: number) => {
+    const packet = actorJoinHandoffPacket(index, label);
+    const parts = [Message.from('header:' + label), Message.from(label)];
+    try {
+      const captured = sourceHandoff.capture(
+        'remote',
+        actorId,
+        parts,
+        false,
+        undefined,
+        attachActorMessageFollowContext(sourceActorRef as never, packet.messageFollowContext)
+      );
+      assert.notEqual(captured, undefined);
+      pendingCaptures.push(Promise.resolve(captured));
+      events.push('source:capture:' + label);
+    } finally {
+      parts.forEach((p) => p.close());
     }
   };
+  const membershipTurn = options.realSourceCapture
+    ? new ZLinkSpotSerialTurnExecutor(true, 'source-room' as never)
+    : undefined;
+  const sourceActivation =
+    membershipTurn === undefined
+      ? undefined
+      : new ZLinkSpotActivation({
+          meshName: 'mesh-a',
+          spotId: 'source-room',
+          domain: {
+            kind: 'user',
+            executionMode: ZLinkUserSpotExecutionMode.PerActor,
+            relocationCoordinationMode: 'framework_managed'
+          },
+          spotType: class Room {},
+          spot: {},
+          serial: membershipTurn,
+          timers: {},
+          actorHandlers: {},
+          handlers: {}
+        } as never);
+  sourceActivation?.commitActorJoin(sourceActor as never);
+  const actualMembership =
+    sourceActivation === undefined
+      ? undefined
+      : new ZLinkSpotActorMembership({
+          resolveActivation: () => sourceActivation
+        });
+  const membershipFailures: unknown[] = [];
+  const prepareFailures: unknown[] = [];
+  const freshIngress = () => {
+    const activation = sourceActivation;
+    assert.notEqual(activation, undefined);
+    return resolveActorIngress({ actorId, parts: [] } as never, false, {
+      resolveActor: () => sourceActor as never,
+      hasDepartedActor: (id) => activation!.hasDepartedActor(id)
+    }).kind;
+  };
+  const membership = {
+    async beginActorTransfer() {
+      events.push('source:membership-begin');
+      if (options.realSourceCapture)
+        await actualMembership!.beginActorTransfer('source-room', actorId);
+      assert.equal(sourceState.isMoving, true);
+      capture('B1', 0);
+      capture('B2', 1);
+    },
+    async cancelActorTransfer() {
+      events.push('source:membership-cancel');
+      if (options.realSourceCapture) {
+        if (options.rollbackFailure !== undefined)
+          membershipTurn!.setLifecycleAdmissionClosed(true);
+        try {
+          await actualMembership!.cancelActorTransfer('source-room', actorId);
+        } catch (error) {
+          membershipFailures.push(error);
+          throw error;
+        }
+        events.push('source:membership-restored');
+      } else if (options.rollbackFailure !== undefined) throw options.rollbackFailure;
+    },
+    async commitActorLeaveAfterTransfer() {
+      events.push('source:committed');
+    },
+    async prepareActorLeaveForTransfer() {
+      events.push('source:onLeave:completed');
+    },
+    admitSourceActorPacketPrefix(id: string, records: readonly any[]) {
+      events.push('source:fifo-admit');
+      const admission = sourceSerial.admitActorPacketPrefix(id, records, async (_serial, parts) => {
+        const label = Buffer.from(parts[1]!.data()).toString();
+        const observation = { label, preserves: location.preserves, moving: sourceState.isMoving };
+        resumeObservations.push(observation);
+        events.push('source:handler:' + label);
+        return undefined;
+      });
+      fifoAdmissions.push(admission.terminal);
+      return admission;
+    }
+  };
+  const realSourceActorTransfer = new ZLinkActorTransferRuntime({
+    actorHandoff: sourceHandoff,
+    spotManager: () => membership,
+    actorManager: () => sourceActorManager,
+    authorityStore: () => location,
+    currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 3n }),
+    primaryMeshNode: () => sourceNode,
+    routeTransport: {},
+    notifyEntrySpotActorLeft: async () => {},
+    locationLifecycle: () => undefined,
+    clearRemoteActorPacketTarget() {},
+    reportPostCommitError: (error: unknown) => deliveryErrors.push(error)
+  } as never);
+  const sourceActorTransfer = options.realSourceCapture
+    ? realSourceActorTransfer
+    : {
+        async prepareMaintenanceSession(
+          _actor: unknown,
+          _state: unknown,
+          _signal: unknown,
+          _retainSource: unknown,
+          relocation: { high: bigint; low: bigint }
+        ) {
+          sourceHandoff.begin(actorId, 5n);
+          return {
+            target: {
+              routerChannelId: 'session.route',
+              targetNodeRid: 'session-owner',
+              spotId: 'session-entry',
+              sessionNodeRid: 'session-owner',
+              sessionRid: 'session-1',
+              bindingGeneration: 5n,
+              serviceWireRelocation: {
+                relocation,
+                coordinator: {
+                  ownerId: sourceAuthority.ownerId,
+                  leaseGeneration: sourceAuthority.ownerLeaseGeneration,
+                  nodeRid: 'source',
+                  nodeGeneration: 2n,
+                  expectedAuthorityStoreVersion: sourceAuthority.storeVersion.value
+                },
+                session: {
+                  sessionOwnerNodeRid: 'session-owner',
+                  sessionOwnerNodeGeneration: 7n,
+                  sessionOwnerId: 'session-owner-id',
+                  sessionOwnerLeaseGeneration: 8n,
+                  sessionRid: 'session-1',
+                  bindingGeneration: 5n
+                }
+              }
+            },
+            handoffBacklog: packets.slice(0, 2),
+            takeRelocationRelay: () => packets.slice(2),
+            setReplayResults() {},
+            async commit(...args: unknown[]) {
+              sourceCommits.push(args);
+              sourceHandoff.complete(
+                actorId,
+                args[0] as never,
+                args[1] as never,
+                [],
+                args[2] as never
+              );
+              events.push('source:committed');
+              await options.commitSource?.();
+            },
+            async rollback() {
+              sourceHandoff.cancel(actorId);
+              events.push('source:rolled-back');
+              if (options.rollbackFailure !== undefined) throw options.rollbackFailure;
+            },
+            discard() {
+              events.push('source:discarded');
+            }
+          };
+        },
+        async completeRelocationSourceLeave(_actor: unknown, sourceSpotId: unknown) {
+          sourceLeaveSpotIds.push(sourceSpotId);
+          events.push('source:onLeave:started');
+          await sourceLeaveGate;
+          if (options.sourceLeaveFailure !== undefined) throw options.sourceLeaveFailure;
+          events.push('source:onLeave:completed');
+        }
+      };
 
   let targetState: Record<string, any> | undefined;
   let targetNativeAuthority:
@@ -3051,6 +3121,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   let sourceRuntime!: ZLinkHostServiceRelocationRuntime;
   let targetRuntime!: ZLinkHostServiceRelocationRuntime;
   let sourceSignal = new AbortController();
+  let sourceDeadlineAtMs: number | undefined;
   const targetDeliveries: Promise<void>[] = [];
   const sourceDeliveries: Promise<void>[] = [];
   const deliveryErrors: unknown[] = [];
@@ -3126,13 +3197,14 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         readonly timeoutMs?: number;
         readonly signal?: AbortSignal;
         readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
+        readonly requestOperation?: PendingOperation<unknown>;
       }
     ): Promise<readonly Uint8Array[]> {
       return requestDurableService(
         sourceNode,
         targetRid,
         frames,
-        performance.now() + (requestOptions?.timeoutMs ?? 30_000),
+        requestOptions!.requestOperation!,
         'Prepare',
         requestOptions?.signal,
         requestOptions?.onSubmitted
@@ -3141,8 +3213,17 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     requestService(
       _targetRid: string,
       frames: readonly Uint8Array[],
-      timeoutMs: number
+      timeoutMs: number,
+      onAdmitted?: () => void,
+      pending?: Pick<PendingOperation<unknown>, 'id' | 'deadlineMs'>,
+      receiver?: undefined,
+      onSubmitted?: () => void
     ): Promise<readonly Buffer[]> {
+      if (options.submitFailure !== undefined) throw options.submitFailure;
+      originalRequests.push({ id: pending?.id, deadlineMs: pending?.deadlineMs, timeoutMs });
+      if (options.realSourceCapture) {
+        capture('D1', 2);
+      }
       const bytes = frames[0]!;
       const control = decodeServiceRelocationControlRequest(bytes);
       if (control !== undefined) {
@@ -3152,8 +3233,16 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         }
       }
       if (options.transport !== undefined)
-        return options.transport.source.raw.requestService(_targetRid, frames, timeoutMs);
-      return new Promise<readonly Buffer[]>((resolve, reject) => {
+        return options.transport.source.raw.requestService(
+          _targetRid,
+          frames,
+          timeoutMs,
+          onAdmitted,
+          pending,
+          receiver,
+          onSubmitted
+        );
+      const reply = new Promise<readonly Buffer[]>((resolve, reject) => {
         const parts = frames.map((frame) => Message.from(frame));
         let settled = false;
         const finish = (action: () => void) => {
@@ -3177,13 +3266,26 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
               const result = queuedResult ?? options.readyResult ?? SubmitResult.Ok;
               if (result === SubmitResult.Ok) {
                 const replyParts = Array.isArray(reply) ? reply : [reply];
-                finish(() => resolve(replyParts.map((part) => Buffer.from(part))));
+                readyReplies.push(Buffer.from(replyParts[0]!));
+                finish(() =>
+                  resolve(
+                    options.explicitFailureCode === undefined
+                      ? replyParts.map((part) => Buffer.from(part))
+                      : [
+                          encodeServiceRelocationControlResponse({
+                            ...decodeServiceRelocationControlResponse(Buffer.from(replyParts[0]!)),
+                            kind: 'failed',
+                            failureCode: options.explicitFailureCode
+                          } as ServiceMaintenanceRelocationFailed)
+                        ]
+                  )
+                );
               }
               if (result !== SubmitResult.Ok) {
                 sourceRouteReady = false;
-                finish(() =>
-                  reject(new ZLinkBackendResultError('request', RequestResult.NotConnected))
-                );
+                const failure = new ZLinkBackendResultError('request', RequestResult.NotConnected);
+                prepareFailures.push(failure);
+                finish(() => reject(failure));
               }
               return result;
             }
@@ -3198,6 +3300,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           .finally(() => parts.forEach((part) => part.close()));
         targetDeliveries.push(delivery);
       });
+      onSubmitted?.();
+      return reply;
     }
   };
   const targetNode = {
@@ -3485,6 +3589,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     boundSessionRelocation: undefined
   };
   sourceRuntime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
     ...common,
     locationStore: () =>
       options.missingAfterTargetCommit
@@ -3526,7 +3631,9 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     meshNode: () => sourceNode,
     spotManager: () => undefined,
     actorManager: () => sourceActorManager,
-    actorTransfer: sourceActorTransfer
+    actorTransfer: sourceActorTransfer,
+    sourceQuiescenceChanged: () =>
+      options.sourceQuiescenceChanged?.(sourceRuntime.isSafeToShutdown())
   } as never);
   const targetMailbox = new ZLinkActorSerialExecutor(actorId, 'entry-target');
   const targetTransfer = new ZLinkActorTransferRuntime({
@@ -3547,6 +3654,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     reportPostCommitError: (error: unknown) => deliveryErrors.push(error)
   } as never);
   targetRuntime = new ZLinkHostServiceRelocationRuntime({
+    requests: fixtureRequestRuntime(),
     ...common,
     requestPeerReconcile: options.requestPeerReconcile,
     activationAdmission: options.activationAdmission,
@@ -3558,7 +3666,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     actorTransfer: {
       admitRelocationPrefix: targetTransfer.admitRelocationPrefix.bind(targetTransfer),
       async publishRoutedActorOwnership() {
-        assert.notEqual(targetState?.boundSession, undefined);
+        if (options.realSourceCapture) assert.equal(targetState?.boundSession, undefined);
+        else assert.notEqual(targetState?.boundSession, undefined);
         events.push('command44');
       }
     }
@@ -3628,6 +3737,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           `-${canonicalHandoffId!.slice(12, 16)}-${canonicalHandoffId!.slice(16, 20)}` +
           `-${canonicalHandoffId!.slice(20)}`
         : relocationId;
+    sourceDeadlineAtMs = performance.now() + 30_000;
     const result = await sourceRuntime.relocateActorJoin({
       meshName: 'mesh-a',
       actor: sourceActor as never,
@@ -3661,13 +3771,19 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
             }
           }),
       advertisedReceiveChunkLimitBytes,
-      signal: sourceSignal.signal
+      signal: sourceSignal.signal,
+      deadlineAtMs: sourceDeadlineAtMs
     });
     if (settleSource) await result.sourceCleanup?.();
     // The public Join owner installs the target ref before the one-way source
     // cleanup terminal arrives. Source cleanup must retain its original ref.
-    (sourceState as any).nativeActorRef = result.actorRef;
-    (sourceState as any).spotId = 'entry-target';
+    if (options.realSourceCapture) {
+      sourceState.setNativeActorRef(result.actorRef);
+      sourceState.setJoinedSpot('entry-target');
+    } else {
+      sourceState.nativeActorRef = result.actorRef;
+      sourceState.spotId = 'entry-target';
+    }
     return result;
   };
   return {
@@ -3685,9 +3801,22 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       sourceRouteReady = true;
       for (const observer of sourceRouteObservers) observer('target');
     },
+    stopSource: () => sourceRuntime.dispose(),
+    sourceState,
+    sourceActivation,
+    freshIngress,
+    membershipFailures,
+    prepareFailures,
+    resumeObservations,
+    originalRequests,
+    sourceFifoIdle: async () => {
+      await Promise.all(pendingCaptures);
+      await Promise.all(fifoAdmissions);
+    },
     events,
     controlKinds,
     prepareFingerprints,
+    readyReplies,
     location,
     targetActorManager,
     targetAuthorityGeneration: () => targetNativeAuthority?.authorityOwnerGeneration,
@@ -3799,6 +3928,46 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       await targetMailbox.execute(() => undefined);
       assert.deepEqual(deliveryErrors, []);
     },
+    async deliverPrepareAgain(
+      leaseGeneration?: bigint,
+      waitForReply = true,
+      manifestConflict = false
+    ) {
+      const original = Buffer.from(prepareFingerprints[0]!, 'base64');
+      const prepare = decodeServiceRelocationControlRequest(
+        original
+      ) as ServiceMaintenanceRelocationPrepare;
+      const part = Message.from(
+        manifestConflict
+          ? encodeServiceRelocationControlRequest({
+              ...prepare,
+              payloadTotalLength: prepare.payloadTotalLength + 1n
+            })
+          : leaseGeneration === undefined
+            ? original
+            : encodeServiceRelocationControlRequest({
+                ...prepare,
+                coordinator: { ...prepare.coordinator, leaseGeneration }
+              })
+      );
+      const replies: Buffer[] = [];
+      try {
+        await targetRuntime.tryHandleControl('mesh-a', {
+          kind: ReceiveKind.NodeRequest,
+          sourceNodeRid: 'source',
+          parts: [part],
+          reply: (reply: Uint8Array | readonly Uint8Array[]) => {
+            const frames = Array.isArray(reply) ? reply : [reply];
+            replies.push(Buffer.from(frames[0]!));
+            return SubmitResult.Ok;
+          }
+        } as never);
+        if (waitForReply) await waitUntil(() => replies.length === 1);
+        return replies;
+      } finally {
+        part.close();
+      }
+    },
     async deliverCutoverAgain() {
       const prepare = controlKinds;
       assert.equal(prepare[0], 'prepare');
@@ -3842,24 +4011,39 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       }
     },
     targetStageCount: () => targetRuntime[inspectRuntime]().targetStages,
-    reachRestoreDeadline: () => sourceSignal.abort(new Error('Restore deadline reached.')),
+    reachRestoreDeadline: async () => {
+      assert.notEqual(sourceDeadlineAtMs, undefined);
+      while (performance.now() < sourceDeadlineAtMs!) {
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, Math.max(1, Math.ceil(sourceDeadlineAtMs! - performance.now())))
+        );
+      }
+      sourceSignal.abort(new Error('Restore deadline reached.'));
+    },
     clearDeliveryErrors: () => {
       deliveryErrors.length = 0;
     },
     async dispose() {
-      releaseTargetPublication();
-      sourceSignal.abort(new Error('ActorJoin harness disposed.'));
-      taskShutdown.abort();
-      releaseAccepted();
-      releaseSourceLeave();
-      admissions.delete(relocationId);
-      if (canonicalHandoffId !== undefined) admissions.delete(canonicalHandoffId);
-      await Promise.all([...targetDeliveries, ...sourceDeliveries]);
-      await targetMailbox.close();
-      sourceCanonicalRuntime.close();
-      targetCanonicalRuntime.close();
-      await sourceRuntime.dispose();
-      await targetRuntime.dispose();
+      try {
+        releaseTargetPublication();
+        sourceSignal.abort(new Error('ActorJoin harness disposed.'));
+        taskShutdown.abort();
+        releaseAccepted();
+        releaseSourceLeave();
+        admissions.delete(relocationId);
+        if (canonicalHandoffId !== undefined) admissions.delete(canonicalHandoffId);
+        await Promise.all([...targetDeliveries, ...sourceDeliveries]);
+        await targetMailbox.close();
+        await sourceSerial.close();
+        sourceCanonicalRuntime.close();
+        targetCanonicalRuntime.close();
+        await sourceRuntime.dispose();
+        await targetRuntime.dispose();
+      } finally {
+        membershipTurn?.closeAdmission();
+        await sourceActivation?.serialExecutor.close();
+        await membershipTurn?.whenIdle();
+      }
     }
   };
 }
@@ -4129,6 +4313,7 @@ for (const phase of ['Prepare', 'cutover'] as const) {
         }
       }
     });
+    harness.location.liveLeases.set('source-owner', 3n);
     try {
       await peers.until(
         () =>
@@ -4153,16 +4338,55 @@ for (const phase of ['Prepare', 'cutover'] as const) {
       );
       await peers.switchRoute(true);
       peers.release();
-      await peers.until(
-        () => outcome !== undefined || failure !== undefined,
-        'original relocation terminal'
-      );
-      if (failure !== undefined) throw failure;
-      assert.equal(String(outcome!.actorRef.nodeRid), 'target');
-      assert.equal(harness.location.commits, 1);
-      assert.equal(harness.targetActorManager.published, 1);
-      assert.equal(harness.targetActorManager.aborted, 0);
+      if (phase === 'Prepare') await relocation;
+      else
+        await peers.until(
+          () => outcome !== undefined || failure !== undefined,
+          'original relocation terminal'
+        );
+      assert.equal(harness.originalRequests.length, 1);
+      assert.equal(harness.prepareFingerprints.length, 1);
+      if (phase === 'cutover')
+        assert.equal(failure, undefined, 'CUTOVER whole-batch route replacement must commit');
+      if (failure === undefined) {
+        assert.equal(String(outcome!.actorRef.nodeRid), 'target');
+        assert.equal(harness.location.commits, 1);
+        assert.equal(harness.targetActorManager.published, 1);
+        assert.equal(harness.targetActorManager.aborted, 0);
+      } else {
+        assert.equal(phase, 'Prepare');
+        assert(failure instanceof ZLinkBackendResultError);
+        assert.equal(failure.operation, 'request');
+        assert.equal(failure.result, RequestResult.NotConnected);
+        assert.equal(harness.location.commits, 0);
+        assert.equal(harness.targetActorManager.published, 0);
+        assert.equal(harness.location.preserves, 1);
+        assert(harness.events.includes('source:rolled-back'));
+      }
       assert.equal(new Set(harness.prepareFingerprints).size, 1);
+      const dataCount = harness.controlKinds.filter((kind) => kind === 'data').length;
+      const cutoverCount = harness.controlKinds.filter((kind) => kind === 'cutover').length;
+      if (phase === 'cutover') {
+        assert(
+          cutoverCount >= 2,
+          'a changed ready route replays the legitimate CUTOVER whole batch'
+        );
+        assert.equal(dataCount, cutoverCount);
+      }
+      console.log(
+        'NATIVE_PHASE_EVIDENCE',
+        JSON.stringify({
+          phase,
+          terminal: failure === undefined ? 'target' : 'failure',
+          failureName: failure instanceof Error ? failure.name : undefined,
+          failureMessage: failure instanceof Error ? failure.message : undefined,
+          prepareCount: harness.prepareFingerprints.length,
+          dataCount,
+          cutoverCount,
+          pendingId: String(harness.originalRequests[0]!.id),
+          deadlineMs: harness.originalRequests[0]!.deadlineMs
+        })
+      );
       await relocation;
     } finally {
       await harness.dispose();
@@ -4232,3 +4456,416 @@ test('Session owner route deadline failure replies explicitly and restores the s
     await harness.dispose();
   }
 });
+
+test('processed PREPARE holds real source FIFO until Store Preserve response confirms storage', async () => {
+  const harness = createActorJoinHostHarness({
+    realSourceCapture: true,
+    readyResults: [SubmitResult.NotConnected]
+  });
+  harness.location.liveLeases.set('source-owner', 3n);
+  let entered!: () => void, release!: () => void;
+  const preserving = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const compare = harness.location.compareExchangeAuthority.bind(harness.location);
+  harness.location.compareExchangeAuthority = async (key, expected, mutation) => {
+    assert.equal(mutation.generationTransition, 'preserve');
+    entered();
+    await held;
+    const stored = await compare(key, expected, mutation);
+    harness.events.push('store:preserve-stored');
+    return stored;
+  };
+  const relocation = harness.relocate();
+  void relocation.catch(() => undefined);
+  try {
+    await preserving; // The original 30s absolute deadline is unchanged.
+    assert.equal(harness.location.preserves, 0);
+    assert.equal(harness.sourceState.isMoving, true);
+    assert.equal(harness.resumeObservations.length, 0);
+    assert.equal(harness.originalRequests.length, 1);
+    assert.equal(harness.prepareFingerprints.length, 1);
+    assert.equal(harness.events.filter((value) => value === 'restore:hidden').length, 1);
+    assert.equal(harness.location.commits, 0);
+    assert.equal(harness.targetActorManager.published, 0);
+    release();
+    await assert.rejects(
+      relocation,
+      (error) =>
+        error instanceof ZLinkBackendResultError && error.result === RequestResult.NotConnected
+    );
+    await harness.sourceFifoIdle();
+    assert.equal(harness.location.preserves, 1);
+    assert.equal(harness.sourceState.isMoving, false);
+    assert.deepEqual(
+      harness.resumeObservations.map((value) => value.label),
+      ['B1', 'B2', 'D1']
+    );
+    assert(harness.resumeObservations.every((value) => value.preserves === 1 && !value.moving));
+    assert(
+      harness.events.indexOf('store:preserve-stored') < harness.events.indexOf('source:fifo-admit')
+    );
+  } finally {
+    release();
+    await harness.dispose();
+  }
+});
+
+test('uncertain Preserve response retains real source FIFO until Store readback and a confirmed fence', async () => {
+  const harness = createActorJoinHostHarness({
+    realSourceCapture: true,
+    readyResults: [SubmitResult.NotConnected]
+  });
+  harness.location.liveLeases.set('source-owner', 3n);
+  const compare = harness.location.compareExchangeAuthority.bind(harness.location);
+  const read = harness.location.readAuthority.bind(harness.location);
+  let uncertain = true,
+    readbacks = 0;
+  harness.location.readAuthority = async () => {
+    if (!uncertain) readbacks++;
+    return read();
+  };
+  harness.location.compareExchangeAuthority = async (key, expected, mutation) => {
+    const result = await compare(key, expected, mutation);
+    if (uncertain) {
+      uncertain = false;
+      assert.equal(harness.resumeObservations.length, 0);
+      assert.equal(harness.sourceState.isMoving, true);
+      throw new Error('Store applied Preserve but its response was lost');
+    }
+    assert(readbacks > 0);
+    return result;
+  };
+  const relocation = harness.relocate();
+  void relocation.catch(() => undefined);
+  try {
+    await harness.waitForReadyAttempt(1);
+    await harness.reachRestoreDeadline();
+    await assert.rejects(
+      relocation,
+      (error) =>
+        error instanceof ZLinkBackendResultError && error.result === RequestResult.NotConnected
+    );
+    await harness.sourceFifoIdle();
+    assert(readbacks > 0);
+    assert.equal(harness.location.preserves, 2);
+    assert.deepEqual(
+      harness.resumeObservations.map((value) => value.label),
+      ['B1', 'B2', 'D1']
+    );
+    assert(harness.resumeObservations.every((value) => value.preserves === 2 && !value.moving));
+    assert.equal(harness.prepareFingerprints.length, 1);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+for (const proof of [
+  'authority-missing',
+  'lease-missing',
+  'lease-expired',
+  'replaced-lease',
+  'foreign'
+] as const) {
+  test(`started PREPARE failure with ${proof} source proof discards and never resumes`, async () => {
+    const harness = createActorJoinHostHarness({ readyResults: [SubmitResult.NotConnected] });
+    harness.location.liveLeases.set('source-owner', 3n);
+    const originalRead = harness.location.readAuthority.bind(harness.location);
+    if (proof === 'replaced-lease') harness.location.liveLeases.set('source-owner', 4n);
+    if (proof === 'lease-missing') harness.location.liveLeases.delete('source-owner');
+    if (proof === 'lease-expired')
+      harness.location.readOwnerLease = async () => ({
+        kind: 'found',
+        token: { ownerId: 'source-owner', leaseGeneration: 3n },
+        leaseExpiresAt: new Date(42),
+        storeNow: new Date(42)
+      });
+    const relocation = harness.relocate();
+    void relocation.catch(() => undefined);
+    try {
+      await harness.waitForReadyAttempt(1);
+      if (proof === 'authority-missing')
+        harness.location.readAuthority = async () =>
+          ({ kind: 'missing', storeNow: new Date() }) as never;
+      if (proof === 'foreign')
+        harness.location.readAuthority = async () =>
+          ({
+            ...(await originalRead()),
+            ownerId: 'foreign-owner',
+            ownerLeaseGeneration: 9n
+          }) as never;
+      await harness.reachRestoreDeadline();
+      await assert.rejects(
+        relocation,
+        (error) => error instanceof Error && error.name === 'ServiceRelocationAuthorityError'
+      );
+      assert(harness.events.includes('source:discarded'));
+      assert(!harness.events.includes('source:rolled-back'));
+      assert.equal(harness.location.preserves, 0);
+      assert.equal(harness.prepareFingerprints.length, 1);
+    } finally {
+      await harness.dispose();
+    }
+  });
+}
+
+for (const mode of ['explicit-failed', 'never-started', 'preserve', 'target'] as const) {
+  for (const cleanupFails of [false, true]) {
+    test(`source relocation metrics and original error/${mode}/cleanup=${cleanupFails}`, async (t) => {
+      const collector = createRuntimeMetricCollector();
+      const diagnostics: unknown[][] = [];
+      t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+      const original = new Error('synchronous creation refusal');
+      const cleanup = new Error('source cleanup failed');
+      const windowCleanup: unknown[] = [];
+      let endFollow!: () => void;
+      const followEnded = new Promise<void>((resolve) => {
+        endFollow = resolve;
+      });
+      const harness = createActorJoinHostHarness({
+        metrics: new ZLinkRuntimeMetrics(collector.provider as never),
+        ...(mode === 'explicit-failed' ? { explicitFailureCode: 35 } : {}),
+        ...(mode === 'never-started' ? { submitFailure: original } : {}),
+        ...(mode === 'preserve'
+          ? {
+              realSourceCapture: true,
+              ...(cleanupFails
+                ? { dropCutover: true }
+                : { readyResults: [SubmitResult.NotConnected] })
+            }
+          : {}),
+        ...(cleanupFails
+          ? mode === 'target'
+            ? {
+                reconcileStatefulAuthorityRoutes: async () => {
+                  throw cleanup;
+                }
+              }
+            : mode === 'preserve'
+              ? {
+                  beforeSourceSettlementRead: async () => followEnded,
+                  sourceQuiescenceChanged: (safe: boolean) => {
+                    if (!safe) return;
+                    harness.events.push('source:window-cleanup');
+                    windowCleanup.push({
+                      preserves: harness.location.preserves,
+                      departed: harness.sourceActivation!.hasDepartedActor('actor-host-profile'),
+                      ingress: harness.freshIngress(),
+                      moving: harness.sourceState.isMoving,
+                      fifoAdmitted: harness.events.includes('source:fifo-admit'),
+                      outcome: collector.records.find(
+                        (record) => record.name === 'zlink.relocation.completed'
+                      )?.attributes?.outcome
+                    });
+                    throw cleanup;
+                  }
+                }
+              : { rollbackFailure: cleanup }
+          : {})
+      });
+      harness.location.liveLeases.set('source-owner', 3n);
+      const resumeAtMetric: Array<{
+        preserves: number;
+        moving: boolean;
+        fifoAdmitted: boolean;
+      }> = [];
+      const recordMetric = collector.records.push.bind(collector.records);
+      assert.equal(Object.getOwnPropertyDescriptor(collector.records, 'push'), undefined);
+      t.after(() => {
+        Reflect.deleteProperty(collector.records, 'push');
+      });
+      collector.records.push = (...records: Parameters<typeof recordMetric>) => {
+        for (const record of records) {
+          if (record.name === 'zlink.relocation.route_convergence') endFollow();
+          if (mode === 'preserve' && record.name === 'zlink.relocation.completed') {
+            resumeAtMetric.push({
+              preserves: harness.location.preserves,
+              moving: harness.sourceState.isMoving,
+              fifoAdmitted: harness.events.includes('source:fifo-admit')
+            });
+            harness.events.push('metric:source-terminal');
+          }
+        }
+        return recordMetric(...records);
+      };
+      const keepAlive = mode === 'preserve' && cleanupFails ? new MessageChannel() : undefined;
+      keepAlive?.port1.on('message', () => {});
+      try {
+        const relocation = harness.relocate();
+        void relocation.catch(() => undefined);
+        if (mode === 'preserve') {
+          await harness.waitForReadyAttempt(1);
+          await harness.reachRestoreDeadline();
+        }
+        if (mode === 'target') {
+          const result = await relocation;
+          assert.equal(String(result.actorRef.nodeRid), 'target');
+          await harness.sourceLeaveIdle();
+          await turn();
+          assert.equal(diagnostics.length, cleanupFails ? 1 : 0);
+          if (cleanupFails) assert.equal(diagnostics[0]![1], cleanup);
+        } else
+          await assert.rejects(relocation, (error) => {
+            if (mode === 'never-started') assert.equal(error, original);
+            if (mode === 'explicit-failed') {
+              assert(error instanceof ZLinkFrameworkException);
+              assert.equal(error.kind, ZLinkFrameworkErrorKind.DataLost);
+            }
+            if (mode === 'preserve')
+              assert.equal(error, cleanupFails ? cleanup : harness.prepareFailures[0]);
+            return true;
+          });
+        if (mode === 'preserve') {
+          await harness.sourceFifoIdle();
+          assert.equal(harness.sourceActivation!.hasDepartedActor('actor-host-profile'), false);
+          assert.equal(harness.freshIngress(), 'local');
+          assert.equal(harness.prepareFailures.length, cleanupFails ? 0 : 1);
+          assert(
+            harness.events.indexOf('source:membership-restored') <
+              harness.events.indexOf('source:fifo-admit')
+          );
+          if (cleanupFails) {
+            assert(
+              harness.events.indexOf('metric:source-terminal') <
+                harness.events.indexOf('source:window-cleanup')
+            );
+            assert.equal(
+              collector.records.filter(
+                (record) => record.name === 'zlink.relocation.route_convergence'
+              ).length,
+              1
+            );
+          }
+          assert.deepEqual(
+            windowCleanup,
+            cleanupFails
+              ? [
+                  {
+                    preserves: 1,
+                    departed: false,
+                    ingress: 'local',
+                    moving: false,
+                    fifoAdmitted: true,
+                    outcome: 'aborted'
+                  }
+                ]
+              : []
+          );
+          assert.deepEqual(resumeAtMetric, [{ preserves: 1, moving: false, fifoAdmitted: true }]);
+          assert.deepEqual(
+            harness.resumeObservations.map((value) => value.label),
+            ['B1', 'B2', 'D1']
+          );
+          assert(
+            harness.resumeObservations.every((value) => value.preserves === 1 && !value.moving)
+          );
+          assert(
+            harness.events.indexOf('source:fifo-admit') <
+              harness.events.indexOf('metric:source-terminal')
+          );
+          for (const name of [
+            'zlink.relocation.started',
+            'zlink.relocation.bytes',
+            'zlink.relocation.duration'
+          ])
+            assert.equal(collector.records.filter((record) => record.name === name).length, 1);
+        }
+        const completed = collector.records.filter(
+          (record) => record.name === 'zlink.relocation.completed'
+        );
+        assert.equal(completed.length, 1);
+        assert.equal(
+          completed[0]!.attributes!.outcome,
+          mode === 'target' ? 'completed' : mode === 'preserve' ? 'aborted' : 'failed'
+        );
+        assert.equal(harness.location.preserves, mode === 'preserve' || mode === 'target' ? 1 : 0);
+      } finally {
+        keepAlive?.port1.close();
+        keepAlive?.port2.close();
+        await harness.dispose();
+      }
+    });
+  }
+}
+
+
+test('source Preserve keeps membership rejection failed and preserves original request error', async (t) => {
+  const collector = createRuntimeMetricCollector();
+  t.mock.method(console, 'error', () => {});
+  const harness = createActorJoinHostHarness({
+    realSourceCapture: true,
+    readyResults: [SubmitResult.NotConnected],
+    rollbackFailure: new Error('close lifecycle admission'),
+    metrics: new ZLinkRuntimeMetrics(collector.provider as never)
+  });
+  harness.location.liveLeases.set('source-owner', 3n);
+  const relocation = harness.relocate();
+  void relocation.catch(() => undefined);
+  try {
+    await harness.waitForReadyAttempt(1);
+    await harness.reachRestoreDeadline();
+    await assert.rejects(relocation, (error) => error === harness.prepareFailures[0]);
+    await harness.sourceFifoIdle();
+    assert.equal(harness.location.preserves, 1);
+    assert.equal(harness.membershipFailures.length, 1);
+    assert.match(String(harness.membershipFailures[0]), /committed Close/);
+    assert.equal(harness.sourceActivation!.hasDepartedActor('actor-host-profile'), true);
+    assert.equal(harness.freshIngress(), 'stale');
+    assert.equal(harness.sourceState.isMoving, false);
+    assert.deepEqual(
+      harness.resumeObservations.map((value) => value.label),
+      ['B1', 'B2', 'D1']
+    );
+    const completed = collector.records.filter(
+      (record) => record.name === 'zlink.relocation.completed'
+    );
+    assert.equal(completed.length, 1);
+    assert.equal(completed[0]!.attributes!.outcome, 'failed');
+    for (const name of [
+      'zlink.relocation.started',
+      'zlink.relocation.bytes',
+      'zlink.relocation.duration'
+    ])
+      assert.equal(collector.records.filter((record) => record.name === name).length, 1);
+  } finally {
+    await harness.dispose();
+  }
+});
+
+for (const terminal of ['Store validation error', 'source disposal'] as const) {
+  test(`uncertain PREPARE settlement ${terminal} never reopens real source FIFO`, async () => {
+    const harness = createActorJoinHostHarness({
+      realSourceCapture: true,
+      readyResults: [SubmitResult.NotConnected]
+    });
+    harness.location.liveLeases.set('source-owner', 3n);
+    const failure = new TypeError('invalid Store authority read');
+    const relocation = harness.relocate();
+    void relocation.catch(() => undefined);
+    try {
+      await harness.waitForReadyAttempt(1);
+      if (terminal === 'Store validation error')
+        harness.location.readAuthority = async () => {
+          throw failure;
+        };
+      else await harness.stopSource();
+      await assert.rejects(relocation, (error) =>
+        terminal === 'Store validation error'
+          ? error === failure
+          : error instanceof Error &&
+            error.name === 'AbortError' &&
+            error.message === 'Relocation runtime stopped.'
+      );
+      assert.equal(harness.sourceState.isMoving, true);
+      assert.equal(harness.resumeObservations.length, 0);
+      assert(!harness.events.includes('source:fifo-admit'));
+      assert.equal(harness.location.preserves, 0);
+      assert.equal(harness.prepareFingerprints.length, 1);
+    } finally {
+      await harness.dispose();
+    }
+  });
+}

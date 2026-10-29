@@ -8,9 +8,9 @@ const { decodeActorJoin28 } = require('../../packages/framework/dist/runtime/pro
 const { encodeStatefulReply } = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const { encodeApplicationPayload } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
-function joinFixture(request, { canonical = true, entry = false } = {}) {
+function joinFixture(request, { canonical = true, entry = false, initiallyReady = true } = {}) {
   const attempts = [];
-  let ready = true;
+  let ready = initiallyReady;
   const routeObservers = new Set();
   const runtime = new ServiceStatefulRuntime({
     observePeerRoute: () => ({ generation: 1n, ready }),
@@ -54,77 +54,87 @@ function joinFixture(request, { canonical = true, entry = false } = {}) {
 }
 
 for (const canonical of [true, false]) for (const entry of [true, false]) {
-  for (const failurePhase of ['submit', 'request']) for (const accepted of [true, false]) {
-    test(`Actor Join replays original terminal after ${failurePhase} disconnect (canonical=${canonical}, entry=${entry}, accepted=${accepted})`, async t => {
+  for (const accepted of [true, false]) {
+    test(`Actor Join retains original reply across ready-route changes (canonical=${canonical}, entry=${entry}, accepted=${accepted})`, async t => {
       let now = 1000.25;
       t.mock.method(performance, 'now', () => now);
       t.mock.timers.enable({ apis: ['setTimeout'] });
-      let terminal;
-      let executions = 0;
-      const fixture = joinFixture((attempt, number) => {
-        if (failurePhase === 'submit' && number === 1) {
-          throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
-        }
-        if (terminal === undefined) {
-          executions++;
-          terminal = fixture.terminal(attempt, accepted);
-        }
-        if (number === 1) throw new ZLinkBackendResultError('request', RequestResult.NotConnected);
-        return terminal;
-      }, { canonical, entry });
+      let finish;
+      const fixture = joinFixture(attempt => new Promise(resolve => {
+        finish = () => resolve(fixture.terminal(attempt, accepted));
+      }), { canonical, entry, initiallyReady: false });
       try {
         const pending = fixture.join(80);
         await new Promise(resolve => setImmediate(resolve));
-        assert.equal(fixture.attempts.length, 1);
+        assert.equal(fixture.attempts.length, 0);
         now += 20.25;
         fixture.ready();
-        t.mock.timers.tick(20.25);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(fixture.attempts.length, 1);
+        fixture.ready();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(fixture.attempts.length, 1);
+        finish();
         const result = await pending.promise;
         assert.equal(result.terminalResult, RequestResult.Ok);
         assert.equal(result.kindData.kind, 'actorJoinCompletion');
         assert.equal(result.kindData.joinResult, accepted ? 0 : 1);
         assert.equal(result.payload.payload.toString(), '{"original":true}');
-        assert.equal(executions, 1);
-        assert.equal(fixture.attempts.length, 2);
-        for (const attempt of fixture.attempts) {
-          assert.equal(attempt.target, 'target-node');
-          assert.equal(attempt.record.correlation, pending.id, 'OperationId is unchanged');
-          assert.equal(attempt.parts.length, 2, 'replay includes the application payload frame');
-          assert.deepEqual(attempt.parts, fixture.attempts[0].parts);
-          const drift = attempt.at + attempt.timeoutMs - 1080.25;
-          assert(drift >= 0 && drift < 1, 'each attempt consumes the whole remaining original deadline');
-        }
+        const attempt = fixture.attempts[0];
+        assert.equal(attempt.target, 'target-node');
+        assert.equal(attempt.record.correlation, pending.id);
+        assert.equal(attempt.parts.length, 2);
+        assert.equal(attempt.timeoutMs, 60);
+        assert.equal(pending.deadlineMs, 1080.25);
         assert.equal(fixture.runtime[inspectRuntime]().canonicalActorJoinHandoffs, 0);
         now += 100;
+        fixture.ready();
         t.mock.timers.tick(100);
         await new Promise(resolve => setImmediate(resolve));
-        assert.equal(fixture.attempts.length, 2, 'a received terminal ends replay');
+        assert.equal(fixture.attempts.length, 1);
+      } finally { fixture.runtime.close(); }
+    });
+  }
+  for (const phase of ['submit', 'request']) {
+    test(`Actor Join returns first ${phase} failure once (canonical=${canonical}, entry=${entry})`, async () => {
+      const failure = new ZLinkBackendResultError(phase,
+        phase === 'submit' ? SubmitResult.NotConnected : RequestResult.NotConnected);
+      const fixture = joinFixture(() => { throw failure; }, { canonical, entry });
+      try {
+        await assert.rejects(fixture.join(80).promise, error => error === failure);
+        fixture.ready();
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(fixture.attempts.length, 1);
+        assert.equal(fixture.runtime[inspectRuntime]().canonicalActorJoinHandoffs, 0);
       } finally { fixture.runtime.close(); }
     });
   }
 }
 
-for (const admitted of [false, true]) {
-  test(`Actor Join deadline has one owner and preserves admission history (admitted=${admitted})`, async t => {
+for (const started of [false, true]) {
+  test(`Actor Join registry owns the original deadline (started=${started})`, async t => {
     let now = 2000;
     t.mock.method(performance, 'now', () => now);
     t.mock.timers.enable({ apis: ['setTimeout'] });
-    const fixture = joinFixture(() => {
-      throw new ZLinkBackendResultError(admitted ? 'request' : 'submit',
-        admitted ? RequestResult.NotConnected : SubmitResult.NotConnected);
-    });
+    let finish;
+    const fixture = joinFixture(attempt => new Promise(resolve => {
+      finish = () => resolve(fixture.terminal(attempt));
+    }), { initiallyReady: started });
     try {
-      const result = assert.rejects(fixture.join(80).promise, error => {
-        assert.equal(error.kind, admitted
-          ? framework.ZLinkFrameworkErrorKind.DeadlineExceeded
-          : framework.ZLinkFrameworkErrorKind.Unavailable);
+      const pending = fixture.join(80);
+      const result = assert.rejects(pending.promise, error => {
+        assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
         return true;
       });
       await new Promise(resolve => setImmediate(resolve));
+      assert.equal(fixture.runtime.nextMaintenanceDeadlineMs(), 2080);
       now += 80;
-      t.mock.timers.tick(80);
+      assert.equal(fixture.runtime.expireOperations(now, Number.POSITIVE_INFINITY), 1);
       await result;
-      assert.equal(fixture.attempts.length, 1);
+      finish?.();
+      fixture.ready();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(fixture.attempts.length, started ? 1 : 0);
       assert.equal(fixture.runtime[inspectRuntime]().canonicalActorJoinHandoffs, 0);
     } finally { fixture.runtime.close(); }
   });

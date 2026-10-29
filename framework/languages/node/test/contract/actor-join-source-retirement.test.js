@@ -1,4 +1,3 @@
-const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -106,9 +105,8 @@ for (const notification of ['delayed', 'lost']) {
         return { high: 1n, low: 1n };
       },
       completionTable: {
-         submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-          operation(resultOwner);
+        async submit(operation) {
+          operation();
           return {
             terminalResult: 0,
             failureErrno: 0,
@@ -126,9 +124,7 @@ return resultOwner.observe((async () => {
               }
             }
           };
-
-})());
-}
+        }
       }
     };
     class PlayerFactory {

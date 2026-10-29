@@ -1,4 +1,4 @@
-import type { ZLinkRequestResult } from '../messaging/request-result';
+import type { PendingOperation } from './operation-registry';
 import type { RoutingId } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
@@ -434,12 +434,12 @@ export interface ServiceSpot {
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
-    options: {
+    options?: {
       flags?: number;
       timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
-      requestEntry: ZLinkRequestResult<any>;
     }
   ): MeshOperationId;
   sendToSpot(
@@ -461,11 +461,13 @@ export interface ServiceSpot {
     options?: {
       flags?: number;
       timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       applicationMetadata?: Buffer;
       routeFence?: ServiceDirectSpotRouteFence;
       onAdmitted?: () => void;
       entrySpot?: boolean;
-    }
+    },
+    completion?: import('../backend/mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId;
   publish(
     channelName: string,

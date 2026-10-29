@@ -1,162 +1,67 @@
-import { detachedMeshDispatchScope } from '../execution';
-import {
-  currentFlowContext,
-  runWithFlow,
-  type ZLinkFlowContextValue
-} from '../diagnostics/flow-context';
+import type { PendingOperation } from '../foundation/operation-registry';
+import { currentFlowContext, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 
 const completedAdmission = Promise.resolve();
 const ignoreAdmissionFailure = (): void => {};
-const REQUEST_ENTRY = Symbol('zlink.requestEntry');
-// Every public request shares this getter; its stable entry owns admission.
+const REQUEST_ADMISSION = Symbol('zlink.requestAdmission');
+// Every public request shares this getter. A getter closure per request gives
+// each reply Promise its own hidden class, and V8 then keeps its properties in
+// a per-request dictionary.
 const ADMITTED_PROPERTY: PropertyDescriptor = {
-  get(this: { readonly [REQUEST_ENTRY]: ZLinkRequestResult<unknown> }): Promise<void> {
-    return this[REQUEST_ENTRY].observeAdmission();
+  get(this: { readonly [REQUEST_ADMISSION]: RequestAdmission }): Promise<void> {
+    return this[REQUEST_ADMISSION].observe();
   }
 };
+
+/** Transport preparation is separate from typed result delivery. */
+export interface ZLinkRequestResult<TReply> {
+  readonly operation?: PendingOperation<TReply>;
+  readonly pending: Promise<unknown>;
+  decode(value: unknown): TReply;
+  readonly mapFailure: (error: unknown) => unknown;
+}
+
 export const identityRequestReply = <TReply>(value: TReply): TReply => value;
 
-/** Stable request owner; dispatcher indexes never own the public result's lifetime. */
-export class ZLinkRequestResult<TReply> {
-  private reply?: Promise<TReply>;
-  private resolve?: (value: TReply) => void;
-  private reject?: (error: unknown) => void;
-  private decode: (value: any) => TReply = identityRequestReply;
-  private mapFailure: (error: unknown) => unknown = identityRequestReply;
-  private flow?: ZLinkFlowContextValue;
-  private admitted?: Promise<void>;
-  declare private resolveAdmission?: () => void;
-  declare private rejectAdmission?: (error: unknown) => void;
-  declare capacityStop?: AbortController;
+export function prepareZLinkRequestReply<TSource, TReply>(
+  pending: Promise<TSource>,
+  decode: (value: TSource) => TReply,
+  mapFailure: (error: unknown) => unknown = identityRequestReply
+): ZLinkRequestResult<TReply> {
+  const flow = currentFlowContext();
+  if (flow === undefined) return { pending, decode, mapFailure };
+  // The completion reaction is registered after the outbound flow scope returns.
+  return {
+    pending,
+    decode: (value: TSource) => runWithFlow(flow, () => decode(value)),
+    mapFailure: (error: unknown) => runWithFlow(flow, () => mapFailure(error))
+  };
+}
 
-  readonly confirm = (): void => {
+export function rejectZLinkRequestReply<TReply>(error: unknown): ZLinkRequestResult<TReply> {
+  return prepareZLinkRequestReply(Promise.reject<TReply>(error), identityRequestReply);
+}
+
+class RequestAdmission {
+  private admitted: Promise<void> | undefined;
+  private resolveAdmission: (() => void) | undefined;
+  private rejectAdmission: ((error: unknown) => void) | undefined;
+  confirm(): void {
     this.admitted ??= completedAdmission;
     this.resolveAdmission?.();
-  };
-
-  get isPending(): boolean {
-    return this.resolve !== undefined;
   }
-
-  get pending(): Promise<TReply> {
-    return (this.reply ??= new Promise<TReply>((resolve, reject) => {
-      this.resolve = resolve;
-      this.reject = reject;
-    }));
-  }
-
-  prepare<TSource>(
-    decode: (value: TSource) => TReply,
-    mapFailure: (error: unknown) => unknown
-  ): this {
-    this.decode = decode;
-    this.mapFailure = mapFailure;
-    this.flow = currentFlowContext();
-    return this;
-  }
-
-  /** Adapts a source owned by another operation without adding another terminal registry. */
-  observe(source: Promise<unknown>): this {
-    this.reply = source.then(
-      (value) => {
-        try {
-          return this.deliver(value);
-        } finally {
-          this.clearDelivery();
-        }
-      },
-      (error) => {
-        try {
-          return this.deliverFailure(error);
-        } finally {
-          this.clearDelivery();
-        }
-      }
-    );
-    return this;
-  }
-
-  // One terminal per request (01-submit-and-completion §10): a later terminal is ignored.
-  complete(value: unknown): void {
-    const resolve = this.resolve;
-    const reject = this.reject;
-    if (resolve === undefined || reject === undefined) return;
-    this.resolve = undefined;
-    this.reject = undefined;
-    this.capacityStop?.abort();
-    this.capacityStop = undefined;
-    detachedMeshDispatchScope(queueMicrotask, () => {
-      try {
-        resolve(this.deliver(value));
-      } catch (error) {
-        reject(error);
-      } finally {
-        this.clearDelivery();
-      }
-    });
-  }
-
   fail(error: unknown): void {
-    const reject = this.reject;
-    if (reject === undefined) return;
-    this.resolve = undefined;
-    this.reject = undefined;
-    this.capacityStop?.abort();
-    this.capacityStop = undefined;
-    detachedMeshDispatchScope(queueMicrotask, () => {
-      try {
-        this.deliverFailure(error);
-      } catch (failure) {
-        reject(failure);
-      } finally {
-        this.clearDelivery();
-      }
-    });
-  }
-
-  private deliver(value: unknown): TReply {
-    try {
-      const reply =
-        this.flow === undefined
-          ? this.decode(value)
-          : runWithFlow(this.flow, () => this.decode(value));
-      this.confirm();
-      return reply;
-    } catch (error) {
-      this.failAdmission(error);
-      throw error;
-    }
-  }
-
-  private deliverFailure(error: unknown): never {
-    let failure: unknown;
-    try {
-      failure =
-        this.flow === undefined
-          ? this.mapFailure(error)
-          : runWithFlow(this.flow, () => this.mapFailure(error));
-    } catch (mapped) {
-      failure = mapped;
-    }
-    this.failAdmission(failure);
-    throw failure;
-  }
-
-  private clearDelivery(): void {
-    this.decode = identityRequestReply;
-    this.mapFailure = identityRequestReply;
-    this.flow = undefined;
-  }
-
-  private failAdmission(error: unknown): void {
     if (this.admitted === undefined) {
       this.admitted = Promise.reject(error);
+      // Existing callers may observe only the reply Promise. Observing the
+      // rejection here leaves the public admission Promise rejected.
       void this.admitted.catch(ignoreAdmissionFailure);
-    } else this.rejectAdmission?.(error);
+    } else {
+      this.rejectAdmission?.(error);
+    }
   }
-
-  observeAdmission(): Promise<void> {
+  observe(): Promise<void> {
     if (this.admitted === undefined) {
       this.admitted = new Promise<void>((resolve, reject) => {
         this.resolveAdmission = resolve;
@@ -168,47 +73,61 @@ export class ZLinkRequestResult<TReply> {
   }
 }
 
-export function prepareZLinkRequestReply<TSource, TReply>(
-  entry: ZLinkRequestResult<TSource>,
-  decode: (value: TSource) => TReply,
-  mapFailure: (error: unknown) => unknown = identityRequestReply
-): ZLinkRequestResult<TReply> {
-  return (entry as unknown as ZLinkRequestResult<TReply>).prepare(decode, mapFailure);
+function requestFailure<TReply>(result: ZLinkRequestResult<TReply>, error: unknown): unknown {
+  try {
+    return result.mapFailure(error);
+  } catch (mappedError) {
+    return mappedError;
+  }
 }
 
-export function observeZLinkRequestReply<TSource, TReply>(
-  source: Promise<TSource>,
-  decode: (value: TSource) => TReply,
-  mapFailure: (error: unknown) => unknown,
-  entry: ZLinkRequestResult<TReply>
-): ZLinkRequestResult<TReply> {
-  return entry.prepare(decode, mapFailure).observe(source);
-}
-
-export function rejectZLinkRequestReply<TReply>(
-  error: unknown,
-  entry: ZLinkRequestResult<TReply>
-): ZLinkRequestResult<TReply> {
-  void entry.pending;
-  entry.fail(error);
-  return entry;
-}
-
+/** Yield applies the same transport decoding without public admission. */
 export function mapZLinkRequestReply<TReply>(result: ZLinkRequestResult<TReply>): Promise<TReply> {
-  return result.pending;
+  if (
+    result.operation !== undefined &&
+    result.operation.mapCaller(result.decode, (error) => requestFailure(result, error))
+  )
+    return result.operation.promise;
+  return result.pending.then(
+    (value) => result.decode(value),
+    (error: unknown) => {
+      throw requestFailure(result, error);
+    }
+  );
 }
 
 export function createZLinkRequest<TReply>(
-  start: (entry: ZLinkRequestResult<TReply>) => ZLinkRequestResult<TReply>,
+  start: (onAdmitted: () => void) => ZLinkRequestResult<TReply>,
   deliverReply?: (reply: Promise<TReply>) => Promise<TReply>
 ): ZLinkRequest<TReply> {
-  const entry = new ZLinkRequestResult<TReply>();
+  const admission = new RequestAdmission();
+  const confirm = (): void => admission.confirm();
+  let pending: Promise<TReply>;
   try {
-    start(entry);
+    const result = start(confirm);
+    const onValue = (value: unknown): TReply => {
+      try {
+        const reply = result.decode(value);
+        admission.confirm();
+        return reply;
+      } catch (error) {
+        admission.fail(error);
+        throw error;
+      }
+    };
+    const onFailure = (error: unknown): never => {
+      const failure = requestFailure(result, error);
+      admission.fail(failure);
+      throw failure;
+    };
+    if (result.operation !== undefined && result.operation.mapCaller(onValue, onFailure)) {
+      pending = result.operation.promise;
+    } else pending = result.pending.then(onValue, onFailure);
   } catch (error) {
-    rejectZLinkRequestReply(error, entry);
+    admission.fail(error);
+    pending = Promise.reject(error);
   }
-  const reply = deliverReply?.(entry.pending) ?? entry.pending;
-  Object.defineProperty(reply, REQUEST_ENTRY, { value: entry });
+  const reply = deliverReply?.(pending) ?? pending;
+  Object.defineProperty(reply, REQUEST_ADMISSION, { value: admission });
   return Object.defineProperty(reply, 'admitted', ADMITTED_PROPERTY) as ZLinkRequest<TReply>;
 }

@@ -1,5 +1,5 @@
-const { mapZLinkRequestReply, observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
+const { mapZLinkRequestReply, prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
@@ -537,9 +537,12 @@ test('same-process ClientServer uses local bound endpoint without a Location Sto
     const requests = [];
     let dealerMonitor;
     dealer.connect = ( endpoint ) => { dealer.connected = endpoint; };
-    dealer.request = ( message ) => new Promise((resolve, reject) => {
-      requests.push({ frame: Buffer.from(message.data()), resolve, reject });
-    });
+    dealer.request = physicalRequest(
+      (message) =>
+        new Promise((resolve, reject) => {
+          requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+        })
+    );
     const sockets = new ZLinkChannelSocketRegistry(
       registration,
       {
@@ -820,9 +823,12 @@ test('manual ClientServer endpoints use dedicated monitored admission and reconn
         const dealer = fakeDealer(`manual-${dealers.length}`);
         dealer.requests = [];
         dealer.connect = ( value ) => { dealer.connected = value; connects.push(value); };
-        dealer.request = ( message ) => new Promise((resolve, reject) => {
-          dealer.requests.push({ frame: Buffer.from(message.data()), resolve, reject });
-        });
+        dealer.request = physicalRequest(
+          (message) =>
+            new Promise((resolve, reject) => {
+              dealer.requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+            })
+        );
         dealers.push(dealer);
         return dealer;
       },
@@ -888,9 +894,12 @@ test('manual ClientServer admission timeout retries hello on the same physical c
   const requests = [];
   const connects = [];
   dealer.connect = ( value ) => connects.push(value);
-  dealer.request = ( message ) => new Promise((resolve, reject) => {
-    requests.push({ frame: Buffer.from(message.data()), resolve, reject });
-  });
+  dealer.request = physicalRequest(
+    (message) =>
+      new Promise((resolve, reject) => {
+        requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+      })
+  );
   let monitorHandler;
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
@@ -955,9 +964,12 @@ for (const cause of ['malformed control', 'invalid pushed control', 'liveness de
     dealer.connect = ( value ) => calls.push(`connect:${value}`);
     dealer.disconnect = ( value ) => calls.push(`disconnect:${value}`);
     dealer.recv = () => inbound.shift();
-    dealer.request = ( message ) => new Promise(( resolve ) => {
-      requests.push({ frame: Buffer.from(message.data()), resolve });
-    });
+    dealer.request = physicalRequest(
+      (message) =>
+        new Promise((resolve) => {
+          requests.push({ frame: Buffer.from(message.data()), resolve });
+        })
+    );
     let onEvent;
     const sockets = new ZLinkChannelSocketRegistry(registration, {
       createDealerSocket() { return dealer; },
@@ -1149,9 +1161,12 @@ test('manual ClientServer reconnect fences a late admission from the previous ph
   });
   const dealer = fakeDealer('manual-race');
   const requests = [];
-  dealer.request = ( message ) => new Promise((resolve, reject) => {
-    requests.push({ frame: Buffer.from(message.data()), resolve, reject });
-  });
+  dealer.request = physicalRequest(
+    (message) =>
+      new Promise((resolve, reject) => {
+        requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+      })
+  );
   let monitorHandler;
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
@@ -1227,9 +1242,12 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
   dealer.send = async ( message ) => {
     sent.push(Buffer.from(message.data()));
   };
-  dealer.request = ( message ) => new Promise((resolve, reject) => {
-    requests.push({ frame: Buffer.from(message.data()), resolve, reject });
-  });
+  dealer.request = physicalRequest(
+    (message) =>
+      new Promise((resolve, reject) => {
+        requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+      })
+  );
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
@@ -1966,7 +1984,7 @@ function readyWaitClient(t, channelTimeoutMs = 60_000, sendTimeoutMs) {
     new ZLinkChannelDispatchServices(fixture.registration)
   );
   const client = new internal.DefaultZLinkChannelClient(fixture.registration, {
-    request(entry, ...args) { return observeZLinkRequestReply(outbound.request(...args), identityRequestReply, identityRequestReply, entry); }
+    request(...args) { return prepareZLinkRequestReply(outbound.request(...args), identityRequestReply); }
   });
   class Lookup { id = 1; }
   t.after(() => fixture.sockets.dispose());
@@ -1979,8 +1997,10 @@ function readyWaitClient(t, channelTimeoutMs = 60_000, sendTimeoutMs) {
   };
 }
 
-test('ClientServer request readiness is bounded by its whole request budget', async ( t ) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('ClientServer request readiness is bounded by its whole request budget', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  t.after(() => t.mock.timers.runAll());
+  t.mock.method(performance, 'now', () => Date.now());
   const { request, dealer, sockets } = readyWaitClient(t);
   const submitted = t.mock.method(dealer, 'request');
   const pending = request(5);
@@ -2009,15 +2029,19 @@ test('ClientServer readiness reduces the outbound request budget without moving 
   t.mock.method(Date, 'now', () => 1000 + now);
   const { request, dealer, admit } = readyWaitClient(t);
   let submittedTimeoutMs;
-  dealer.request = async (parts, timeoutMs) => {
+  dealer.request = physicalRequest(async (parts, timeoutMs) => {
     submittedTimeoutMs = timeoutMs;
-    const messages = parts.map(( part ) => zlink.Message.from(part));
+    const messages = parts.map((part) => zlink.Message.from(part));
     try {
       const header = channelEnvelope.decodeChannelHeader(messages);
       assert.equal(header.deadline, new Date(1050).toISOString());
-      return channelEnvelope.encodeChannelReplyParts(header, { found: true }).map(( part ) => zlink.Message.from(part));
-    } finally { channelEnvelope.closeMessages(messages); }
-  };
+      return channelEnvelope
+        .encodeChannelReplyParts(header, { found: true })
+        .map((part) => zlink.Message.from(part));
+    } finally {
+      channelEnvelope.closeMessages(messages);
+    }
+  });
   const pending = request(50);
   now = 20;
   t.mock.timers.tick(20);
@@ -2034,13 +2058,13 @@ test('ClientServer request uses the remaining reply budget and finishes once', a
   let attempts = 0;
   let entered;
   const submitted = new Promise(( resolve ) => { entered = resolve; });
-  dealer.request = async (_parts, timeoutMs) => {
+  dealer.request = physicalRequest(async (_parts, timeoutMs) => {
     attempts += 1;
     assert.equal(timeoutMs, 30);
     entered();
-    await new Promise(( resolve ) => setTimeout(resolve, timeoutMs));
+    await new Promise((resolve) => setTimeout(resolve, timeoutMs));
     throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
-  };
+  });
   const pending = request(50);
   const terminal = assert.rejects(pending, { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
   now = 20;
@@ -2127,7 +2151,7 @@ test('ClientServer outbound readiness stays pending for send and request keeps i
   const send = manager.send('orders', 'Notice', { id: 1 });
   const shutdown = assert.rejects(send, { kind: framework.ZLinkFrameworkErrorKind.ShuttingDown });
   try {
-    await assert.rejects(() => mapZLinkRequestReply(manager.request(new ZLinkRequestResult(), 'orders', 'Lookup', { id: 1 }, 5)), { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
+    await assert.rejects(() => mapZLinkRequestReply(manager.request('orders', 'Lookup', { id: 1 }, 5)), { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
     await manager.dispose();
     await shutdown;
   } finally { await manager.dispose(); }
@@ -2154,7 +2178,7 @@ test('ClientServer outbound reports a missing Client role as NotConfigured', asy
       && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
   );
   await assert.rejects(
-    () => mapZLinkRequestReply(manager.request(new ZLinkRequestResult(), 'orders', 'Lookup', { id: 1 }, 60)),
+    () => mapZLinkRequestReply(manager.request('orders', 'Lookup', { id: 1 }, 60)),
     (error) => error instanceof framework.ZLinkFrameworkException
       && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
   );
@@ -2324,7 +2348,6 @@ test('ClientServer admission and disconnect publish after their facts change', a
   await sockets.dispose();
 });
 
-
 test('automatic ClientServer admission preserves opaque server RID byte identity', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const localRuntime = new internal.ZLinkLocationRuntime({
@@ -2368,3 +2391,69 @@ test('automatic ClientServer admission preserves opaque server RID byte identity
     await localRuntime.stop();
   }
 });
+test('ClientServer readiness and HWM admission retain one logical request entry', async (t) => {
+  const {
+    OperationRegistry
+  } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+  const {
+    waitRequestReply
+  } = require('../../packages/framework/dist/runtime/messaging/request-deadline');
+  const {
+    bindingRequestReply
+  } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+  const register = t.mock.method(OperationRegistry.prototype, 'register');
+  const { request, dealer, admit } = readyWaitClient(t);
+  let enter, releaseAdmission, releaseReply;
+  const entered = new Promise((resolve) => {
+    enter = resolve;
+  });
+  const admitted = new Promise((resolve) => {
+    releaseAdmission = resolve;
+  });
+  const reply = new Promise((resolve) => {
+    releaseReply = resolve;
+  });
+  let entry, parts;
+  dealer.request = (requestParts, _timeout, _admitted, pending, receiver) => {
+    entry = pending;
+    parts = requestParts;
+    enter();
+    bindingRequestReply({ result: zlink.SubmitResult.Backpressured, admitted, reply }, receiver, pending);
+    return pending.promise;
+  };
+  const pending = request(1000);
+  assert.equal(register.mock.callCount(), 1);
+  admit();
+  await entered;
+  assert.equal(register.mock.callCount(), 1);
+  assert.equal(entry.isPending(), true);
+  releaseAdmission();
+  const messages = parts.map((part) => zlink.Message.from(part));
+  try {
+    const header = channelEnvelope.decodeChannelHeader(messages);
+    releaseReply(
+      channelEnvelope
+        .encodeChannelReplyParts(header, { found: true })
+        .map((part) => zlink.Message.from(part))
+    );
+  } finally {
+    channelEnvelope.closeMessages(messages);
+  }
+  assert.deepEqual(await pending, { found: true });
+  assert.equal(register.mock.callCount(), 1);
+  assert.equal(entry.isPending(), false);
+});
+function physicalRequest(work) {
+  return function (...args) {
+    const receiver = args.at(-1);
+    const result = work.apply(this, args);
+    if (typeof receiver?.operationCompleted !== 'function') return result;
+    const entry = args.at(-2);
+    void Promise.resolve(result).then(
+      (value) => receiver.operationCompleted(entry.id, value),
+      (error) => receiver.operationFailed(entry.id, error)
+    );
+    return entry.promise;
+  };
+}
+
