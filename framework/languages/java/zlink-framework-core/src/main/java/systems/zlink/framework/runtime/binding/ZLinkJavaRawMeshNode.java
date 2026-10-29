@@ -173,7 +173,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private final AtomicLong nextIntent = new AtomicLong(1);
     private final AtomicLong nextCorrelation = new AtomicLong(1);
     private final long preStartBindingGenerationSeed = positiveRandomLong();
-    private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicReference<LogicalCloseOperation> logicalClose = new AtomicReference<>();
     private final ZLinkStateLane transportStateLane;
     // Descriptor mutation and deferred-ready state are one C2 group.
     private final ZLinkStateLane descriptorStateLane = new ZLinkStateLane();
@@ -3111,10 +3111,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                         "remote Instance Spot target is not connected"));
                     }
                     long remainingNanos = deadlineNanos - System.nanoTime();
-                    if (remainingNanos <= 0 || closed.get()) {
+                    if (remainingNanos <= 0 || logicalClose.get() != null) {
                         return CompletableFuture.failedFuture(
                                 ZLinkFrameworkErrorOrigin.framework(
-                                        (closed.get()
+                                        (logicalClose.get() != null
                                                         ? ZLinkBackendRequestResult.TERMINATED
                                                         : ZLinkBackendRequestResult.TIMED_OUT)
                                                 .toFrameworkErrorKind(),
@@ -3267,7 +3267,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             boolean request,
             long deadlineNanos,
             CompletableFuture<Void> requestAdmission) {
-        if (closed.get()
+        if (logicalClose.get() != null
                 || localDescriptor == null
                 || route.targetNodeGeneration() != localDescriptor.lifecycleGeneration()) {
             return CompletableFuture.failedFuture(
@@ -5104,54 +5104,87 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     @Override
     public void close() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
-        }
-        state = MeshNodeState.STOPPED;
-        ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
-        port.signalReceiveOwner(router);
-        ExecutorService currentPump = pump;
-        if (currentPump != null) {
-            currentPump.shutdownNow();
-            currentPump.close();
-        }
-        // The pump has stopped, so the children of its unfinished fanout end here.
-        RawMulticastFanout fanout = pendingRawMulticast;
-        pendingRawMulticast = null;
-        if (fanout != null) {
-            fanout.close();
-        }
-        pendingReplyRelays
-                .values()
-                .forEach(
-                        pending -> {
-                            pending.cancelTimeout();
-                            pending.completion.completeExceptionally(
-                                    new IllegalStateException("MeshNode is closed"));
+        var operation = new LogicalCloseOperation();
+        if (logicalClose.compareAndSet(null, operation)) {
+            try {
+                state = MeshNodeState.STOPPED;
+                ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
+                port.signalReceiveOwner(router);
+                ExecutorService currentPump = pump;
+                if (currentPump != null) {
+                    currentPump.shutdownNow();
+                    currentPump.close();
+                }
+                // The pump has stopped, so the children of its unfinished fanout end here.
+                RawMulticastFanout fanout = pendingRawMulticast;
+                pendingRawMulticast = null;
+                if (fanout != null) {
+                    fanout.close();
+                }
+                pendingReplyRelays
+                        .values()
+                        .forEach(
+                                pending -> {
+                                    pending.cancelTimeout();
+                                    pending.completion.completeExceptionally(
+                                            new IllegalStateException("MeshNode is closed"));
+                                });
+                pendingReplyRelays.clear();
+                knownPeerChannels.clear();
+                port.inStateLane(
+                        () -> {
+                            if (topology != null) {
+                                for (var peer : topology.disconnectAll()) {
+                                    liveness.disconnect(
+                                            peer.descriptor().nodeRoutingId(), peer.connectionId());
+                                }
+                            }
+                            helloExchanges.clear();
+                            selectedRoutes = Map.of();
+                            publishPeerObservation();
+                            return null;
                         });
-        pendingReplyRelays.clear();
-        knownPeerChannels.clear();
-        port.inStateLane(
-                () -> {
-                    if (topology != null) {
-                        for (var peer : topology.disconnectAll()) {
-                            liveness.disconnect(
-                                    peer.descriptor().nodeRoutingId(), peer.connectionId());
-                        }
-                    }
-                    helloExchanges.clear();
-                    selectedRoutes = Map.of();
-                    publishPeerObservation();
-                    return null;
-                });
-        operations.close();
-        // Stop receiving queue transitions before the service port closes its
-        // ROUTER. The controller waits for any in-flight apply on this socket.
-        var currentReceiveFlowRegistration = receiveFlowRegistration;
-        receiveFlowRegistration = () -> {};
-        currentReceiveFlowRegistration.close();
-        port.close();
-        signalLifecycleEnded();
+                operations.close();
+                // Stop receiving queue transitions before the service port closes its
+                // ROUTER. The controller waits for any in-flight apply on this socket.
+                var currentReceiveFlowRegistration = receiveFlowRegistration;
+                receiveFlowRegistration = () -> {};
+                currentReceiveFlowRegistration.close();
+                operation.complete();
+            } catch (RuntimeException | Error failure) {
+                operation.completeExceptionally(failure);
+                throw failure;
+            }
+            try {
+                port.close();
+            } finally {
+                signalLifecycleEnded();
+            }
+        } else {
+            var current = logicalClose.get();
+            if (current.isExecutingOnCurrentThread()) return;
+            ZLinkCompletionBridge.await(current.completed);
+            port.close();
+        }
+    }
+
+    private static final class LogicalCloseOperation {
+        private volatile Thread owner = Thread.currentThread();
+        private final CompletableFuture<Void> completed = new CompletableFuture<>();
+
+        private boolean isExecutingOnCurrentThread() {
+            return owner == Thread.currentThread();
+        }
+
+        private void complete() {
+            owner = null;
+            completed.complete(null);
+        }
+
+        private void completeExceptionally(Throwable failure) {
+            owner = null;
+            completed.completeExceptionally(failure);
+        }
     }
 
     private void startPump() {
@@ -5182,7 +5215,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         // Yield to that grant before continuing, while keeping completion and management
         // progress on the existing receive turns even when ordinary capacity is exhausted.
         do {
-            if (closed.get()) return;
+            if (logicalClose.get() != null) return;
             long waitStartedAt = nanoTime.getAsLong();
             int ready =
                     pendingRawMulticast != null && pendingReceiveAcquire.get() == null
@@ -5203,17 +5236,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 drainIngressBatch(pumpSocket);
             }
         } while (pendingReceiveAcquire.get() == null);
-        if (!closed.get()) {
+        if (logicalClose.get() == null) {
             try {
                 pump.execute(pumpRotation);
             } catch (RejectedExecutionException stopped) {
-                if (!closed.get()) throw stopped;
+                if (logicalClose.get() == null) throw stopped;
             }
         }
     }
 
     private void drainIngressBatch(RouterSocket pumpSocket) {
-        if (pendingReceiveAcquire.get() != null || closed.get()) return;
+        if (pendingReceiveAcquire.get() != null || logicalClose.get() != null) return;
         drainIngressBatch(pumpSocket, null);
     }
 
@@ -5229,7 +5262,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         boolean budgetReserved = false;
         rotationReceivePeer = null;
         try {
-            while (count < MAX_INGRESS_BATCH && !closed.get()) {
+            while (count < MAX_INGRESS_BATCH && logicalClose.get() == null) {
                 var queue = applicationJobQueue;
                 boolean budgeted = false;
                 if (grant == null && queue != null && queue == budgetQueue) {
@@ -5246,7 +5279,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                     permit -> drainIngressBatch(pumpSocket, permit),
                                     pendingReceiveAcquire,
                                     ZLinkApplicationJobQueue.Origin.REMOTE);
-                    if (closed.get()) {
+                    if (logicalClose.get() != null) {
                         ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
                         return;
                     }
@@ -8366,7 +8399,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private RouterSocket requireStarted() {
         RouterSocket current = router;
-        if (current == null || closed.get()) {
+        if (current == null || logicalClose.get() != null) {
             throw new IllegalStateException("raw MeshNode is not started");
         }
         return current;
