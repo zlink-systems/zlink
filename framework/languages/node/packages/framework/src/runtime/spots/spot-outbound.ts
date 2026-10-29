@@ -1,3 +1,4 @@
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import {
   createZLinkRequest,
   mapZLinkRequestReply,
@@ -187,6 +188,7 @@ export interface ZLinkSpotAddressCallOptions {
   readonly instanceSpotType?: string;
   readonly initialMeshName?: string;
   readonly timeoutMs?: number;
+  readonly requestOperation?: PendingOperation<unknown>;
   readonly signal?: AbortSignal;
   readonly sourceSpot?: ZLinkBackendSpot;
 }
@@ -223,13 +225,15 @@ export interface ZLinkSpotRoutedTransport {
   requestToSpot<TReply = unknown>(
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
-    options: ZLinkSpotRoutedRequestOptions
+    options: ZLinkSpotRoutedRequestOptions,
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<TReply>;
   requestFromSpotToSpot?<TReply = unknown>(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
-    options: ZLinkSpotRoutedRequestOptions
+    options: ZLinkSpotRoutedRequestOptions,
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<TReply>;
 }
 
@@ -240,8 +244,10 @@ export interface ZLinkSpotRoutedSendOptions {
 }
 
 export interface ZLinkSpotRoutedRequestOptions extends ZLinkSpotRoutedSendOptions {
+  readonly deadlineMs?: number;
   readonly onAdmitted?: () => void;
   readonly timeoutMs?: number;
+  readonly requestOperation?: PendingOperation<unknown>;
   readonly signal?: AbortSignal;
 }
 
@@ -658,6 +664,7 @@ export interface ZLinkSpotHandleCallOptions {
   readonly onAdmitted?: () => void;
   readonly metadata?: ReadonlyMap<string, string>;
   readonly timeoutMs?: number;
+  readonly requestOperation?: PendingOperation<unknown>;
   readonly signal?: AbortSignal;
   readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
   readonly sourceSpot?: ZLinkBackendSpot;

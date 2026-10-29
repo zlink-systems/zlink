@@ -18,15 +18,56 @@ function harness(table, checkSlot = true, stateful) {
   const promise = new Promise((done) => {
     resolve = done;
   });
+  let operationPending = true;
+  const requestOperation = {
+    id: 7n,
+    deadlineMs: undefined,
+    hasObserver() {
+      return true;
+    },
+    takeFailure() {
+      if (!operationPending) return false;
+      operationPending = false;
+      return true;
+    },
+    complete() {
+      operationPending = false;
+      return true;
+    },
+    fail() {
+      operationPending = false;
+      return true;
+    },
+    isPending() {
+      return operationPending;
+    },
+    setFailureDispatcher() {},
+    clearFailureDispatcher() {},
+    setObserver() {},
+    deferCompletion() {},
+    reply() {
+      operationPending = false;
+      return true;
+    },
+    replyFailure() {
+      operationPending = false;
+      return true;
+    },
+    setSignal() {},
+    mapCaller() {
+      return false;
+    }
+  };
   const raw = {
     mailbox: new ServiceMailbox(),
     close() {
       this.mailbox.close();
     },
-    requestToNode() {
+    requestToNode(_target, _parts, _timeout, _admitted, observer, kind) {
       if (checkSlot)
         assert.equal(table.pendingCount, 1, 'completion slot exists before transport submission');
-      return { id: 7n, promise };
+      void promise.then((value) => observer.operationCompleted(requestOperation.id, value, kind));
+      return requestOperation;
     }
   };
   const backend = new ZLinkNodeRawMeshBackend('completion', 'local', {}, undefined, undefined, undefined, undefined, { raw, stateful });

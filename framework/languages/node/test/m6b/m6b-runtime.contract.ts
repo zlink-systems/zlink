@@ -31,7 +31,9 @@ import {
   OperationCancelledError,
   OperationRegistry,
   OperationTimeoutError,
-  type OperationClock
+  type OperationClock,
+  type OperationHandle,
+  type OperationObserver
 } from '../../packages/framework/src/runtime/foundation/operation-registry';
 import {
   ReadyDomain,
@@ -2324,17 +2326,27 @@ async function requestThroughCachedReadyRoute(
     }
   } as unknown as ZLinkBackendMeshNode;
   const ownerCompletions = {
-    async submit(submit: () => unknown) {
-      submit();
-      await ownerIngress;
-      const reply = decodeStatefulReply(harness.replies[0]![0]!, 2n, 'instanceSpotRequest');
-      return {
-        terminalResult: reply.terminalResult,
-        failureErrno: reply.failureCode,
-        operationKind: 39,
-        kindData: null,
-        parts: []
-      };
+    async submit(
+      submit: () => unknown,
+      _signal: AbortSignal | undefined,
+      requestOperation: OperationHandle<unknown>,
+      receiver: OperationObserver<unknown, unknown>
+    ) {
+      try {
+        submit();
+        await ownerIngress;
+        const reply = decodeStatefulReply(harness.replies[0]![0]!, 2n, 'instanceSpotRequest');
+        const completion = {
+          terminalResult: reply.terminalResult,
+          failureErrno: reply.failureCode,
+          operationKind: 39,
+          kindData: null,
+          parts: []
+        };
+        receiver.operationCompleted(requestOperation.id, completion, undefined);
+      } catch (error) {
+        receiver.operationFailed(requestOperation.id, error, undefined);
+      }
     }
   };
   const coldCompletions = {
@@ -7601,15 +7613,25 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
       meshNode: () => node,
       meshCompletionTable: () =>
         ({
-          async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-            operation();
-            return {
-              terminalResult: 0,
-              failureErrno: 0,
-              operationKind: 39,
-              kindData: null,
-              parts: completionParts
-            };
+          submit(
+            operation: () => { readonly high: bigint; readonly low: bigint },
+            _signal: AbortSignal | undefined,
+            requestOperation: OperationHandle<unknown>,
+            receiver: OperationObserver<unknown, unknown>
+          ): void {
+            try {
+              operation();
+              const completion = {
+                terminalResult: 0,
+                failureErrno: 0,
+                operationKind: 39,
+                kindData: null,
+                parts: completionParts
+              };
+              receiver.operationCompleted(requestOperation.id, completion, undefined);
+            } catch (error) {
+              receiver.operationFailed(requestOperation.id, error, undefined);
+            }
           }
         }) as never
     })
@@ -7688,15 +7710,25 @@ test('stateful request failure codes preserve typed Instance route errors', asyn
         meshNode: () => node,
         meshCompletionTable: () =>
           ({
-            async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-              operation();
-              return {
-                terminalResult: RequestResult.Conflict,
-                failureErrno: failureCode,
-                operationKind: 39,
-                kindData: null,
-                parts: []
-              };
+            submit(
+              operation: () => { readonly high: bigint; readonly low: bigint },
+              _signal: AbortSignal | undefined,
+              requestOperation: OperationHandle<unknown>,
+              receiver: OperationObserver<unknown, unknown>
+            ): void {
+              try {
+                operation();
+                const completion = {
+                  terminalResult: RequestResult.Conflict,
+                  failureErrno: failureCode,
+                  operationKind: 39,
+                  kindData: null,
+                  parts: []
+                };
+                receiver.operationCompleted(requestOperation.id, completion, undefined);
+              } catch (error) {
+                receiver.operationFailed(requestOperation.id, error, undefined);
+              }
             }
           }) as never
       })

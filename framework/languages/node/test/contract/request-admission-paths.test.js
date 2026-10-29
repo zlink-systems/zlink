@@ -37,22 +37,36 @@ for (const path of [
     const admission = deferred();
     const reply = deferred();
     const submitted = deferred();
-    const start = (onAdmitted) => {
-      const pending = submitBindingRequest(
-        {
-          message() {
-            return this;
-          },
-          submit: () => ({
-            result: zlink.SubmitResult.Backpressured,
-            admitted: admission.promise,
-            reply: reply.promise
-          })
+    const {
+      RequestRuntime
+    } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+    const requests = new RequestRuntime();
+    const start = (onAdmitted, requestOperation, decode = (value) => value) => {
+      const entry = requests.begin(undefined, undefined, requestOperation);
+      const pending = requests.run(
+        entry,
+        (receiver) => {
+          submitBindingRequest(
+            {
+              message() {
+                return this;
+              },
+              submit: () => ({
+                result: zlink.SubmitResult.Backpressured,
+                admitted: admission.promise,
+                reply: reply.promise
+              })
+            },
+            [],
+            undefined,
+            undefined,
+            onAdmitted,
+            entry,
+            receiver
+          );
         },
-        [],
-        undefined,
-        undefined,
-        onAdmitted
+        decode,
+        (error) => error
       );
       submitted.resolve();
       return pending;
@@ -60,11 +74,14 @@ for (const path of [
     const transport = {
       async sendToSpot() {},
       request: (_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
-        prepareZLinkRequestReply(start(onAdmitted), () => 'reply'),
+        prepareZLinkRequestReply(start(onAdmitted, undefined, () => 'reply'), (value) => value),
       requestToChannel: (_mesh, _channel, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
-        prepareZLinkRequestReply(start(onAdmitted), () => 'reply'),
+        prepareZLinkRequestReply(start(onAdmitted, undefined, () => 'reply'), (value) => value),
       requestToSpot: (_target, _request, options) =>
-        prepareZLinkRequestReply(start(options.onAdmitted), () => 'reply'),
+        prepareZLinkRequestReply(
+          start(options.onAdmitted, options.requestOperation, () => 'reply'),
+          (value) => value
+        ),
       requestRawToSpot: (_target, _request, options) => start(options.onAdmitted)
     };
     const registration = framework.createFrameworkRegistration({
@@ -141,9 +158,7 @@ for (const path of [
     const pending = call.submit();
     let admitted = false;
     let replied = false;
-    void pending.admitted.then(() => {
-      admitted = true;
-    });
+    void pending.admitted.then(() => { admitted = true; });
     const terminal = pending.then((value) => {
       replied = true;
       return value;
@@ -246,7 +261,6 @@ test('Instance activation public request observes existing remote submission adm
     await terminal;
   }
 });
-
 
 test('public routed local Spot request observes serial queue acceptance before handler reply', async () => {
   const { ZLinkRoutedSpotPacketDispatch } = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');

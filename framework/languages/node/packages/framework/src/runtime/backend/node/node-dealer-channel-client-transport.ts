@@ -1,5 +1,7 @@
+import { RequestRuntime } from '../../foundation/request-runtime';
 import {
   prepareZLinkRequestReply,
+  identityRequestReply,
   rejectZLinkRequestReply,
   type ZLinkRequestResult
 } from '../../messaging/request-result';
@@ -13,7 +15,7 @@ import {
   ZLinkChannelMessageKind
 } from '../../channels/channel-envelope';
 import { throwIfAborted } from '../../abort';
-import { appendParts, submitRequestOperation } from '../../channels/channel-multipart';
+import { appendParts, mapRequestFailure } from '../../channels/channel-multipart';
 import type { ZLinkChannelClientTransport } from '../../channels/channel-transports';
 import { runWithOutboundFlow } from '../../diagnostics/flow-context';
 
@@ -23,7 +25,8 @@ const EMPTY_METADATA: ReadonlyMap<string, string> = new Map();
 export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTransport {
   constructor(
     private readonly dealer: DealerSocket,
-    private readonly publisher?: PubSocket
+    private readonly publisher?: PubSocket,
+    private readonly requests = new RequestRuntime()
   ) {}
 
   async send(
@@ -67,6 +70,12 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
   ): ZLinkRequestResult<TReply> {
     try {
       throwIfAborted(signal);
+    } catch (error) {
+      return rejectZLinkRequestReply(error);
+    }
+    const requestOperation = this.requests.begin(timeoutMs, signal);
+    try {
+      throwIfAborted(signal);
       const operation = runWithOutboundFlow(true, () =>
         appendParts(
           this.dealer.request(),
@@ -85,27 +94,60 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         )
       );
       if (timeoutMs !== undefined) operation.timeout(timeoutMs);
-      const pending = submitRequestOperation(
-        {
-          submit: () =>
-            bindingRequestReply(
-              operation.submit(),
-              timeoutMs === undefined ? undefined : performance.now() + timeoutMs,
-              undefined,
-              onAdmitted
-            )
-        },
-        'channel request'
-      );
-      return prepareZLinkRequestReply(pending, (reply) => {
+      const decode = (raw: unknown): TReply => {
+        const reply = raw as readonly Message[];
         try {
           return decodeChannelReply<TReply>(reply);
         } finally {
-          for (const part of reply) part.close();
+          closeReply(reply);
         }
-      });
+      };
+      requestOperation.mapCaller(decode, identityRequestReply);
+      if (requestOperation.isPending()) {
+        const receiver = {
+          operationCompleted: (_id: bigint, raw: unknown) => {
+            if (requestOperation.complete(raw)) return;
+            try {
+              requestOperation.resolveCaller(decode(raw));
+            } catch (error) {
+              requestOperation.rejectCaller(error);
+            }
+          },
+          operationFailed: (_id: bigint, error: unknown) => {
+            let failure = error;
+            try {
+              failure = mapRequestFailure(error, 'channel request');
+            } catch (mapped) {
+              failure = mapped;
+            }
+            requestOperation.fail(failure);
+          }
+        };
+        try {
+          bindingRequestReply(
+            operation.submit(),
+            receiver,
+            requestOperation,
+            undefined,
+            onAdmitted
+          );
+        } catch (error) {
+          receiver.operationFailed(requestOperation.id, error);
+        }
+      }
+      return {
+        pending: requestOperation.promise,
+        decode: identityRequestReply<TReply>,
+        mapFailure: identityRequestReply,
+        operation:
+          requestOperation as import('../../foundation/operation-registry').PendingOperation<TReply>
+      };
     } catch (error) {
-      return rejectZLinkRequestReply(error);
+      requestOperation.fail(error);
+      return prepareZLinkRequestReply(
+        requestOperation.promise as Promise<TReply>,
+        identityRequestReply
+      );
     }
   }
 
@@ -150,4 +192,8 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     throwIfAborted(signal);
     return this.tryPublish(channelName, topic, packetName, event, metadata);
   }
+}
+
+function closeReply(parts: readonly { close(): void }[]): void {
+  for (const part of parts) part.close();
 }

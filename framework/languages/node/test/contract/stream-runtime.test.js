@@ -383,7 +383,10 @@ test('clearing an Actor packet target preserves Session relocation terminal owne
   assert.equal(ownershipClears, 0);
 });
 
-test('managed stream binds Session Actors through the Framework service without binding service APIs', async (t) => {
+for (const notConnected of [false, true]) {
+  test(notConnected
+    ? 'managed stream propagates the first service NotConnected without resubmitting'
+    : 'managed stream binds Session Actors through the Framework service without binding service APIs', async (t) => {
   const actor = {
     actorId: 'actor-framework-service',
     generation: 7n,
@@ -393,7 +396,9 @@ test('managed stream binds Session Actors through the Framework service without 
   const bindings = [];
   const bindAuthorities = [];
   let bindAttempts = 0;
+  let bindOperationId;
   const transportAttempts = [];
+  const firstFailure = new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
   const serviceRuntime = withTestSessionOwners(
     new ServiceStatefulRuntime(
       {
@@ -403,11 +408,10 @@ test('managed stream binds Session Actors through the Framework service without 
           return () => {};
         },
         setServiceIngress() {},
-        async requestService(_targetNodeRid, parts) {
+        async requestService(targetNodeRid, parts) {
+          assert.equal(targetNodeRid, actor.nodeRid);
           transportAttempts.push(Buffer.from(parts[0]));
-          if (transportAttempts.length === 1) {
-            throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
-          }
+          if (notConnected) throw firstFailure;
           const request = serviceStatefulWire.decodeStatefulHeader(parts[0]);
           return [
             serviceStatefulWire.encodeStatefulReply(request.correlation, RequestResult.Ok, 0, {
@@ -460,6 +464,7 @@ test('managed stream binds Session Actors through the Framework service without 
         onBindingReplaced,
         actorAuthority
       );
+      bindOperationId = pending.id;
       return operation('bind', pending.promise);
     },
     unbindActor() {
@@ -513,7 +518,7 @@ test('managed stream binds Session Actors through the Framework service without 
     ownerLeaseGeneration: 10n,
     ownerNodeGeneration: 3n
   };
-  await stream.bindActor(
+  const bind = stream.bindActor(
     {
       actorId: actor.actorId,
       objectGeneration: actor.generation,
@@ -526,10 +531,29 @@ test('managed stream binds Session Actors through the Framework service without 
     actorAuthority
   );
 
-  assert.equal(bindings.length, 1);
+  if (notConnected) {
+    await assert.rejects(bind, (error) => {
+      assert.equal(error, firstFailure);
+      assert.ok(error instanceof ZLinkBackendResultError);
+      assert.equal(error.operation, 'submit');
+      assert.equal(error.result, SubmitResult.NotConnected);
+      assert.equal(error.phase, 'completion');
+      return true;
+    });
+  } else {
+    await bind;
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(bindings.length, notConnected ? 0 : 1);
+  assert.equal(serviceRuntime.allSessionBindings().length, notConnected ? 0 : 1);
   assert.equal(bindAttempts, 1);
-  assert.equal(transportAttempts.length, 2);
-  assert.deepEqual(transportAttempts[1], transportAttempts[0]);
+  assert.equal(transportAttempts.length, 1);
+  assert.deepEqual(transportAttempts[0], serviceStatefulWire.encodeBoundSessionBindHeader(
+    bindOperationId,
+    { actor, targetNodeGeneration: 3n, authorityOwnerGeneration: 9n, ownerLeaseGeneration: 10n },
+    'session-rid',
+    { state: 'active', generation: 1n }
+  ));
   assert.deepEqual(serviceStatefulWire.decodeStatefulHeader(transportAttempts[0]).actor, {
     actor,
     targetNodeGeneration: 3n,
@@ -546,7 +570,8 @@ test('managed stream binds Session Actors through the Framework service without 
   assert.equal(typeof rawStreamSocket.bindActor, 'undefined');
   assert.equal(typeof rawStreamSocket.unbindActor, 'undefined');
   assert.equal(typeof rawStreamSocket.sendBoundActor, 'undefined');
-});
+  });
+}
 
 test('session Actor bind forwards the resolved Location authority to the native bind', async () => {
   const stream = new framework.ZLinkManagedStream(

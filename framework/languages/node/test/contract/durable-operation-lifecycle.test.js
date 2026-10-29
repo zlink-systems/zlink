@@ -37,9 +37,9 @@ function fixture(request, disconnectOnFailure = true) {
     receive: () => incoming.shift(), send: async () => {},
     submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }),
     routesSnapshot: () => [...routes].map(([routingId, routeGeneration]) => ({ routingId, routeGeneration })),
-    request: (rid, parts, timeoutMs, onReply, onFailed, _recordReceived, onAdmitted) => (async () => {
+    request: (rid, parts, timeoutMs, onReply, onFailed, _recordReceived, onAdmitted, existing) => (async () => {
       const record = parts[0][3] === 28 ? decodeActorJoin28(parts) : wire.decodeStatefulHeader(parts[0]);
-      const attempt = { rid, parts, timeoutMs, record };
+      const attempt = { rid, parts, timeoutMs, record, existing };
       attempts.push(attempt);
       try {
         const result = request(attempt, attempts.length);
@@ -73,7 +73,7 @@ function fixture(request, disconnectOnFailure = true) {
     targetOwnerId: 'target-owner', targetOwnerLeaseGeneration: 7n, pendingCapacityDelta: 1
   };
   return {
-    raw, runtime, attempts, target,
+    raw, runtime, attempts, target, router,
     async admit() {
       const routeGeneration = nextRouteGeneration++;
       routes.set(target.nodeRoutingId, routeGeneration);
@@ -109,17 +109,15 @@ function fixture(request, disconnectOnFailure = true) {
 }
 
 for (const kind of operationKinds) {
-  for (const mode of ['inFlight', 'replayDelay']) {
+  for (const mode of ['inFlight', 'beforeStart']) {
     test(`${kind}: intent removal immediately terminates ${mode} as Unavailable`, async t => {
       let now = 1000;
       t.mock.method(performance, 'now', () => now);
       t.mock.timers.enable({ apis: ['setTimeout'] });
       let finishAttempt;
-      const f = fixture(() => mode === 'inFlight'
-        ? new Promise(resolve => { finishAttempt = resolve; })
-        : Promise.reject(new ZLinkBackendResultError('submit', SubmitResult.NotConnected)));
+      const f = fixture(() => new Promise(resolve => { finishAttempt = resolve; }));
       try {
-        await f.admit();
+        if (mode === 'inFlight') await f.admit();
         let outcome;
         const operation = f.start(kind).then(value => { outcome = { value }; }, error => { outcome = { error }; });
         await turn();
@@ -134,17 +132,18 @@ for (const kind of operationKinds) {
         now += 100;
         t.mock.timers.tick(100);
         await turn();
-        assert.equal(f.attempts.length, 1, 'late transport completion cannot restart a terminal operation');
+        assert.equal(f.attempts.length, mode === 'inFlight' ? 1 : 0, 'terminal operation cannot submit again');
         assert.equal(f.raw[inspectRuntime]().peerConnectionIntentObservers, 0, 'terminal releases the transition observer');
       } finally { f.close(); }
     });
   }
 
-  test(`${kind}: physical disconnect retains replay until the logical endpoint intent is removed`, async t => {
+  test(`${kind}: physical disconnect preserves the original request until logical intent removal`, async t => {
     let now = 1000;
     t.mock.method(performance, 'now', () => now);
     t.mock.timers.enable({ apis: ['setTimeout'] });
-    const f = fixture(() => Promise.reject(new ZLinkBackendResultError('request', RequestResult.NotConnected)));
+    let reply;
+    const f = fixture(() => new Promise(resolve => { reply = resolve; }));
     try {
       await f.admit();
       let outcome;
@@ -161,11 +160,13 @@ for (const kind of operationKinds) {
       assert.equal(outcome?.error?.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
       assert.match(outcome.error.message, /lifecycle ended/);
       await operation;
+      reply(f.terminal(f.attempts[0]));
+      await turn();
       assert.equal(f.raw[inspectRuntime]().peerConnectionIntentObservers, 0);
     } finally { f.close(); }
   });
 
-  test(`${kind}: only typed transient transport errors replay`, async t => {
+  test(`${kind}: first binding failure terminates once without replay`, async t => {
     let now = 1000;
     t.mock.method(performance, 'now', () => now);
     t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -183,7 +184,6 @@ for (const kind of operationKinds) {
       Object.assign(new Error('untyped result lookalike'), { operation: 'request', result: RequestResult.TimedOut })
     ];
     for (const failure of [...transient, ...terminal]) {
-      const replay = transient.includes(failure);
       const f = fixture((attempt, count) => {
         if (count === 1) throw failure;
         return f.terminal(attempt);
@@ -191,19 +191,23 @@ for (const kind of operationKinds) {
       try {
         await f.admit();
         let outcome;
-        const operation = f.start(kind).then(value => { outcome = { value }; }, error => { outcome = { error }; });
+        let completions = 0;
+        const operation = f.start(kind).then(value => { completions++; outcome = { value }; }, error => { completions++; outcome = { error }; });
         await turn();
-        if (replay) {
-          assert.equal(outcome, undefined);
-          await f.admit();
-          await turn();
-          assert.equal(outcome?.value?.terminalResult, RequestResult.Rejected);
-          assert.equal(f.attempts.length, 2);
-          assert.deepEqual(f.attempts[1].parts, f.attempts[0].parts);
+        if (failure instanceof ZLinkBackendResultError && failure.operation === 'request' &&
+            failure.result === RequestResult.TimedOut) {
+          assert(outcome?.error instanceof framework.ZLinkFrameworkException);
+          assert.equal(outcome.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+          assert.equal(outcome.error.message, 'Request exceeded its deadline.');
         } else {
-          assert.equal(outcome?.error, failure, 'non-replayable failure retains its original identity');
-          assert.equal(f.attempts.length, 1);
+          assert.equal(outcome?.error, failure, 'non-timeout binding failure retains original identity');
         }
+        const fixedOutcome = outcome;
+        await f.admit();
+        await turn();
+        assert.equal(f.attempts.length, 1, 'a new ready route cannot retry the binding failure');
+        assert.equal(outcome, fixedOutcome);
+        assert.equal(completions, 1);
         await operation;
         assert.equal(f.raw[inspectRuntime]().peerConnectionIntentObservers, 0);
       } finally { f.close(); }
@@ -223,10 +227,8 @@ for (const kind of operationKinds) {
 
 test('removing a stale lifecycle intent does not terminate the admitted replacement', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const f = fixture((attempt, count) => {
-    if (count === 1) throw new ZLinkBackendResultError('request', RequestResult.NotConnected);
-    return f.terminal(attempt);
-  }, false);
+  let reply;
+  const f = fixture(() => new Promise(resolve => { reply = resolve; }), false);
   try {
     await f.admit();
     const operation = f.start('actorCreate');
@@ -234,8 +236,9 @@ test('removing a stale lifecycle intent does not terminate the admitted replacem
     f.raw.disconnectPeer(f.target.advertisedEndpoint, f.target.nodeRoutingId, 6n);
     assert(f.raw.topology.peer(f.target.nodeRoutingId));
     t.mock.timers.tick(20);
+    reply(f.terminal(f.attempts[0]));
     assert.equal((await operation).terminalResult, RequestResult.Rejected);
-    assert.equal(f.attempts.length, 2);
+    assert.equal(f.attempts.length, 1);
   } finally { f.close(); }
 });
 
@@ -256,7 +259,7 @@ test('raw binding request maps the installed binding failure through the existin
 });
 
 for (const kind of operationKinds) {
-  test(`${kind}: a new selected ready route replays a pending request without a timer tick`, async t => {
+  test(`${kind}: a new selected ready route preserves the original physical request`, async t => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
     let originalReply;
     let outcome;
@@ -273,12 +276,118 @@ for (const kind of operationKinds) {
       assert.equal(f.attempts.length, 1, 'unchanged selection does not replay');
       await f.admit();
       await turn();
-      assert.equal(f.attempts.length, 2, 'new ready selection replays immediately');
-      assert.equal(outcome?.terminalResult, RequestResult.Rejected);
-      assert.deepEqual(f.attempts[1].parts, f.attempts[0].parts);
+      assert.equal(f.attempts.length, 1, 'new ready selection cannot resubmit a started request');
+      assert.equal(outcome, undefined, 'original physical reply remains pending');
       originalReply();
       await operation;
-      assert.equal(f.attempts.length, 2);
+      assert.equal(outcome?.terminalResult, RequestResult.Rejected);
+      assert.equal(f.attempts.length, 1);
     } finally { f.close(); }
+  });
+}
+
+for (const started of [false, true]) {
+  test(`standalone infrastructure direct request uses the existing raw registry (started=${started})`, async t => {
+    const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+    let now = 1000;
+    t.mock.method(performance, 'now', () => now);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let finish;
+    const f = fixture(() => new Promise(resolve => { finish = resolve; }));
+    try {
+      if (started) await f.admit();
+      let timers = 0;
+      const setTimer = globalThis.setTimeout;
+      t.mock.method(globalThis, 'setTimeout', (...args) => { timers++; return setTimer(...args); });
+      const backend = new ZLinkNodeRawMeshBackend('mesh', 'source-node', {}, undefined,
+        undefined, undefined, undefined, { raw: f.raw });
+      const frames = [wire.encodeUserSpotCloseHeader({
+        sourceNodeRid: 'source-node', sourceNodeGeneration: 7n, correlation: 77n,
+        operation: { high: 7n, low: 77n }, deadlineUnixMs: BigInt(Date.now() + 80),
+        target: { spotId: 'spot', objectGeneration: 3n, targetNodeRid: 'target-node',
+          targetNodeGeneration: 7n, authorityOwnerGeneration: 5n, expectedStoreVersion: 'version' }
+      })];
+      let completions = 0;
+      const caller = backend.requestInfrastructureControlFrames('target-node', frames, { timeoutMs: 80 });
+      const outcome = assert.rejects(caller, error => {
+        completions++;
+        assert(error instanceof framework.ZLinkFrameworkException);
+        assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+        return true;
+      });
+      await turn();
+      assert.equal(f.raw.pendingOperationCount, 1);
+      assert.equal(f.runtime.pendingOperationCount, 0);
+      assert.equal(f.attempts.length, started ? 1 : 0);
+      assert.equal(timers, 0, 'the existing raw visitor owns expiry without a request timer');
+      if (started) assert.equal(f.attempts[0].existing.deadlineMs, 1080);
+      now += 80;
+      assert.equal(f.raw.expireOperations(now, Number.POSITIVE_INFINITY), 1);
+      await outcome;
+      assert.equal(f.raw.pendingOperationCount, 0);
+      finish?.(f.terminal(f.attempts[0]));
+      await f.admit();
+      await turn();
+      assert.equal(f.attempts.length, started ? 1 : 0);
+      assert.equal(completions, 1);
+      assert.equal(f.raw[inspectRuntime]().peerConnectionIntentObservers, 0);
+    } finally { f.close(); }
+  });
+}
+
+
+test('Raw Promise request preserves the physical Promise and rejected-Promise submit semantics', async t => {
+  const f = fixture(() => undefined);
+  let resolve;
+  const physical = new Promise(yes => { resolve = yes; });
+  const cause = new Error('synchronous binding refusal');
+  let hooks = 0;
+  try {
+    await f.admit();
+    t.mock.method(f.router, 'request', () => physical);
+    const reply = f.raw.requestService('target-node', [], 80, undefined, undefined, undefined, () => hooks++);
+    assert.equal(reply, physical);
+    assert.equal(hooks, 1);
+    resolve([]); await reply;
+    t.mock.method(f.router, 'request', () => { throw cause; });
+    let refused;
+    assert.doesNotThrow(() => { refused = f.raw.requestService('target-node', [], 80, undefined, undefined, undefined, () => hooks++); });
+    await assert.rejects(refused, error => error === cause);
+    assert.equal(hooks, 1);
+  } finally { f.runtime.close(); f.raw.close(); }
+});
+
+for (const mode of ['sync', 'async', 'cancel-at-creation']) {
+  test(`submitted hook failure uses original pending and retains late physical decoder/mode=${mode}`, async t => {
+    const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+    const { requestDurableService } = require('../../packages/framework/dist/runtime/foundation/durable-service-request');
+    const f = fixture(() => undefined);
+    const requests = new RequestRuntime();
+    const pending = requests.begin(80);
+    const cause = new Error('original submitted hook failure');
+    const controller = new AbortController();
+    let resolve, hooks = 0, decoded = 0, submitted = 0;
+    const physical = new Promise(yes => { resolve = yes; });
+    try {
+      await f.admit();
+      t.mock.method(f.router, 'request', () => { submitted++; if (mode === 'cancel-at-creation') controller.abort(cause); return physical; });
+      const caller = requests.run(pending, receiver => {
+        void requestDurableService(f.raw, 'target-node', [], pending, 'test', controller.signal, signal => {
+          hooks++;
+          if (mode === 'sync') throw cause;
+          if (mode === 'cancel-at-creation') { assert.equal(signal.aborted, true); return Promise.resolve(); }
+          return Promise.reject(cause);
+        }).then(value => receiver.operationCompleted(pending.id, value, undefined), error => receiver.operationFailed(pending.id, error, undefined));
+      }, raw => { decoded++; return raw; }, error => error);
+      assert.equal(hooks, 1, 'start bookkeeping runs before an async callback boundary');
+      await assert.rejects(caller, error => error === cause);
+      assert.equal(decoded, 0);
+      resolve([Buffer.from('late physical reply')]);
+      await turn();
+      assert.equal(decoded, 1);
+      assert.equal(hooks, 1);
+      assert.equal(submitted, 1);
+      assert.equal(requests.registry.size, 0);
+    } finally { resolve([]); requests.close(); f.runtime.close(); f.raw.close(); }
   });
 }

@@ -8,7 +8,6 @@ import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
-import { ZLinkExecutionBarrier } from '../../packages/framework/src/runtime/execution';
 import {
   ServiceWireExactTerminalByFailureCode,
   ServiceWireFrameworkErrorCode
@@ -80,69 +79,138 @@ test('canonical Join public error kinds retain their exact wire terminals', () =
   }
 });
 
-test('canonical Join rejects missing targets as Unavailable and closing targets as Rejected', async () => {
-  const closingBarrier = new ZLinkExecutionBarrier();
-  closingBarrier.seal('close');
+test('canonical Join rejects missing targets as Unavailable and closing targets as NotFound', async () => {
+  const { ZLinkSpotRelocationCoordinationMode } = await import(
+    '../../packages/framework/src/contracts/Configuration/ObjectRoles'
+  );
+  const { ZLinkRuntimeTaskErrorSink, ZLinkRuntimeTaskRunner } = await import(
+    '../../packages/framework/src/runtime/execution'
+  );
+  const { ZLinkSpotActivation } = await import(
+    '../../packages/framework/src/runtime/spots/spot-activation-state'
+  );
+  const { ZLinkSpotTimerRegistry } = await import(
+    '../../packages/framework/src/runtime/spots/spot-timer'
+  );
+  let releaseClosing!: () => void;
+  const closingCleanup = new Promise<void>((resolve) => {
+    releaseClosing = resolve;
+  });
+  let markClosingStarted!: () => void;
+  const closingStarted = new Promise<void>((resolve) => {
+    markClosingStarted = resolve;
+  });
   const closingSerial = new ZLinkSpotSerialTurnExecutor(true);
-  closingSerial.setExecutionBarrier(closingBarrier);
+  const closingActivation = new ZLinkSpotActivation({
+    meshName: MESH_NAME,
+    spotId: SPOT_ID,
+    domain: {
+      kind: 'user',
+      executionMode: ZLinkUserSpotExecutionMode.SpotWide,
+      relocationCoordinationMode: ZLinkSpotRelocationCoordinationMode.FrameworkManaged
+    },
+    spotType: class ClosingSpot {} as never,
+    spot: {
+      async onClosing() {
+        markClosingStarted();
+        await closingCleanup;
+      }
+    } as never,
+    serial: closingSerial,
+    timers: new ZLinkSpotTimerRegistry(),
+    actorHandlers: {} as never,
+    handlers: {} as never
+  });
+  const closingManager = new DefaultZLinkSpotManager({
+    detachedTaskRunner: new ZLinkRuntimeTaskRunner(
+      new ZLinkRuntimeTaskErrorSink(),
+      new AbortController().signal
+    ),
+    spotFactories: []
+  });
+  const closingActivations = (
+    closingManager as unknown as {
+      activations: import('../../packages/framework/src/runtime/spots/spot-activation-registry').ZLinkSpotActivationRegistry;
+    }
+  ).activations;
+  closingActivations.register(closingActivation);
+  let closeFinished = false;
+  const closing = closingManager.closeUserWithAuthority(
+    MESH_NAME,
+    SPOT_ID,
+    async (onCommitted) => {
+      onCommitted();
+      return { release: async () => undefined };
+    }
+  ).then((result) => {
+    closeFinished = true;
+    return result;
+  });
 
-  for (const state of ['missing-user', 'missing-null', 'closing-user', 'missing-entry']) {
-    const replies: Array<{ terminal: number; code: number }> = [];
-    let dispatched = false;
-    const activation = {
-      domain: { kind: 'user' },
-      spotId: SPOT_ID,
-      serial:
-        state === 'closing-user'
-          ? closingSerial
-          : { executeLifecycleOperation: async (callback: () => Promise<void>) => callback() }
-    };
-    const manager = {
-      activations: { resolve: () => (state === 'closing-user' ? activation : undefined) },
-      async dispatchMeshActorJoinCore() {
-        dispatched = true;
-      },
-      options: { entryNodeRid: state === 'missing-entry' ? SPOT_ID : NODE_RID }
-    };
-    const dispatch = DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin.call(
-      manager as never,
-      MESH_NAME,
-      { spotId: state === 'missing-null' ? null : SPOT_ID } as never,
-      {
-        kindData: {
-          kind: 'actorControl',
-          currentActor: { actorId: ACTOR_ID },
-          canonicalActorJoin: { handoffId: state }
+  try {
+    await closingStarted;
+    assert.equal(closeFinished, false);
+    for (const state of ['missing-user', 'missing-null', 'closing-user', 'missing-entry']) {
+      const replies: Array<{ terminal: number; code: number }> = [];
+      let dispatched = false;
+      const manager = {
+        activations: {
+          resolve: () =>
+            state === 'closing-user' ? closingActivations.resolve(MESH_NAME, SPOT_ID) : undefined
         },
-        parts: [],
-        replyFailure(terminal: number, code: number) {
-          replies.push({ terminal, code });
-          return 0;
-        }
-      } as never
-    );
-
-    // The Join requester must receive exactly one terminal reply: Rejected for a
-    // Closing target (barrier seal), Unavailable for an absent target.
-    await dispatch;
-    const expected =
-      state === 'closing-user'
-        ? {
-            terminal:
-              ServiceWireExactTerminalByFailureCode[ServiceWireFrameworkErrorCode.requestRejected],
-            code: ServiceWireFrameworkErrorCode.requestRejected,
-            kind: ZLinkFrameworkErrorKind.Rejected
+        async dispatchMeshActorJoinCore() {
+          dispatched = true;
+        },
+        options: { entryNodeRid: state === 'missing-entry' ? SPOT_ID : NODE_RID }
+      };
+      const dispatch = DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin.call(
+        manager as never,
+        MESH_NAME,
+        { spotId: state === 'missing-null' ? null : SPOT_ID } as never,
+        {
+          kindData: {
+            kind: 'actorControl',
+            currentActor: { actorId: ACTOR_ID },
+            canonicalActorJoin: { handoffId: state }
+          },
+          parts: [],
+          replyFailure(terminal: number, code: number) {
+            replies.push({ terminal, code });
+            return 0;
           }
-        : { terminal: 105, code: 13, kind: ZLinkFrameworkErrorKind.Unavailable };
-    assert.deepEqual(replies, [{ terminal: expected.terminal, code: expected.code }], state);
-    if (state === 'closing-user') assert.deepEqual(replies[0], { terminal: 106, code: 15 });
-    assert.equal(
-      wireReplyFailureException(replies[0]!.terminal, replies[0]!.code, 'Actor Join').kind,
-      expected.kind,
-      state
-    );
-    assert.equal(dispatched, false, state);
+        } as never
+      );
+
+      // Actor membership section 4.2 follows Spot messaging section 9 for Closing:
+      // NotFound for the committed Closing incarnation, Unavailable for absence.
+      await dispatch;
+      const expected =
+        state === 'closing-user'
+          ? {
+              terminal:
+                ServiceWireExactTerminalByFailureCode[ServiceWireFrameworkErrorCode.requestTargetNotFound],
+              code: ServiceWireFrameworkErrorCode.requestTargetNotFound,
+              kind: ZLinkFrameworkErrorKind.NotFound
+            }
+          : { terminal: 105, code: 13, kind: ZLinkFrameworkErrorKind.Unavailable };
+      assert.deepEqual(replies, [{ terminal: expected.terminal, code: expected.code }], state);
+      if (state === 'closing-user') {
+        assert.deepEqual(replies[0], { terminal: 102, code: 14 });
+        assert.equal(closeFinished, false, 'Join must terminate before Close finishes');
+        assert.equal(closingActivations.resolve(MESH_NAME, SPOT_ID), closingActivation);
+      }
+      assert.equal(
+        wireReplyFailureException(replies[0]!.terminal, replies[0]!.code, 'Actor Join').kind,
+        expected.kind,
+        state
+      );
+      assert.equal(dispatched, false, state);
+    }
+  } finally {
+    releaseClosing();
+    await closing;
   }
+  assert.equal(closeFinished, true);
 });
 
 test('Entry Join commit failure after accepted reply reaches completion without another wire reply', async () => {

@@ -1,3 +1,5 @@
+import { awaitWithAbort } from '../abort';
+import type { PendingOperation } from '../foundation/operation-registry';
 import { inspectRuntime } from '../internal-observation';
 import { listAllMeshNodeDescriptors } from './location-store-pages';
 import type { ActorRef, RoutingId, SpotId } from '../../contracts/Common';
@@ -5,7 +7,7 @@ import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contract
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import { ZLinkSpotKind } from '../../contracts/Spots';
 import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
-import { waitActorReply } from '../actors/actor-request-deadline';
+import { remainingActorRequestTimeout } from '../actors/actor-request-deadline';
 import { emitActorOwnerLeaseObservation, isRelocationDebugEnabled } from '../diagnostics';
 import { ZLinkStateLane } from '../execution/state-lane';
 import {
@@ -425,16 +427,17 @@ export class ZLinkStoreLocationResolvers
   async resolveDirectActorRoute(
     actorId: string,
     signal?: AbortSignal,
-    deadlineMs?: number
+    deadlineMs?: number,
+    requestOperation?: PendingOperation<unknown>
   ): Promise<ZLinkDirectActorRouteResolution> {
     const cached = await this.lane.run(() => this.getCachedCore(this.directActorRoutes, actorId));
     if (cached !== undefined) return { kind: 'ready', route: cached };
-    return await waitActorReply(
-      this.resolveUncachedDirectActorRoute(actorId, signal),
-      actorId,
-      deadlineMs,
-      signal
-    );
+    const resolving = this.resolveUncachedDirectActorRoute(actorId, signal);
+    if (requestOperation === undefined) {
+      remainingActorRequestTimeout(actorId, deadlineMs);
+      return await awaitWithAbort(resolving, signal);
+    }
+    return await resolving;
   }
 
   private async resolveUncachedDirectActorRoute(

@@ -67,8 +67,11 @@ function fakeSpotRouteBridge(calls, reply) {
           calls.push(`bridge:timeout:${timeoutMs}`);
           return this;
         },
-        submit() {
-          return Promise.resolve(reply === undefined ? [] : [reply]);
+        submit(onAdmitted, entry, receiver) {
+          const physical = Promise.resolve(reply === undefined ? [] : [reply]);
+          if (receiver === undefined) return physical;
+          onAdmitted?.();
+          void physical.then(parts => receiver.operationCompleted(entry.id, parts, undefined));
         }
       };
     },

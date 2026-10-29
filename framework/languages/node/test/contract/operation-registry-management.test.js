@@ -123,9 +123,10 @@ test('deadline maintenance yields its live iterator and resumes through deletion
   registry.close();
 });
 
-test('shared deadline maintenance completes a native request while its handler is suspended', async () => {
+test('shared deadline maintenance completes a same-node logical request while its handler is suspended', async () => {
   const backend = require('../../packages/framework/dist/runtime/backend');
   const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+  const { ServiceWireFrameworkErrorCode } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const context = factory.createChannelAdapter().createContext();
   const suffix = `node-dispatch-deadline-${process.pid}`;
@@ -178,7 +179,8 @@ test('shared deadline maintenance completes a native request while its handler i
     );
     await started;
     const completion = await pending;
-    assert.equal(completion.terminalResult, RequestResult.TimedOut);
+    assert.equal(completion.terminalResult, RequestResult.InternalError);
+    assert.equal(completion.failureErrno, ServiceWireFrameworkErrorCode.workerTimedOut);
     backend.closeMeshCompletion(completion);
     assert.equal(table.pendingCount, 0);
     release();
@@ -224,7 +226,8 @@ test('shared maintenance budget advances both registries while raw work carries 
 
 test('backend shared maintenance gives raw and stateful registries one divided budget', async (t) => {
   // Subtracting this fractional origin from its deadline does not recover the exact budget.
-  t.mock.method(performance, 'now', () => 0.3);
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+  t.mock.method(performance, 'now', () => Date.now() + 0.3);
   const backend = require('../../packages/framework/dist/runtime/backend');
   const {
     RAW_MESH_RECEIVE_TIME_BUDGET_MS
@@ -256,7 +259,11 @@ test('backend shared maintenance gives raw and stateful registries one divided b
     node.start();
     // Maintenance runs at the nearest management deadline (spec 08 §4.2); a
     // pending request gives this idle node one.
-    node.requestToNode('budget-missing-peer', [Buffer.from('budget')], { timeoutMs: 5 });
+    const rawPending = node.runtime.operations.register(1000);
+    const statefulPending = node.stateful.operations.register(1000);
+    void rawPending.promise.catch(() => {});
+    void statefulPending.promise.catch(() => {});
+    t.mock.timers.tick(256);
     await observed;
     await new Promise(setImmediate);
     assert.equal(observations[0].now, observations[1].now);

@@ -56,34 +56,30 @@ test.afterEach(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
-test('pending channel requests keep the Node event loop alive until they settle', async () => {
-  const originalSetTimeout = global.setTimeout;
-  const originalClearTimeout = global.clearTimeout;
-  let keepalive;
-  let cleared;
-  let resolveReply;
-  const reply = new Promise(( resolve ) => {
-    resolveReply = resolve;
+test('runtime-owned requests share one referenced management handle', async (t) => {
+  const {
+    RequestRuntime
+  } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+  const owner = new RequestRuntime();
+  let release;
+  const reply = new Promise((resolve) => {
+    release = resolve;
   });
-  global.setTimeout = (callback, delay) => {
-    assert.equal(delay, 0x7fffffff);
-    keepalive = { callback, delay, ref: true };
-    return keepalive;
-  };
-  global.clearTimeout = ( timer ) => {
-    cleared = timer;
-  };
-  try {
-    const pending = keepChannelRequestAlive(reply);
-    assert.equal(keepalive.ref, true);
-    assert.equal(cleared, undefined);
-    resolveReply('reply');
-    assert.equal(await pending, 'reply');
-    assert.equal(cleared, keepalive);
-  } finally {
-    global.setTimeout = originalSetTimeout;
-    global.clearTimeout = originalClearTimeout;
-  }
+  const before = process.getActiveResourcesInfo().filter((type) => type === 'Timeout').length;
+  const timer = t.mock.method(globalThis, 'setTimeout');
+  const pending = Array.from({ length: 1000 }, () => owner.request(60_000, undefined, () => reply));
+  assert.equal(
+    process.getActiveResourcesInfo().filter((type) => type === 'Timeout').length,
+    before + 1
+  );
+  assert.equal(timer.mock.callCount(), 1);
+  release('reply');
+  await Promise.all(pending);
+  assert.equal(
+    process.getActiveResourcesInfo().filter((type) => type === 'Timeout').length,
+    before
+  );
+  owner.close();
 });
 
 test('two in-process ClientServer nodes deliver a delayed reply to an awaited client request', async () => {
@@ -1621,7 +1617,7 @@ test('route raw SPOT requests await independent binding request promises', async
   const calls = [];
   const releases = [];
   const fakeSpot = {
-    requestToSpot(targetNodeRid, targetSpot, request) {
+    requestToSpot: physicalRequest(function (targetNodeRid, targetSpot, request) {
       active += 1;
       maxActive = Math.max(maxActive, active);
       calls.push({
@@ -1630,11 +1626,13 @@ test('route raw SPOT requests await independent binding request promises', async
         request: request.data().toString()
       });
       const sequence = calls.length;
-      return new Promise((resolve) => releases.push(() => {
-        active -= 1;
-        resolve([zlink.Message.from(Buffer.from(`reply-${sequence}`))]);
-      }));
-    }
+      return new Promise((resolve) =>
+        releases.push(() => {
+          active -= 1;
+          resolve([zlink.Message.from(Buffer.from(`reply-${sequence}`))]);
+        })
+      );
+    })
   };
   const registration = framework.createFrameworkRegistration({
     routeChannels: [{ routerChannelId: 'room.route' }],
@@ -1694,10 +1692,10 @@ test('aborted raw SPOT request closes its late binding reply', async () => {
   const calls = [];
   const releases = [];
   const fakeSpot = {
-    requestToSpot(_targetNodeRid, _targetSpot, request) {
+    requestToSpot: physicalRequest(function (_targetNodeRid, _targetSpot, request) {
       calls.push(request.data().toString());
       return new Promise((resolve) => releases.push(resolve));
-    }
+    })
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({
@@ -1748,10 +1746,10 @@ test('raw SPOT request timeout is delegated to the binding request promise', asy
   const calls = [];
   const releases = [];
   const fakeSpot = {
-    requestToSpot(_targetNodeRid, _targetSpot, request) {
+    requestToSpot: physicalRequest(function (_targetNodeRid, _targetSpot, request) {
       calls.push(request.data().toString());
       return new Promise((resolve) => releases.push(resolve));
-    }
+    })
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({
@@ -1808,10 +1806,10 @@ test('SpotNode router is not classified as packet route channel', () => {
 test('route raw SPOT request awaits the binding request once', async () => {
   let attempts = 0;
   const fakeSpot = {
-    async requestToSpot() {
+    requestToSpot: physicalRequest(async function () {
       attempts += 1;
       return [zlink.Message.from(Buffer.from('ready-reply'))];
-    }
+    })
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({
@@ -1853,10 +1851,10 @@ test('route raw SPOT request awaits the binding request once', async () => {
 test('route raw SPOT request from a user spot awaits the binding request once', async () => {
   let attempts = 0;
   const sourceSpot = {
-    async requestToSpot() {
+    requestToSpot: physicalRequest(async function () {
       attempts += 1;
       return [zlink.Message.from(Buffer.from('replacement-ready'))];
-    }
+    })
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({ requestTimeoutMs: 1000 }),
@@ -1897,10 +1895,10 @@ test('route raw SPOT request aborts its wait without resubmitting', async () => 
   manager.setSpotNodes(new Map([['play', {
     entrySpot() {
       return {
-        requestToSpot() {
-          attempts += 1;
-          return new Promise(() => undefined);
-        }
+        requestToSpot: physicalRequest(function () {
+                attempts += 1;
+                return new Promise(() => undefined);
+              })
       };
     }
   }]]));
@@ -1915,7 +1913,7 @@ test('route raw SPOT request aborts its wait without resubmitting', async () => 
 
   await waitUntil(() => attempts > 0);
   abort.abort();
-  await assert.rejects(pending, /The operation was aborted/);
+  await assert.rejects(pending, (error) => error === abort.signal.reason);
   const attemptsAtAbort = attempts;
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(attempts, attemptsAtAbort);
@@ -1925,9 +1923,11 @@ test('route raw SPOT request aborts its wait without resubmitting', async () => 
 test('source Spot raw request aborts after native submission and closes a late reply', async () => {
   let complete;
   const sourceSpot = {
-    requestToSpot() {
-      return new Promise((resolve) => { complete = resolve; });
-    }
+    requestToSpot: physicalRequest(function () {
+      return new Promise((resolve) => {
+        complete = resolve;
+      });
+    })
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration(),
@@ -1943,11 +1943,11 @@ test('source Spot raw request aborts after native submission and closes a late r
   }, request, 1000, abort.signal);
 
   abort.abort();
-  await assert.rejects(pending, /The operation was aborted/);
+  await assert.rejects(pending, (error) => error === abort.signal.reason);
   let closeCount = 0;
   const lateReply = { close() { closeCount += 1; } };
   complete([lateReply]);
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(closeCount, 1);
   request.close();
 });
@@ -1973,28 +1973,88 @@ test('route channel request propagates binding route rejection', async () => {
   assert.equal(router.requestAttempts, 1);
 });
 
-test('route channel request delegates its timeout to the binding Promise', async () => {
-  const router = fakeRouteRouter({ acceptWithoutReply: true });
-  const manager = new framework.ZLinkChannelRuntimeManager(
-    framework.createFrameworkRegistration({
-      routeChannels: [{
-        routerChannelId: 'room.route',
-        bind: 'inproc://session-route',
-        routingId: 'session-node'
-      }]
-    }),
-    fakeChannelAdapter({ dealer: fakeBackpressuredDealer(), router }),
-    fakeContext()
-  );
-
-  await assert.rejects(
-    manager.routeRequest(
-      'room.route', 'play-node', 'EnsurePlayerActorReq', { actorId: 'player-1' }, 30
-    ),
-    /binding request timed out/
-  );
-  assert.equal(router.requestAttempts, 1);
-});
+for (const first of ['Framework visit', 'binding timeout']) {
+  test(`route request deadline has one terminal when ${first} wins`, async (t) => {
+    // Submit and completion §9 and §10.1: one deadline and one entry own timeout.
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
+    try {
+      t.mock.method(performance, 'now', () => Date.now());
+      const {
+        OperationRegistry
+      } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+      const {
+        translateBindingResultError
+      } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+      const originalFail = OperationRegistry.prototype.fail;
+      let terminals = 0,
+        registry;
+      t.mock.method(OperationRegistry.prototype, 'fail', function (id, error) {
+        const won = originalFail.call(this, id, error);
+        if (won) terminals++;
+        return won;
+      });
+      const register = OperationRegistry.prototype.register;
+      t.mock.method(OperationRegistry.prototype, 'register', function (...args) {
+        registry = this;
+        return register.apply(this, args);
+      });
+      let entered;
+      const submitted = new Promise((resolve) => {
+        entered = resolve;
+      });
+      let rejectBinding;
+      const binding = new Promise((_, reject) => {
+        rejectBinding = reject;
+      });
+      const router = fakeRouteRouter();
+      router.request = function () {
+        this.requestAttempts++;
+        entered();
+        return binding;
+      };
+      const manager = new framework.ZLinkChannelRuntimeManager(
+        framework.createFrameworkRegistration({
+          routeChannels: [{
+            routerChannelId: 'room.route',
+            bind: 'inproc://session-route',
+            routingId: 'session-node'
+          }]
+        }),
+        fakeChannelAdapter({ dealer: fakeBackpressuredDealer(), router }),
+        fakeContext()
+      );
+      const pending = manager.routeRequest(
+        'room.route', 'play-node', 'EnsurePlayerActorReq', { actorId: 'player-1' }, 30
+      );
+      let observed = 0;
+      const terminal = assert.rejects(pending, (error) => {
+        observed++;
+        return error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded;
+      });
+      await submitted;
+      const nativeTimeout = translateBindingResultError(
+        new zlink.RequestError(zlink.RequestResult.TimedOut, 110)
+      );
+      if (first === 'Framework visit') {
+        t.mock.timers.tick(30);
+        await terminal;
+        rejectBinding(nativeTimeout);
+      } else {
+        t.mock.timers.setTime(30);
+        rejectBinding(nativeTimeout);
+        await terminal;
+        t.mock.timers.tick(0);
+      }
+      await Promise.resolve();
+      assert.equal(router.requestAttempts, 1);
+      assert.equal(registry.size, 0);
+      assert.equal(terminals, 1);
+      assert.equal(observed, 1);
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+}
 
 test('route channel with SPOT acceptance starts one route receive loop for shared router frames', async () => {
   const router = fakeRouteRouter();
@@ -2021,9 +2081,9 @@ test('route channel with SPOT acceptance starts one route receive loop for share
     },
     entrySpot() {
       return {
-        requestToSpot() {
+        requestToSpot: physicalRequest(function () {
           throw new Error('spot request not used');
-        }
+        })
       };
     }
   };
@@ -2053,9 +2113,9 @@ test('route bridge raw request awaits its binding Promise reply', async () => {
         timeout() {
           return this;
         },
-        async submit() {
+        submit: physicalRequest(async function () {
           return [zlink.Message.from(Buffer.from(JSON.stringify({ ok: true, response: { value: 'reply' } })))];
-        }
+        })
       };
     },
     handleRouterReceived() {
@@ -2085,9 +2145,9 @@ test('route bridge raw request awaits its binding Promise reply', async () => {
     },
     entrySpot() {
       return {
-        requestToSpot() {
-          throw new Error('spot request not used');
-        }
+        requestToSpot: physicalRequest(function () {
+                throw new Error('spot request not used');
+              })
       };
     }
   }]]));
@@ -2137,7 +2197,9 @@ test('channel runtime disposal does not add a Framework request owner around the
   );
   manager.setSpotNodes(new Map([['play', {
     createRouteBridge() { return bridge; },
-    entrySpot() { return { requestToSpot() { return false; } }; }
+    entrySpot() { return { requestToSpot: physicalRequest(function () {
+                return false;
+              }) }; }
   }]]));
   manager.start({
     errorSink: { reportRuntimeTaskException() {} },
@@ -2204,9 +2266,9 @@ test('route bridge sends await each binding Promise directly', async () => {
     },
     entrySpot() {
       return {
-        requestToSpot() {
-          throw new Error('spot request not used');
-        }
+        requestToSpot: physicalRequest(function () {
+                throw new Error('spot request not used');
+              })
       };
     }
   }]]));
@@ -2255,10 +2317,10 @@ test('route raw SPOT request uses route bridge before SpotNode router fallback',
           call.timeoutMs = timeoutMs;
           return this;
         },
-        async submit() {
+        submit: physicalRequest(async function () {
           call.submitted = true;
           return [zlink.Message.from(Buffer.from('bridge-reply'))];
-        }
+        })
       };
     },
     handleRouterReceived() {
@@ -2289,10 +2351,10 @@ test('route raw SPOT request uses route bridge before SpotNode router fallback',
     },
     entrySpot() {
       return {
-        requestToSpot() {
+        requestToSpot: physicalRequest(function () {
           spotNodeRouterUsed = true;
           throw new Error('SpotNode router fallback must not be used when bridge is available');
-        }
+        })
       };
     }
   };
@@ -2363,10 +2425,10 @@ test('route raw SPOT request prefers the named Spot mesh when route and Spot mes
     },
     entrySpot() {
       return {
-        async requestToSpot() {
-          spotRequests += 1;
-          return [zlink.Message.from(Buffer.from('spot-reply'))];
-        }
+        requestToSpot: physicalRequest(async function () {
+                spotRequests += 1;
+                return [zlink.Message.from(Buffer.from('spot-reply'))];
+              })
       };
     }
   }]]));
@@ -5706,6 +5768,9 @@ async function waitUntil(predicate, timeoutMs = 1000) {
 }
 
 function fakeChannelAdapter({ dealer, router }) {
+if (dealer?.request) dealer.request = physicalRequest(dealer.request);
+if (router?.request) router.request = physicalRequest(router.request);
+
   return {
     createDealerSocket() {
       return dealer;
@@ -5822,3 +5887,17 @@ function fakeMessagePart(part) {
     close() {}
   };
 }
+function physicalRequest(work) {
+  return function (...args) {
+    const receiver = args.at(-1);
+    const result = work.apply(this, args);
+    if (typeof receiver?.operationCompleted !== 'function') return result;
+    const entry = args.at(-2);
+    void Promise.resolve(result).then(
+      (value) => receiver.operationCompleted(entry.id, value, undefined),
+      (error) => receiver.operationFailed(entry.id, error, undefined)
+    );
+    return entry.promise;
+  };
+}
+

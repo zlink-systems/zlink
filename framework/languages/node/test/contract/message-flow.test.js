@@ -377,13 +377,14 @@ test(`node direct request records one source flow with sent and reply terminal (
     isObjectClientNodeDirectTarget() { return false; }
   };
   const table = {
-    submit(operation) {
+    submit(operation, _signal, entry, receiver) {
       operation();
       const header = channelEnvelope.decodeChannelHeader(requestParts.map(part => ZLinkBufferMessage.from(part)));
       const parts = failure
         ? []
         : channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map(part => ZLinkBufferMessage.from(part));
-      return Promise.resolve({ terminalResult: failure ? 101 : 0, failureErrno: 0, parts });
+      queueMicrotask(() => receiver.operationCompleted(entry.id, { terminalResult: failure ? 101 : 0, failureErrno: 0, parts }));
+      return entry.promise;
     }
   };
   const transport = new ZLinkRuntimeRouteTransport(
@@ -628,7 +629,7 @@ test('channel request completion owner records one terminal for failure, cancell
 test('channel request completion owner records success and in-flight cancellation once', async () => {
   const successEvents = [];
   const successDealer = {
-    async request(parts) {
+    request: physicalFlowRequest(async function(parts) {
       const messages = parts.map((part) =>
         typeof part.data === 'function' ? part : bindingMessage(part)
       );
@@ -637,7 +638,7 @@ test('channel request completion owner records success and in-flight cancellatio
       return channelEnvelope
         .encodeChannelReplyParts(header, { ok: true })
         .map((part) => (typeof part.data === 'function' ? part : bindingMessage(part)));
-    }
+    })
   };
   const success = new ZLinkChannelOutboundOperations(
     {
@@ -676,10 +677,10 @@ test('channel request completion owner records success and in-flight cancellatio
   const cancelledEvents = [];
   const controller = new AbortController();
   const pendingDealer = {
-    request(parts) {
+    request: physicalFlowRequest(function(parts) {
       channelEnvelope.closeMessages(parts);
       return new Promise(() => {});
-    }
+    })
   };
   const pending = new ZLinkChannelOutboundOperations(
     {
@@ -1628,3 +1629,11 @@ test('MFLOW-WIRE relay JSON writes the spec lowercase flow_origin and decodes it
   legacy.flowOrigin = 'Application';
   assert.equal(boundSessionWire.decodeRemoteBoundSessionSendPayload(legacy).flowOrigin, undefined);
 });
+function physicalFlowRequest(work) {
+ return function (...args) {
+  const entry=args.at(-2),receiver=args.at(-1);
+  void work.apply(this,args).then(value=>receiver.operationCompleted(entry.id,value),error=>receiver.operationFailed(entry.id,error));
+  return entry.promise;
+ };
+}
+

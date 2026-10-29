@@ -1,3 +1,4 @@
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import type { ZLinkRequestResult } from '../messaging/request-result';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendSpot } from '../backend/contracts';
@@ -37,6 +38,7 @@ export interface ZLinkActorRoutedJoinTransport {
     request: Message,
     options: {
       readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onAdmitted?: () => void;
     }
@@ -47,9 +49,11 @@ export interface ZLinkActorRoutedJoinTransport {
     options: {
       readonly packetName?: string;
       readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onAdmitted?: () => void;
-    }
+    },
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<TReply>;
   requestFromSpotToSpot?<TReply = unknown>(
     sourceSpot: ZLinkBackendSpot,
@@ -58,9 +62,11 @@ export interface ZLinkActorRoutedJoinTransport {
     options: {
       readonly packetName?: string;
       readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onAdmitted?: () => void;
-    }
+    },
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<TReply>;
   requestRawFromSpotToSpot?(
     sourceSpot: ZLinkBackendSpot,
@@ -68,6 +74,7 @@ export interface ZLinkActorRoutedJoinTransport {
     request: Message,
     options: {
       readonly timeoutMs?: number;
+      readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onAdmitted?: () => void;
     }
