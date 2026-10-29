@@ -211,7 +211,9 @@ export class ZLinkMessageFlowTracer {
     if (MESSAGE_FLOW_MODE_RANK[mode] < MESSAGE_FLOW_MODE_RANK[requiredMode(outcome, result)]) {
       return undefined;
     }
-    const samplingFlowId = flowId ?? currentFlowContext()?.flowId;
+    const samplingFlowId = messageFlowTracingEnabled(mode)
+      ? (flowId ?? currentFlowContext()?.flowId)
+      : undefined;
     if (!this.acceptsSample(outcome, result, samplingFlowId, sourceMeshGeneration)) {
       return undefined;
     }
@@ -244,8 +246,9 @@ export class ZLinkMessageFlowTracer {
       MESSAGE_FLOW_MODE_RANK[requiredMode(flowInput.outcome, flowInput.result)]
     )
       return;
-    const ambient = currentFlowContext();
-    const flowId = flowInput.flowId ?? ambient?.flowId;
+    const tracingEnabled = messageFlowTracingEnabled(effectiveMode);
+    const ambient = tracingEnabled ? currentFlowContext() : undefined;
+    const flowId = tracingEnabled ? (flowInput.flowId ?? ambient?.flowId) : undefined;
     if (
       !this.acceptsSample(
         flowInput.outcome,
@@ -264,12 +267,21 @@ export class ZLinkMessageFlowTracer {
     acceptedFlowId?: string,
     acceptedFlowOrigin?: ZLinkFlowOrigin
   ): void {
-    const ambient = currentFlowContext();
-    const flowId = flowInput.flowId ?? acceptedFlowId ?? ambient?.flowId;
-    const flowOrigin = flowInput.flowOrigin ?? acceptedFlowOrigin ?? ambient?.flowOrigin;
+    const tracingEnabled = messageFlowTracingEnabled(effectiveMode);
+    const ambient = tracingEnabled ? currentFlowContext() : undefined;
+    const flowId = tracingEnabled
+      ? (flowInput.flowId ?? acceptedFlowId ?? ambient?.flowId)
+      : undefined;
+    const flowOrigin = tracingEnabled
+      ? (flowInput.flowOrigin ?? acceptedFlowOrigin ?? ambient?.flowOrigin)
+      : undefined;
     const flow: MessageFlowInput = {
       ...flowInput,
-      ...(flowId === undefined ? {} : { flowId, flowOrigin }),
+      ...(tracingEnabled
+        ? flowId === undefined
+          ? {}
+          : { flowId, flowOrigin }
+        : { flowId: undefined, flowOrigin: undefined }),
       streamSessionId: flowInput.streamSessionId ?? ambient?.streamSessionId,
       effectiveMode
     };
