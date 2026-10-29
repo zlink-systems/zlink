@@ -112,7 +112,7 @@ class message_flow_tracer_t
         try {
             auto event = build_event ();
             event.result = result;
-            stamp_flow (event);
+            stamp_flow (event, effective_mode);
             emit (std::move (event), effective_mode);
         }
         catch (...) {
@@ -150,7 +150,7 @@ class message_flow_tracer_t
         // (e.g. bad_alloc) never terminates this noexcept tracing call.
         try {
             auto event = build_event ();
-            stamp_flow (event);
+            stamp_flow (event, effective_mode);
             emit (std::move (event), effective_mode);
         }
         catch (...) {
@@ -174,7 +174,7 @@ class message_flow_tracer_t
             return;
         try {
             auto event = build_event ();
-            stamp_flow (event);
+            stamp_flow (event, effective_mode);
             emit (std::move (event), effective_mode);
         }
         catch (...) {
@@ -193,7 +193,7 @@ class message_flow_tracer_t
         if (rank (effective_mode) < rank (required) || !has_sink ()) {
             return;
         }
-        stamp_flow (event);
+        stamp_flow (event, effective_mode);
         if (event.outcome != message_flow_outcome_t::dropped
             && event.outcome != message_flow_outcome_t::backpressured
             && (!event.result || *event.result == message_flow_result_t::succeeded)
@@ -262,8 +262,13 @@ class message_flow_tracer_t
 
     /* Fills the optional flow pair from the ambient context when the caller
      * did not carry it (flow-correlation §8: both or neither). */
-    static void stamp_flow (message_flow_event_t &event)
+    static void stamp_flow (message_flow_event_t &event, message_flow_log_mode_t effective_mode)
     {
+        if (!runtime::flow_context_t::tracing (effective_mode)) {
+            event.flow_id.reset ();
+            event.flow_origin.reset ();
+            return;
+        }
         if (!event.stream_session_id) {
             if (const auto &flow = runtime::flow_context_t::current ();
                 flow && flow->stream_session_id)
