@@ -8,27 +8,67 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
     @Test
     void topologyAdmissionRejectionSignalsTheTargetObserverOnce() throws Exception {
+        var localRid = RoutingId.from("rejected-observer");
+        var peerRid = RoutingId.from("rejected-peer");
+        var ioDeadline = Duration.ofSeconds(1);
+        var wire = new ZLinkServiceM6AWireCodec();
         try (var context = Zlink.createContext();
-                var source = new ZLinkJavaRawMeshNode(context, "mesh")) {
-            start(source, "rejected-observer");
-            var peerRid = RoutingId.from("rejected-peer");
-            // The direct admission fixture represents a record on the selected route.
-            var routesField = ZLinkJavaRawMeshNode.class.getDeclaredField("selectedRoutes");
-            routesField.setAccessible(true);
-            routesField.set(source, java.util.Map.of(peerRid, 0L));
-            var descriptorField = ZLinkJavaRawMeshNode.class.getDeclaredField("localDescriptor");
-            descriptorField.setAccessible(true);
-            var local = (ZLinkServiceNodeDescriptor) descriptorField.get(source);
+                var localPort = new ZLinkJavaRawServicePort(context);
+                var peerPort = new ZLinkJavaRawServicePort(context)) {
+            var localRouter = localPort.openRouter(localRid);
+            var peerRouter = peerPort.openRouter(peerRid);
+            localRouter.options().probe(true);
+            peerRouter.options().probe(true);
+            var endpoint = "inproc://rejected-observer-" + System.nanoTime();
+            localRouter.bind(endpoint);
+            peerRouter.connect(endpoint);
+            localPort.ensureReceivePollerRegistered(localRouter);
+            peerPort.ensureReceivePollerRegistered(peerRouter);
+            long routeDeadline = System.nanoTime() + ioDeadline.toNanos();
+            var routes = localPort.routesSnapshot(localRouter);
+            while (routes.stream().noneMatch(route -> route.routingId().equals(peerRid))
+                    && System.nanoTime() < routeDeadline) {
+                Thread.onSpinWait();
+                routes = localPort.routesSnapshot(localRouter);
+            }
+            long generation =
+                    routes.stream()
+                            .filter(route -> route.routingId().equals(peerRid))
+                            .findFirst()
+                            .orElseThrow(() -> new AssertionError("expected Core selected route"))
+                            .routeGeneration();
+            var local =
+                    new ZLinkServiceNodeDescriptor(
+                            "mesh",
+                            localRid,
+                            1,
+                            1,
+                            endpoint,
+                            List.of(),
+                            ZLinkServiceNodeDescriptor.State.SERVING,
+                            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                            1,
+                            List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                            ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
+                            1,
+                            1,
+                            100,
+                            0,
+                            0);
             var peer =
                     new ZLinkServiceNodeDescriptor(
                             "another-mesh",
@@ -47,70 +87,91 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                             local.pendingCapacityLimit(),
                             local.activeCapacityUsed(),
                             local.pendingCapacityUsed());
-            var observer =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "onPeerStateChanged", RoutingId.class, Runnable.class, Runnable.class);
-            observer.setAccessible(true);
-            var admission =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "dispatchAdmission", ZLinkJavaRawServicePort.Inbound.class, int.class);
-            admission.setAccessible(true);
-            var laneField = ZLinkJavaRawMeshNode.class.getDeclaredField("descriptorStateLane");
-            laneField.setAccessible(true);
-            var lane =
-                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                            laneField.get(source);
-            var observed = new AtomicInteger();
-            var initial = new CompletableFuture<Void>();
-            var rejected = new CompletableFuture<Void>();
-            try (var registration =
-                    (AutoCloseable)
-                            observer.invoke(
-                                    source,
-                                    peerRid,
-                                    (Runnable)
-                                            () -> {
-                                                if (observed.incrementAndGet() == 1)
-                                                    initial.complete(null);
-                                                else rejected.complete(null);
-                                            },
-                                    (Runnable) () -> {})) {
-                initial.get(1, TimeUnit.SECONDS);
-                int hello = ServiceWireConstants.COMMAND_HELLO;
-                var wire =
-                        new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceM6AWireCodec();
-                try (var inbound =
-                        new ZLinkJavaRawServicePort.Inbound(
+            var topology = new ZLinkServiceTopologyRegistry(local, localPort.stateLane());
+            try (var source =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "mesh",
+                            localPort,
+                            localRouter,
+                            local,
+                            topology,
+                            Map.of(peerRid, generation),
+                            Runnable::run)) {
+                var observed = new AtomicInteger();
+                var initial = new CompletableFuture<Void>();
+                var rejected = new CompletableFuture<Void>();
+                try (var registration =
+                        source.onPeerStateChanged(
                                 peerRid,
-                                null,
-                                java.util.List.of(wire.encodeAdmission(hello, peer)),
-                                new systems.zlink.contracts.messaging.Received())) {
-                    lane.runAsync(
-                                    () -> {
-                                        try {
-                                            admission.invoke(source, inbound, hello);
-                                        } catch (ReflectiveOperationException failure) {
-                                            throw new CompletionException(failure);
-                                        }
-                                        return null;
-                                    })
-                            .toCompletableFuture()
-                            .get(1, TimeUnit.SECONDS);
-                    rejected.get(1, TimeUnit.SECONDS);
-                    lane.runAsync(
-                                    () -> {
-                                        try {
-                                            admission.invoke(source, inbound, hello);
-                                        } catch (ReflectiveOperationException failure) {
-                                            throw new CompletionException(failure);
-                                        }
-                                        return null;
-                                    })
-                            .toCompletableFuture()
-                            .get(1, TimeUnit.SECONDS);
-                    lane.runAsync(() -> null).toCompletableFuture().get(1, TimeUnit.SECONDS);
-                    assertEquals(2, observed.get());
+                                () -> {
+                                    if (observed.incrementAndGet() == 1) initial.complete(null);
+                                    else rejected.complete(null);
+                                },
+                                () -> {})) {
+                    initial.get(1, TimeUnit.SECONDS);
+                    assertEquals(1, observed.get());
+                    for (int attempt = 0; attempt < 2; attempt++) {
+                        peerPort.send(
+                                        peerRouter,
+                                        localRid,
+                                        List.of(
+                                                wire.encodeAdmission(
+                                                        ServiceWireConstants.COMMAND_HELLO, peer)))
+                                .toCompletableFuture()
+                                .get(1, TimeUnit.SECONDS);
+                        long helloDeadline = System.nanoTime() + ioDeadline.toNanos();
+                        while (true) {
+                            long remaining = helloDeadline - System.nanoTime();
+                            assertTrue(remaining > 0, "expected HELLO before deadline");
+                            assertTrue(
+                                    localPort.waitForReadable(
+                                            localRouter, Duration.ofNanos(remaining)));
+                            var inbound = localPort.receive(localRouter);
+                            assertNotNull(inbound);
+                            if (inbound.frames().getFirst().length == 0) {
+                                inbound.close();
+                                continue;
+                            }
+                            try {
+                                assertEquals(peerRid, inbound.source());
+                                assertEquals(generation, inbound.routeGeneration());
+                                assertEquals(
+                                        ServiceWireConstants.COMMAND_HELLO,
+                                        wire.decodeHeader(inbound.frames().getFirst()).command());
+                            } catch (Throwable failure) {
+                                inbound.close();
+                                throw failure;
+                            }
+                            source.dispatch(inbound);
+                            break;
+                        }
+                        long rejectDeadline = System.nanoTime() + ioDeadline.toNanos();
+                        while (true) {
+                            long remaining = rejectDeadline - System.nanoTime();
+                            assertTrue(remaining > 0, "expected REJECT before deadline");
+                            assertTrue(
+                                    peerPort.waitForReadable(
+                                            peerRouter, Duration.ofNanos(remaining)));
+                            try (var rejection = peerPort.receive(peerRouter)) {
+                                assertNotNull(rejection);
+                                if (rejection.frames().getFirst().length == 0) continue;
+                                assertEquals(localRid, rejection.source());
+                                assertEquals(1, rejection.frames().size());
+                                assertEquals(
+                                        ServiceWireConstants.COMMAND_REJECT,
+                                        wire.decodeHeader(rejection.frames().getFirst()).command());
+                                wire.decodeReject(rejection.frames().getFirst());
+                                break;
+                            }
+                        }
+                        if (attempt == 0) rejected.get(1, TimeUnit.SECONDS);
+                        assertTrue(topology.peer(peerRid).isEmpty());
+                        assertFalse(topology.isReady(peerRid));
+                        assertEquals(0, source.readyPeerCount());
+                        // The rejection branch gates publication with rejectedPeers.add;
+                        // this count observation is not a fence for every async callback.
+                        assertEquals(2, observed.get());
+                    }
                 }
             }
         }

@@ -38,6 +38,52 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
         verify(false, true);
     }
 
+    @Test
+    void closeRemovesAllAdmissionsReadinessLivenessAndChannelTargets() throws Exception {
+        try (var context = Zlink.createContext()) {
+            var port = new ZLinkJavaRawServicePort(context);
+            var local = descriptor(RoutingId.from("close-local"));
+            var topology = new ZLinkServiceTopologyRegistry(local, port.stateLane());
+            try (var node =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "liveness-close",
+                            port,
+                            null,
+                            local,
+                            topology,
+                            java.util.Map.of(),
+                            Runnable::run)) {
+                var liveness = node.livenessForTest();
+                var channels = List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 1));
+                var peers = List.of(RoutingId.from("close-a"), RoutingId.from("close-b"));
+                for (var peer : peers) {
+                    assertEquals(
+                            ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                            topology.admit(
+                                    descriptor(peer, channels),
+                                    "route:" + peer,
+                                    ServiceWireConstants.COMMAND_ADMIT));
+                    topology.bindLiveness(peer, liveness.admit(peer, "route:" + peer, 0));
+                    assertTrue(topology.isReady(peer));
+                }
+                assertTrue(topology.selectChannel("orders").isPresent());
+                assertTrue(topology.selectReadyChannel("orders").isPresent());
+                assertEquals(2, liveness.size());
+
+                node.close();
+
+                assertTrue(topology.peers().isEmpty());
+                for (var peer : peers) {
+                    assertFalse(topology.isReady(peer));
+                }
+                assertEquals(0, liveness.size());
+                assertTrue(topology.selectChannel("orders").isEmpty());
+                assertTrue(topology.selectReadyChannel("orders").isEmpty());
+                assertTrue(node.peers().isEmpty());
+            }
+        }
+    }
+
     private static void verify(boolean receive, boolean replacement) throws Exception {
         var local = RoutingId.from("liveness-local");
         var peer = RoutingId.from("liveness-peer");
@@ -113,13 +159,18 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
     }
 
     private static ZLinkServiceNodeDescriptor descriptor(RoutingId rid) {
+        return descriptor(rid, List.of());
+    }
+
+    private static ZLinkServiceNodeDescriptor descriptor(
+            RoutingId rid, List<ZLinkServiceNodeDescriptor.Channel> channels) {
         return new ZLinkServiceNodeDescriptor(
                 "liveness-close",
                 rid,
                 1,
                 1,
                 "inproc://" + rid,
-                List.of(),
+                channels,
                 ZLinkServiceNodeDescriptor.State.SERVING,
                 "test-security",
                 1,

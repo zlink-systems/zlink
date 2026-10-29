@@ -1,3 +1,4 @@
+const { createRelayMeshHost } = require('./fixtures/relay-host');
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -9,8 +10,8 @@ function scenario(t, ownerUsable) {
   const registration = framework.createFrameworkRegistrationWithBuilder(builder => {
     builder.addRouteMesh('mesh').objects().server();
   });
-  const host = new framework.ZLinkFrameworkRuntimeHost({ registration });
-  host.admission.register('mesh');
+  const { host, admission, relay, meshRuntime } = createRelayMeshHost({ registration });
+  admission.register('mesh');
   let ownerReads = 0;
   let dispatched = 0;
   host.locationOwner.runtime = {
@@ -24,10 +25,11 @@ function scenario(t, ownerUsable) {
     canDispatchLocalMeshRoute: () => true,
     dispatchLocalMeshRoute: dispatch
   };
-  host.setSpotManager({ dispatchMeshActor: dispatchAdmitted, dispatchMeshInstance: dispatchAdmitted });
+  const spotManager = { dispatchMeshActor: dispatchAdmitted, dispatchMeshInstance: dispatchAdmitted };
+  host.setSpotManager(spotManager);
   t.mock.method(host.serviceRelocation, 'tryHandleControl', () => false);
   t.mock.method(host, 'dispatchMeshSpotRecord', dispatchAdmitted);
-  return { host, ownerReads: () => ownerReads, dispatched: () => dispatched, setOwnerUsable: value => { ownerUsable = value; } };
+  return { host, admission, relay, meshRuntime, spotManager, ownerReads: () => ownerReads, dispatched: () => dispatched, setOwnerUsable: value => { ownerUsable = value; } };
 }
 
 const directKinds = ['NodeSend', 'NodeRequest', 'ChannelSend', 'ChannelRequest'];
@@ -42,8 +44,8 @@ for (const kind of directKinds) {
       }
       assert.equal(s.dispatched(), 4);
       assert.equal(s.ownerReads(), 0);
-      assert.equal(s.host.admission.pending('mesh'), 0);
-      s.host.admission.seal('mesh');
+      assert.equal(s.admission.pending('mesh'), 0);
+      s.admission.seal('mesh');
       await assert.rejects(s.host.dispatchMeshRecord(() => 'remote', 'mesh', {}, {
         kind: framework.ReceiveKind[kind], domain: framework.ReadyDomain.Application, parts: []
       }), /admission is closed/u);
@@ -61,13 +63,13 @@ for (const kind of ['ActorSend', 'ActorRequest', 'SpotSend', 'SpotRequest', 'Spo
     }), /admission is closed/u);
     assert.equal(s.dispatched(), 0);
     assert(s.ownerReads() > 0);
-    assert.equal(s.host.admission.pending('mesh'), 0);
+    assert.equal(s.admission.pending('mesh'), 0);
   });
 }
 
 test('infrastructure Node dispatch remains independent of owner admission and mesh seal', async t => {
   const s = scenario(t, false);
-  s.host.admission.seal('mesh');
+  s.admission.seal('mesh');
   await s.host.dispatchMeshRecord(() => 'remote', 'mesh', {}, {
     kind: framework.ReceiveKind.NodeSend, domain: framework.ReadyDomain.Infrastructure, parts: []
   });
@@ -89,13 +91,13 @@ test('local Node submit skips Location owner and still obeys mesh seal', async t
   }));
   assert.equal(s.host.submitLocalMeshRoute('mesh', 'source', []).status,
     ZLinkSubmitStatus.Submitted);
-  assert.equal(s.host.admission.pending('mesh'), 1);
+  assert.equal(s.admission.pending('mesh'), 1);
   await tasks.shift()();
   assert.equal(s.dispatched(), 1);
   assert.equal(released, 1);
-  assert.equal(s.host.admission.pending('mesh'), 0);
+  assert.equal(s.admission.pending('mesh'), 0);
   assert.equal(s.ownerReads(), 0);
-  s.host.admission.seal('mesh');
+  s.admission.seal('mesh');
   assert.equal(s.host.submitLocalMeshRoute('mesh', 'source', []).status,
     ZLinkSubmitStatus.Shutdown);
   assert.equal(tasks.length, 0);
@@ -151,7 +153,7 @@ async function actorEndpoint(t, s, entry) {
       resolveJoinedActor: () => actor,
       executeActor: (_id, operation) => operation(serial)
     };
-    const coordinator = new framework.ZLinkSpotActorAdmissionCoordinator({ admission: s.host.admission });
+    const coordinator = new framework.ZLinkSpotActorAdmissionCoordinator({ admission: s.admission });
     dispatch = (...args) => coordinator.dispatchActorPacketDirect(args[0], activation, ...args.slice(1));
     execute = operation => serial.execute(operation);
     admissionExecutor = serial;
@@ -185,8 +187,8 @@ for (const entry of [true, false]) {
       const s = scenario(t, ownerUsable);
       const endpoint = await actorEndpoint(t, s, entry);
       s.host.setActorManager({ getState: () => entry ? undefined : { spotId: 'room' } });
-      s.host.spotNodeRuntime = { dispatchEntryActorPacket: endpoint.dispatch };
-      s.host.spotManager.dispatchRoutedActorPacket = (origin, _spot, ...args) => endpoint.dispatch(origin, ...args);
+      s.meshRuntime.dispatchEntryActorPacket = endpoint.dispatch;
+      s.spotManager.dispatchRoutedActorPacket = (origin, _spot, ...args) => endpoint.dispatch(origin, ...args);
       const parts = actorParts();
       const payload = relayWire.encodeRemoteActorPacketRelayPayload({
         actorId: 'actor', header: parts[0].data(), payload: parts[1].data(), returnResponse: true
@@ -194,7 +196,7 @@ for (const entry of [true, false]) {
       parts.forEach(part => part.close());
       let result;
       s.host.channelRuntime.dispatchMeshRoute = (_mesh, _record, _signal, admit) => admit(async () => {
-        result = await s.host.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(payload, {
+        result = await s.relay.actorPackets.receiveRemoteActorPacketRelay(payload, {
           meshName: 'mesh', sourceNodeRid: 'source'
         });
       });
@@ -204,7 +206,7 @@ for (const entry of [true, false]) {
       assert.equal(result.ok, ownerUsable);
       assert.equal(endpoint.actorCalls(), ownerUsable ? 1 : 0);
       assert.equal(s.ownerReads(), 1);
-      assert.equal(s.host.admission.pending('mesh'), 0);
+      assert.equal(s.admission.pending('mesh'), 0);
     });
   }
   for (const closeOwner of [true, false]) {
@@ -226,7 +228,7 @@ for (const entry of [true, false]) {
         await queued;
         assert.equal(endpoint.actorCalls(), 0);
         if (closeOwner) s.setOwnerUsable(false);
-        else s.host.admission.seal('mesh');
+        else s.admission.seal('mesh');
         release();
         if (closeOwner) await assert.rejects(pending, /owner admission is closed/u);
         else assert.equal(await pending, 'reply');
@@ -256,7 +258,7 @@ test('Actor relay bind acknowledgement stays independent of owner lease', async 
     }),
     payload: relayWire.encodeRemoteActorSessionBinding({ sessionNodeRid: 'source', sessionRid: 'session' })
   });
-  const result = await s.host.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(payload, {
+  const result = await s.relay.actorPackets.receiveRemoteActorPacketRelay(payload, {
     meshName: 'mesh', sourceNodeRid: 'source'
   });
   assert.equal(result.ok, true);
@@ -265,10 +267,10 @@ test('Actor relay bind acknowledgement stays independent of owner lease', async 
 
 test('Actor relay disconnect cleanup survives expired owner and mesh seal', async t => {
   const s = scenario(t, false);
-  s.host.admission.seal('mesh');
+  s.admission.seal('mesh');
   s.host.setActorManager({ getState: () => undefined });
   let disconnects = 0;
-  s.host.spotNodeRuntime = { dispatchEntryActorPacket: async () => { disconnects++; } };
+  s.meshRuntime.dispatchEntryActorPacket = async () => { disconnects++; };
   const payload = relayWire.encodeRemoteActorPacketRelayPayload({
     actorId: 'actor',
     header: protocol.encodeStreamHeader({
@@ -280,7 +282,7 @@ test('Actor relay disconnect cleanup survives expired owner and mesh seal', asyn
     }),
     payload: Buffer.alloc(0)
   });
-  const result = await s.host.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(payload, {
+  const result = await s.relay.actorPackets.receiveRemoteActorPacketRelay(payload, {
     meshName: 'mesh', sourceNodeRid: 'source'
   });
   assert.equal(result.ok, true);

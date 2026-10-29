@@ -208,6 +208,15 @@ TEST (ZLinkStateLane, UncontendedSynchronousTurnDoesNotAllocate)
     EXPECT_EQ (0u, allocations);
 }
 
+TEST (ZLinkStateLane, IdleCloseDoesNotAllocate)
+{
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    EXPECT_EQ (0u, zlink::framework::tests::count_allocations ([&] { lane.close (); }));
+    EXPECT_TRUE (lane.closed ());
+    EXPECT_FALSE (lane.try_post ([] {}));
+}
+
 TEST (ZLinkStateLane, SynchronousTurnPreservesResultLifetimeAndOriginalException)
 {
     offload_executor_t executor (1);
@@ -425,6 +434,8 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
           using namespace zlink::framework::detail;
           constexpr auto completion_timeout = std::chrono::seconds (2);
           auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("cleanup-lane");
+          auto release_workers =
+            test::reserve_single_infrastructure_worker (*runtime::infrastructure_executor ());
           spot_node_runtime_t spots (node);
           node->spot_factories.emplace ("attachment", std::type_index (typeid (void)));
           std::atomic<int> settled{0};
@@ -443,7 +454,7 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
           auto attaching = attachment_started.get_future ();
           std::promise<std::size_t> cleaned;
           auto cleanup = cleaned.get_future ();
-          node->lane_executor.submit ([&] {
+          ::zlink::framework::runtime::infrastructure_executor ()->submit ([&] {
               auto pending = spots.cleanup_expired_actor_admissions_at_async (
                 std::chrono::steady_clock::now (), [&] {
                     // The drain is queued behind this sole worker's continuation.
@@ -473,7 +484,7 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
               std::_Exit (6);
           if (attachment.get ().state != spot_create_state_t::created)
               std::_Exit (7);
-          node->lane_executor.drain ();
+          node->lane.close ();
           std::_Exit (0);
       }()),
       ::testing::ExitedWithCode (0), "");
@@ -627,7 +638,7 @@ TEST (ZLinkStateLaneDeathTest, PreparedSpotPublicationCompletesSameLaneAdmission
           context->spot_serial_executor->close ();
           context->serial_queue->close ();
           node->worker_executor->drain ();
-          node->lane_executor.drain ();
+          node->lane.close ();
           runtime::shutdown_handler_coroutine_executor ();
           std::printf ("Spot admission completed: handlers=%d terminals=%d lane_turns=%d "
                        "callback_depth=%zu\n",
@@ -643,13 +654,15 @@ TEST (ZLinkStateLane, ActorMailboxLookupAndReadyReleaseTheOnlyLaneWorker)
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
     auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("actor-ready-lane");
+    auto release_workers =
+      test::reserve_single_infrastructure_worker (*runtime::infrastructure_executor ());
     spot_node_runtime_t spots (node);
     std::promise<bool> lookup_completed;
     std::promise<bool> ready_completed;
     auto lookup_result = lookup_completed.get_future ();
     auto ready_result = ready_completed.get_future ();
     auto takes = std::make_shared<std::atomic<int>> (0);
-    node->lane_executor.submit ([&] {
+    ::zlink::framework::runtime::infrastructure_executor ()->submit ([&] {
         // The only lane worker still owns this callback. Its posted predecessor
         // cannot drain until both asynchronous lookups have returned to it.
         if (!node->lane.try_post ([] {})) {
@@ -677,7 +690,7 @@ TEST (ZLinkStateLane, ActorMailboxLookupAndReadyReleaseTheOnlyLaneWorker)
     });
     EXPECT_TRUE (lookup_result.get ());
     EXPECT_TRUE (ready_result.get ());
-    node->lane_executor.drain ();
+    node->lane.close ();
     EXPECT_EQ (0, takes->load ());
 }
 
@@ -688,9 +701,11 @@ TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
     auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("mailbox-lifetime");
     auto replacement =
       test::runtime_failure_fixture<spot_node_builder_state_t> ("replacement-lifetime");
+    auto release_workers =
+      test::reserve_single_infrastructure_worker (*runtime::infrastructure_executor ());
     auto scheduler = std::make_shared<test::manual_internal_scheduler_t> ();
-    scheduler->publication_fence (
-      test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     node->worker_executor = scheduler;
     auto spot = std::make_shared<spot_context_state_t> ();
     spot->lane_owner = node;
@@ -714,7 +729,7 @@ TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
     auto lookup_result = lookup_completed.get_future ();
     auto ready_result = ready_completed.get_future ();
     auto takes = std::make_shared<std::atomic<int>> (0);
-    node->lane_executor.submit ([&] {
+    ::zlink::framework::runtime::infrastructure_executor ()->submit ([&] {
         if (!node->lane.try_post ([] {})) {
             lookup_completed.set_value (false);
             ready_completed.set_value (false);
@@ -752,7 +767,7 @@ TEST (ZLinkStateLane, ActorMailboxTasksRetainSubmittedHandleStateAndActorId)
     node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
     spot.reset ();
     scheduler->retire ();
-    node->lane_executor.drain ();
+    node->lane.close ();
 }
 
 TEST (ZLinkStateLane, ActorReadyRevalidationFailureReachesRuntimeCollector)
@@ -810,7 +825,7 @@ TEST (ZLinkStateLane, ActorReadyRevalidationFailureReachesRuntimeCollector)
     spot.reset ();
     serial.reset ();
     scheduler->retire ();
-    node->lane_executor.drain ();
+    node->lane.close ();
 }
 
 TEST (ZLinkStateLane, CallerDrainedTaskDoesNotWaitForUnrelatedExecutorWork)

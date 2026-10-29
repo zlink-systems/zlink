@@ -53,9 +53,7 @@ public final class ZLinkRequestAdmissionAdapterAllocationTest {
     private static void submit(
             Submission submission, BiConsumer<List<Message>, Throwable> terminal) {
         var consumer = new CompletableFuture<Void>();
-        observed =
-                ZLinkJavaSocketSupport.observeReply(
-                        submission, Long.MAX_VALUE, null, consumer, terminal);
+        observed = ZLinkJavaSocketSupport.observeReply(submission, null, consumer, terminal);
         assertEquals(1, submission.admissionReads);
         submission.admitted.complete(null);
         assertTrue(consumer.isDone());

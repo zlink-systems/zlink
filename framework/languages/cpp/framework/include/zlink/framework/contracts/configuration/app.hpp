@@ -14,6 +14,7 @@
 #include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
 #include <zlink/framework/contracts/monitoring/spot_events.hpp>
 
+#include <opentelemetry/metrics/meter_provider.h>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -61,6 +62,8 @@ class app_t
     logging_builder_t &logging () noexcept;
     monitoring_builder_t &monitoring () noexcept;
     health_builder_t &health () noexcept;
+    app_t &use_metric_provider (
+      opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider> provider);
     app_advanced_t advanced () noexcept;
 
     // Synchronous compatibility bridge for set_message_flow_mode_async(). Do not

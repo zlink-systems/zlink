@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/backend/raw_route_port.hpp"
+#include "runtime/foundation/operation_registry.hpp"
 
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
@@ -51,21 +52,13 @@ struct request_submission_stages_t
 {
     std::optional<zlink::async_result_t<void>> admission;
     zlink::async_result_t<std::vector<zlink::message_t>> reply;
-    std::optional<std::chrono::steady_clock::time_point> caller_deadline;
 };
 
-template <typename TSubmit>
-request_submission_stages_t submit_request_once (
-  TSubmit &&submit,
-  std::optional<std::chrono::steady_clock::time_point> caller_deadline = std::nullopt)
+template <typename TSubmit> request_submission_stages_t submit_request_once (TSubmit &&submit)
 {
     auto submission = std::forward<TSubmit> (submit) ();
     auto admission = take_submission_admission (submission);
-    // Core bounds the reply after immediate admission. Only its wait-token
-    // result needs a Framework deadline covering admission and the later reply.
-    if (!admission)
-        caller_deadline.reset ();
-    return {std::move (admission), std::move (submission.reply), caller_deadline};
+    return {std::move (admission), std::move (submission.reply)};
 }
 
 inline result_t<raw_request_completion_t> raw_request_failure_result (
@@ -154,8 +147,18 @@ inline binding_completion_observer_t observe_request_completion (
   request_submission_stages_t stages,
   std::shared_ptr<task_completion_source_t<raw_request_completion_t>> source,
   runtime::mesh::service_liveness_registry_t::connection_t admission = {},
-  std::shared_ptr<task_completion_source_t<void>> admitted = {})
+  std::shared_ptr<task_completion_source_t<void>> admitted = {},
+  std::shared_ptr<runtime::foundation::operation_registry_t> requests = {},
+  runtime::call_id_t id = {})
 {
+    const auto finish = [&] (result_t<raw_request_completion_t> result) {
+        if (requests) {
+            if (requests->unregister (id))
+                source->complete (std::move (result));
+        } else {
+            source->complete (std::move (result));
+        }
+    };
     try {
         std::exception_ptr admission_error;
         if (stages.admission) {
@@ -185,11 +188,11 @@ inline binding_completion_observer_t observe_request_completion (
               runtime::mesh::service_liveness_registry_t::clock_t::now ());
         if (admission_error)
             std::rethrow_exception (admission_error);
-        source->complete (result_t<raw_request_completion_t>::success (
+        finish (result_t<raw_request_completion_t>::success (
           raw_request_completion_t{zlink::request_result_t::ok, std::move (reply)}));
     }
     catch (const std::exception &error) {
-        source->complete (raw_request_failure_result (error));
+        finish (raw_request_failure_result (error));
     }
 }
 

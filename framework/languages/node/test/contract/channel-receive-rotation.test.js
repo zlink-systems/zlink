@@ -13,8 +13,15 @@ test('one readiness reserves one count for two ordinary claims', async t => {
   t.mock.method(performance, 'now', () => 0);
   const queue = queueWithLimit(64);
   const reservations = [];
-  const reserve = queue.reserveSupply.bind(queue);
-  t.mock.method(queue, 'reserveSupply', (count, ...args) => { reservations.push(count); return reserve(count, ...args); });
+  const reserve = queue.tryReserveCount.bind(queue);
+  t.mock.method(queue, 'tryReserveCount', (...args) => {
+    const before = queue.snapshot().reservedSupplyPermits;
+    const result = reserve(...args);
+    if (result !== undefined) {
+      reservations.push(Number(queue.snapshot().reservedSupplyPermits - before));
+    }
+    return result;
+  });
   let claims = 0;
   let beforeSecond;
   let closed = 0;
@@ -163,8 +170,15 @@ test('one remaining permit claims only one ordinary record before another reserv
   const queue = queueWithLimit(2);
   const held = await queue.acquire(undefined, 'local');
   const reservations = [];
-  const reserve = queue.reserveSupply.bind(queue);
-  t.mock.method(queue, 'reserveSupply', (count, ...args) => { reservations.push(count); return reserve(count, ...args); });
+  const reserve = queue.tryReserveCount.bind(queue);
+  t.mock.method(queue, 'tryReserveCount', (...args) => {
+    const before = queue.snapshot().reservedSupplyPermits;
+    const result = reserve(...args);
+    if (result !== undefined) {
+      reservations.push(Number(queue.snapshot().reservedSupplyPermits - before));
+    }
+    return result;
+  });
   const claims = [];
   const f = fixture(queue, ['first', 'second'], { claim(action) { if (action) claims.push([...reservations]); } });
   await f.loop.run();

@@ -45,10 +45,10 @@ class in_memory_location_repository_t : public location_repository_t
     friend struct in_memory_location_repository_test_access_t;
 
   public:
-    in_memory_location_repository_t () : _lane_executor (), _lane (_lane_executor) {}
+    in_memory_location_repository_t () = default;
 
     explicit in_memory_location_repository_t (std::uint64_t initial_store_revision) :
-        _lane_executor (), _lane (_lane_executor), _store_revision (initial_store_revision)
+        _store_revision (initial_store_revision)
     {
     }
 
@@ -2145,7 +2145,6 @@ class in_memory_location_repository_t : public location_repository_t
         }
     }
 
-    runtime::offload_executor_t _lane_executor;
     runtime::state_lane_t _lane;
     std::map<std::string, mesh_node_descriptor_t> _mesh_nodes;
     std::map<std::string, entry_spot_id_claim_t> _entry_spot_id_claims;

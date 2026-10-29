@@ -115,4 +115,7 @@ class offload_executor_t
     std::size_t _idle_workers = 0;
 };
 
+// Runtimes share one process pool and retain it until their lanes have drained.
+std::shared_ptr<offload_executor_t> infrastructure_executor ();
+
 } // namespace zlink::framework::runtime

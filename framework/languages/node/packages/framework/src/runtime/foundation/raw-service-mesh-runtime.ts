@@ -1,4 +1,5 @@
 import type { ZLinkRequestResult } from '../messaging/request-result';
+import { inspectRuntime } from '../internal-observation';
 import { constants as osConstants } from 'node:os';
 import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
 import type {
@@ -187,6 +188,17 @@ interface ControlSendState {
  * It owns protocol, admission, mailbox, request and liveness state.
  */
 export class RawServiceMeshRuntime {
+  [inspectRuntime](nodeRoutingId?: string) {
+    return Object.freeze({
+      pendingControlSends: this.controlSends.size,
+      selectedRouteGeneration:
+        nodeRoutingId === undefined ? undefined : this.selectedRoutes.get(nodeRoutingId),
+      peerRouteObservers: this.peerRouteChanged.size,
+      peerConnectionIntentObservers: this.peerConnectionIntentRemoved.size,
+      expectedPeers: this.expectedPeers.size
+    });
+  }
+
   readonly topology: ServiceTopologyRegistry;
   readonly mailbox: ServiceMailbox;
   readonly liveness: ServiceLivenessRegistry;

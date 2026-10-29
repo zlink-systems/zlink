@@ -512,11 +512,10 @@ public sealed class RequestFailureMappingTests
     public async Task SpotRouteNativeReply_TimeoutDisposesLateOkReply()
     {
         using var completion = new ZLinkNativeReplyCompletion<RequestResult>(
-            CancellationToken.None,
-            TimeSpan.Zero,
-            "route request timed out"
+            CancellationToken.None
         );
 
+        completion.Fail(new TimeoutException("route request timed out"), []);
         await Assert.ThrowsAsync<TimeoutException>(() => completion.Task);
 
         using var lateReply = Message.From("late-route-timeout-reply");

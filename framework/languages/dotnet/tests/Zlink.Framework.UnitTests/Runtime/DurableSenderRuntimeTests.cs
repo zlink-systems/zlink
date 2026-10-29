@@ -13,7 +13,7 @@ public sealed partial class StatefulServiceRuntimeTests
     [InlineData(true, true, true, true, false)]
     [InlineData(false, false, false, false, false)]
     [InlineData(true, true, false, true, true)]
-    public async Task DurableSenderIntentRemovalEndsUnavailableWhilePhysicalDisconnectReplays(
+    public async Task DurableSenderIntentRemovalAndPhysicalDisconnectEndWithoutResubmission(
         bool removeIntent,
         bool removeExpectationFirst,
         bool ownerDisconnects,
@@ -37,26 +37,6 @@ public sealed partial class StatefulServiceRuntimeTests
             completionReady.TrySetResult();
             return domains;
         });
-        if (holdIntentNotification)
-        {
-            // Hold cleanup outside the state turn until the durable owner has
-            // published its terminal. Retirement itself must already be visible.
-            typeof(ZLinkManagedMeshNode)
-                .GetEvent(
-                    "PeerConnectionIntentRemoved",
-                    System.Reflection.BindingFlags.Instance
-                        | System.Reflection.BindingFlags.NonPublic
-                )!
-                .GetAddMethod(nonPublic: true)!
-                .Invoke(
-                    source,
-                    [
-                        new Func<RoutingId, Action?>(_ =>
-                            () => completionReady.Task.WaitAsync(timeout).GetAwaiter().GetResult()
-                        ),
-                    ]
-                );
-        }
         var replySubmissions = 0;
         await using var target = new ZLinkManagedMeshNode(
             context,
@@ -123,6 +103,26 @@ public sealed partial class StatefulServiceRuntimeTests
         );
         await WaitUntilAsync(() => Volatile.Read(ref replySubmissions) == 1);
         Assert.Equal(1, createTarget.CreateCount);
+        if (holdIntentNotification)
+        {
+            // Hold cleanup outside the state turn until the durable owner has
+            // published its terminal. Retirement itself must already be visible.
+            typeof(ZLinkManagedMeshNode)
+                .GetEvent(
+                    "PeerConnectionIntentRemoved",
+                    System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.NonPublic
+                )!
+                .GetAddMethod(nonPublic: true)!
+                .Invoke(
+                    source,
+                    [
+                        new Func<RoutingId, Action?>(_ =>
+                            () => completionReady.Task.WaitAsync(timeout).GetAwaiter().GetResult()
+                        ),
+                    ]
+                );
+        }
         var terminalBeforeRouteLoss = removeExpectationFirst && !ownerDisconnects;
         if (removeExpectationFirst)
         {
@@ -151,7 +151,10 @@ public sealed partial class StatefulServiceRuntimeTests
             target.DisconnectPeer(source.RoutingId);
         await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 0);
         if (!removeIntent && observeExpectation)
-            await WaitUntilAsync(() => deadlineTime.ActiveTimerCount > 0);
+        {
+            // Physical loss completes independently of the frozen owner deadline.
+            Assert.Equal(0, deadlineTime.ActiveTimerCount);
+        }
 
         if (removeIntent)
         {
@@ -177,8 +180,16 @@ public sealed partial class StatefulServiceRuntimeTests
         }
         else
         {
-            Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
+            await completionReady.Task.WaitAsync(timeout);
+            var completion = Assert.Single(
+                DrainRecords(source),
+                record =>
+                    record.OperationId == operation && record.Kind == MeshRecordKind.Completion
+            );
+            Assert.Equal((int)RequestResult.NotConnected, completion.TerminalResult);
         }
+        Assert.Equal(1, Volatile.Read(ref replySubmissions));
+        Assert.Equal(1, createTarget.CreateCount);
         if (ownerDisconnects)
             source.ConnectPeer(targetEndpoint, target.RoutingId);
         else
@@ -186,20 +197,8 @@ public sealed partial class StatefulServiceRuntimeTests
         await WaitUntilAsync(() =>
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
-        if (removeIntent)
-        {
-            Assert.Equal(1, Volatile.Read(ref replySubmissions));
-            Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
-        }
-        else
-        {
-            // Actor model §8.1: the ready transition submits replay without a
-            // retry timer. The controlled clock remains frozen throughout.
-            var (completion, parts) = DrainCompletion(source, operation);
-            ZLinkMessageParts.DisposeAll(parts);
-            Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
-            Assert.Equal(2, Volatile.Read(ref replySubmissions));
-        }
+        Assert.Equal(1, Volatile.Read(ref replySubmissions));
+        Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
         Assert.Equal(1, createTarget.CreateCount);
     }
 
@@ -381,7 +380,8 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(kind, completion.OperationKind);
         var expected = scenario switch
         {
-            "absent" => RequestResult.NotConnected,
+            // §9: deadline before binding starts is still DeadlineExceeded.
+            "absent" => RequestResult.TimedOut,
             "withheld" => RequestResult.TimedOut,
             _ => RequestResult.Ok,
         };
@@ -391,12 +391,7 @@ public sealed partial class StatefulServiceRuntimeTests
             var error = Assert.IsType<ZLinkFrameworkException>(
                 ZLinkRequestFailureMapper.CreateCompletionException(expected, "matrix")
             );
-            Assert.Equal(
-                scenario == "absent"
-                    ? ZLinkFrameworkErrorKind.Unavailable
-                    : ZLinkFrameworkErrorKind.DeadlineExceeded,
-                error.Kind
-            );
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
         }
         else
             Assert.True(Stopwatch.GetElapsedTime(started) < timeout);

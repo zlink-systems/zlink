@@ -24,6 +24,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistryTesting.RegistrationProbe;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -212,16 +213,28 @@ final class ZLinkJavaSubmissionTest {
 
     @ParameterizedTest
     @EnumSource(Adapter.class)
-    void cancellingPendingRequestCancelsBindingWaiterWithoutResubmission(Adapter adapter) {
+    void cancellingPendingRequestRetainsLateReplyProcessingWithoutResubmission(Adapter adapter)
+            throws Exception {
         try (var binding = new BindingProbe();
                 Message part = Message.from("request")) {
             binding.result = SubmitResult.BACKPRESSURED;
             var completion = requestForCancellation(binding, adapter, List.of(part));
             assertTrue(completion.cancel(false));
-            assertTrue(binding.replies.getFirst().isCancelled());
+            var cancellation =
+                    completion.handle((reply, failure) -> failure).get(1, TimeUnit.SECONDS);
+            assertInstanceOf(java.util.concurrent.CancellationException.class, cancellation);
+            assertEquals(0, binding.operations.pendingCount());
+            assertFalse(binding.replies.getFirst().isDone());
             assertEquals(1, binding.submissions);
             binding.admission.complete(null);
+            try (Message late = Message.from("late")) {
+                assertTrue(binding.replies.getFirst().complete(List.of(late)));
+                assertTrue(late.empty());
+            }
+            assertSame(cancellation, completion.handle((reply, failure) -> failure).join());
             assertTrue(completion.isCancelled());
+            assertEquals(1, binding.submissions);
+            assertEquals(0, binding.operations.pendingCount());
         }
     }
 
@@ -244,19 +257,27 @@ final class ZLinkJavaSubmissionTest {
         return adapter == Adapter.SERVICE
                 ? binding.request(adapter, parts).toCompletableFuture()
                 : ZLinkJavaSocketSupport.submitRequest(
-                                binding.requestOperation(), parts, TIMEOUT, null, null)
+                                binding.requestOperation(),
+                                parts,
+                                TIMEOUT,
+                                null,
+                                null,
+                                binding.operations)
                         .toCompletableFuture();
     }
 
     @ParameterizedTest
     @EnumSource(Adapter.class)
-    void lateBindingReplyAfterCallerCancellationClosesItsPayload(Adapter adapter) {
+    void lateBindingReplyAfterCallerCancellationClosesItsPayload(Adapter adapter) throws Exception {
         try (var binding = new BindingProbe();
                 Message part = Message.from("request")) {
             binding.result = SubmitResult.BACKPRESSURED;
             binding.ignoreReplyCancellation = true;
             var completion = requestForCancellation(binding, adapter, List.of(part));
             assertTrue(completion.cancel(false));
+            assertEquals(0, binding.operations.pendingCount());
+            // Observe the dispatched caller terminal before checking its Future cancellation state.
+            completion.handle((reply, failure) -> null).get(1, TimeUnit.SECONDS);
             binding.admission.complete(null);
             try (Message late = Message.from("late")) {
                 assertTrue(binding.replies.getFirst().complete(List.of(late)));
@@ -267,7 +288,7 @@ final class ZLinkJavaSubmissionTest {
     }
 
     @Test
-    void cancelledServiceRequestDiscardsALateDecodedReply() {
+    void cancelledServiceRequestDiscardsALateDecodedReply() throws Exception {
         try (var binding = new BindingProbe();
                 Message part = Message.from("request");
                 Message decoded = Message.from("decoded")) {
@@ -309,6 +330,7 @@ final class ZLinkJavaSubmissionTest {
             try {
                 assertTrue(decoderEntered.await(5, TimeUnit.SECONDS));
                 assertTrue(completion.cancel(false));
+                assertEquals(0, binding.operations.pendingCount());
             } catch (InterruptedException failure) {
                 Thread.currentThread().interrupt();
                 throw new AssertionError(failure);
@@ -317,6 +339,8 @@ final class ZLinkJavaSubmissionTest {
             }
             delivery.join();
             assertTrue(decoded.empty());
+            // Native decode cleanup and caller dispatcher notification are separate events.
+            completion.handle((reply, failure) -> null).get(1, TimeUnit.SECONDS);
             assertTrue(completion.isCancelled());
         }
     }
@@ -437,9 +461,9 @@ final class ZLinkJavaSubmissionTest {
     void onlyBackpressuredSendsRegisterAndRegisterBeforeObservingAdmission(Adapter adapter)
             throws Exception {
         try (var binding = new BindingProbe()) {
-            long before = registrations(binding.operations);
+            long before = binding.registrations.count();
             binding.send(adapter, List.of(Message.from("ok"))).toCompletableFuture().join();
-            assertEquals(before, registrations(binding.operations));
+            assertEquals(before, binding.registrations.count());
             binding.sendFailure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
             try {
                 var rejected = binding.send(adapter, List.of(Message.from("rejected")));
@@ -448,7 +472,7 @@ final class ZLinkJavaSubmissionTest {
             } catch (ZlinkSubmitException expected) {
                 assertSame(binding.sendFailure, expected);
             }
-            assertEquals(before, registrations(binding.operations));
+            assertEquals(before, binding.registrations.count());
             assertEquals(0, binding.operations.pendingCount());
             binding.sendFailure = null;
             binding.result = SubmitResult.BACKPRESSURED;
@@ -457,7 +481,7 @@ final class ZLinkJavaSubmissionTest {
             binding.send(adapter, List.of(Message.from("already admitted")))
                     .toCompletableFuture()
                     .join();
-            assertEquals(before + 1, registrations(binding.operations));
+            assertEquals(before + 1, binding.registrations.count());
             assertEquals(0, binding.operations.pendingCount());
         }
     }
@@ -500,7 +524,7 @@ final class ZLinkJavaSubmissionTest {
                                     assertThrows(CompletionException.class, result::join)
                                             .getCause())
                             .kind());
-            assertEquals(1, registrations(binding.operations));
+            assertEquals(1, binding.registrations.count());
             assertEquals(0, binding.operations.pendingCount());
             binding.admission.completeExceptionally(new IllegalStateException("late failure"));
             assertEquals(
@@ -621,7 +645,15 @@ final class ZLinkJavaSubmissionTest {
     @Test
     void meshAndPortShareExactlyOnePendingSendRegistry() throws Exception {
         try (var binding = new BindingProbe();
-                var mesh = new ZLinkJavaRawMeshNode(binding.context, "pending-send-mesh")) {
+                var mesh =
+                        ZLinkJavaRawMeshNodeTesting.create(
+                                "pending-send-mesh",
+                                binding.port,
+                                null,
+                                null,
+                                null,
+                                java.util.Map.of(),
+                                Runnable::run)) {
             binding.result = SubmitResult.BACKPRESSURED;
             var portField = ZLinkJavaRawMeshNode.class.getDeclaredField("port");
             portField.setAccessible(true);
@@ -629,13 +661,14 @@ final class ZLinkJavaSubmissionTest {
             var operationsField = ZLinkJavaRawMeshNode.class.getDeclaredField("operations");
             operationsField.setAccessible(true);
             var registry = (ZLinkServiceOperationRegistry) operationsField.get(mesh);
+            var registrations = binding.registrations;
             var portOperations = ZLinkJavaRawServicePort.class.getDeclaredField("operations");
             portOperations.setAccessible(true);
             assertSame(registry, portOperations.get(meshPort));
             var socket = meshPort.openRouter(RoutingId.from("mesh-source"));
             var send = meshPort.sendMessages(socket, TARGET, List.of(Message.from("pending")));
             assertEquals(1, registry.pendingCount());
-            assertEquals(1, registrations(registry));
+            assertEquals(1, registrations.count());
             mesh.close();
             var failure =
                     assertThrows(CompletionException.class, () -> send.toCompletableFuture().join())
@@ -650,18 +683,6 @@ final class ZLinkJavaSubmissionTest {
                             .getCause());
             assertEquals(0, registry.pendingCount());
         }
-    }
-
-    private static long registrations(ZLinkServiceOperationRegistry registry) throws Exception {
-        var slotsField = ZLinkServiceOperationRegistry.class.getDeclaredField("slots");
-        slotsField.setAccessible(true);
-        long count = 0;
-        for (var entry : (Object[]) slotsField.get(registry)) {
-            var generation = entry.getClass().getDeclaredField("generation");
-            generation.setAccessible(true);
-            count += generation.getLong(entry);
-        }
-        return count;
     }
 
     private static void await(CountDownLatch latch) {
@@ -691,9 +712,10 @@ final class ZLinkJavaSubmissionTest {
         private int submissions;
         private final systems.zlink.framework.runtime.internal.execution.ZLinkStateLane lane =
                 new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane();
-        private final ZLinkServiceOperationRegistry operations =
-                new ZLinkServiceOperationRegistry(
-                        ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+        private final RegistrationProbe registrations =
+                new RegistrationProbe(
+                        lane, ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+        private final ZLinkServiceOperationRegistry operations = registrations.registry();
         private final ZLinkJavaRawServicePort port;
         private final RouterSocket router;
         private final Context context;
@@ -745,7 +767,7 @@ final class ZLinkJavaSubmissionTest {
                         null);
             }
             return ZLinkJavaSocketSupport.submitRequest(
-                            requestOperation(), messages, TIMEOUT, null, null)
+                            requestOperation(), messages, TIMEOUT, null, null, operations)
                     .thenApply(
                             reply -> {
                                 try (reply) {
@@ -801,7 +823,12 @@ final class ZLinkJavaSubmissionTest {
 
                         @Override
                         public RequestSubmitOperation timeout(Duration timeout) {
-                            assertEquals(TIMEOUT, timeout);
+                            assertTrue(
+                                    timeout.compareTo(Duration.ZERO) > 0,
+                                    "binding receives a positive remaining request budget");
+                            assertTrue(
+                                    timeout.compareTo(TIMEOUT) <= 0,
+                                    "binding budget must not exceed the original request timeout");
                             return this;
                         }
 

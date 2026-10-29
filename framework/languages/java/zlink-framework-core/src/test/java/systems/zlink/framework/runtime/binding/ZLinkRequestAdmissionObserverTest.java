@@ -62,7 +62,6 @@ final class ZLinkRequestAdmissionObserverTest {
                         reply,
                         ZLinkJavaSocketSupport.observeReply(
                                 submission,
-                                Long.MAX_VALUE,
                                 null,
                                 consumer,
                                 (parts, failure) -> terminals.incrementAndGet()));

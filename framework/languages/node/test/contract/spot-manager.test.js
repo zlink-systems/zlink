@@ -1159,7 +1159,7 @@ test('Instance context close returns after activation completion', async () => {
   assert.equal(durableCloseCalls, 0);
   assert.deepEqual(events, ['close-returned', 'wait-for-terminal']);
 
-  const activation = manager.activations.activationForClose('test.mesh', spotId);
+  const activation = manager.resolveRelocationActivation('test.mesh', spotId);
   const laterLifecycle = activation.serial.executeLifecycleOperation(() => {
     events.push('later-lifecycle');
   });
@@ -1196,7 +1196,7 @@ test('Spot Close retains its lifecycle item until a failed authority decision se
     }
   });
   await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
-  const activation = manager.activations.activationForClose('test.mesh', spotId);
+  const activation = manager.resolveRelocationActivation('test.mesh', spotId);
   const close = manager.close('test.mesh', spotId);
   await enteredAuthority.promise;
   const laterLifecycle = activation.serial.executeLifecycleOperation(() => {
@@ -1468,7 +1468,7 @@ test('Relocation seal prevents Close CAS and preserves admission', async () => {
     beginInstanceClosingAuthority: async () => { authorityCalls++; throw new Error('unexpected CAS'); }
   });
   await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
-  const activation = manager.activations.activationForClose('test.mesh', spotId);
+  const activation = manager.resolveRelocationActivation('test.mesh', spotId);
   const relocationSeal = activation.sealExecution();
   await assert.rejects(
     () => manager.close('test.mesh', spotId),
@@ -1497,7 +1497,7 @@ test('Close invokes OnClosing after a yielded continuation finishes', async () =
     }
   });
   await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
-  const activation = manager.activations.activationForClose('test.mesh', spotId);
+  const activation = manager.resolveRelocationActivation('test.mesh', spotId);
   const turn = activation.serial.execute(async () => {
     entered.resolve();
     await activation.serial.yieldPromise(release.promise);
@@ -1539,7 +1539,7 @@ test('OnClosing receives NotFound for later lifecycle work while Close keeps its
     }
   });
   await manager.materializeInstance('test.mesh', 'test', spotId, 1n);
-  activation = manager.activations.activationForClose('test.mesh', spotId);
+  activation = manager.resolveRelocationActivation('test.mesh', spotId);
   assert.equal(await manager.close('test.mesh', spotId), true);
   assert.equal((await laterLifecycle).kind, framework.ZLinkFrameworkErrorKind.NotFound);
   assert.deepEqual(events, [
@@ -3914,10 +3914,6 @@ test('formal Actor Join runtime port preserves fixture order through target Read
 
   const events = [];
   const detached = [];
-  let observeJoinedCallback;
-  const joinedCallbackObserved = new Promise((resolve) => {
-    observeJoinedCallback = resolve;
-  });
   class PlayerActor {
     constructor() {
       this.actorId = 'player-1';
@@ -3980,7 +3976,6 @@ test('formal Actor Join runtime port preserves fixture order through target Read
     async onJoinedActor(joinedActor) {
       assert.equal(joinedActor, actor);
       events.push('joined-callback-completed');
-      observeJoinedCallback();
     }
   }
   class SavedHandler {
@@ -4094,14 +4089,12 @@ test('formal Actor Join runtime port preserves fixture order through target Read
     assert.equal(detached.length, 1);
     assert.match(detached[0].name, /target commit/);
     const targetCommit = detached[0].callback();
-    const joinedBeforeSourceLeaveSubmission = await Promise.race([
-      joinedCallbackObserved.then(() => true),
-      new Promise((resolve) => setImmediate(() => resolve(false)))
-    ]);
-    assert.equal(
-      joinedBeforeSourceLeaveSubmission,
-      true,
-      `OnJoinedActor must complete before the source leave submission fence; observed ${events.join(' -> ')}`
+    // The source leave terminal below is completed by the test itself, so OnJoinedActor must
+    // complete without it. Wait for that completion rather than a single event-loop turn.
+    await waitFor(
+      () => events.includes('joined-callback-completed'),
+      undefined,
+      () => `OnJoinedActor must complete before the source leave submission fence; observed ${events.join(' -> ')}`
     );
     assert.equal(events.includes('public-join-completed'), false);
     assert.equal(
@@ -5374,7 +5367,7 @@ test('HostShutdown closes occupied User and Instance scopes with membership visi
   });
   await manager.create('test.mesh', OccupiedSpot);
   await manager.materializeInstance('test.mesh', 'occupied', zlink.RoutingId.from('occupied-instance'));
-  for (const activation of manager.activations.activeActivations()) {
+  for (const activation of manager.relocationActivations('test.mesh')) {
     activation.commitActorJoin(actor);
     activations.set(String(activation.spotId), activation);
     const close =

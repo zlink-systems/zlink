@@ -145,6 +145,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_disconnect_progress
   ${INTEGRATION_TEST_ROOT}/test_phase3_completion_contract
   ${INTEGRATION_TEST_ROOT}/test_phase3_request_reply_contract
+  ${INTEGRATION_TEST_ROOT}/test_reply_before_pair_term
   ${INTEGRATION_TEST_ROOT}/test_request_reply_part_count_boundary
   ${INTEGRATION_TEST_ROOT}/test_request_writable_contract
   ${INTEGRATION_TEST_ROOT}/test_writable_resubmit_from_other_thread_while_sequence_open

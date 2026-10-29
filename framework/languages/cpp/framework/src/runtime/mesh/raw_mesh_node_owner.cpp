@@ -9,6 +9,7 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include <zlink/framework/contracts/configuration/mesh_node.hpp>
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
@@ -34,8 +35,6 @@
 #include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
 
-#include <boost/asio/steady_timer.hpp>
-#include <boost/asio/system_executor.hpp>
 
 #include <nlohmann/json.hpp>
 #include <opentelemetry/metrics/provider.h>
@@ -47,10 +46,18 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
-#include <stop_token>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+namespace zlink::framework::detail
+{
+std::uint64_t next_connection_intent_id ()
+{
+    static std::atomic_uint64_t next{1};
+    return next.fetch_add (1, std::memory_order_relaxed);
+}
+}
 
 namespace zlink::framework::runtime::mesh
 {
@@ -164,21 +171,25 @@ request_metric_terminal (const protocol::reply_header_t &reply) noexcept
     }
 }
 
-// Every attempt can deliver the operation's terminal envelope, including an
-// attempt superseded by a selected-route change. Publish its completion only
-// after classifying the result, so a ready task cannot race terminal delivery.
-task_t<void> observe_durable_infrastructure_attempt (
+foundation::operation_registry_t::clock_t::time_point
+capture_request_deadline (std::chrono::milliseconds timeout)
+{
+    if (timeout <= std::chrono::milliseconds::zero ())
+        throw std::invalid_argument ("raw mesh request timeout must be positive");
+    return foundation::operation_registry_t::clock_t::now () + timeout;
+}
+
+// Binding completion delivers the registered operation's terminal envelope.
+void observe_infrastructure_request (
   std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> native,
   std::shared_ptr<foundation::operation_registry_t> operations,
   foundation::call_id_t operation,
   std::optional<std::uint64_t> correlation,
   std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> decode_reply)
 {
-    auto completion = std::make_shared<task_completion_source_t<void>> ();
-    auto completed = completion->task ();
     detail::observe_task_terminal (*native, [native, operations = std::move (operations), operation,
-                                             correlation, decode_reply = std::move (decode_reply),
-                                             completion] (const auto &settled) {
+                                             correlation, decode_reply = std::move (decode_reply)] (
+                                              const auto &settled) {
         if (operations->contains (operation)) {
             if (!settled) {
                 (void) operations->fail (operation,
@@ -188,13 +199,15 @@ task_t<void> observe_durable_infrastructure_attempt (
                 trace_mesh ("infrastructure-request-result correlation="
                             + std::to_string (correlation.value_or (0))
                             + " result=" + std::to_string (static_cast<int> (result.terminal)));
-                if (result.terminal != zlink::request_result_t::not_connected
-                    && result.terminal != zlink::request_result_t::timed_out) {
+                {
                     try {
                         if (result.terminal != zlink::request_result_t::ok) {
                             if (!correlation)
                                 (void) operations->fail (
-                                  operation, foundation::operation_terminal_t::transport_failed);
+                                  operation,
+                                  messaging::request_failure_mapper_t{}
+                                    .transport_terminal (result.terminal)
+                                    .value_or (foundation::operation_terminal_t::transport_failed));
                             else if (const auto terminal =
                                        messaging::request_failure_mapper_t{}.transport_terminal (
                                          result.terminal))
@@ -227,14 +240,13 @@ task_t<void> observe_durable_infrastructure_attempt (
                 }
             }
         }
-        completion->complete (result_t<void>::success ());
     });
-    return completed;
 }
 
-// The coroutine owns one operation's replay state. Topology publications and
-// binding completions only wake it; they never make an independent retry decision.
-task_t<void> run_durable_infrastructure_request (
+// Readiness waits observe the same final completion as the caller. The
+// registry owns timeout; a ready peer admits one binding submission.
+template <typename TTerminal>
+task_t<void> run_infrastructure_request (
   std::shared_ptr<detail::backend::raw_route_port_t> port,
   service_topology_registry_t::peer_observer_t observe_peer,
   std::shared_ptr<foundation::operation_registry_t> operations,
@@ -244,24 +256,9 @@ task_t<void> run_durable_infrastructure_request (
   detail::backend::raw_message_t request_parts,
   std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> decode_reply,
   foundation::operation_registry_t::clock_t::time_point deadline,
-  std::shared_ptr<task_completion_source_t<void>> admission)
+  task_t<TTerminal> terminal,
+  std::shared_ptr<task_completion_source_t<void>> admitted)
 {
-    using clock_t = foundation::operation_registry_t::clock_t;
-    auto first_admission =
-      admission ? std::move (admission) : std::make_shared<task_completion_source_t<void>> ();
-    auto admitted = first_admission->task ();
-    auto deadline_signal = std::make_shared<task_completion_source_t<void>> ();
-    auto expired = deadline_signal->task ();
-    // Bound admission waits by the operation deadline. A submitted attempt
-    // retains the binding's full remaining-deadline completion owner.
-    boost::asio::steady_timer deadline_timer{boost::asio::system_executor ()};
-    deadline_timer.expires_at (deadline);
-    deadline_timer.async_wait ([deadline_signal] (const boost::system::error_code &error) {
-        if (!error)
-            deadline_signal->complete (result_t<void>::success ());
-    });
-    std::shared_ptr<task_t<void>> running;
-    std::vector<std::uint8_t> submitted_connection;
     struct wait_subscriptions_t
     {
         std::stop_source owner;
@@ -269,39 +266,19 @@ task_t<void> run_durable_infrastructure_request (
     };
     while (operations->contains (operation)) {
         auto observation = observe_peer ();
-        if (running && running->await_ready ()) {
-            running.reset ();
-            if (!operations->contains (operation))
+        if (observation.peer && observation.peer->ready) {
+            const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
+              deadline - foundation::operation_registry_t::clock_t::now ());
+            if (remaining > std::chrono::milliseconds::zero ()) {
+                auto native = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
+                  port->request (target_routing_id, std::move (request_parts), remaining, {},
+                                 admitted));
+                observe_infrastructure_request (std::move (native), operations, operation,
+                                                correlation, std::move (decode_reply));
                 co_return;
-        }
-        const auto remaining =
-          std::chrono::ceil<std::chrono::milliseconds> (deadline - clock_t::now ());
-        if (!running && remaining <= std::chrono::milliseconds::zero ()) {
-            (void) operations->fail (operation,
-                                     admitted.await_ready () && admitted.result ()
-                                       ? foundation::operation_terminal_t::timed_out
-                                       : foundation::operation_terminal_t::route_unavailable);
+            }
+            (void) co_await terminal;
             co_return;
-        }
-        // NotConnected may arrive before the route observer invalidates the
-        // previous ready publication. Only a different observed selected route
-        // can admit another attempt (Actor model §8.1); if already ready, submit
-        // immediately, including while the previous native attempt is pending.
-        if (observation.peer && observation.peer->ready
-            && observation.peer->connection_id != submitted_connection
-            && remaining > std::chrono::milliseconds::zero ()) {
-            submitted_connection = observation.peer->connection_id;
-            auto accepted = std::make_shared<task_completion_source_t<void>> ();
-            auto native = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-              port->request (target_routing_id, request_parts, remaining, {}, accepted));
-            auto accepted_task = accepted->task ();
-            detail::observe_task_terminal (accepted_task,
-                                           [first_admission] (const result_t<void> &result) {
-                                               if (result)
-                                                   first_admission->complete (result);
-                                           });
-            running = std::make_shared<task_t<void>> (observe_durable_infrastructure_attempt (
-              std::move (native), operations, operation, correlation, decode_reply));
         }
         auto wake = std::make_shared<task_completion_source_t<void>> ();
         auto notified = wake->task ();
@@ -311,22 +288,16 @@ task_t<void> run_durable_infrastructure_request (
         };
         wait_subscriptions_t subscriptions;
         {
-            // End every losing registration when this wait completes. In
-            // particular, a quiet topology must not retain expired operations.
             detail::ambient_context_scope_t subscription_scope (
               nullptr, nullptr, subscriptions.owner.get_token (), false, true);
             detail::observe_task_completion (observation.changed, notify);
-            if (!running)
-                detail::observe_task_completion (expired, notify);
-            if (!admitted.await_ready ())
-                detail::observe_task_completion (admitted, notify);
-            if (running)
-                detail::observe_task_completion (*running, notify);
+            detail::observe_task_completion (terminal, notify);
         }
         co_await notified;
     }
 }
-task_t<bool> submit_registered_infrastructure_request_with_retry (
+template <typename TTerminal>
+task_t<bool> submit_registered_infrastructure_request (
   std::shared_ptr<detail::backend::raw_route_port_t> port,
   service_topology_registry_t::peer_observer_t observe_peer,
   std::shared_ptr<foundation::operation_registry_t> operations,
@@ -336,20 +307,20 @@ task_t<bool> submit_registered_infrastructure_request_with_retry (
   detail::backend::raw_message_t request_parts,
   std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)> decode_reply,
   foundation::operation_registry_t::clock_t::time_point deadline,
+  task_t<TTerminal> terminal,
   std::shared_ptr<task_completion_source_t<void>> admitted = {})
 {
-    if (!port || deadline <= foundation::operation_registry_t::clock_t::now ()) {
+    if (!port) {
         (void) operations->fail (operation, foundation::operation_terminal_t::route_unavailable);
         co_return false;
     }
-    // Admission and replay progress independently of the initiating handler's
-    // turn and cancellation owner (execution gate §13).
+    // Infrastructure progress releases the initiating handler's turn.
     detail::serial_turn_scope_t turn_scope (nullptr);
     detail::ambient_context_scope_t infrastructure_scope (nullptr, nullptr, {}, false, true);
-    auto running = std::make_shared<task_t<void>> (run_durable_infrastructure_request (
+    auto running = std::make_shared<task_t<void>> (run_infrastructure_request (
       std::move (port), std::move (observe_peer), operations, operation, correlation,
       std::move (target_routing_id), std::move (request_parts), std::move (decode_reply), deadline,
-      std::move (admitted)));
+      std::move (terminal), std::move (admitted)));
     detail::observe_task_terminal (*running, [operations, operation,
                                               running] (const result_t<void> &settled) {
         if (!settled)
@@ -397,48 +368,8 @@ task_t<bool> submit_registered_infrastructure_request (
       admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
     auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
       port->request (target_routing_id, std::move (request_parts), timeout, {}, accepted));
-    detail::observe_task_terminal (
-      *running, [operations = std::move (operations), operation, correlation,
-                 decode_reply = std::move (decode_reply),
-                 running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
-          if (!settled) {
-              (void) operations->fail (operation,
-                                       foundation::operation_terminal_t::transport_failed);
-              return;
-          }
-          const auto &completion = settled.value ();
-          trace_mesh ("infrastructure-request-result correlation=" + std::to_string (correlation)
-                      + " result=" + std::to_string (static_cast<int> (completion.terminal)));
-          if (completion.terminal != zlink::request_result_t::ok) {
-              if (const auto terminal = messaging::request_failure_mapper_t{}.transport_terminal (
-                    completion.terminal)) {
-                  (void) operations->fail (operation, *terminal);
-              } else {
-                  auto payload =
-                    decode_reply (request_failure_reply_parts (correlation, completion.terminal));
-                  (void) operations->complete (
-                    operation, detail::backend::materialize_binding_part (std::move (payload)));
-              }
-              return;
-          }
-          try {
-              const auto parts = detail::backend::copy_binding_parts (completion.parts);
-              if (parts.empty ()) {
-                  throw protocol::service_wire_error_t ("infrastructure reply has no header");
-              }
-              const auto prefix = protocol::decode_reply_header (parts.front ());
-              if (prefix.correlation != correlation) {
-                  throw protocol::service_wire_error_t (
-                    "infrastructure reply correlation does not match");
-              }
-              auto payload = decode_reply (parts);
-              (void) operations->complete (
-                operation, detail::backend::materialize_binding_part (std::move (payload)));
-          }
-          catch (const protocol::service_wire_error_t &) {
-              (void) operations->fail (operation, foundation::operation_terminal_t::protocol_error);
-          }
-      });
+    observe_infrastructure_request (std::move (running), std::move (operations), operation,
+                                    correlation, std::move (decode_reply));
     co_return co_await await_request_admission (accepted->task ());
 }
 
@@ -454,15 +385,20 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
                                               std::shared_ptr<zlink::context_t> context) :
     _options (std::move (options)),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
-    _topology (_options.descriptor, _options.metric_channel_names, &_liveness),
+    _liveness (_lane),
+    _topology (_lane,
+               _options.descriptor,
+               _options.metric_channel_names,
+               &_liveness,
+               _options.metric_provider),
     _mailbox (),
-    _request_metrics (std::make_shared<mesh_request_metrics_t> (_options.descriptor.mesh_name)),
-    _operations (std::make_shared<foundation::operation_registry_t> ())
+    _request_metrics (std::make_shared<mesh_request_metrics_t> (_options.descriptor.mesh_name,
+                                                                _options.metric_provider)),
+    _operations (foundation::operation_registry_t::create_scheduled (_lane))
 {
     if (!_options.runtime_failures)
         throw std::invalid_argument ("A host runtime failure collector is required");
-    auto meter =
-      opentelemetry::metrics::Provider::GetMeterProvider ()->GetMeter ("zlink.framework");
+    auto meter = _options.metric_provider->GetMeter ("zlink.framework");
     if (!meter)
         return;
     constexpr std::array names{"zlink.mesh_node.peers.configured",
@@ -503,63 +439,95 @@ raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
     }
 }
 
+std::exception_ptr raw_mesh_node_owner_t::deliver_topology_notifications (
+  std::vector<std::function<void ()>> &notifications, std::exception_ptr failure) noexcept
+{
+    // Consume before callbacks can re-enter: every committed publication is delivered once.
+    for (auto &changed : std::exchange (notifications, {})) {
+        try {
+            changed ();
+        }
+        catch (...) {
+            if (failure)
+                _options.runtime_failures->report (std::current_exception ());
+            else
+                failure = std::current_exception ();
+        }
+    }
+    return failure;
+}
+
 void raw_mesh_node_owner_t::start ()
 {
-    return _lane
-      .run ([this] {
-          auto descriptor = _topology.local_descriptor ();
-          {
-              std::lock_guard lifecycle_lock (_lifecycle_mutex);
-              if (_port) {
-                  return;
-              }
-              if (_closed) {
-                  throw std::logic_error ("raw mesh node owner cannot restart after close");
-              }
-              auto router = std::make_unique<zlink::router_socket_t> (*_context);
-              router->options ().handover (true);
-              router->options ().mandatory (true);
-              router->options ().linger (std::chrono::milliseconds (0));
-              if (_options.receive_timeout)
-                  router->options ().recv_timeout (*_options.receive_timeout);
-              router->set_routing_id (
-                zlink::routing_id_t::from (_options.descriptor.node_routing_id));
-              application_job_queue_t::receive_flow_registration_t receive_flow_registration;
-              if (_options.application_jobs) {
-                  receive_flow_registration =
-                    _options.application_jobs->register_receive_flow_socket (
-                      [socket = router.get ()] (application_job_queue_pressure_state_t state) {
-                          return apply_application_job_receive_flow_state (*socket, state);
-                      });
-              }
-              router->bind (_options.descriptor.advertised_endpoint);
+    std::vector<std::function<void ()>> notifications;
+    try {
+        _lane
+          .run ([this, &notifications] {
+              auto descriptor = _topology.local_descriptor ();
+              {
+                  std::lock_guard lifecycle_lock (_lifecycle_mutex);
+                  if (_port) {
+                      return;
+                  }
+                  if (_closed) {
+                      throw std::logic_error ("raw mesh node owner cannot restart after close");
+                  }
+                  auto router = std::make_unique<zlink::router_socket_t> (*_context);
+                  router->options ().handover (true);
+                  router->options ().mandatory (true);
+                  router->options ().linger (std::chrono::milliseconds (0));
+                  if (_options.receive_timeout)
+                      router->options ().recv_timeout (*_options.receive_timeout);
+                  router->set_routing_id (
+                    zlink::routing_id_t::from (_options.descriptor.node_routing_id));
+                  application_job_queue_t::receive_flow_registration_t receive_flow_registration;
+                  if (_options.application_jobs) {
+                      receive_flow_registration =
+                        _options.application_jobs->register_receive_flow_socket (
+                          [socket = router.get ()] (application_job_queue_pressure_state_t state) {
+                              return apply_application_job_receive_flow_state (*socket, state);
+                          });
+                  }
+                  router->bind (_options.descriptor.advertised_endpoint);
 
-              if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ()) {
-                  throw std::overflow_error ("service descriptor revision is exhausted");
-              }
-              descriptor.advertised_endpoint = transport::advertised_tcp_endpoint (
-                router->options ().last_endpoint (), _options.advertise_host, "MeshNode");
-              ++descriptor.descriptor_revision;
+                  if (descriptor.descriptor_revision
+                      == std::numeric_limits<std::uint64_t>::max ()) {
+                      throw std::overflow_error ("service descriptor revision is exhausted");
+                  }
+                  descriptor.advertised_endpoint = transport::advertised_tcp_endpoint (
+                    router->options ().last_endpoint (), _options.advertise_host, "MeshNode");
+                  ++descriptor.descriptor_revision;
 
-              auto ingress_poller = std::make_unique<zlink::poller_t> ();
-              // The ingress poller is this ROUTER's one route observer: POLLROUTE
-              // wakes the host and pump_one reads the selected-route snapshot.
-              _port = std::make_shared<detail::backend::raw_route_port_t> (
-                *router, _socket_mutex,
-                zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollroute,
-                ingress_poller.get (), 1);
-              _port->set_request_receive_source (
-                [this] (const auto &target) { return _liveness.connection (target); });
-              _ingress_poller = std::move (ingress_poller);
-              _router = std::move (router);
-              _receive_flow_registration = std::move (receive_flow_registration);
-              // Keep the descriptor in preparing until the receive port, completion
-              // control, and route observation can accept the first admitted message.
-              descriptor.state = service_node_state_t::serving;
-          }
-          _topology.publish_local (std::move (descriptor));
-      })
-      .get ();
+                  auto ingress_poller = std::make_unique<zlink::poller_t> ();
+                  // The ingress poller is this ROUTER's one route observer: POLLROUTE
+                  // wakes the host and pump_one reads the selected-route snapshot.
+                  _port = std::make_shared<detail::backend::raw_route_port_t> (
+                    *router, _socket_mutex,
+                    zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollroute,
+                    ingress_poller.get (), 1);
+                  _port->set_request_receive_source ([this] (const auto &target) {
+                      const auto peer = _topology.peer (target);
+                      return peer ? peer->liveness : service_liveness_registry_t::connection_t{};
+                  });
+                  _ingress_poller = std::move (ingress_poller);
+                  _router = std::move (router);
+                  _receive_flow_registration = std::move (receive_flow_registration);
+                  // Keep the descriptor in preparing until the receive port, completion
+                  // control, and route observation can accept the first admitted message.
+                  descriptor.state = service_node_state_t::serving;
+              }
+              auto changed = _topology.publish_local_on_lane (std::move (descriptor));
+              if (changed)
+                  notifications.push_back (std::move (changed));
+          })
+          .get ();
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
+    if (auto failure = deliver_topology_notifications (notifications))
+        std::rethrow_exception (failure);
 }
 
 // Every read of the local descriptor that is submitted to a route, and every
@@ -569,12 +537,24 @@ void raw_mesh_node_owner_t::start ()
 task_t<void> raw_mesh_node_owner_t::publish_draining ()
 {
     return runtime::run_blocking_step<void> ([this] () -> task_t<void> {
-        _lane
-          .run ([this] {
-              const auto publication = _topology.publish_draining_snapshot ();
-              send_descriptor_update_on_lane (publication.first, publication.second);
-          })
-          .get ();
+        std::vector<std::function<void ()>> notifications;
+        try {
+            _lane
+              .run ([this, &notifications] {
+                  auto publication = _topology.publish_draining_on_lane ();
+                  if (std::get<2> (publication))
+                      notifications.push_back (std::move (std::get<2> (publication)));
+                  send_descriptor_update_on_lane (std::get<0> (publication),
+                                                  std::get<1> (publication));
+              })
+              .get ();
+        }
+        catch (...) {
+            std::rethrow_exception (
+              deliver_topology_notifications (notifications, std::current_exception ()));
+        }
+        if (auto failure = deliver_topology_notifications (notifications))
+            std::rethrow_exception (failure);
         co_return;
     });
 }
@@ -582,15 +562,28 @@ task_t<void> raw_mesh_node_owner_t::publish_draining ()
 service_node_descriptor_t raw_mesh_node_owner_t::publish_descriptor_update (
   const std::function<void (service_node_descriptor_t &)> &change)
 {
-    return _lane
-      .run ([this, &change] {
-          auto descriptor = _topology.local_descriptor ();
-          change (descriptor);
-          const auto peers = _topology.publish_local_snapshot (descriptor);
-          send_descriptor_update_on_lane (descriptor, peers);
-          return descriptor;
-      })
-      .get ();
+    std::vector<std::function<void ()>> notifications;
+    try {
+        auto descriptor = _lane
+                            .run ([this, &change, &notifications] {
+                                auto descriptor = _topology.local_descriptor ();
+                                change (descriptor);
+                                auto changed = _topology.publish_local_on_lane (descriptor);
+                                if (changed)
+                                    notifications.push_back (std::move (changed));
+                                const auto peers = _topology.peers_on_lane ();
+                                send_descriptor_update_on_lane (descriptor, peers);
+                                return descriptor;
+                            })
+                            .get ();
+        if (auto failure = deliver_topology_notifications (notifications))
+            std::rethrow_exception (failure);
+        return descriptor;
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
 }
 
 void raw_mesh_node_owner_t::send_descriptor_update_on_lane (
@@ -607,19 +600,26 @@ void raw_mesh_node_owner_t::send_descriptor_update_on_lane (
 
 void raw_mesh_node_owner_t::close ()
 {
-    auto resources =
+    auto [resources, operations] =
       _lane
         .run ([this] {
+            std::shared_ptr<foundation::operation_registry_t> operations;
             if (!_closed) {
                 _receive_flow_registration.close ();
                 _mailbox.close ();
-                _operations->shutdown ();
                 _routes.clear ();
+                operations = _operations;
             }
             std::lock_guard lifecycle_lock (_lifecycle_mutex);
-            return std::tuple{std::move (_port), std::move (_ingress_poller), std::move (_router)};
+            return std::pair{
+              std::tuple{std::move (_port), std::move (_ingress_poller), std::move (_router)},
+              std::move (operations)};
         })
         .get ();
+    // Only an open owner's close borrows the Registry for draining outside
+    // the lane. The existing owner state decides whether shutdown is needed.
+    if (operations)
+        operations->shutdown ();
     std::exception_ptr failure;
     try {
         auto &[port, poller, router] = resources;
@@ -643,12 +643,8 @@ void raw_mesh_node_owner_t::close ()
 bool raw_mesh_node_owner_t::started () const noexcept
 {
     try {
-        return _lane
-          .run ([this] {
-              std::lock_guard lifecycle_lock (_lifecycle_mutex);
-              return static_cast<bool> (_port);
-          })
-          .get ();
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        return static_cast<bool> (_port);
     }
     catch (...) {
         return false;
@@ -693,57 +689,63 @@ bool raw_mesh_node_owner_t::connect_peer (
 {
     return _lane
       .run ([this, &endpoint, expected_descriptor = std::move (expected_descriptor)] () mutable {
-          std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          if (!_router || endpoint.empty ())
-              return false;
-          const auto expectation =
-            expected_descriptor
-              ? std::make_optional (std::make_tuple (expected_descriptor->node_routing_id,
-                                                     expected_descriptor->security_identity,
-                                                     expected_descriptor->lifecycle_generation))
-              : std::nullopt;
-          const auto existing = _outbound_endpoints.find (endpoint);
-          if (existing != _outbound_endpoints.end ()) {
-              if (existing->second == expectation) {
-                  if (expected_descriptor)
-                      _expected_peers.insert_or_assign (expected_descriptor->node_routing_id,
-                                                        *expected_descriptor);
-                  return true;
-              }
-          }
-          try {
-              std::lock_guard socket_lock (*_socket_mutex);
-              if (existing != _outbound_endpoints.end ()) {
-                  _router->disconnect (endpoint);
-                  _outbound_endpoints.erase (existing);
-                  for (auto peer = _expected_peers.begin (); peer != _expected_peers.end ();) {
-                      if (peer->second.advertised_endpoint != endpoint) {
-                          ++peer;
-                          continue;
-                      }
-                      const auto retired_rid = peer->first;
-                      peer = _expected_peers.erase (peer);
-                      end_peer_operations_if_disconnected_locked (retired_rid);
-                  }
-              }
-              if (expected_descriptor)
-                  _router->options ().connect_routing_id (
-                    zlink::routing_id_t::from (expected_descriptor->node_routing_id));
-              _router->connect (endpoint);
-              _outbound_endpoints.emplace (endpoint, expectation);
-              if (expected_descriptor)
-                  _expected_peers.insert_or_assign (expected_descriptor->node_routing_id,
-                                                    *expected_descriptor);
-              return true;
-          }
-          catch (const zlink::binding_error_t &rejection) {
-              // A rejected submission has no transport registration to reuse.
-              trace_mesh ("connect rejected endpoint=" + endpoint + " error=" + rejection.what ());
-              return false;
-          }
+          return connect_peer_owned (endpoint, std::move (expected_descriptor));
       })
       .get ();
 }
+bool raw_mesh_node_owner_t::connect_peer_owned (
+  const std::string &endpoint, std::optional<service_node_descriptor_t> expected_descriptor)
+{
+    std::lock_guard lifecycle_lock (_lifecycle_mutex);
+    if (!_router || endpoint.empty ())
+        return false;
+    const auto expectation =
+      expected_descriptor
+        ? std::make_optional (std::make_tuple (expected_descriptor->node_routing_id,
+                                               expected_descriptor->security_identity,
+                                               expected_descriptor->lifecycle_generation))
+        : std::nullopt;
+    const auto existing = _outbound_endpoints.find (endpoint);
+    if (existing != _outbound_endpoints.end ()) {
+        if (existing->second == expectation) {
+            if (expected_descriptor)
+                _expected_peers.insert_or_assign (expected_descriptor->node_routing_id,
+                                                  *expected_descriptor);
+            return true;
+        }
+    }
+    try {
+        std::lock_guard socket_lock (*_socket_mutex);
+        if (existing != _outbound_endpoints.end ()) {
+            _router->disconnect (endpoint);
+            _outbound_endpoints.erase (existing);
+            for (auto peer = _expected_peers.begin (); peer != _expected_peers.end ();) {
+                if (peer->second.advertised_endpoint != endpoint) {
+                    ++peer;
+                    continue;
+                }
+                const auto retired_rid = peer->first;
+                peer = _expected_peers.erase (peer);
+                end_peer_operations_if_disconnected_locked (retired_rid);
+            }
+        }
+        if (expected_descriptor)
+            _router->options ().connect_routing_id (
+              zlink::routing_id_t::from (expected_descriptor->node_routing_id));
+        _router->connect (endpoint);
+        _outbound_endpoints.emplace (endpoint, expectation);
+        if (expected_descriptor)
+            _expected_peers.insert_or_assign (expected_descriptor->node_routing_id,
+                                              *expected_descriptor);
+        return true;
+    }
+    catch (const zlink::binding_error_t &rejection) {
+        // A rejected submission has no transport registration to reuse.
+        trace_mesh ("connect rejected endpoint=" + endpoint + " error=" + rejection.what ());
+        return false;
+    }
+}
+
 void raw_mesh_node_owner_t::disconnect_peer (const std::string &endpoint) noexcept
 {
     (void) disconnect_peer ({}, endpoint);
@@ -754,88 +756,293 @@ bool raw_mesh_node_owner_t::disconnect_peer (const std::vector<std::uint8_t> &ex
 {
     if (endpoint.empty ())
         return false;
+    std::vector<std::function<void ()>> notifications;
     try {
-        return _lane
-          .run ([this, &expected_routing_id, &endpoint] {
-              if (!_router)
-                  return false;
-              try {
-                  trace_mesh ("disconnect endpoint=" + endpoint
-                              + " expected=" + owner_key (expected_routing_id));
-                  std::optional<admitted_peer_t> admitted;
-                  if (!expected_routing_id.empty ()) {
-                      if (const auto peer = _topology.peer (expected_routing_id))
-                          admitted = *peer;
-                  } else {
-                      for (const auto &candidate : _topology.peers ()) {
-                          if (candidate.descriptor.advertised_endpoint == endpoint) {
-                              admitted = candidate;
-                              break;
-                          }
-                      }
-                  }
-                  if (admitted) {
-                      trace_mesh ("disconnect admitted="
-                                  + owner_key (admitted->descriptor.node_routing_id)
-                                  + " connection=" + owner_key (admitted->connection_id));
-                      (void) _topology.disconnect (admitted->descriptor.node_routing_id,
-                                                   admitted->connection_id);
-                      (void) _liveness.disconnect (admitted->descriptor.node_routing_id,
-                                                   admitted->connection_id);
-                      refresh_admission_due_on_lane ();
-                  }
-                  const auto &ended_routing_id = !expected_routing_id.empty () || !admitted
-                                                   ? expected_routing_id
-                                                   : admitted->descriptor.node_routing_id;
-                  if (!ended_routing_id.empty ())
-                      end_peer_operations_if_disconnected_locked (ended_routing_id);
-                  // Endpoint ownership is configuration and descriptor intent; Core
-                  // owns which physical pipe carries the RID (Core ROUTER §10.1).
-                  bool endpoint_in_use_by_other = false;
-                  if (!expected_routing_id.empty ()) {
-                      for (const auto &candidate : _topology.peers ()) {
-                          if (candidate.descriptor.node_routing_id != expected_routing_id
-                              && candidate.descriptor.advertised_endpoint == endpoint) {
-                              endpoint_in_use_by_other = true;
-                              break;
-                          }
-                      }
-                  }
-                  if (!expected_routing_id.empty ()) {
-                      std::lock_guard socket_lock (*_socket_mutex);
-                      try {
-                          _router->disconnect_rid (zlink::routing_id_t::from (expected_routing_id));
-                      }
-                      catch (...) {
-                          /* The RID can already have no selected route. Endpoint
+        const auto endpoint_retained =
+          _lane
+            .run ([this, &expected_routing_id, &endpoint, &notifications] {
+                return disconnect_peer_owned (expected_routing_id, endpoint, notifications);
+            })
+            .get ();
+        if (deliver_topology_notifications (notifications))
+            return false;
+        return endpoint_retained;
+    }
+    catch (...) {
+        (void) deliver_topology_notifications (notifications, std::current_exception ());
+        return false;
+    }
+}
+
+bool raw_mesh_node_owner_t::disconnect_peer_owned (
+  const std::vector<std::uint8_t> &expected_routing_id,
+  const std::string &endpoint,
+  std::vector<std::function<void ()>> &notifications)
+{
+    if (endpoint.empty ())
+        return false;
+    if (!_router)
+        return false;
+    try {
+        trace_mesh ("disconnect endpoint=" + endpoint
+                    + " expected=" + owner_key (expected_routing_id));
+        std::optional<admitted_peer_t> admitted;
+        if (!expected_routing_id.empty ()) {
+            if (const auto peer = _topology.peer (expected_routing_id))
+                admitted = *peer;
+        } else {
+            for (const auto &candidate : _topology.peers_on_lane ()) {
+                if (candidate.descriptor.advertised_endpoint == endpoint) {
+                    admitted = candidate;
+                    break;
+                }
+            }
+        }
+        if (admitted) {
+            trace_mesh ("disconnect admitted=" + owner_key (admitted->descriptor.node_routing_id)
+                        + " connection=" + owner_key (admitted->connection_id));
+            auto publication = _topology.disconnect_on_lane (admitted->descriptor.node_routing_id,
+                                                             admitted->connection_id);
+            if (publication.second)
+                notifications.push_back (std::move (publication.second));
+            (void) _liveness.disconnect_owned (admitted->descriptor.node_routing_id,
+                                               admitted->connection_id);
+            refresh_admission_due_on_lane ();
+        }
+        const auto &ended_routing_id = !expected_routing_id.empty () || !admitted
+                                         ? expected_routing_id
+                                         : admitted->descriptor.node_routing_id;
+        if (!ended_routing_id.empty ())
+            end_peer_operations_if_disconnected_locked (ended_routing_id);
+        // Endpoint ownership is configuration and descriptor intent; Core
+        // owns which physical pipe carries the RID (Core ROUTER §10.1).
+        bool endpoint_in_use_by_other = false;
+        if (!expected_routing_id.empty ()) {
+            for (const auto &candidate : _topology.peers_on_lane ()) {
+                if (candidate.descriptor.node_routing_id != expected_routing_id
+                    && candidate.descriptor.advertised_endpoint == endpoint) {
+                    endpoint_in_use_by_other = true;
+                    break;
+                }
+            }
+        }
+        if (!expected_routing_id.empty ()) {
+            std::lock_guard socket_lock (*_socket_mutex);
+            try {
+                _router->disconnect_rid (zlink::routing_id_t::from (expected_routing_id));
+            }
+            catch (...) {
+                /* The RID can already have no selected route. Endpoint
                            * teardown remains required to disable reconnect for every
                            * pipe configured by this owner. */
-                      }
-                  }
-                  if (!endpoint_in_use_by_other) {
-                      try {
-                          std::lock_guard socket_lock (*_socket_mutex);
-                          // Remove the configured endpoint after terminating the current
-                          // RID. Otherwise the binding may reconnect the same stale
-                          // endpoint. This step must still run when the RID index is stale.
-                          _router->disconnect (endpoint);
-                      }
-                      catch (...) {
-                      }
-                      _outbound_endpoints.erase (endpoint);
-                  }
-                  trace_mesh ("disconnect endpoint-complete=" + endpoint);
-                  return endpoint_in_use_by_other;
-              }
-              catch (...) {
-                  return false;
-              }
-          })
-          .get ();
+            }
+        }
+        if (!endpoint_in_use_by_other) {
+            try {
+                std::lock_guard socket_lock (*_socket_mutex);
+                // Remove the configured endpoint after terminating the current
+                // RID. Otherwise the binding may reconnect the same stale
+                // endpoint. This step must still run when the RID index is stale.
+                _router->disconnect (endpoint);
+            }
+            catch (...) {
+            }
+            _outbound_endpoints.erase (endpoint);
+        }
+        trace_mesh ("disconnect endpoint-complete=" + endpoint);
+        return endpoint_in_use_by_other;
     }
     catch (...) {
         return false;
     }
+}
+
+bool raw_mesh_node_owner_t::connect_peer_endpoint (const std::string &endpoint,
+                                                   std::optional<zlink::routing_id_t> expected,
+                                                   std::uint64_t expected_lifecycle_generation,
+                                                   std::string security_identity,
+                                                   bool automatic)
+{
+    return _lane
+      .run ([this, endpoint, expected = std::move (expected), expected_lifecycle_generation,
+             security_identity = std::move (security_identity), automatic] () mutable {
+          return connect_peer_endpoint_owned (endpoint, std::move (expected),
+                                              expected_lifecycle_generation,
+                                              std::move (security_identity), automatic);
+      })
+      .get ();
+}
+
+bool raw_mesh_node_owner_t::connect_peer_endpoint_owned (
+  const std::string &endpoint,
+  std::optional<zlink::routing_id_t> expected,
+  std::uint64_t expected_lifecycle_generation,
+  std::string security_identity,
+  bool automatic)
+{
+    auto expected_key = expected ? expected->to_string () : std::string{};
+    if (automatic && expected
+        && (peer_route_on_lane (expected->to_bytes (), std::nullopt).first != 0
+            || std::any_of (_peer_endpoints.begin (), _peer_endpoints.end (),
+                            [&] (const auto &intent) {
+                                return intent.first == endpoint || intent.second == expected_key;
+                            })))
+        return false;
+    bool connected = false;
+    if (expected) {
+        auto descriptor = _options.descriptor;
+        descriptor.node_routing_id = expected->to_bytes ();
+        descriptor.advertised_endpoint = endpoint;
+        descriptor.lifecycle_generation = expected_lifecycle_generation;
+        descriptor.security_identity = std::move (security_identity);
+        connected = connect_peer_owned (endpoint, std::move (descriptor));
+    } else {
+        connected = connect_peer_owned (endpoint, std::nullopt);
+    }
+    if (connected)
+        _peer_endpoints.insert_or_assign (endpoint, std::move (expected_key));
+    return connected;
+}
+
+void raw_mesh_node_owner_t::disconnect_peer_endpoint (const std::string &endpoint) noexcept
+{
+    std::vector<std::function<void ()>> notifications;
+    try {
+        _lane
+          .run ([this, endpoint, &notifications] {
+              disconnect_peer_endpoint_owned (endpoint, notifications);
+          })
+          .get ();
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
+    // The old private disconnect contained callback failure even for the void surface.
+    (void) deliver_topology_notifications (notifications);
+}
+
+bool raw_mesh_node_owner_t::disconnect_peer_endpoint (
+  const std::vector<std::uint8_t> &expected_routing_id, const std::string &endpoint) noexcept
+{
+    std::vector<std::function<void ()>> notifications;
+    bool endpoint_retained;
+    try {
+        endpoint_retained = _lane
+                              .run ([this, expected_routing_id, endpoint, &notifications] {
+                                  return disconnect_peer_endpoint_owned (expected_routing_id,
+                                                                         endpoint, notifications);
+                              })
+                              .get ();
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
+    if (deliver_topology_notifications (notifications))
+        return false;
+    return endpoint_retained;
+}
+
+void raw_mesh_node_owner_t::disconnect_peer_endpoint_owned (
+  const std::string &endpoint, std::vector<std::function<void ()>> &notifications)
+{
+    _peer_endpoints.erase (endpoint);
+    (void) disconnect_peer_owned ({}, endpoint, notifications);
+}
+
+bool raw_mesh_node_owner_t::disconnect_peer_endpoint_owned (
+  const std::vector<std::uint8_t> &expected_routing_id,
+  const std::string &endpoint,
+  std::vector<std::function<void ()>> &notifications)
+{
+    const auto endpoint_retained =
+      disconnect_peer_owned (expected_routing_id, endpoint, notifications);
+    if (!endpoint_retained)
+        _peer_endpoints.erase (endpoint);
+    return endpoint_retained;
+}
+
+void raw_mesh_node_owner_t::connect_peer_intent (const std::string &endpoint,
+                                                 std::optional<zlink::routing_id_t> expected,
+                                                 std::uint64_t expected_lifecycle_generation,
+                                                 std::string security_identity,
+                                                 bool automatic)
+{
+    _lane
+      .run ([this, endpoint, expected = std::move (expected), expected_lifecycle_generation,
+             security_identity = std::move (security_identity), automatic] () mutable {
+          if (connect_peer_endpoint_owned (endpoint, std::move (expected),
+                                           expected_lifecycle_generation,
+                                           std::move (security_identity), automatic)) {
+              const auto [intent, inserted] = _peer_connection_intents.try_emplace (endpoint);
+              if (inserted)
+                  intent->second = zlink::framework::detail::next_connection_intent_id ();
+          }
+      })
+      .get ();
+}
+
+void raw_mesh_node_owner_t::connect_peer_intent (const mesh_peer_connection_t &configured)
+{
+    _lane
+      .run ([this, configured] {
+          if (connect_peer_endpoint_owned (configured.endpoint, configured.expected_routing_id, 0,
+                                           "default", false))
+              _peer_connection_intents.emplace (
+                configured.endpoint, zlink::framework::detail::next_connection_intent_id ());
+      })
+      .get ();
+}
+
+void raw_mesh_node_owner_t::disconnect_peer_intent (const std::string &endpoint)
+{
+    std::vector<std::function<void ()>> notifications;
+    try {
+        _lane
+          .run ([this, endpoint, &notifications] {
+              const auto found = _peer_connection_intents.find (endpoint);
+              disconnect_peer_endpoint_owned (endpoint, notifications);
+              if (found != _peer_connection_intents.end ())
+                  _peer_connection_intents.erase (found);
+          })
+          .get ();
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
+    (void) deliver_topology_notifications (notifications);
+}
+
+void raw_mesh_node_owner_t::disconnect_peer_intent (const zlink::routing_id_t &expected_routing_id,
+                                                    const std::string &endpoint,
+                                                    bool automatic)
+{
+    std::vector<std::function<void ()>> notifications;
+    try {
+        _lane
+          .run ([this, expected_routing_id, endpoint, automatic, &notifications] {
+              if (automatic && !_peer_connection_intents.contains (endpoint))
+                  return;
+              const auto endpoint_retained = disconnect_peer_endpoint_owned (
+                expected_routing_id.to_bytes (), endpoint, notifications);
+              // Core may retain the endpoint for a replacement admitted RID.
+              if (!endpoint_retained)
+                  _peer_connection_intents.erase (endpoint);
+          })
+          .get ();
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
+    (void) deliver_topology_notifications (notifications);
+}
+
+void raw_mesh_node_owner_t::clear_peer_connection_intents ()
+{
+    _lane.run ([this] { _peer_connection_intents.clear (); }).get ();
 }
 
 void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_descriptor)
@@ -919,18 +1126,31 @@ raw_mesh_node_owner_t::admit_peer (service_node_descriptor_t descriptor,
                                    std::vector<std::uint8_t> connection_id,
                                    service_liveness_registry_t::clock_t::time_point now)
 {
-    return _lane
-      .run ([this, descriptor = std::move (descriptor), connection_id = std::move (connection_id),
-             now] () mutable {
-          if (!_router) {
-              return peer_admission_result_t::invalid_descriptor;
-          }
-          const auto result =
-            _topology.admit (std::move (descriptor), std::move (connection_id), now);
-          refresh_admission_due_on_lane ();
-          return result;
-      })
-      .get ();
+    std::vector<std::function<void ()>> notifications;
+    try {
+        const auto result =
+          _lane
+            .run ([this, descriptor = std::move (descriptor),
+                   connection_id = std::move (connection_id), now, &notifications] () mutable {
+                if (!_router)
+                    return peer_admission_result_t::invalid_descriptor;
+                auto admission =
+                  _topology.admit_on_lane (std::move (descriptor), std::move (connection_id),
+                                           nullptr, now, protocol::command::admit);
+                if (admission.second)
+                    notifications.push_back (std::move (admission.second));
+                refresh_admission_due_on_lane ();
+                return admission.first;
+            })
+            .get ();
+        if (auto failure = deliver_topology_notifications (notifications))
+            std::rethrow_exception (failure);
+        return result;
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
 }
 
 task_t<bool>
@@ -995,12 +1215,13 @@ raw_mesh_node_owner_t::request_to_node (const std::vector<std::uint8_t> &target_
                                         foundation::operation_registry_t::callback_t callback,
                                         std::optional<std::uint64_t> correlation)
 try {
+    const auto deadline = capture_request_deadline (timeout);
     return request_with_header (
       target_routing_id,
       [] (std::uint64_t request_correlation) {
           return protocol::encode_node_request_header (request_correlation);
       },
-      application_payload, timeout, std::move (callback), correlation, false,
+      application_payload, deadline, std::move (callback), correlation, false,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::node));
 }
 catch (...) {
@@ -1014,6 +1235,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_channel (
   foundation::operation_registry_t::callback_t callback,
   std::optional<std::uint64_t> correlation)
 {
+    const auto deadline = capture_request_deadline (timeout);
     mesh_request_metric_t request_metric (_request_metrics, mesh_request_surface_t::channel);
     service_liveness_registry_t::connection_t admission;
     auto selected = _topology.select (channel_name, &admission);
@@ -1025,7 +1247,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_channel (
       [&channel_name] (std::uint64_t request_correlation) {
           return protocol::encode_channel_request_header (request_correlation, channel_name);
       },
-      application_payload, timeout, std::move (callback), correlation, true,
+      application_payload, deadline, std::move (callback), correlation, true,
       std::move (request_metric), std::move (admission));
 }
 
@@ -1151,7 +1373,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
   const std::vector<std::uint8_t> &target_routing_id,
   const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
   const protocol::application_payload_t &application_payload,
-  std::chrono::milliseconds timeout,
+  foundation::operation_registry_t::clock_t::time_point deadline,
   foundation::operation_registry_t::callback_t callback,
   std::optional<std::uint64_t> requested_correlation,
   bool target_claimed,
@@ -1159,9 +1381,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
   service_liveness_registry_t::connection_t admission,
   std::optional<foundation::operation_registry_t::request_identity_t> request)
 try {
-    if (timeout <= std::chrono::milliseconds::zero ()) {
-        throw std::invalid_argument ("raw mesh request timeout must be positive");
-    }
+    const auto wait_owner = detail::current_wait_owner ();
     if (!target_claimed) {
         const auto peer = _topology.peer (target_routing_id);
         if (!peer || !peer->ready)
@@ -1179,8 +1399,8 @@ try {
         bool registered = false;
     };
     auto start = _lane.run_sync ([this, &header, &request_metric, &target_routing_id,
-                                  request = std::move (request), requested_correlation, timeout,
-                                  callback = std::move (callback),
+                                  request = std::move (request), requested_correlation, deadline,
+                                  wait_owner, callback = std::move (callback),
                                   encoded_payload = std::move (encoded_payload),
                                   admission = std::move (admission)] () mutable {
         std::shared_ptr<detail::backend::raw_route_port_t> port;
@@ -1201,15 +1421,36 @@ try {
         if (request && request->operation == foundation::call_id_t{})
             request->operation = value.operation;
         value.registered = _operations->register_operation (
-          value.operation, foundation::operation_registry_t::clock_t::now () + timeout,
-          std::move (callback), {}, std::move (request_metric), std::move (request));
+          value.operation, deadline,
+          [callback = std::move (callback), admitted = value.admitted] (
+            foundation::operation_terminal_t terminal, zlink::message_t payload) {
+              if (terminal != foundation::operation_terminal_t::completed) {
+                  if (terminal == foundation::operation_terminal_t::cancelled)
+                      admitted->complete (detail::result_access_t::failure<void> (
+                        detail::make_cancellation_exception ("request was cancelled")));
+                  else
+                      admitted->complete (detail::boundary_failure<void> (
+                        terminal == foundation::operation_terminal_t::timed_out
+                          ? detail::boundary_error_t::timed_out
+                        : terminal == foundation::operation_terminal_t::shutdown
+                          ? detail::boundary_error_t::shutdown
+                          : detail::boundary_error_t::disconnected,
+                        "request ended before admission"));
+              }
+              callback (terminal, std::move (payload));
+          },
+          {}, std::move (request_metric), std::move (request), wait_owner);
         if (value.registered) {
             try {
+                const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
+                  deadline - foundation::operation_registry_t::clock_t::now ());
+                if (remaining <= std::chrono::milliseconds::zero ())
+                    return std::optional<request_start_t>{std::move (value)};
                 trace_mesh ("request-submit correlation=" + std::to_string (value.correlation)
                             + " targetBytes=" + std::to_string (target_routing_id.size ()));
                 value.running =
                   std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-                    port->request (target_routing_id, std::move (wire), timeout,
+                    port->request (target_routing_id, std::move (wire), remaining,
                                    std::move (admission), value.admitted));
             }
             catch (...) {
@@ -1226,7 +1467,8 @@ try {
                                      "raw mesh request registry is closed");
     }
     auto admitted = start->admitted->task ();
-    (void) observe_request (start->operation, start->correlation, std::move (start->running));
+    if (start->running)
+        (void) observe_request (start->operation, start->correlation, std::move (start->running));
     return await_request_admission (std::move (admitted));
 }
 catch (...) {
@@ -1468,9 +1710,8 @@ task_t<bool> raw_mesh_node_owner_t::request_session_relocation_seal (
     const auto operation = operation_id (seal.relocation.high, seal.relocation.low);
     if (!_operations->register_operation (
           operation, foundation::operation_registry_t::clock_t::now () + timeout,
-          std::move (callback)))
+          std::move (callback), {}, {}, {}, detail::current_wait_owner ()))
         co_return false;
-    signal_activity ();
     if (co_await send_session_relocation_seal (target_routing_id, seal))
         co_return true;
     (void) _operations->fail (operation, foundation::operation_terminal_t::transport_failed);
@@ -1542,19 +1783,20 @@ task_t<relocation_prepare_response_t> raw_mesh_node_owner_t::request_relocation_
             co_return relocation_prepare_response_t{};
         id = operation_id (_topology.local_descriptor ().lifecycle_generation,
                            take_reply_route_id_locked ());
-        if (!_operations->register_operation (
-              id, foundation::operation_registry_t::clock_t::time_point::max (),
-              [completion] (auto terminal, auto packed) {
-                  completion->complete (
-                    result_t<completion_t>::success ({terminal, std::move (packed)}));
-              },
-              target_routing_id))
-            co_return relocation_prepare_response_t{};
     }
+    if (!_operations->register_operation (
+          id, deadline,
+          [completion] (auto terminal, auto packed) {
+              completion->complete (
+                result_t<completion_t>::success ({terminal, std::move (packed)}));
+          },
+          target_routing_id, {}, {}, detail::current_wait_owner ()))
+        co_return relocation_prepare_response_t{};
     detail::backend::raw_message_t parts{protocol::encode_relocation_control (prepare)};
-    (void) co_await submit_registered_infrastructure_request_with_retry (
+    (void) co_await submit_registered_infrastructure_request (
       std::move (port), _topology.observe_peer (target_routing_id), _operations, id, std::nullopt,
-      target_routing_id, std::move (parts), protocol::pack_infrastructure_reply, deadline);
+      target_routing_id, std::move (parts), protocol::pack_infrastructure_reply, deadline,
+      completion->task ());
     const auto [terminal, packed] = co_await pending;
     if (terminal != foundation::operation_terminal_t::completed)
         co_return relocation_prepare_response_t{};
@@ -1691,10 +1933,9 @@ bool raw_mesh_node_owner_t::reply_failure (const service_mailbox_record_t &reque
       std::move (parts));
 }
 
-std::size_t
+task_t<std::size_t>
 raw_mesh_node_owner_t::expire_requests (foundation::operation_registry_t::clock_t::time_point now)
 {
-    static_cast<void> (now);
     return _operations->expire (now);
 }
 
@@ -1733,9 +1974,9 @@ bool raw_mesh_node_owner_t::register_prepared_local_operation (
           request_surface == mesh_request_surface_t::spot
               || request_surface == mesh_request_surface_t::actor
             ? request_identity (protocol::wire_operation_id_t{operation.high, operation.low})
-            : std::nullopt))
+            : std::nullopt,
+          detail::current_wait_owner ()))
         return false;
-    reservation.second->signal_activity ();
     return true;
 }
 
@@ -1915,6 +2156,7 @@ raw_mesh_node_owner_t::request_to_spot (const std::vector<std::uint8_t> &target_
                                         std::optional<std::uint64_t> correlation,
                                         std::uint8_t message_follow_hop_count)
 {
+    const auto deadline = capture_request_deadline (timeout);
     const auto local = _topology.local_descriptor ();
     co_return co_await request_with_header (
       target_routing_id,
@@ -1926,7 +2168,7 @@ raw_mesh_node_owner_t::request_to_spot (const std::vector<std::uint8_t> &target_
                                                        source_spot_id, target, exact, correlation,
                                                        message_follow_hop_count);
       },
-      application_payload, timeout, std::move (callback), correlation, false,
+      application_payload, deadline, std::move (callback), correlation, false,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot), {},
       request_identity (operation));
 }
@@ -1980,6 +2222,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
   std::optional<std::uint64_t> correlation,
   std::uint8_t message_follow_hop_count)
 {
+    const auto deadline = capture_request_deadline (timeout);
     const auto local = _topology.local_descriptor ();
     co_return co_await request_with_header (
       target_routing_id,
@@ -1991,7 +2234,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
             protocol::command::actorRequest, source_actor, target, exact, correlation,
             message_follow_hop_count, bound_session_source);
       },
-      application_payload, timeout, std::move (callback), correlation, false,
+      application_payload, deadline, std::move (callback), correlation, false,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::actor), {},
       request_identity (operation));
 }
@@ -2002,6 +2245,7 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (
   std::chrono::milliseconds timeout,
   foundation::operation_registry_t::callback_t callback)
 {
+    const auto deadline = capture_request_deadline (timeout);
     const auto local = _topology.local_descriptor ();
     if (request.source_node_routing_id != local.node_routing_id
         || request.source_node_generation != local.lifecycle_generation
@@ -2026,7 +2270,7 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (
               (void) protocol::decode_application_payload (parts[1], false);
           return protocol::pack_infrastructure_reply (parts);
       },
-      timeout, std::move (callback));
+      deadline, std::move (callback));
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_bound_session (
@@ -2069,6 +2313,23 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
         throw std::invalid_argument ("bound Session bind request timeout must be positive");
     }
 
+    const auto target_routing_id = actor_owner_routing_id;
+    const auto target_generation = record.actor.target_node_generation;
+    const auto has_descriptor =
+      co_await _lane.run_task ([this, target_routing_id, target_generation] {
+          const auto expected = _expected_peers.find (target_routing_id);
+          if (expected != _expected_peers.end ()
+              && expected->second.lifecycle_generation == target_generation)
+              return true;
+          const auto peer = _topology.peer (target_routing_id);
+          return peer && peer->descriptor.lifecycle_generation == target_generation;
+      });
+    if (!has_descriptor) {
+        throw framework_exception_t (
+          framework_error_kind_t::unavailable,
+          "Remote Actor session binding owner descriptor is unavailable");
+    }
+
     const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
     const auto local = _topology.local_descriptor ();
     const auto operations = _operations;
@@ -2077,6 +2338,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
     foundation::call_id_t id{};
     detail::backend::raw_message_t request_parts;
     bool registered = false;
+    auto terminal_wake = std::make_shared<task_completion_source_t<void>> ();
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
         port = _port;
@@ -2085,19 +2347,23 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
             id = operation_id (local.lifecycle_generation, correlation);
             record.correlation = correlation;
             request_parts = {protocol::encode_bound_session_bind (record)};
-            registered = operations->register_operation (
-              id, foundation::operation_registry_t::clock_t::time_point::max (),
-              std::move (callback), actor_owner_routing_id);
         }
     }
     if (!port) {
         callback (foundation::operation_terminal_t::shutdown, {});
         co_return true;
     }
+    registered = operations->register_operation (
+      id, deadline,
+      [callback = std::move (callback), terminal_wake] (auto terminal, auto payload) {
+          terminal_wake->complete (result_t<void>::success ());
+          callback (terminal, std::move (payload));
+      },
+      actor_owner_routing_id, {}, {}, detail::current_wait_owner ());
     if (!registered)
         co_return false;
 
-    co_return co_await submit_registered_infrastructure_request_with_retry (
+    co_return co_await submit_registered_infrastructure_request (
       std::move (port), _topology.observe_peer (actor_owner_routing_id), operations, id,
       correlation, actor_owner_routing_id, std::move (request_parts),
       [] (const detail::backend::raw_message_t &parts) {
@@ -2113,7 +2379,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
           }
           return parts.front ();
       },
-      deadline, std::move (admitted));
+      deadline, terminal_wake->task (), std::move (admitted));
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
@@ -2135,6 +2401,7 @@ task_t<void>
 raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_close_t record,
                                                     std::chrono::milliseconds timeout)
 {
+    const auto deadline = capture_request_deadline (timeout);
     const auto target = record.session.session_owner_node_routing_id;
     auto completion = std::make_shared<task_completion_source_t<void>> ();
     const auto submitted = co_await request_infrastructure (
@@ -2150,7 +2417,7 @@ raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_clos
           (void) protocol::decode_reply_header (parts.front ());
           return protocol::pack_infrastructure_reply (parts);
       },
-      timeout,
+      deadline,
       [completion] (foundation::operation_terminal_t terminal, zlink::message_t packed) {
           try {
               protocol::reply_header_t reply{};
@@ -2205,9 +2472,7 @@ raw_mesh_node_owner_t::request_actor_create (std::vector<std::uint8_t> target_ro
                                              std::chrono::milliseconds timeout,
                                              foundation::operation_registry_t::callback_t callback)
 {
-    if (timeout <= std::chrono::milliseconds::zero ()) {
-        throw std::invalid_argument ("Actor create request timeout must be positive");
-    }
+    const auto deadline = capture_request_deadline (timeout);
     const auto local = _topology.local_descriptor ();
     if (request.source_node_routing_id != local.node_routing_id
         || request.source_node_generation != local.lifecycle_generation
@@ -2233,16 +2498,16 @@ raw_mesh_node_owner_t::request_actor_create (std::vector<std::uint8_t> target_ro
                   (void) protocol::decode_application_payload (parts[1], false);
               return protocol::pack_infrastructure_reply (parts);
           },
-          timeout, std::move (callback));
+          deadline, std::move (callback));
     }
 
-    const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
     const auto operations = _operations;
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     std::uint64_t correlation = 0;
     foundation::call_id_t id{};
     detail::backend::raw_message_t request_parts;
     bool registered = false;
+    auto terminal_wake = std::make_shared<task_completion_source_t<void>> ();
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
         port = _port;
@@ -2251,19 +2516,23 @@ raw_mesh_node_owner_t::request_actor_create (std::vector<std::uint8_t> target_ro
             id = operation_id (local.lifecycle_generation, correlation);
             request.correlation = correlation;
             request_parts = {protocol::encode_actor_create_header (request)};
-            registered = operations->register_operation (
-              id, foundation::operation_registry_t::clock_t::time_point::max (),
-              std::move (callback), target_routing_id);
         }
     }
     if (!port) {
         callback (foundation::operation_terminal_t::shutdown, {});
         co_return true;
     }
+    registered = operations->register_operation (
+      id, deadline,
+      [callback = std::move (callback), terminal_wake] (auto terminal, auto payload) {
+          terminal_wake->complete (result_t<void>::success ());
+          callback (terminal, std::move (payload));
+      },
+      target_routing_id, {}, {}, detail::current_wait_owner ());
     if (!registered)
         co_return false;
 
-    co_return co_await submit_registered_infrastructure_request_with_retry (
+    co_return co_await submit_registered_infrastructure_request (
       std::move (port), _topology.observe_peer (target_routing_id), operations, id, correlation,
       target_routing_id, std::move (request_parts),
       [] (const detail::backend::raw_message_t &parts) {
@@ -2276,7 +2545,7 @@ raw_mesh_node_owner_t::request_actor_create (std::vector<std::uint8_t> target_ro
               (void) protocol::decode_application_payload (parts[1], false);
           return protocol::pack_infrastructure_reply (parts);
       },
-      deadline);
+      deadline, terminal_wake->task ());
 }
 
 task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
@@ -2340,23 +2609,21 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
         id = operation_id (_topology.local_descriptor ().lifecycle_generation,
                            take_reply_route_id_locked ());
-        // The durable sender owns the deadline and its admission-dependent
-        // terminal. Registry expiry must not race that classification.
-        if (!_operations->register_operation (
-              id, foundation::operation_registry_t::clock_t::time_point::max (),
-              [completion] (auto terminal, auto packed) {
-                  completion->complete (
-                    result_t<completion_t>::success ({terminal, std::move (packed)}));
-              },
-              target_routing_id)) {
-            outcome.failure = actor_join_wire_failure_t::unavailable;
-            co_return outcome;
-        }
     }
-    (void) co_await submit_registered_infrastructure_request_with_retry (
+    if (!_operations->register_operation (
+          id, deadline,
+          [completion] (auto terminal, auto packed) {
+              completion->complete (
+                result_t<completion_t>::success ({terminal, std::move (packed)}));
+          },
+          target_routing_id, {}, {}, detail::current_wait_owner ())) {
+        outcome.failure = actor_join_wire_failure_t::unavailable;
+        co_return outcome;
+    }
+    (void) co_await submit_registered_infrastructure_request (
       std::move (port), _topology.observe_peer (target_routing_id), _operations, id,
       request.correlation, target_routing_id, std::move (parts),
-      protocol::pack_infrastructure_reply, deadline);
+      protocol::pack_infrastructure_reply, deadline, completion->task ());
     const auto [terminal, packed] = co_await pending;
     if (terminal != foundation::operation_terminal_t::completed) {
         outcome.failure = terminal == foundation::operation_terminal_t::timed_out
@@ -2431,6 +2698,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument ("Instance Spot activation timeout must be positive");
     }
+    const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
     const auto local = _topology.local_descriptor ();
     if (!request.request || request.source_node_routing_id != local.node_routing_id
         || request.source_node_generation != local.lifecycle_generation
@@ -2457,8 +2725,9 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     parts.push_back (protocol::encode_application_payload (application_payload));
     const auto id = operation_id (local.lifecycle_generation, correlation);
     if (!_operations->register_operation (
-          id, foundation::operation_registry_t::clock_t::now () + timeout, std::move (callback), {},
-          mesh_request_metric_t (_request_metrics, mesh_request_surface_t::instance_spot))) {
+          id, deadline, std::move (callback), {},
+          mesh_request_metric_t (_request_metrics, mesh_request_surface_t::instance_spot), {},
+          detail::current_wait_owner ())) {
         co_return false;
     }
     if (target_routing_id == local.node_routing_id) {
@@ -2475,9 +2744,13 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     const auto operations = _operations;
     trace_mesh ("infrastructure-request-submit correlation=" + std::to_string (correlation)
                 + " targetBytes=" + std::to_string (target_routing_id.size ()));
+    const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
+      deadline - foundation::operation_registry_t::clock_t::now ());
+    if (remaining <= std::chrono::milliseconds::zero ())
+        co_return true;
     auto admitted = std::make_shared<task_completion_source_t<void>> ();
     auto running = std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-      port->request (target_routing_id, std::move (parts), timeout, {}, admitted));
+      port->request (target_routing_id, std::move (parts), remaining, {}, admitted));
     detail::observe_task_terminal (
       *running, [operations, id, correlation,
                  running] (const result_t<detail::backend::raw_request_completion_t> &settled) {
@@ -2547,6 +2820,7 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_close (
   std::chrono::milliseconds timeout,
   foundation::operation_registry_t::callback_t callback)
 {
+    const auto deadline = capture_request_deadline (timeout);
     const auto local = _topology.local_descriptor ();
     if (request.source_node_routing_id != local.node_routing_id
         || request.source_node_generation != local.lifecycle_generation
@@ -2566,7 +2840,7 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_close (
           (void) protocol::decode_user_spot_close_reply (parts.front ());
           return protocol::pack_infrastructure_reply (parts);
       },
-      timeout, std::move (callback));
+      deadline, std::move (callback));
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
@@ -2574,12 +2848,9 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
   const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
   const std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)>
     &decode_reply,
-  std::chrono::milliseconds timeout,
+  foundation::operation_registry_t::clock_t::time_point deadline,
   foundation::operation_registry_t::callback_t callback)
 {
-    if (timeout <= std::chrono::milliseconds::zero ()) {
-        throw std::invalid_argument ("raw mesh infrastructure request timeout must be positive");
-    }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     std::uint64_t correlation = 0;
     const auto local = _topology.local_descriptor ();
@@ -2592,8 +2863,8 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
         correlation = take_reply_route_id_locked ();
     }
     const auto id = operation_id (local.lifecycle_generation, correlation);
-    if (!_operations->register_operation (
-          id, foundation::operation_registry_t::clock_t::now () + timeout, std::move (callback))) {
+    if (!_operations->register_operation (id, deadline, std::move (callback), {}, {}, {},
+                                          detail::current_wait_owner ())) {
         co_return false;
     }
     if (target_routing_id == local.node_routing_id) {
@@ -2609,9 +2880,13 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
     }
     const auto operations = _operations;
     detail::backend::raw_message_t request_parts{header (correlation)};
+    const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
+      deadline - foundation::operation_registry_t::clock_t::now ());
+    if (remaining <= std::chrono::milliseconds::zero ())
+        co_return true;
     co_return co_await submit_registered_infrastructure_request (
       std::move (port), std::move (operations), id, correlation, target_routing_id,
-      std::move (request_parts), decode_reply, timeout);
+      std::move (request_parts), decode_reply, remaining);
 }
 
 bool raw_mesh_node_owner_t::reply_infrastructure (const service_mailbox_record_t &request,
@@ -2807,7 +3082,7 @@ void raw_mesh_node_owner_t::publish_peer_metrics (opentelemetry::metrics::Observ
         .run ([&] () -> std::size_t {
             if (registration.index == 1)
                 return owner._closed ? 0 : owner._routes.size ();
-            const auto peers = owner._topology.peers ();
+            const auto peers = owner._topology.peers_on_lane ();
             if (registration.index == 2)
                 return owner._closed
                          ? 0
@@ -2820,7 +3095,7 @@ void raw_mesh_node_owner_t::publish_peer_metrics (opentelemetry::metrics::Observ
               - owner._expected_peers.count (owner._options.descriptor.node_routing_id);
             for (const auto &peer : peers)
                 configured += !owner._expected_peers.contains (peer.descriptor.node_routing_id);
-            for (const auto &peer : owner._topology.not_required_peers ())
+            for (const auto &peer : owner._topology.not_required_peers_on_lane ())
                 configured += !owner._expected_peers.contains (peer.node_routing_id);
             return configured;
         })
@@ -3003,48 +3278,62 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::admit_descriptor_record (
         const auto submitted = submit_header_only (source_routing_id, protocol::encode_reject (3));
         return raw_mesh_pump_result_t::infrastructure;
     }
-    const auto admission =
-      _lane
-        .run ([this, &source_routing_id, &descriptor, &expectation, &connection_id, now, kind] {
-            const auto result = expectation.expected_descriptor
-                                  ? _topology.admit (descriptor, connection_id,
-                                                     *expectation.expected_descriptor, now, kind)
-                                  : _topology.admit (descriptor, connection_id, now, kind);
-            trace_admission_phase (source_routing_id, descriptor.lifecycle_generation, kind,
-                                   result);
-            refresh_admission_due_on_lane ();
-            if (result == peer_admission_result_t::not_required
-                || result == peer_admission_result_t::admitted
-                || result == peer_admission_result_t::duplicate_connection) {
-                if (kind == protocol::command::hello) {
-                    auto local = _topology.local_descriptor ();
-                    const auto route = _routes.find (source_routing_id);
-                    // The exchange owns the descriptor until the remote ADMIT;
-                    // its catch-up publication sends later revisions as UPDATE.
-                    if (route != _routes.end () && !route->second.hello.empty ())
-                        local = protocol::decode_route_mesh_admission (
-                          route->second.hello, protocol::command::hello, local.node_routing_id);
-                    (void) submit_header_only_on_lane (
-                      source_routing_id,
-                      protocol::encode_route_mesh_admission (protocol::command::admit, local));
-                } else if (kind == protocol::command::admit) {
-                    const auto route = _routes.find (source_routing_id);
-                    if (route != _routes.end () && !route->second.hello.empty ()) {
-                        auto hello = std::exchange (route->second.hello, {});
-                        const auto local = _topology.local_descriptor ();
-                        if (hello
-                            != protocol::encode_route_mesh_admission (protocol::command::hello,
-                                                                      local)) {
-                            const auto peer = _topology.peer (source_routing_id);
-                            if (peer)
-                                send_descriptor_update_on_lane (local, {*peer});
+    std::vector<std::function<void ()>> notifications;
+    peer_admission_result_t admission;
+    try {
+        admission =
+          _lane
+            .run ([this, &source_routing_id, &descriptor, &expectation, &connection_id, now, kind,
+                   &notifications] {
+                auto publication = _topology.admit_on_lane (
+                  descriptor, connection_id,
+                  expectation.expected_descriptor ? &*expectation.expected_descriptor : nullptr,
+                  now, kind);
+                if (publication.second)
+                    notifications.push_back (std::move (publication.second));
+                const auto result = publication.first;
+                trace_admission_phase (source_routing_id, descriptor.lifecycle_generation, kind,
+                                       result);
+                refresh_admission_due_on_lane ();
+                if (result == peer_admission_result_t::not_required
+                    || result == peer_admission_result_t::admitted
+                    || result == peer_admission_result_t::duplicate_connection) {
+                    if (kind == protocol::command::hello) {
+                        auto local = _topology.local_descriptor ();
+                        const auto route = _routes.find (source_routing_id);
+                        // The exchange owns the descriptor until the remote ADMIT;
+                        // its catch-up publication sends later revisions as UPDATE.
+                        if (route != _routes.end () && !route->second.hello.empty ())
+                            local = protocol::decode_route_mesh_admission (
+                              route->second.hello, protocol::command::hello, local.node_routing_id);
+                        (void) submit_header_only_on_lane (
+                          source_routing_id,
+                          protocol::encode_route_mesh_admission (protocol::command::admit, local));
+                    } else if (kind == protocol::command::admit) {
+                        const auto route = _routes.find (source_routing_id);
+                        if (route != _routes.end () && !route->second.hello.empty ()) {
+                            auto hello = std::exchange (route->second.hello, {});
+                            const auto local = _topology.local_descriptor ();
+                            if (hello
+                                != protocol::encode_route_mesh_admission (protocol::command::hello,
+                                                                          local)) {
+                                const auto peer = _topology.peer (source_routing_id);
+                                if (peer)
+                                    send_descriptor_update_on_lane (local, {*peer});
+                            }
                         }
                     }
                 }
-            }
-            return result;
-        })
-        .get ();
+                return result;
+            })
+            .get ();
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
+    if (auto failure = deliver_topology_notifications (notifications))
+        std::rethrow_exception (failure);
     if (admission == peer_admission_result_t::not_required) {
         if (kind != protocol::command::hello) {
             // NotRequired ends this configured connection intent; the
@@ -3199,16 +3488,29 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                 return raw_mesh_pump_result_t::protocol_error;
             }
             (void) protocol::decode_reject (protocol::message_bytes (received->parts.front ()));
-            _lane
-              .run ([this, &received] {
-                  const auto peer = _topology.peer (received->source_routing_id);
-                  if (!peer)
-                      return;
-                  (void) _topology.disconnect (received->source_routing_id, peer->connection_id);
-                  (void) _liveness.disconnect (received->source_routing_id, peer->connection_id);
-                  refresh_admission_due_on_lane ();
-              })
-              .get ();
+            std::vector<std::function<void ()>> notifications;
+            try {
+                _lane
+                  .run ([this, &received, &notifications] {
+                      const auto peer = _topology.peer (received->source_routing_id);
+                      if (!peer)
+                          return;
+                      auto publication = _topology.disconnect_on_lane (received->source_routing_id,
+                                                                       peer->connection_id);
+                      if (publication.second)
+                          notifications.push_back (std::move (publication.second));
+                      (void) _liveness.disconnect_owned (received->source_routing_id,
+                                                         peer->connection_id);
+                      refresh_admission_due_on_lane ();
+                  })
+                  .get ();
+            }
+            catch (...) {
+                std::rethrow_exception (
+                  deliver_topology_notifications (notifications, std::current_exception ()));
+            }
+            if (auto failure = deliver_topology_notifications (notifications))
+                std::rethrow_exception (failure);
             return raw_mesh_pump_result_t::infrastructure;
         }
         if (admitted->liveness)
@@ -3226,8 +3528,8 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                 const auto ack =
                   _lane
                     .run ([this, &received, &connection_id, &record] {
-                        return _liveness.acknowledge_probe (received->source_routing_id,
-                                                            connection_id, record.probe_id);
+                        return _liveness.acknowledge_probe_owned (received->source_routing_id,
+                                                                  connection_id, record.probe_id);
                     })
                     .get ();
                 if (!ack)
@@ -3240,8 +3542,8 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
             } else {
                 (void) _lane
                   .run ([this, &received, &connection_id, &record, now] {
-                      return _liveness.acknowledge (received->source_routing_id, connection_id,
-                                                    record.probe_id, now);
+                      return _liveness.acknowledge_owned (received->source_routing_id,
+                                                          connection_id, record.probe_id, now);
                   })
                   .get ();
             }
@@ -3776,11 +4078,6 @@ bool raw_mesh_node_owner_t::wait_for_activity (std::chrono::milliseconds timeout
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     try {
         auto next_activity = _liveness.next_activity ();
-        const auto next_operation_deadline = _operations->next_deadline ();
-        if (next_operation_deadline
-            && (!next_activity || *next_operation_deadline < *next_activity)) {
-            next_activity = next_operation_deadline;
-        }
         if (next_activity) {
             const auto now = foundation::operation_registry_t::clock_t::now ();
             const auto remaining =
@@ -3896,18 +4193,24 @@ raw_mesh_node_owner_t::peer_route (const std::vector<std::uint8_t> &rid,
 {
     return _lane
       .run ([this, &rid, lifecycle_generation] {
-          const auto selected = _routes.find (rid);
-          if (selected == _routes.end ())
-              return std::pair<std::uint64_t, bool>{0, false};
-          const auto peer = _topology.peer (rid);
-          return std::pair{selected->second.generation,
-                           peer && peer->ready
-                             && (!lifecycle_generation
-                                 || peer->descriptor.lifecycle_generation == *lifecycle_generation)
-                             && detail::backend::is_route_connection (peer->connection_id,
-                                                                      selected->second.generation)};
+          return peer_route_on_lane (rid, lifecycle_generation);
       })
       .get ();
+}
+
+std::pair<std::uint64_t, bool>
+raw_mesh_node_owner_t::peer_route_on_lane (const std::vector<std::uint8_t> &rid,
+                                           std::optional<std::uint64_t> lifecycle_generation) const
+{
+    const auto selected = _routes.find (rid);
+    if (selected == _routes.end ())
+        return std::pair<std::uint64_t, bool>{0, false};
+    const auto peer = _topology.peer (rid);
+    return std::pair{
+      selected->second.generation,
+      peer && peer->ready
+        && (!lifecycle_generation || peer->descriptor.lifecycle_generation == *lifecycle_generation)
+        && detail::backend::is_route_connection (peer->connection_id, selected->second.generation)};
 }
 
 std::size_t raw_mesh_node_owner_t::observe_routes ()
@@ -3931,58 +4234,74 @@ std::size_t raw_mesh_node_owner_t::apply_route_snapshot (zlink::poll_event_flag_
     if ((static_cast<short> (readiness) & static_cast<short> (zlink::poll_event_flag_t::pollroute))
         == 0)
         return 0;
-    return _lane
-      .run ([this] {
-          std::size_t changes = 0;
-          {
-              if (!_router)
-                  return changes;
-              std::vector<zlink::router_route_t> snapshot;
-              {
-                  std::lock_guard socket_lock (*_socket_mutex);
-                  snapshot = _router->routes_snapshot ();
-              }
-              decltype (_routes) observed;
-              for (const auto &route : snapshot) {
-                  const auto rid = route.routing_id.to_bytes ();
-                  auto previous = _routes.find (rid);
-                  observed.emplace (rid,
-                                    previous != _routes.end ()
-                                        && previous->second.generation == route.route_generation
-                                      ? std::move (previous->second)
-                                      : selected_route_t{route.route_generation, {}});
-              }
-              // A route that ended or was replaced loses its admission and
-              // liveness; a new route admits only through a new handshake.
-              for (const auto &[node_routing_id, route] : _routes) {
-                  const auto still = observed.find (node_routing_id);
-                  if (still != observed.end () && still->second.generation == route.generation)
-                      continue;
-                  ++changes;
-                  const auto connection_id = route_connection_id (route.generation);
-                  trace_mesh ("route-ended routing=" + owner_key (node_routing_id)
-                              + " connection=" + owner_key (connection_id));
-                  const auto removed = _topology.disconnect (node_routing_id, connection_id);
-                  (void) _liveness.disconnect (node_routing_id, connection_id);
-                  if (removed)
-                      end_peer_operations_if_disconnected_locked (node_routing_id);
-              }
-              for (const auto &[node_routing_id, route] : observed) {
-                  if (route_current_locked (node_routing_id, route.generation))
-                      continue;
-                  if (!_routes.contains (node_routing_id))
-                      ++changes;
-                  trace_mesh ("route-selected routing=" + owner_key (node_routing_id)
-                              + " connection="
-                              + owner_key (route_connection_id (route.generation)));
-              }
-              _routes = std::move (observed);
-          }
-          if (changes != 0)
-              submit_pending_hellos_on_lane ();
-          return changes;
-      })
-      .get ();
+    std::vector<std::function<void ()>> notifications;
+    try {
+        const auto result =
+          _lane
+            .run ([this, &notifications] {
+                std::size_t changes = 0;
+                {
+                    if (!_router)
+                        return changes;
+                    std::vector<zlink::router_route_t> snapshot;
+                    {
+                        std::lock_guard socket_lock (*_socket_mutex);
+                        snapshot = _router->routes_snapshot ();
+                    }
+                    decltype (_routes) observed;
+                    for (const auto &route : snapshot) {
+                        const auto rid = route.routing_id.to_bytes ();
+                        auto previous = _routes.find (rid);
+                        observed.emplace (rid, previous != _routes.end ()
+                                                   && previous->second.generation
+                                                        == route.route_generation
+                                                 ? std::move (previous->second)
+                                                 : selected_route_t{route.route_generation, {}});
+                    }
+                    // A route that ended or was replaced loses its admission and
+                    // liveness; a new route admits only through a new handshake.
+                    for (const auto &[node_routing_id, route] : _routes) {
+                        const auto still = observed.find (node_routing_id);
+                        if (still != observed.end ()
+                            && still->second.generation == route.generation)
+                            continue;
+                        ++changes;
+                        const auto connection_id = route_connection_id (route.generation);
+                        trace_mesh ("route-ended routing=" + owner_key (node_routing_id)
+                                    + " connection=" + owner_key (connection_id));
+                        auto publication =
+                          _topology.disconnect_on_lane (node_routing_id, connection_id);
+                        if (publication.second)
+                            notifications.push_back (std::move (publication.second));
+                        const auto removed = publication.first;
+                        (void) _liveness.disconnect_owned (node_routing_id, connection_id);
+                        if (removed)
+                            end_peer_operations_if_disconnected_locked (node_routing_id);
+                    }
+                    for (const auto &[node_routing_id, route] : observed) {
+                        if (route_current_locked (node_routing_id, route.generation))
+                            continue;
+                        if (!_routes.contains (node_routing_id))
+                            ++changes;
+                        trace_mesh ("route-selected routing=" + owner_key (node_routing_id)
+                                    + " connection="
+                                    + owner_key (route_connection_id (route.generation)));
+                    }
+                    _routes = std::move (observed);
+                }
+                if (changes != 0)
+                    submit_pending_hellos_on_lane ();
+                return changes;
+            })
+            .get ();
+        if (auto failure = deliver_topology_notifications (notifications))
+            std::rethrow_exception (failure);
+        return result;
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
 }
 
 bool raw_mesh_node_owner_t::route_needs_hello_on_lane (const std::vector<std::uint8_t> &rid,
@@ -3998,7 +4317,7 @@ bool raw_mesh_node_owner_t::route_needs_hello_on_lane (const std::vector<std::ui
 
 void raw_mesh_node_owner_t::refresh_admission_due_on_lane ()
 {
-    _liveness.set_admission_pending (
+    _liveness.set_admission_pending_owned (
       std::any_of (_routes.begin (), _routes.end (), [this] (const auto &route) {
           return route_needs_hello_on_lane (route.first, route.second.generation);
       }));
@@ -4016,7 +4335,7 @@ void raw_mesh_node_owner_t::submit_pending_hellos_on_lane ()
                                                                  _topology.local_descriptor ());
         (void) submit_header_only_on_lane (rid, route.hello);
     }
-    _liveness.set_admission_pending (pending);
+    _liveness.set_admission_pending_owned (pending);
 }
 
 task_t<service_liveness_tick_t>
@@ -4031,49 +4350,62 @@ raw_mesh_node_owner_t::tick_liveness (service_liveness_registry_t::clock_t::time
 task_t<service_liveness_tick_t>
 raw_mesh_node_owner_t::tick_due_liveness (service_liveness_registry_t::clock_t::time_point now)
 {
-    const auto [result, port] =
-      _lane
-        .run ([this, now] {
-            auto tick = _liveness.tick (now);
-            std::shared_ptr<detail::backend::raw_route_port_t> port;
-            {
-                std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                port = _port;
-            }
-            if (!_router)
-                return std::pair{std::move (tick), port};
-            for (const auto &timed_out : tick.timed_out_nodes) {
-                const auto peer = _topology.peer (timed_out);
-                if (!peer)
-                    continue;
-                const auto removed = _topology.disconnect (timed_out, peer->connection_id);
-                if (removed) {
-                    {
-                        std::lock_guard socket_lock (*_socket_mutex);
-                        try {
-                            _router->disconnect_rid (zlink::routing_id_t::from (timed_out));
-                        }
-                        catch (const zlink::connect_error_t &error) {
-                            // Core may already have removed the selected route.
-                            if (error.result () != zlink::connect_result_t::not_found)
-                                throw;
-                        }
-                    }
-                    end_peer_operations_if_disconnected_locked (timed_out);
+    std::vector<std::function<void ()>> notifications;
+    try {
+        const auto [result, port] =
+          _lane
+            .run ([this, now, &notifications] {
+                auto tick = _liveness.tick_owned (now);
+                std::shared_ptr<detail::backend::raw_route_port_t> port;
+                {
+                    std::lock_guard lifecycle_lock (_lifecycle_mutex);
+                    port = _port;
                 }
-            }
-            submit_pending_hellos_on_lane ();
-            return std::pair{std::move (tick), port};
-        })
-        .get ();
-    if (!port)
+                if (!_router)
+                    return std::pair{std::move (tick), port};
+                for (const auto &timed_out : tick.timed_out_nodes) {
+                    const auto peer = _topology.peer (timed_out);
+                    if (!peer)
+                        continue;
+                    auto publication =
+                      _topology.disconnect_on_lane (timed_out, peer->connection_id);
+                    if (publication.second)
+                        notifications.push_back (std::move (publication.second));
+                    const auto removed = publication.first;
+                    if (removed) {
+                        {
+                            std::lock_guard socket_lock (*_socket_mutex);
+                            try {
+                                _router->disconnect_rid (zlink::routing_id_t::from (timed_out));
+                            }
+                            catch (const zlink::connect_error_t &error) {
+                                // Core may already have removed the selected route.
+                                if (error.result () != zlink::connect_result_t::not_found)
+                                    throw;
+                            }
+                        }
+                        end_peer_operations_if_disconnected_locked (timed_out);
+                    }
+                }
+                submit_pending_hellos_on_lane ();
+                return std::pair{std::move (tick), port};
+            })
+            .get ();
+        if (auto failure = deliver_topology_notifications (notifications))
+            std::rethrow_exception (failure);
+        if (!port)
+            co_return result;
+        for (const auto &probe : result.probes) {
+            (void) submit_header_only (
+              probe.node_routing_id,
+              protocol::encode_liveness (protocol::command::livenessProbe, probe.probe_id));
+        }
         co_return result;
-    for (const auto &probe : result.probes) {
-        (void) submit_header_only (
-          probe.node_routing_id,
-          protocol::encode_liveness (protocol::command::livenessProbe, probe.probe_id));
     }
-    co_return result;
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
 }
 
 std::string raw_mesh_node_owner_t::owner_key (const std::vector<std::uint8_t> &routing_id)
