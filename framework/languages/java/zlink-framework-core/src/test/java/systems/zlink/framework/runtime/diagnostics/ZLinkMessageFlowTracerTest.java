@@ -12,6 +12,7 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkActivationState;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkChannelRouteKind;
@@ -19,6 +20,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAc
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowResult;
@@ -122,6 +124,264 @@ class ZLinkMessageFlowTracerTest {
         assertTrue(tracer(options(ZLinkMessageFlowLogMode.DETAILED)).captureEnabled());
         assertFalse(tracer(options(ZLinkMessageFlowLogMode.OFF)).dispatchErrorsEnabled());
         assertTrue(tracer(options(ZLinkMessageFlowLogMode.ERRORS)).dispatchErrorsEnabled());
+    }
+
+    @Test
+    void errorsDirectAndCapturedPointsKeepErrorsAndCorrelationWithoutFlowOrAmbientSession() {
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        List<String> records = new ArrayList<>();
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        records.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        boolean useParentHandlers = logger.getUseParentHandlers();
+        Level previousLevel = logger.getLevel();
+        logger.addHandler(handler);
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        var outer = tracer(options(ZLinkMessageFlowLogMode.NORMAL));
+        var ambient =
+                new ZLinkFlowContext.State(
+                        "01890f47-5ec8-7000-8000-000000000001",
+                        ZLinkFlowOrigin.INBOUND,
+                        "foreign-session");
+        assertTrue(outer.captureEnabled());
+        try (var ignored = ZLinkFlowContext.enter(ambient)) {
+            for (boolean dispatchError : new boolean[] {true, false}) {
+                for (boolean direct : new boolean[] {true, false}) {
+                    for (boolean explicitFlow : new boolean[] {true, false}) {
+                        for (boolean explicitSession : new boolean[] {true, false}) {
+                            records.clear();
+                            var options = options(ZLinkMessageFlowLogMode.NORMAL);
+                            options.traceSampleRate(0.0d);
+                            var live = new AtomicReference<>(ZLinkMessageFlowLogMode.NORMAL);
+                            options.diagnostics().installLiveMode(live);
+                            var tracer = tracer(options);
+                            var event =
+                                    dispatchError
+                                            ? error(
+                                                    ZLinkDispatchMessageKind.REQUEST,
+                                                    ZLinkDispatchErrorReason.HANDLER_EXCEPTION)
+                                            : flow(ZLinkMessageFlowOutcome.DROPPED);
+                            if (explicitFlow) {
+                                event =
+                                        event.withFlow(
+                                                "01890f47-5ec8-7000-8000-000000000002",
+                                                ZLinkFlowOrigin.APPLICATION);
+                            }
+                            if (explicitSession) {
+                                event = event.withStreamSessionId("message-session");
+                            }
+                            live.set(ZLinkMessageFlowLogMode.ERRORS);
+                            if (direct) {
+                                tracer.trace(event);
+                            } else {
+                                var point =
+                                        dispatchError
+                                                ? tracer.beginDispatchError()
+                                                : tracer.begin(ZLinkMessageFlowOutcome.DROPPED);
+                                assertTrue(point != null);
+                                point.trace(event);
+                            }
+                            assertEquals(1L, tracer.tracedCount());
+                            assertEquals(1, records.size());
+                            String record = records.getFirst();
+                            assertTrue(record.contains(" corr=corr-1"), record);
+                            assertTrue(record.contains(" packet=PlaceOrder"), record);
+                            assertTrue(record.contains(" channel=orders"), record);
+                            assertTrue(
+                                    record.contains(
+                                            dispatchError
+                                                    ? "event_id=zlink.dispatch_error"
+                                                    : " phase=dropped"),
+                                    record);
+                            assertFalse(record.contains(" flow="), record);
+                            assertFalse(record.contains(" origin="), record);
+                            assertFalse(record.contains("foreign-session"), record);
+                            assertEquals(
+                                    explicitSession, record.contains(" session=message-session"));
+                            assertEquals(0L, tracer.providerFailureCount());
+                        }
+                    }
+                }
+            }
+        } finally {
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(useParentHandlers);
+            logger.setLevel(previousLevel);
+        }
+    }
+
+    @Test
+    void errorsReporterInsideNormalFlowKeepsOneUnsampledErrorWithoutBorrowingFlow() {
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        List<String> records = new ArrayList<>();
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        records.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        boolean useParentHandlers = logger.getUseParentHandlers();
+        Level previousLevel = logger.getLevel();
+        logger.addHandler(handler);
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        var outer = tracer(options(ZLinkMessageFlowLogMode.NORMAL));
+        assertTrue(outer.captureEnabled());
+        var ambient =
+                new ZLinkFlowContext.State(
+                        "01890f47-5ec8-7000-8000-000000000001",
+                        ZLinkFlowOrigin.INBOUND,
+                        "foreign-session");
+        try (var ignored = ZLinkFlowContext.enter(ambient)) {
+            var options = options(ZLinkMessageFlowLogMode.ERRORS);
+            options.traceSampleRate(0.0d);
+            var reporter =
+                    new ZLinkDispatchErrorReporter(
+                            options, ZLinkHandlerActivator.reflection(), Runnable::run);
+            reporter.report(
+                    ZLinkDispatchErrorSurface.CHANNEL,
+                    ZLinkDispatchMessageKind.REQUEST,
+                    ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                    ZLinkDispatchErrorAction.REPLY_ERROR,
+                    "PlaceOrder",
+                    "orders",
+                    null,
+                    null,
+                    null,
+                    null,
+                    "corr-1",
+                    new IllegalStateException("handler failed"));
+
+            assertEquals(1L, reporter.reportedCount());
+            assertEquals(1L, reporter.flow().tracedCount());
+            assertEquals(1, records.size());
+            String record = records.getFirst();
+            assertTrue(record.contains("event_id=zlink.dispatch_error"), record);
+            assertTrue(record.contains(" corr=corr-1"), record);
+            assertTrue(record.contains(" reason=handler_exception"), record);
+            assertTrue(record.contains(" action=reply_error"), record);
+            assertTrue(record.contains(" error_type=IllegalStateException"), record);
+            assertTrue(record.contains(" error_message=handler failed"), record);
+            assertFalse(record.contains(" flow="), record);
+            assertFalse(record.contains(" origin="), record);
+            assertFalse(record.contains(" session="), record);
+            assertEquals(0L, reporter.flow().providerFailureCount());
+        } finally {
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(useParentHandlers);
+            logger.setLevel(previousLevel);
+        }
+    }
+
+    @Test
+    void normalPointPreservesExplicitFlowOrAmbientFallbackAfterLiveModeChanges() {
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        List<String> records = new ArrayList<>();
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        records.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        boolean useParentHandlers = logger.getUseParentHandlers();
+        Level previousLevel = logger.getLevel();
+        logger.addHandler(handler);
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        var ambient =
+                new ZLinkFlowContext.State(
+                        "01890f47-5ec8-7000-8000-000000000001",
+                        ZLinkFlowOrigin.INBOUND,
+                        "ambient-session");
+        try (var ignored = ZLinkFlowContext.enter(ambient)) {
+            for (boolean explicitFlow : new boolean[] {true, false}) {
+                for (boolean switchAfterBegin : new boolean[] {true, false}) {
+                    records.clear();
+                    var options = options(ZLinkMessageFlowLogMode.NORMAL);
+                    var live = new AtomicReference<>(ZLinkMessageFlowLogMode.NORMAL);
+                    options.diagnostics().installLiveMode(live);
+                    var tracer = tracer(options);
+                    var event = flow(ZLinkMessageFlowOutcome.RECEIVED);
+                    if (explicitFlow) {
+                        event =
+                                event.withFlow(
+                                                "01890f47-5ec8-7000-8000-000000000002",
+                                                ZLinkFlowOrigin.APPLICATION)
+                                        .withStreamSessionId("message-session");
+                    }
+                    var point = tracer.begin(ZLinkMessageFlowOutcome.RECEIVED);
+                    assertTrue(point != null);
+                    if (switchAfterBegin) {
+                        live.set(ZLinkMessageFlowLogMode.ERRORS);
+                    }
+                    point.trace(event);
+
+                    assertEquals(1L, tracer.tracedCount());
+                    assertEquals(1, records.size());
+                    String record = records.getFirst();
+                    assertTrue(record.contains(" corr=corr-1"), record);
+                    assertTrue(
+                            record.contains(
+                                    " flow="
+                                            + (explicitFlow
+                                                    ? "01890f47-5ec8-7000-8000-000000000002"
+                                                    : ambient.flowId())),
+                            record);
+                    assertTrue(
+                            record.contains(
+                                    " origin=" + (explicitFlow ? "application" : "inbound")),
+                            record);
+                    assertTrue(
+                            record.contains(
+                                    " session="
+                                            + (explicitFlow
+                                                    ? "message-session"
+                                                    : "ambient-session")),
+                            record);
+                    assertEquals(0L, tracer.providerFailureCount());
+                }
+            }
+        } finally {
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(useParentHandlers);
+            logger.setLevel(previousLevel);
+        }
+    }
+
+    @Test
+    void eventStillRejectsEitherHalfOfAFlowPair() {
+        var event = flow(ZLinkMessageFlowOutcome.DROPPED);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> event.withFlow("01890f47-5ec8-7000-8000-000000000002", null));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> event.withFlow(null, ZLinkFlowOrigin.APPLICATION));
     }
 
     @Test

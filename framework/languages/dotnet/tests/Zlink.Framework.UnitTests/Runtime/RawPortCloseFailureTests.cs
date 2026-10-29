@@ -20,10 +20,11 @@ public sealed class RawPortCloseFailureTests
         var proxy = (CloseFailureProxy)(object)router;
         proxy.Inner = socket;
         proxy.BlockClose = true;
-        var node = new ZLinkManagedMeshNode(context, "blocked-mesh");
-        typeof(ZLinkManagedMeshNode)
-            .GetField("_socket", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(node, router);
+        var node = new ZLinkManagedMeshNode(
+            context,
+            "blocked-mesh",
+            directRequestSocket: router
+        );
         var first = node.DisposeAsync().AsTask();
         await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var second = node.DisposeAsync().AsTask();
@@ -278,29 +279,29 @@ public sealed class RawPortCloseFailureTests
             1,
             default
         );
-        var type = typeof(ZLinkAutomaticFanoutSubscriberRuntime).GetNestedType(
-            "Connection",
-            BindingFlags.NonPublic
-        )!;
-        var connection = Activator.CreateInstance(
-            type,
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-            null,
-            [runtime, descriptor],
-            null
-        )!;
-        type.GetField("_socketOwner", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(connection, new ZLinkReceiveSocketOwner(subscriber.DisposeAsync));
-        var connections = (System.Collections.IDictionary)
-            typeof(ZLinkAutomaticFanoutSubscriberRuntime)
-                .GetField("_connections", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(runtime)!;
-        connections.Add((descriptor.PublisherRid, descriptor.LifecycleGeneration), connection);
-        var first = runtime.DisposeAsync().AsTask();
-        await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var second = runtime.DisposeAsync().AsTask();
+        Task? first = null;
+        Task? second = null;
         try
         {
+            await runtime.ReplaceAsync(
+                [
+                    new ZLinkFanoutConnectionPlan(
+                        descriptor,
+                        true,
+                        ZLinkFanoutPublisherConnectionState.Connecting
+                    ),
+                ],
+                new ZLinkLocationRuntimeSnapshot("healthy", null, null)
+            );
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => runtime.SocketCreationCount > 0,
+                    TimeSpan.FromSeconds(5)
+                )
+            );
+            first = runtime.DisposeAsync().AsTask();
+            await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            second = runtime.DisposeAsync().AsTask();
             Assert.Same(first, second);
             Assert.Equal(1, proxy.CloseAttempts);
             await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
@@ -313,8 +314,12 @@ public sealed class RawPortCloseFailureTests
         finally
         {
             proxy.ReleaseClose.TrySetResult();
+            first ??= runtime.DisposeAsync().AsTask();
+            if (second is null)
+                await first;
+            else
+                await Task.WhenAll(first, second);
         }
-        await Task.WhenAll(first, second);
     }
 
     [Fact]
@@ -363,10 +368,11 @@ public sealed class RawPortCloseFailureTests
         var router = DispatchProxy.Create<IRouterSocket, CloseFailureProxy>();
         var proxy = (CloseFailureProxy)(object)router;
         proxy.Inner = socket;
-        var node = new ZLinkManagedMeshNode(context, "close-failure");
-        typeof(ZLinkManagedMeshNode)
-            .GetField("_socket", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(node, router);
+        var node = new ZLinkManagedMeshNode(
+            context,
+            "close-failure",
+            directRequestSocket: router
+        );
         Assert.Same(
             proxy.Failure,
             await Assert.ThrowsAsync<InvalidOperationException>(async () =>

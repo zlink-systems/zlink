@@ -8,9 +8,9 @@
 #include <zlink/Contracts/Eventing/poll_event.hpp>
 
 static_assert(ZLINK_VERSION_MAJOR == 1, "zlink/common.h major version must match Core version");
-static_assert(ZLINK_VERSION_MINOR == 20, "zlink/common.h minor version must match Core version");
+static_assert(ZLINK_VERSION_MINOR == 21, "zlink/common.h minor version must match Core version");
 static_assert(ZLINK_VERSION_PATCH == 0, "zlink/common.h patch version must match Core version");
-static_assert(ZLINK_VERSION == ZLINK_MAKE_VERSION(1, 20, 0),
+static_assert(ZLINK_VERSION == ZLINK_MAKE_VERSION(1, 21, 0),
   "zlink/common.h aggregate version must match Core version");
 static_assert(ZLINK_COMPLETION_WRITABLE == 3,
   "the public raw header must expose the WRITABLE completion ABI value");

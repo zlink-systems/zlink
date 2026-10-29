@@ -59,9 +59,9 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.20.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.21.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.20.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.21.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 # The binding and Core package prefixes have three sources, in this order: the
 # two ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_*_PREFIX options, the repository's local
@@ -2590,6 +2590,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;channel;topology;liveness")
   target_use_zlink_gtest_main(test_cpp_framework_mesh_selected_route)
   target_include_directories(test_cpp_framework_mesh_selected_route PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_durable_head_supply
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_durable_head_supply.cpp
+    "framework-unit;framework-regression;execution;dispatch;admission"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_durable_head_supply)
+  target_include_directories(test_cpp_framework_durable_head_supply PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_application_job_queue

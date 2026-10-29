@@ -1959,12 +1959,14 @@ test('framework host dispatches a MeshNode channel record through registered han
 test('framework host dispatches MeshNode node-direct send and request records', async () => {
   const meshName = `host.node-direct.${process.pid}`;
   let resolveHandled;
+  let sent;
   const handled = new Promise((resolve) => {
     resolveHandled = resolve;
   });
   class DirectNotice {
     handle(message, context) {
-      resolveHandled({ message, context });
+      sent = { message, context };
+      resolveHandled(sent);
     }
   }
   class DirectQuery {
@@ -1983,58 +1985,177 @@ test('framework host dispatches MeshNode node-direct send and request records', 
       .addRouteRequestHandler(DirectQuery);
     mesh.channel(`${meshName}.direct`).server().addSendHandler(DirectChannelNotice);
   });
-  const host = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  const queuedRecords = [];
+  const untransferredParts = new Set();
+  const readyBatches = new WeakMap();
+  const receiveCapacities = new WeakMap();
+  let readyHandler;
+  const factory = new backend.ZLinkNodeBackendAdapterFactory();
+  const createMeshAdapter = factory.createMeshAdapter.bind(factory);
+  factory.createMeshAdapter = () => {
+    const adapter = createMeshAdapter();
+    const createMeshNode = adapter.createMeshNode.bind(adapter);
+    adapter.createMeshNode = (...args) => {
+      const node = createMeshNode(...args);
+      // Keep real node startup/shutdown; replace only synthetic ingress readiness.
+      node.setReadyHandler = (handler) => { readyHandler = handler; };
+      node.createReadyBatch = (capacity) => {
+        const pending = [];
+        const batch = {
+          records: [],
+          takeClaim(index) {
+            let record = pending[index];
+            pending[index] = undefined;
+            return {
+              recvBatch(receiveBatch) {
+                if (record === undefined || receiveCapacities.get(receiveBatch) === 0) {
+                  return { ok: true, records: [] };
+                }
+                const received = record;
+                record = undefined;
+                // Returning the receive record transfers its input parts to the pump.
+                untransferredParts.delete(received.parts);
+                return { ok: true, records: [received] };
+              },
+              release() { record = undefined; }
+            };
+          },
+          reset() {
+            batch.records.length = 0;
+            pending.length = 0;
+          },
+          close() {
+            batch.reset();
+            readyBatches.delete(batch);
+          }
+        };
+        readyBatches.set(batch, { capacity, pending });
+        return batch;
+      };
+      node.createReceiveBatch = (capacity) => {
+        const batch = {
+          reset(messageCapacity = capacity) {
+            receiveCapacities.set(batch, messageCapacity);
+          },
+          close() { receiveCapacities.delete(batch); }
+        };
+        batch.reset();
+        return batch;
+      };
+      node.drainReady = (domain, batch) => {
+        batch.reset();
+        if (domain === framework.ReadyDomain.Infrastructure) {
+          return { ok: true, hasResidue: false, records: batch.records };
+        }
+        const { capacity, pending } = readyBatches.get(batch);
+        while (pending.length < capacity && queuedRecords.length > 0) {
+          pending.push(queuedRecords.shift());
+          batch.records.push({
+            ownerKind: framework.ReadyOwnerKind.Node,
+            domain: framework.ReadyDomain.Application,
+            spotId: null,
+            actor: null
+          });
+        }
+        return { ok: true, hasResidue: queuedRecords.length > 0, records: batch.records };
+      };
+      return node;
+    };
+    return adapter;
+  };
+  function ownParts(encoded) {
+    const parts = [];
+    untransferredParts.add(parts);
+    for (const part of encoded) parts.push(zlink.Message.from(part));
+    return parts;
+  }
+  function enqueue(record) {
+    queuedRecords.push({
+      domain: framework.ReadyDomain.Application,
+      sourceSpotId: null,
+      sourceBindingGeneration: 0n,
+      sourceActor: null,
+      operationId: { high: 0n, low: 0n },
+      channelName: null,
+      topic: null,
+      applicationMetadata: null,
+      kindData: null,
+      terminalResult: 0,
+      failureErrno: 0,
+      reply: () => zlink.SubmitResult.InvalidState,
+      replyActorJoin: () => zlink.SubmitResult.NotSupported,
+      ...record
+    });
+    readyHandler(framework.ReadyDomain.Application);
+  }
+  const host = new framework.ZLinkFrameworkRuntimeHost(
+    { registration },
+    { backendAdapterFactory: factory }
+  );
+  let replyParts;
 
   try {
     await host.start();
     const node = host.requirePrimaryMeshNode();
     const target = node.status().routingId;
-    const sendParts = channelEnvelope.encodeChannelEnvelopeParts(
+    const sendParts = ownParts(channelEnvelope.encodeChannelEnvelopeParts(
       3,
       meshName,
       'DirectNotice',
       { value: 'sent' }
-    ).map((part) => zlink.Message.from(part));
-    await host.dispatchMeshRecord(() => 'remote', meshName, { ownerKind: framework.ReadyOwnerKind.Node }, {
+    ));
+    const sendTerminal = deferred();
+    enqueue({
       kind: framework.ReceiveKind.NodeSend,
+      operationKind: 0,
       sourceNodeRid: target,
-      parts: sendParts
+      parts: sendParts,
+      onTerminalCompletion: () => { sendTerminal.resolve(); }
     });
-    const sent = await handled;
+    await sendTerminal.promise;
+    assert.ok(sent, 'NodeSend handler must run before terminal');
+    await handled;
     assert.deepEqual(sent.message, { value: 'sent' });
     assert.equal(sent.context.meshName, meshName);
     assert.equal(sent.context.channelName, undefined);
     assert.equal(String(sent.context.sourceNodeRid), String(target));
 
-    const requestParts = channelEnvelope.encodeChannelEnvelopeParts(
+    const requestParts = ownParts(channelEnvelope.encodeChannelEnvelopeParts(
       1,
       meshName,
       'DirectQuery',
       { value: 'asked' }
-    ).map((part) => zlink.Message.from(part));
-    let replyParts;
-    await host.dispatchMeshRecord(() => 'remote', meshName, { ownerKind: framework.ReadyOwnerKind.Node }, {
+    ));
+    const requestTerminal = deferred();
+    enqueue({
       kind: framework.ReceiveKind.NodeRequest,
+      operationKind: framework.OperationKind.NodeRequest,
       sourceNodeRid: target,
       parts: requestParts,
+      onTerminalCompletion: () => { requestTerminal.resolve(); },
       reply(parts) {
         replyParts = parts.map((part) => zlink.Message.from(part));
         return zlink.SubmitResult.Ok;
       }
     });
-    try {
-      const reply = channelEnvelope.decodeChannelEnvelope(replyParts);
-      assert.deepEqual(JSON.parse(reply.payload.toString()), {
-        echoed: 'asked',
-        source: String(target)
-      });
-    } finally {
-      for (const part of sendParts) part.close();
-      for (const part of requestParts) part.close();
-      for (const part of replyParts) part.close();
-    }
+    await requestTerminal.promise;
+    assert.ok(replyParts, 'NodeRequest reply must run before terminal');
+    const reply = channelEnvelope.decodeChannelEnvelope(replyParts);
+    assert.deepEqual(JSON.parse(reply.payload.toString()), {
+      echoed: 'asked',
+      source: String(target)
+    });
   } finally {
-    await host.stop();
+    try {
+      await host.stop();
+    } finally {
+      queuedRecords.length = 0;
+      for (const parts of untransferredParts) {
+        for (const part of parts) part.close();
+      }
+      untransferredParts.clear();
+      for (const part of replyParts ?? []) part.close();
+    }
   }
 });
 
