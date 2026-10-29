@@ -50,17 +50,22 @@ class dispatch_error_reporter_t
             event.error_type = std::move (error.type);
             event.error_message = std::move (error.message);
         }
-        if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
-            event.flow_id.reset ();
-            event.flow_origin.reset ();
-        }
-        if (!event.flow_id) {
-            if (const auto &flow = runtime::flow_context_t::current ()) {
-                if (!flow->flow_id.empty ()) {
-                    event.flow_id = flow->flow_id;
-                    event.flow_origin = flow->origin;
+        if (runtime::flow_context_t::tracing (effective_mode)) {
+            if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
+                event.flow_id.reset ();
+                event.flow_origin.reset ();
+            }
+            if (!event.flow_id) {
+                if (const auto &flow = runtime::flow_context_t::current ()) {
+                    if (!flow->flow_id.empty ()) {
+                        event.flow_id = flow->flow_id;
+                        event.flow_origin = flow->origin;
+                    }
                 }
             }
+        } else {
+            event.flow_id.reset ();
+            event.flow_origin.reset ();
         }
         if (dispatch_options_access_t::logger (*_options))
             log_default (event);

@@ -267,12 +267,158 @@ int dispatch_error_logger_failures_preserve_operation ()
     return passed ? 0 : 1;
 }
 
+int errors_flow_owner ()
+{
+    using zlink::framework::detail::enum_name;
+    using access = zlink::framework::detail::dispatch_options_access_t;
+    const std::string ambient_id = "019a1234-5678-7000-8000-000000000001";
+    const std::string explicit_id = "019a1234-5678-7000-8000-000000000002";
+    bool passed = true;
+    for (const auto mode : {message_flow_log_mode_t::errors, message_flow_log_mode_t::normal,
+                            message_flow_log_mode_t::detailed, message_flow_log_mode_t::off}) {
+        for (const bool live_change : {false, true}) {
+            for (const bool explicit_pair : {false, true}) {
+                auto scope = runtime::flow_context_t::enter (
+                  std::optional<std::string>{ambient_id}, flow_origin_t::application,
+                  message_flow_log_mode_t::normal, flow_origin_t::inbound,
+                  std::string ("foreign-session"));
+                auto options =
+                  options_with_mode (live_change ? message_flow_log_mode_t::normal : mode);
+                auto live = std::make_shared<std::atomic<message_flow_log_mode_t>> (
+                  message_flow_log_mode_t::normal);
+                if (live_change) {
+                    access::set_live_mode (options, live);
+                    live->store (mode);
+                }
+                options.trace_sample_rate (0.0);
+                const bool emits = mode != message_flow_log_mode_t::off;
+                const bool traces = mode == message_flow_log_mode_t::normal
+                                    || mode == message_flow_log_mode_t::detailed;
+                const auto expected_id = explicit_pair ? explicit_id : ambient_id;
+                const auto expected_origin =
+                  explicit_pair ? flow_origin_t::timer : flow_origin_t::application;
+                unsigned error_calls = 0;
+                bool error_fields = true;
+                access::set_dispatch_error_observer_for_tests (
+                  options, [&] (const message_dispatch_error_event_t &event) {
+                      ++error_calls;
+                      error_fields = event.correlation_id == "corr-123"
+                                     && (traces ? event.flow_id == expected_id
+                                                    && event.flow_origin == expected_origin
+                                                : !event.flow_id && !event.flow_origin);
+                  });
+                unsigned error_builds = 0;
+                const auto reported_before = dispatch_error_reporter_t::reported ();
+                const auto error_log = capture_logs ([&] {
+                    dispatch_error_reporter_t (options).report_lazy ([&] {
+                        ++error_builds;
+                        auto event = error_event ();
+                        if (explicit_pair) {
+                            event.flow_id = explicit_id;
+                            event.flow_origin = flow_origin_t::timer;
+                        }
+                        return event;
+                    });
+                });
+                const bool error_ok =
+                  error_calls == unsigned (emits) && error_builds == unsigned (emits)
+                  && dispatch_error_reporter_t::reported () - reported_before == unsigned (emits)
+                  && error_fields
+                  && occurrences (error_log, "event_id=zlink.dispatch_error") == unsigned (emits)
+                  && occurrences (error_log, "corr=corr-123") == unsigned (emits)
+                  && occurrences (error_log, " flow=") == unsigned (traces)
+                  && occurrences (error_log, " origin=") == unsigned (traces)
+                  && (!traces
+                      || (contains (error_log, " flow=" + expected_id)
+                          && contains (error_log,
+                                       " origin=" + std::string (enum_name (expected_origin)))));
+                std::cout << "errors_flow_reporter mode=" << int (mode) << " live=" << live_change
+                          << " explicit_pair=" << explicit_pair << " passed=" << error_ok << '\n';
+                passed = error_ok && passed;
+                for (const bool explicit_session : {false, true}) {
+                    // Exercise each stamp_flow caller without sampling errors or drops.
+                    for (int entry = 0; entry != 4; ++entry) {
+                        unsigned calls = 0;
+                        bool fields = true;
+                        const auto expected_session =
+                          explicit_session ? std::optional<std::string>{"own-session"}
+                          : traces         ? std::optional<std::string>{"foreign-session"}
+                                           : std::nullopt;
+                        access::set_observer_for_tests (
+                          options, [&] (const message_flow_event_t &event) {
+                              ++calls;
+                              fields = event.outcome == message_flow_outcome_t::dropped
+                                       && event.correlation_id == "corr-123"
+                                       && event.stream_session_id == expected_session
+                                       && (traces ? event.flow_id == expected_id
+                                                      && event.flow_origin == expected_origin
+                                                  : !event.flow_id && !event.flow_origin);
+                          });
+                        unsigned builds = 0;
+                        const auto build = [&] {
+                            ++builds;
+                            auto event = flow_event (message_flow_outcome_t::dropped);
+                            if (explicit_pair) {
+                                event.flow_id = explicit_id;
+                                event.flow_origin = flow_origin_t::timer;
+                            }
+                            if (explicit_session)
+                                event.stream_session_id = "own-session";
+                            return event;
+                        };
+                        const auto before = message_flow_tracer_t::traced ();
+                        const auto log = capture_logs ([&] {
+                            message_flow_tracer_t tracer (options);
+                            if (entry == 0)
+                                tracer.trace (build ());
+                            else if (entry == 1)
+                                tracer.trace (message_flow_outcome_t::dropped, build);
+                            else if (entry == 2)
+                                tracer.trace (message_flow_outcome_t::dropped, explicit_id, build);
+                            else
+                                tracer.trace (message_flow_outcome_t::dropped,
+                                              message_flow_result_t::failed, build);
+                        });
+                        const bool ok =
+                          calls == unsigned (emits) && fields
+                          && builds == unsigned (entry == 0 || emits)
+                          && message_flow_tracer_t::traced () - before == unsigned (emits)
+                          && occurrences (log, "event_id=zlink.message_flow") == unsigned (emits)
+                          && occurrences (log, "phase=dropped") == unsigned (emits)
+                          && occurrences (log, "corr=corr-123") == unsigned (emits)
+                          && occurrences (log, " flow=") == unsigned (traces)
+                          && occurrences (log, " origin=") == unsigned (traces)
+                          && occurrences (log, " session=")
+                               == unsigned (emits && expected_session.has_value ())
+                          && (!emits || !expected_session
+                              || contains (log, " session=" + *expected_session))
+                          && (!traces
+                              || (contains (log, " flow=" + expected_id)
+                                  && contains (
+                                    log, " origin=" + std::string (enum_name (expected_origin)))));
+                        std::cout << "errors_flow_drop mode=" << int (mode)
+                                  << " live=" << live_change << " explicit_pair=" << explicit_pair
+                                  << " explicit_session=" << explicit_session << " entry=" << entry
+                                  << " passed=" << ok << '\n';
+                        passed = ok && passed;
+                    }
+                }
+            }
+        }
+    }
+    return passed ? 0 : 1;
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string (argv[1]) == "--errors-flow-owner")
+        return errors_flow_owner ();
     if (argc == 2 && std::string (argv[1]) == "--logger-failures")
         return dispatch_error_logger_failures_preserve_operation ();
     if (argc == 2 && std::string (argv[1]) == "--observer-failures")
         return dispatch_error_observer_failures_preserve_operation ();
+    if (const auto result = errors_flow_owner (); result != 0)
+        return result;
     if (const auto result = dispatch_error_observer_failures_preserve_operation (); result != 0)
         return result;
     if (const auto result = dispatch_error_logger_failures_preserve_operation (); result != 0)
