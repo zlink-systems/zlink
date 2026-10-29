@@ -1,10 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
-#include <zlink/framework/contracts/dispatch/request_task.hpp>
-#include <zlink/framework/detail/deadline_scheduler.hpp>
+#include <chrono>
 
-#include <optional>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -43,46 +41,6 @@ inline std::chrono::steady_clock::time_point request_deadline_from_unix_ms (std:
     if (remaining >= available)
         return clock_t::time_point::max ();
     return now + std::chrono::duration_cast<clock_t::duration> (milliseconds_t{remaining});
-}
-
-// The caller budget covers admission and reply. Expiry only closes this
-// completion; binding retains the operation and drains its eventual terminal.
-template <typename T>
-task_t<T> with_request_deadline (task_t<T> operation,
-                                 std::optional<std::chrono::steady_clock::time_point> at)
-{
-    if (!at || operation.await_ready ())
-        return operation;
-    auto source = std::make_shared<task_completion_source_t<T>> ();
-    auto output = source->task ();
-    auto observed = std::make_shared<task_t<T>> (std::move (operation));
-    auto deadline = std::make_shared<detail::deadline_state_t> ();
-    detail::observe_task_completion (
-      *observed, [source, observed, deadline] (const result_t<T> &result) {
-          deadline->cancelled.store (true, std::memory_order_release);
-          detail::deadline_scheduler_t::instance ().wake ();
-          source->complete (result);
-      });
-    if (!output.await_ready ()) {
-        detail::deadline_scheduler_t::instance ().schedule (
-          *at, deadline, [weak = std::weak_ptr (source)] {
-              if (auto current = weak.lock ())
-                  current->complete (detail::boundary_failure<T> (
-                    detail::boundary_error_t::timed_out, "request deadline expired"));
-          });
-    }
-    return output;
-}
-
-template <typename T>
-request_task_t<T> with_request_deadline (request_task_t<T> operation,
-                                         std::optional<std::chrono::steady_clock::time_point> at)
-{
-    auto admitted = detail::request_task_access_t::admission_source (operation);
-    auto reply = with_request_deadline (std::move (static_cast<task_t<T> &> (operation)), at);
-    detail::observe_request_failure (reply, admitted);
-    static_cast<task_t<T> &> (operation) = std::move (reply);
-    return operation;
 }
 
 } // namespace zlink::framework::runtime::messaging

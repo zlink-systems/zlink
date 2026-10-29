@@ -316,11 +316,10 @@ terminates.
 `DONTWAIT` makes one admission attempt and pins no endpoint. The wait token targets the whole request candidate set. A newly connected ROUTER candidate, restored write credit, or a weight changing from `0` to positive re-evaluates that set. Flag-specific submit results and resubmission follow [Socket Common request](README.en.md#request-and-reply).
 
 The reply timeout start and wait-token period follow
-[Socket Common request](README.en.md#request-and-reply). When the submit-time transport
-pair terminates after admission, the request ends at once with `ZLINK_REQUEST_NOT_CONNECTED`,
-whatever the cause, per the [Socket Common §6 completion table](README.en.md#request-and-reply), and
-the payload is not replayed. [Socket Common](README.en.md#completion-pull-and-ownership) owns completion ownership and
-close.
+[Socket Common request](README.en.md#request-and-reply). Request completion when
+the submit-time transport pair terminates after admission follows the same
+section. The payload is not replayed.
+[Socket Common](README.en.md#completion-pull-and-ownership) owns completion ownership and close.
 
 ---
 

@@ -273,6 +273,8 @@ void verify_node_request_submit_cost ()
             }
             assert (!callback_called);
             assert (source.expire_requests (foundation::operation_registry_t::clock_t::now ())
+                      .result ()
+                      .value ()
                     == 0);
             std::fprintf (stderr,
                           "node request target=%zu ready=%d copied=%zu borrowed=%zu observed=%zu\n",
@@ -464,6 +466,7 @@ void verify_bound_session_bind_retries_until_route_is_admitted ()
     source.start ();
     target.start ();
     const auto target_descriptor = target.topology ().local_descriptor ();
+    source.expect_peer (target_descriptor);
     std::promise<completion_t> completion_promise;
     auto completion = completion_promise.get_future ();
     assert (await_task (source.request_bound_session_bind (
@@ -496,6 +499,7 @@ void verify_bound_session_bind_exposes_only_accepted_attempt ()
     source.start ();
     target.start ();
     const auto remote = target.topology ().local_descriptor ();
+    source.expect_peer (remote);
     auto accepted = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     auto admission = accepted->task ();
     std::promise<completion_t> completion_promise;
@@ -532,6 +536,7 @@ bound_session_request (mesh::raw_mesh_node_owner_t &source,
                        std::chrono::milliseconds timeout)
 {
     using namespace zlink::framework;
+    source.expect_peer (target);
     auto reply = std::make_shared<task_completion_source_t<bound_session_completion_t>> ();
     auto admitted = std::make_shared<task_completion_source_t<void>> ();
     request_task_t<bound_session_completion_t> result (reply->task (), admitted);
@@ -552,6 +557,80 @@ bound_session_request (mesh::raw_mesh_node_owner_t &source,
       },
       admitted)));
     return result;
+}
+
+void verify_bound_session_bind_missing_descriptor_is_unavailable_without_blocking ()
+{
+    using namespace zlink::framework;
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("bind-missing-descriptor-source"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    const auto remote = descriptor ("bind-missing-descriptor-target");
+
+    std::promise<void> lane_entered_promise;
+    auto lane_entered = lane_entered_promise.get_future ();
+    std::promise<void> release_lane_promise;
+    auto release_lane = release_lane_promise.get_future ().share ();
+    std::thread lane_blocker ([&] {
+        (void) source.publish_descriptor_update ([&] (auto &local) {
+            ++local.descriptor_revision;
+            lane_entered_promise.set_value ();
+            release_lane.wait ();
+        });
+    });
+
+    const bool lane_entered_in_time = lane_entered.wait_for (2s) == std::future_status::ready;
+    if (!lane_entered_in_time) {
+        release_lane_promise.set_value ();
+        lane_blocker.join ();
+        assert (lane_entered_in_time);
+    }
+
+    std::promise<task_t<bool>> bind_promise;
+    auto bind_result = bind_promise.get_future ();
+    std::thread bind_caller ([&] {
+        bind_promise.set_value (source.request_bound_session_bind (
+          remote.node_routing_id, bound_session_bind_request (remote, "missing-bind-actor"), 2s,
+          [] (foundation::operation_terminal_t, zlink::message_t) {}));
+    });
+    const bool returned_while_lane_held = bind_result.wait_for (2s) == std::future_status::ready;
+    std::optional<task_t<bool>> bind;
+    bool pending_while_lane_held = false;
+    if (returned_while_lane_held) {
+        bind.emplace (bind_result.get ());
+        pending_while_lane_held = !bind->await_ready ();
+    }
+    release_lane_promise.set_value ();
+    lane_blocker.join ();
+    bind_caller.join ();
+    if (!bind)
+        bind.emplace (bind_result.get ());
+    assert (returned_while_lane_held && pending_while_lane_held);
+
+    const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!bind->await_ready () && std::chrono::steady_clock::now () < completion_deadline)
+        std::this_thread::yield ();
+    assert (bind->await_ready ());
+
+    bool unavailable = false;
+    try {
+        (void) await_task (std::move (*bind));
+    }
+    catch (const framework_exception_t &error) {
+        unavailable = error.kind () == framework_error_kind_t::unavailable
+                      && std::string_view (error.what ())
+                           == "Remote Actor session binding owner descriptor is unavailable";
+    }
+    assert (unavailable);
+
+    source.expect_peer (remote);
+    bool shutdown_callback_called = false;
+    const auto submitted = await_task (source.request_bound_session_bind (
+      remote.node_routing_id, bound_session_bind_request (remote, "configured-bind-actor"), 2s,
+      [&shutdown_callback_called] (foundation::operation_terminal_t terminal, zlink::message_t) {
+          shutdown_callback_called = terminal == foundation::operation_terminal_t::shutdown;
+      }));
+    assert (submitted && shutdown_callback_called);
 }
 
 // Opt-in Core boundary repro: send the first new handshake record after local
@@ -662,7 +741,7 @@ void verify_standby_promotion_readmits_both_peers ()
 }
 
 
-void verify_bound_session_bind_replay_preserves_first_admission ()
+void verify_bound_session_bind_does_not_replay_after_route_change ()
 {
     mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
       mesh::raw_mesh_node_options_t{descriptor ("Z-bind-replay-source")}));
@@ -685,6 +764,7 @@ void verify_bound_session_bind_replay_preserves_first_admission ()
     });
     const auto pump = [&] {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        (void) source.expire_requests (now).result ().value ();
         (void) source.observe_routes ();
         (void) target.observe_routes ();
         (void) await_task (source.pump_one (now));
@@ -701,30 +781,40 @@ void verify_bound_session_bind_replay_preserves_first_admission ()
         return claim;
     };
     auto first = receive ();
-    const auto header = protocol::decode_bound_session_bind (
+    (void) protocol::decode_bound_session_bind (
       protocol::message_bytes (first->records.front ()->parts.front ()));
+    const auto first_record = *first->records.front ();
+    std::size_t submissions = first->records.size ();
     assert (admitted.await_ready () && admitted.result ());
     const auto *first_admission = &admitted.result ();
     observed.get ();
     assert (admission_completions == 1 && !request.await_ready ());
     assert (target.mailbox ().release (*first));
     assert (target.connect_peer (source.endpoint (), local));
-    auto replay = receive ();
-    assert (protocol::decode_bound_session_bind (
-              protocol::message_bytes (replay->records.front ()->parts.front ()))
-            == header);
-    assert (admitted.await_ready () && admitted.result ());
-    assert (&admitted.result () == first_admission && admission_completions == 1);
-    assert (!request.await_ready ());
-    assert (target.mailbox ().release (*replay));
-    // Withhold every reply: admission remains successful when the durable deadline expires.
-    while (!request.await_ready () && std::chrono::steady_clock::now () < deadline)
+    while (!request.await_ready () && std::chrono::steady_clock::now () < deadline) {
         pump ();
+        const auto extra =
+          target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        assert (!extra);
+    }
     assert (request.await_ready ());
     assert (!request.result ());
-    assert (request.result ().error ()->kind ()
-            == zlink::framework::framework_error_kind_t::deadline_exceeded);
+    assert (request.result ().error () != nullptr);
     assert (admitted.result () && admission_completions == 1);
+    assert (&admitted.result () == first_admission && submissions == 1);
+    const auto terminal = request.result ().exception ();
+    const auto bind =
+      protocol::decode_bound_session_bind (protocol::message_bytes (first_record.parts.front ()));
+    (void) target.reply_bound_session_bind (
+      first_record, 0, 0,
+      protocol::stream_bind_reply_tail_t{bind.binding.generation,
+                                         bind.actor.authority_owner_generation});
+    for (int turn = 0; turn < 32; ++turn) {
+        pump ();
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+    }
+    assert (request.result ().exception () == terminal);
     source.close ();
     target.close ();
 }
@@ -739,11 +829,18 @@ void verify_bound_session_bind_unadmitted_deadline_fails_both_stages ()
     auto request = bound_session_request (source, remote, 50ms);
     auto admitted = request.admitted ();
     assert (!admitted.await_ready () && !request.await_ready ());
+    const auto deadline = std::chrono::steady_clock::now () + 500ms;
+    while (!request.await_ready () && std::chrono::steady_clock::now () < deadline) {
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
+        std::this_thread::yield ();
+    }
+    assert (request.await_ready () && admitted.await_ready ());
     const auto &reply = request.result ();
     const auto &admission = admitted.result ();
     assert (!reply && !admission);
-    assert (reply.error ()->kind () == zlink::framework::framework_error_kind_t::unavailable);
-    assert (admission.error ()->kind () == zlink::framework::framework_error_kind_t::unavailable);
+    assert (reply.error ()->kind () == zlink::framework::framework_error_kind_t::deadline_exceeded);
+    assert (admission.error ()->kind ()
+            == zlink::framework::framework_error_kind_t::deadline_exceeded);
     assert (reply.exception () == admission.exception ());
     source.close ();
 }
@@ -758,6 +855,7 @@ void verify_bound_session_bind_permanent_absence_is_bounded ()
     source.start ();
     auto target_descriptor = descriptor ("bind-timeout-target", "tcp://127.0.0.1:1");
     target_descriptor.state = mesh::service_node_state_t::serving;
+    source.expect_peer (target_descriptor);
     std::promise<completion_t> completion_promise;
     auto completion = completion_promise.get_future ();
     const auto started = std::chrono::steady_clock::now ();
@@ -769,9 +867,15 @@ void verify_bound_session_bind_permanent_absence_is_bounded ()
           auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       })));
-    assert (completion.wait_for (500ms) == std::future_status::ready);
+    const auto deadline = started + 500ms;
+    while (completion.wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
+        std::this_thread::yield ();
+    }
+    assert (completion.wait_for (0ms) == std::future_status::ready);
     assert (std::chrono::steady_clock::now () - started >= 40ms);
-    assert (completion.get ().first == foundation::operation_terminal_t::route_unavailable);
+    assert (completion.get ().first == foundation::operation_terminal_t::timed_out);
     source.close ();
 }
 
@@ -941,7 +1045,7 @@ void verify_actor_create_intent_removal_ends_operation ()
     }
 }
 
-void verify_actor_create_retry_timeout_is_unavailable ()
+void verify_actor_create_readiness_deadline_is_timed_out ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
     mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
@@ -966,12 +1070,18 @@ void verify_actor_create_retry_timeout_is_unavailable ()
     assert (std::chrono::steady_clock::now () - submitted_at < 20ms);
     assert (await_task (std::move (submitted)));
     assert (std::chrono::steady_clock::now () - submitted_at < 20ms);
-    assert (completion.wait_for (500ms) == std::future_status::ready);
+    const auto deadline = submitted_at + 500ms;
+    while (completion.wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
+        std::this_thread::yield ();
+    }
+    assert (completion.wait_for (0ms) == std::future_status::ready);
     assert (std::chrono::steady_clock::now () - submitted_at >= 40ms);
     const auto terminal = completion.get ().first;
-    assert (terminal == foundation::operation_terminal_t::route_unavailable);
+    assert (terminal == foundation::operation_terminal_t::timed_out);
     assert (runtime::user_spot_terminal::map_user_spot_operation_failure (terminal, {}, true)
-            == zlink::framework::framework_error_kind_t::unavailable);
+            == zlink::framework::framework_error_kind_t::deadline_exceeded);
     source.close ();
 }
 
@@ -3446,7 +3556,7 @@ claim_actor_join (mesh::raw_mesh_node_owner_t &target)
     return claim;
 }
 
-void verify_actor_join_durable_replay ()
+void verify_actor_join_waits_for_admit_without_replay ()
 {
     for (const bool handover : {false, true}) {
         mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
@@ -3462,6 +3572,7 @@ void verify_actor_join_durable_replay ()
         source.expect_peer (remote);
         const auto pump = [&] {
             const auto now = std::chrono::steady_clock::now ();
+            (void) source.expire_requests (now).result ().value ();
             (void) source.observe_routes ();
             (void) target.observe_routes ();
             assert (await_task (source.pump_one (now))
@@ -3483,7 +3594,8 @@ void verify_actor_join_durable_replay ()
         const std::optional<protocol::application_payload_t> payload{
           {"Join", "application/json", bytes ("{\"value\":7}")}};
         const auto deadline = std::chrono::steady_clock::now () + 2s;
-        auto pending = source.request_actor_join (remote.node_routing_id, request, payload, 2s);
+        auto pending = source.request_actor_join (remote.node_routing_id, request, payload,
+                                                  handover ? 200ms : 2s);
         assert (!pending.await_ready ());
         const auto receive = [&] {
             std::shared_ptr<mesh::service_mailbox_claim_t> claim;
@@ -3505,6 +3617,31 @@ void verify_actor_join_durable_replay ()
             assert (target.connect_peer (source.endpoint (), local));
         } else {
             assert (source.connect_peer (target.endpoint (), remote));
+        }
+        if (handover) {
+            while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
+                pump ();
+                assert (!target.mailbox ().try_claim (
+                  mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+            }
+            assert (pending.await_ready ());
+            const auto &terminal = pending.result ();
+            assert (terminal && !terminal.value ().reply);
+            const auto failure = terminal.value ().failure;
+            (void) target.reply_actor_join (*first, protocol::actor_join_result_t::accepted,
+                                            protocol::actor_join_reply_spot_ref_t{"join-spot", 9},
+                                            3, 8192, 0, 0, payload);
+            for (int turn = 0; turn < 32; ++turn) {
+                pump ();
+                assert (!target.mailbox ().try_claim (
+                  mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+            }
+            assert (&pending.result () == &terminal);
+            assert (!pending.result ().value ().reply
+                    && pending.result ().value ().failure == failure);
+            source.close ();
+            target.close ();
+            continue;
         }
         auto claim = receive ();
         const auto &record = (*claim->records.front ());
@@ -3543,10 +3680,17 @@ void verify_actor_join_durable_terminals ()
     const auto request = actor_join_request (local, remote, 93, "join-actor", "join-spot");
     source.expect_peer (remote);
     const auto started = std::chrono::steady_clock::now ();
-    const auto expired =
-      await_task (source.request_actor_join (remote.node_routing_id, request, std::nullopt, 50ms));
+    auto expiring = source.request_actor_join (remote.node_routing_id, request, std::nullopt, 50ms);
+    const auto expiry_deadline = started + 500ms;
+    while (!expiring.await_ready () && std::chrono::steady_clock::now () < expiry_deadline) {
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
+        std::this_thread::yield ();
+    }
+    assert (expiring.await_ready ());
+    const auto expired = await_task (std::move (expiring));
     assert (std::chrono::steady_clock::now () - started >= 40ms);
-    assert (!expired.reply && expired.failure == mesh::actor_join_wire_failure_t::unavailable);
+    assert (!expired.reply
+            && expired.failure == mesh::actor_join_wire_failure_t::deadline_exceeded);
     auto pending = source.request_actor_join (remote.node_routing_id, request, std::nullopt, 2s);
     assert (!pending.await_ready ());
     source.forget_peer (remote.node_routing_id, remote.advertised_endpoint);
@@ -3577,14 +3721,17 @@ void verify_actor_join_durable_terminals ()
     const auto completion_deadline = admitted_at + 500ms;
     while (!admitted.await_ready () && std::chrono::steady_clock::now () < completion_deadline) {
         const auto now = std::chrono::steady_clock::now ();
+        (void) source.expire_requests (now).result ().value ();
         (void) source.observe_routes ();
         (void) await_task (source.pump_one (now));
     }
     assert (admitted.await_ready ());
     const auto lost_reply = await_task (std::move (admitted));
-    assert (std::chrono::steady_clock::now () - admitted_at >= 150ms);
+    // Submit §5 delivers binding connection loss without waiting for the
+    // logical deadline or submitting the admitted request again.
     assert (!lost_reply.reply
-            && lost_reply.failure == mesh::actor_join_wire_failure_t::deadline_exceeded);
+            && lost_reply.failure == mesh::actor_join_wire_failure_t::unavailable);
+    assert (source.pending_operation_count () == 0);
     source.close ();
 }
 
@@ -4241,6 +4388,7 @@ void verify_durable_attempt_waits_for_admit (protocol::command kind)
     target.start ();
     const auto local = source.topology ().local_descriptor ();
     const auto remote = target.topology ().local_descriptor ();
+    source.expect_peer (remote);
     using completion_t = foundation::operation_terminal_t;
     std::promise<completion_t> promise;
     auto completed = promise.get_future ();
@@ -4262,11 +4410,11 @@ void verify_durable_attempt_waits_for_admit (protocol::command kind)
           remote.node_routing_id, actor_join_request (local, remote, 81, "preadmit-actor", "spot"),
           std::nullopt, unadmitted_timeout));
     }
-    source.expect_peer (remote);
     assert (source.connect_peer (target.endpoint (), remote));
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while ((join ? !join->await_ready () : completed.wait_for (0ms) != std::future_status::ready)
            && std::chrono::steady_clock::now () < deadline) {
+        (void) source.expire_requests (std::chrono::steady_clock::now ()).result ().value ();
         const auto pumped = await_task (target.pump_one (std::chrono::steady_clock::now ()));
         assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
         assert (
@@ -4275,10 +4423,10 @@ void verify_durable_attempt_waits_for_admit (protocol::command kind)
     if (join) {
         assert (join->await_ready ());
         assert (await_task (std::move (*join)).failure
-                == mesh::actor_join_wire_failure_t::unavailable);
+                == mesh::actor_join_wire_failure_t::deadline_exceeded);
     } else {
         assert (completed.wait_for (0ms) == std::future_status::ready);
-        assert (completed.get () == completion_t::route_unavailable);
+        assert (completed.get () == completion_t::timed_out);
     }
     // A new operation on the same unobserved route starts at the ADMIT transition.
     std::promise<std::pair<completion_t, std::vector<std::uint8_t>>> ready_promise;
@@ -4328,7 +4476,7 @@ void verify_topology_ready_is_remote_admit_on_current_route ()
     assert (!observe ().peer->ready);
 }
 
-void verify_prepare_replays_on_selected_route ()
+void verify_prepare_does_not_replay_on_selected_route ()
 {
     mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
       mesh::raw_mesh_node_options_t{descriptor ("Z-prepare-source")}));
@@ -4360,20 +4508,36 @@ void verify_prepare_replays_on_selected_route ()
         return claim;
     };
     auto first = receive ();
+    const auto first_record = *first->records.front ();
+    assert (first->records.size () == 1);
     assert (target.mailbox ().release (*first));
     assert (target.connect_peer (source.endpoint (), local));
-    auto replay = receive ();
-    assert (target.reply_relocation_failed (
-      (*replay->records.front ()),
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
+        const auto now = std::chrono::steady_clock::now ();
+        (void) source.expire_requests (now).result ().value ();
+        (void) await_task (source.pump_one (now));
+        (void) await_task (target.pump_one (now));
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+    }
+    assert (pending.await_ready ());
+    const auto &terminal = pending.result ();
+    assert (terminal && !terminal.value ().ready && !terminal.value ().failed);
+    (void) target.reply_relocation_failed (
+      first_record,
       protocol::relocation_failed_t{
         prepare.relocation, prepare.target_attempt_generation, prepare.coordinator, prepare.target,
         prepare.object, protocol::relocation_role_t::target,
-        static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost)}));
-    assert (target.mailbox ().release (*replay));
-    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline)
-        (void) await_task (source.pump_one (std::chrono::steady_clock::now ()));
-    assert (pending.await_ready ());
-    assert (await_task (std::move (pending)).failed);
+        static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost)});
+    for (int turn = 0; turn < 32; ++turn) {
+        const auto now = std::chrono::steady_clock::now ();
+        (void) await_task (source.pump_one (now));
+        (void) await_task (target.pump_one (now));
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+    }
+    assert (&pending.result () == &terminal);
+    assert (!pending.result ().value ().ready && !pending.result ().value ().failed);
     assert (std::chrono::steady_clock::now () < deadline);
     source.close ();
     target.close ();
@@ -4519,6 +4683,10 @@ void verify_unadmitted_route (bool repeat_hello)
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--bound-session-missing-descriptor") {
+        verify_bound_session_bind_missing_descriptor_is_unavailable_without_blocking ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--request-submit-cost") {
         verify_node_request_submit_cost ();
         return 0;
@@ -4548,7 +4716,7 @@ int main (int argc, char **argv)
             else if (name == "silent")
                 verify_unadmitted_route (false);
             else if (name == "prepare")
-                verify_prepare_replays_on_selected_route ();
+                verify_prepare_does_not_replay_on_selected_route ();
             else if (name == "hello")
                 verify_unadmitted_route (true);
             else if (name == "native-standby")
@@ -4558,7 +4726,7 @@ int main (int argc, char **argv)
             else if (name == "standby")
                 verify_standby_promotion_readmits_both_peers ();
             else if (name == "replay")
-                verify_bound_session_bind_replay_preserves_first_admission ();
+                verify_bound_session_bind_does_not_replay_after_route_change ();
             else if (name == "create")
                 verify_actor_create_retries_until_route_is_admitted ();
             else if (name == "stale-rid-retained")
@@ -4566,7 +4734,7 @@ int main (int argc, char **argv)
             else if (name == "bilateral")
                 verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ();
             else if (name == "join")
-                verify_actor_join_durable_replay ();
+                verify_actor_join_waits_for_admit_without_replay ();
             else
                 return 2;
             std::fprintf (stderr, "%s %d/%d passed\n", argv[2], i + 1, repetitions);
@@ -4602,7 +4770,7 @@ int main (int argc, char **argv)
         return 0;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--r6-join-durable") {
-        verify_actor_join_durable_replay ();
+        verify_actor_join_waits_for_admit_without_replay ();
         verify_actor_join_durable_terminals ();
         verify_actor_join_rejected_reply_completes_typed_failure ();
         verify_actor_join_wrong_source_generation_is_fenced ();
@@ -4628,22 +4796,23 @@ int main (int argc, char **argv)
             == zlink::request_result_t::not_connected);
     verify_unadmitted_route (false);
     verify_unadmitted_route (true);
-    verify_prepare_replays_on_selected_route ();
+    verify_prepare_does_not_replay_on_selected_route ();
     verify_topology_ready_is_remote_admit_on_current_route ();
     verify_durable_attempt_waits_for_admit (protocol::command::boundSessionBind);
     verify_durable_attempt_waits_for_admit (protocol::command::actorCreate);
     verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_close_reply_grammar ();
+    verify_bound_session_bind_missing_descriptor_is_unavailable_without_blocking ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_exposes_only_accepted_attempt ();
     verify_bound_session_bind_unadmitted_deadline_fails_both_stages ();
-    verify_bound_session_bind_replay_preserves_first_admission ();
+    verify_bound_session_bind_does_not_replay_after_route_change ();
     verify_bound_session_bind_permanent_absence_is_bounded ();
     verify_bound_session_bind_reply_completes_registered_operation ();
     verify_actor_create_retries_until_route_is_admitted ();
     verify_actor_create_intent_removal_ends_operation ();
-    verify_actor_create_retry_timeout_is_unavailable ();
+    verify_actor_create_readiness_deadline_is_timed_out ();
     verify_actor_create_from_dispatch_thread_does_not_block ();
     verify_topology_snapshot_and_connection_fence ();
     verify_route_mesh_descriptor_uses_generated_capability ();
@@ -4672,7 +4841,7 @@ int main (int argc, char **argv)
     verify_raw_owner_node_send_and_liveness ();
     verify_relocation_prepare_failed_reply_resolves_promptly_with_identity_fencing ();
     verify_relocation_prepare_failed_reply_with_mismatched_identity_is_fenced ();
-    verify_actor_join_durable_replay ();
+    verify_actor_join_waits_for_admit_without_replay ();
     verify_actor_join_durable_terminals ();
     verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ();
     verify_actor_join_rejected_reply_completes_typed_failure ();

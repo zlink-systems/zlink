@@ -516,6 +516,8 @@ int main (int argc, char **argv)
     }
     if (owner == "server-close-lane" || owner == "client-close-lane"
         || owner == "server-close-retry" || owner == "client-close-retry") {
+        // The fixture owns async lane delivery until every transport has closed.
+        const zlink::framework::completion_owner_t completion_owner;
         namespace rt = zlink::framework::runtime;
         rt::protocol::client_server_server_admission_t descriptor{
           "close-lane",

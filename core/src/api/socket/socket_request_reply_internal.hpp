@@ -55,7 +55,7 @@ void release_completion_discard (completion_discard_t *discard_);
 
 completion_pipe_drain_result_t process_completion_pipe (
   zlink::socket_base_t *socket_, zlink::pipe_t *pipe_,
-  completion_discard_t *discard_);
+  completion_discard_t *discard_, bool pair_terminating_ = false);
 
 // Public routing ids are bounded by zlink_routing_id_t. Keep reply-token keys
 // inline so a normal 16-byte RID never allocates a std::string on receive,
