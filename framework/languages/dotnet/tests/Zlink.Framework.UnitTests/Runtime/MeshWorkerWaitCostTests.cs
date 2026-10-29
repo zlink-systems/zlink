@@ -14,6 +14,43 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
     private const int SignalCount = 1000;
     private static readonly TimeSpan TestGuard = TimeSpan.FromSeconds(5);
 
+    [Fact]
+    public async Task PoolSensitiveFixturesOwnTheirLifetimesWithAnotherSourceAlive()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshWorkerWaitCostTests),
+                nameof(PoolSensitiveFixturesOwnTheirLifetimesWithAnotherSourceAlive)
+            )
+        )
+            return;
+
+        var ready = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await using var source = ZLinkProcessExecutionPool.CreateApplicationSource(
+            _ =>
+            {
+                ready.TrySetResult();
+                return ValueTask.CompletedTask;
+            },
+            error => ready.TrySetException(error)
+        );
+        try
+        {
+            await new MeshWorkerWaitCostTests(output)
+                .ProcessPoolReservesReceiverWhenAllApplicationSlotsAreOccupiedAndJoinsEveryWorker();
+            await new ServiceRuntimeFoundationTests()
+                .Managed_mesh_pump_defers_application_dispatch_while_shared_capacity_is_saturated();
+            await new MeshReceiveWakeTests(output).RawIngressAddsNoAllocationToTheReceivedContainer();
+        }
+        finally
+        {
+            source.Signal();
+            await ready.Task.WaitAsync(TestGuard);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -158,6 +195,14 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
     [Fact]
     public async Task ProcessPoolReservesReceiverWhenAllApplicationSlotsAreOccupiedAndJoinsEveryWorker()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshWorkerWaitCostTests),
+                nameof(ProcessPoolReservesReceiverWhenAllApplicationSlotsAreOccupiedAndJoinsEveryWorker)
+            )
+        )
+            return;
+
         var applicationCount = ZLinkProcessExecutionPool.WorkerCount - 1;
         using var entered = new CountdownEvent(applicationCount);
         using var release = new ManualResetEventSlim();

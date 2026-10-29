@@ -815,6 +815,14 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     [Fact]
     public async Task RawIngressAddsNoAllocationToTheReceivedContainer()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(RawIngressAddsNoAllocationToTheReceivedContainer)
+            )
+        )
+            return;
+
         await using var inner = Systems.Zlink.Zlink.CreateContext();
         var context = new EmptyIngressContext(inner);
         var poller = new ControlledReceivePoller();

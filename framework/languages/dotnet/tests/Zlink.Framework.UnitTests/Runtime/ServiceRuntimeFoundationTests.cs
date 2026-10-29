@@ -2769,6 +2769,14 @@ public sealed class ServiceRuntimeFoundationTests
     [Fact]
     public async Task Managed_mesh_pump_defers_application_dispatch_while_shared_capacity_is_saturated()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(ServiceRuntimeFoundationTests),
+                nameof(Managed_mesh_pump_defers_application_dispatch_while_shared_capacity_is_saturated)
+            )
+        )
+            return;
+
         var completionBound = TimeSpan.FromSeconds(5);
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var applicationJobQueue = new ZLinkApplicationJobQueue(
