@@ -374,13 +374,8 @@ target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
   ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
 target_link_libraries(zlink_framework PUBLIC zlink::cpp zlink::framework_provider_abstractions)
-if(ZLINK_FRAMEWORK_CPP_SHARED)
-  # C++ exports metrics through runtime.status(), not an OpenTelemetry provider API.
-  # Adding a provider-injection boundary would therefore be a spec change.
-  target_link_libraries(zlink_framework PRIVATE opentelemetry-cpp::api)
-else()
-  target_link_libraries(zlink_framework PUBLIC opentelemetry-cpp::api)
-endif()
+# Applications own the SDK, reader and exporter for the supplied Metrics API provider.
+target_link_libraries(zlink_framework PUBLIC opentelemetry-cpp::api)
 if(WIN32)
   target_link_libraries(zlink_framework PUBLIC bcrypt)
 endif()
@@ -817,12 +812,12 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     COMPONENT HttpClient)
 endif()
 
-set(ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
+set(ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES "find_dependency(opentelemetry-cpp CONFIG COMPONENTS api)\n")
 set(ZLINK_HTTP_CLIENT_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 set(ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES
-    "find_dependency(opentelemetry-cpp CONFIG COMPONENTS api)\n"
+    "${ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES}"
     "find_package(protobuf CONFIG QUIET)\n"
     "if(NOT protobuf_FOUND)\n"
     "  find_dependency(Protobuf MODULE)\n"
@@ -1382,6 +1377,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     COMMAND test_cpp_framework_m6b_runtime --dispatch-callback-lifetime
     LABELS "framework-unit;framework-m6-runtime;stateful"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_message_follow_capture_lifetime
+    COMMAND test_cpp_framework_m6b_runtime --message-follow-capture-lifetime
+    LABELS "framework-unit;framework-m6-runtime;stateful"
+    TIMEOUT 30)
 
   add_executable(test_cpp_framework_reply_submit_claim
     tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp)
@@ -1537,6 +1537,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     NAME zlink_cpp_framework_mesh_node_vertical_test
     COMMAND zlink_cpp_framework_mesh_node_vertical_test
     LABELS "framework-unit;framework-zlink;framework-zlink-channel;framework-zlink-spot;framework-zlink-actor-gateway"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_application_terminal_capture_lifetime
+    COMMAND zlink_cpp_framework_mesh_node_vertical_test --terminal-owner-capture-lifetime
+    LABELS "framework-unit;framework-regression;resource"
     TIMEOUT 30)
   zlink_framework_cpp_add_test(
     NAME zlink_cpp_framework_mesh_management_async_test
@@ -2059,6 +2064,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_async_task.cpp
     "framework-unit;framework-regression;async")
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_async_task)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_coroutine_executor_capture_lifetime
+    COMMAND test_cpp_framework_async_task --coroutine-executor-capture-lifetime
+    LABELS "framework-unit;framework-regression;async;resource"
+    TIMEOUT 30)
   add_zlink_framework_test(
     test_cpp_framework_completion_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_allocations.cpp
@@ -2137,6 +2147,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-contract;framework-regression;execution"
     TIER unit
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_session_control_priority
+    COMMAND test_cpp_framework_execution --session-control-priority
+    LABELS "framework-unit;framework-contract;execution;stream"
+    TIER unit
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_fanout_state_owner
+    COMMAND test_cpp_framework_execution --fanout-state-owner
+    LABELS "framework-unit;framework-contract;execution;topology"
+    TIER unit
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_binding_state_owner
+    COMMAND test_cpp_framework_actor_gateway --binding-state-owner
+    LABELS "framework-unit;framework-contract;execution;stream"
+    TIER unit
+    TIMEOUT 30)
   add_executable(test_cpp_framework_lane_getters
     tests/Zlink.Framework.UnitTests/test_cpp_framework_lane_getters.cpp
     tests/support/allocation_counter.cpp)
@@ -2149,6 +2177,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     NAME test_cpp_framework_lane_getters
     COMMAND test_cpp_framework_lane_getters
     LABELS "framework-unit;framework-contract;framework-regression;execution"
+    TIER unit
+    TIMEOUT 30)
+  add_executable(test_cpp_framework_shared_infrastructure
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_shared_infrastructure.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_shared_infrastructure)
+  target_compile_features(test_cpp_framework_shared_infrastructure PRIVATE cxx_std_20)
+  target_link_libraries(test_cpp_framework_shared_infrastructure PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_shared_infrastructure PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_shared_infrastructure
+    COMMAND test_cpp_framework_shared_infrastructure
+    LABELS "framework-unit;framework-regression;execution"
     TIER unit
     TIMEOUT 30)
   add_executable(test_cpp_framework_state_lane
@@ -2371,6 +2413,47 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_channel_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_zlink_framework_test(
+      test_cpp_framework_manual_ingress_wait
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_ingress_wait.cpp
+      "framework-unit;framework-regression;framework-client-server;liveness")
+    add_zlink_framework_test(
+      test_cpp_framework_manual_source_threads
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_source_threads.cpp
+      "framework-unit;framework-regression;framework-client-server;liveness")
+    target_include_directories(test_cpp_framework_manual_source_threads PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    add_zlink_framework_test(
+      test_cpp_framework_client_server_control_submit
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_control_submit.cpp
+      "framework-unit;framework-regression;framework-client-server;liveness")
+    target_include_directories(test_cpp_framework_client_server_control_submit PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_use_zlink_gtest_main(test_cpp_framework_manual_ingress_wait)
+    target_include_directories(test_cpp_framework_manual_ingress_wait PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_options(test_cpp_framework_manual_ingress_wait PRIVATE
+      "LINKER:--wrap=zlink_poller_add" "LINKER:--wrap=zlink_poller_wait"
+      "LINKER:--wrap=zlink_set_router_option" "LINKER:--wrap=zlink_socket_monitor_recv")
+  endif()
+  add_zlink_framework_test(
+    test_cpp_framework_manual_dispatch_owner
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_dispatch_owner.cpp
+    "framework-unit;framework-regression;framework-client-server")
+  target_use_zlink_gtest_main(test_cpp_framework_manual_dispatch_owner)
+  target_include_directories(test_cpp_framework_manual_dispatch_owner PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_manual_client_connections
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_manual_client_connections.cpp
+    "framework-unit;framework-regression;framework-client-server")
+  add_zlink_framework_test(
+    test_cpp_framework_client_server_native_body
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_native_body.cpp
+    "framework-unit;framework-regression;framework-client-server")
+  target_include_directories(test_cpp_framework_client_server_native_body PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_submission_failure_contract
     tests/Zlink.Framework.UnitTests/test_cpp_framework_submission_failure_contract.cpp
@@ -2561,6 +2644,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_metrics_contract.py
     LABELS "framework-unit;framework-contract;framework-observability;metrics")
   add_zlink_framework_test(
+    test_cpp_framework_metric_provider
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_metric_provider.cpp
+    "framework-unit;framework-contract;framework-observability;metrics"
+    contract)
+  target_link_libraries(test_cpp_framework_metric_provider PRIVATE opentelemetry-cpp::metrics)
+  add_zlink_framework_test(
     test_cpp_framework_runtime_metrics
     tests/Zlink.Framework.UnitTests/test_cpp_framework_runtime_metrics.cpp
     "framework-unit;framework-contract;framework-observability;metrics"
@@ -2568,6 +2657,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_runtime_metrics PRIVATE opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_runtime_metrics PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stopped_population_retirement
+    COMMAND test_cpp_framework_runtime_metrics --stopped-population-retirement
+    LABELS "framework-unit;framework-regression;framework-observability;metrics"
+    TIMEOUT 30)
   add_zlink_framework_test(
     test_cpp_framework_mesh_metrics
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_metrics.cpp

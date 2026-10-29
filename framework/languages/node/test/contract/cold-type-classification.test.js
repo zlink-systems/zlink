@@ -47,8 +47,10 @@ function fixture(targets) {
   );
   for (const target of targets)
     assert.equal(topology.admit(target, `connection-${target.nodeRoutingId}`, undefined, undefined, ServiceWireCommand.admit), 'admitted');
-  const backend = new ZLinkNodeRawMeshBackend('play', 'source', {});
-  backend.runtime = { topology, isPeerRouteReady: () => true };
+  const backend = new ZLinkNodeRawMeshBackend(
+    'play', 'source', {}, undefined, undefined, undefined, undefined,
+    { raw: { topology, isPeerRouteReady: () => true } }
+  );
   let submissions = 0;
   let selectedType;
   backend.sendToMissingInstanceSpot = async (target) => {

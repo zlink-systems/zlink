@@ -121,6 +121,8 @@ test('ClientServer server ordinary receive refreshes only its peer and expires a
   const disconnected = [];
   const router = {
     async send() {},
+    reply() {},
+    maxMessageSize: 4096,
     disconnectPeer(rid) {
       disconnected.push(rid);
     }
@@ -129,6 +131,13 @@ test('ClientServer server ordinary receive refreshes only its peer and expires a
     clientServerConnections: new Map(),
     clientServerServerPeers: new Map(),
     clientServerAdmittedClients: new Map(),
+    clientServerServerDescriptors: new Map([['orders', {
+      channelName: 'orders', serverRid: 'server', lifecycleGeneration: 1n,
+      descriptorRevision: 1n, endpoint: 'inproc://orders', weight: 1,
+      state: require('../../packages/framework/dist/internal').ZLinkFrameworkRuntimeState.Serving,
+      securityIdentity: 'default', ownerId: 'owner',
+      leaseGeneration: 1n, applicationVersion: 1n
+    }]]),
     channelRouters: new Map([['orders', router]]),
     fanoutConnections: new Map(),
     ownedResources: [],
@@ -136,8 +145,8 @@ test('ClientServer server ordinary receive refreshes only its peer and expires a
     nextClientServerProbeId: 1n,
     ensureClientServerLivenessTimer() {}
   });
-  sockets.admitClientServerServerPeer('orders', 'active', 4096);
-  sockets.admitClientServerServerPeer('orders', 'silent', 4096);
+  admitServerPeer(sockets, router, 'active');
+  admitServerPeer(sockets, router, 'silent');
   const beforeReceive = performance.now();
   const message = Message.from('ordinary-message');
   try {
@@ -172,6 +181,8 @@ test('ClientServer server receive from another routing id does not refresh this 
   const disconnected = [];
   const router = {
     async send() {},
+    reply() {},
+    maxMessageSize: 4096,
     disconnectPeer(rid) {
       disconnected.push(rid);
     }
@@ -180,6 +191,13 @@ test('ClientServer server receive from another routing id does not refresh this 
     clientServerConnections: new Map(),
     clientServerServerPeers: new Map(),
     clientServerAdmittedClients: new Map(),
+    clientServerServerDescriptors: new Map([['orders', {
+      channelName: 'orders', serverRid: 'server', lifecycleGeneration: 1n,
+      descriptorRevision: 1n, endpoint: 'inproc://orders', weight: 1,
+      state: require('../../packages/framework/dist/internal').ZLinkFrameworkRuntimeState.Serving,
+      securityIdentity: 'default', ownerId: 'owner',
+      leaseGeneration: 1n, applicationVersion: 1n
+    }]]),
     channelRouters: new Map([['orders', router]]),
     fanoutConnections: new Map(),
     ownedResources: [],
@@ -187,8 +205,8 @@ test('ClientServer server receive from another routing id does not refresh this 
     nextClientServerProbeId: 1n,
     ensureClientServerLivenessTimer() {}
   });
-  sockets.admitClientServerServerPeer('orders', 'active', 4096);
-  sockets.admitClientServerServerPeer('orders', 'other', 4096);
+  admitServerPeer(sockets, router, 'active');
+  admitServerPeer(sockets, router, 'other');
   const peers = sockets.clientServerServerPeersForChannel('orders');
   const beforeReceive = performance.now();
   peers.get('active').liveness.deadlineMs = beforeReceive + 1_000;
@@ -216,3 +234,19 @@ test('ClientServer server receive from another routing id does not refresh this 
   await sockets.tickClientServerLiveness(afterReceive + 15_000);
   assert.deepEqual(disconnected, ['active', 'other']);
 });
+
+function admitServerPeer(sockets, router, routingId) {
+  const { Message } = require('@zlink-systems/zlink');
+  const { encodeClientServerHello } = require('../../packages/framework/dist/runtime/channels/client-server-service-wire');
+  const hello = Message.from(encodeClientServerHello({
+    channelName: 'orders', securityIdentity: 'default', normalizedEffectiveMaxMessageBytes: 4096
+  }));
+  try {
+    assert.equal(sockets.tryHandleClientServerControl('orders', {
+      parts: [hello], routingId, replyToken: {}
+    }, router), true);
+    assert.equal(sockets.clientServerServerPeersForChannel('orders').get(routingId).normalizedEffectiveMaxMessageBytes, 4096);
+  } finally {
+    hello.close();
+  }
+}

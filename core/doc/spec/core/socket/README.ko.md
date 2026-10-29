@@ -169,20 +169,16 @@ typedef enum zlink_rid_duplicate_policy_t
 않으며, 등록하지 않은 중복 pipe는 즉시 닫는다. 따라서 connector는 그 pipe의 종료를
 monitor로 관찰하고 connect intent에 따라 다시 연결하며, 기존 pipe가 종료된 뒤의 시도가
 admission된다. wire에 거부 사유는 없으며 connector는 자기 pair의 종료만 관찰한다. 거부된 pipe에
-이미 admit된 request는 그 pair가 종료되는 즉시 §6 completion 표의 단일 규칙(submit 시점 pair 종료, 원인
-불문)에 따라 `ZLINK_REQUEST_NOT_CONNECTED`(errno `EHOSTUNREACH`)로 정확히 한 번 종결되고 caller가 다시
-보낸다. 재연결이 잦은 흐름은 `ZLINK_RID_DUPLICATE_HANDOVER`를 권장한다. Connector가 관찰하는 READY event는 transport 연결
+이미 admit된 request의 pair 종료 처리는 [Request와 reply](#request와-reply)를 따른다. 재연결이 잦은 흐름은 `ZLINK_RID_DUPLICATE_HANDOVER`를 권장한다. Connector가 관찰하는 READY event는 transport 연결
 성립을 뜻하며 peer ROUTER의 routing id admission을 뜻하지 않는다. `ZLINK_RID_DUPLICATE_HANDOVER`에서는 같은 방향에서 다시 연결한 pipe가
 기존 pipe를 인수한다.
 
 서로 반대 방향의 pipe가 충돌하면(정책과 무관하게) 두 peer의 routing id를
 비교해 양쪽이 같은 방향 하나를 선택하고, 물러나는 방향의 pipe는 닫지 않고 standby로 둔다
 ([ROUTER §5](07-router.ko.md)). 그 선택으로 물러나는 방향에서 이미 admit된
-request는 선택된 방향으로 이어지지 않는다. 그 request의 reply는 submit 시점에 사용한 바로 그
-transport pair로만 전달되도록 제한되어 있어 request를 완료하지 못한다. Core는 그 pair가
-handover로 물러나는 즉시 해당 request를 `ZLINK_REQUEST_NOT_CONNECTED`(errno `EHOSTUNREACH`)로
-정확히 한 번 종결하며, request의 자기 timeout까지 기다리지 않는다. Caller는 그 completion을
-받은 뒤 handover된 방향으로 다시 보낸다. RID마다 어느 pipe가 선택됐는지는
+request는 선택된 방향으로 이어지지 않는다. Reply는 제출 시점 transport pair로만 전달되며
+새 방향을 통해 request를 완료하지 않는다. 해당 pair가 선택에서 물러날 때의 request completion은
+[Request와 reply](#request와-reply)를 따른다. RID마다 어느 pipe가 선택됐는지는
 [ROUTER §10.1](07-router.ko.md#101-선택-route-관찰)의 snapshot으로 관찰한다.
 
 이 옵션은 peer가 광고한 routing id를 관찰할 수 있는 socket에서만 의미가
@@ -851,6 +847,11 @@ socket을 local endpoint에 binding한다. endpoint 문자열은
 - `wss://interface:port` (TLS 위의 WebSocket; `ZLINK_HAVE_WSS` build에서만)
 - `tls://interface:port` (TLS 암호화 TCP; `ZLINK_HAVE_TLS` build에서만)
 
+IP 기반 bind 주소의 주소 부분은 숫자 IP 주소로 먼저 해석한다. 해석되면 NIC의 주소 조회나
+DNS 조회 없이 그 주소를 사용한다. 숫자 IP 주소가 아니면 NIC 이름으로 조회하고, 해당 NIC가
+없으면 허용된 주소 이름 해석을 수행한다. `*`의 전체 interface 지정과 IPv6 주소의 대괄호
+표기는 그대로 지원한다.
+
 socket은 여러 endpoint에 binding할 수 있다. TCP의 경우 port 0을 지정하면
 시스템이 임시 port를 할당한다. 실제 endpoint를 가져오려면
 `ZLINK_OPT_LAST_ENDPOINT`를 사용한다.
@@ -1029,9 +1030,9 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect (void *s_, const char *addr
 제거된 연결을 admission 대상으로 다시 선택하지 않는다. 제거된 연결의 physical 자원 정리(비동기)와 뒤이은
 `zlink_connect(endpoint)`가 시작하는 새 연결 시도는 겹칠 수 있으며, 새 시도의 진행은 monitor event 소비나 이전
 연결의 terminal edge 관찰을 조건으로 하지 않는다(05-polling §3 command progress). 원격 ROUTER에 남아 있는 같은
-RID의 등록은 §4 RID duplicate policy(REJECT/HANDOVER)로 처리한다. 제거된 연결에 admit되어 있던 REQUEST의 종결은
-completion 계약을 따른다: 명시적 endpoint·logical RID 제거는 `NOT_FOUND`, 그 외 submit 시점 pair의 종료(일시적
-physical 단절, handover로 물러남, REJECT로 닫힘)는 원인 불문 `NOT_CONNECTED`(§6 completion 표).
+RID의 등록은 §4 RID duplicate policy(REJECT/HANDOVER)로 처리한다. 제거된 연결에 admit되어 있던 REQUEST의
+명시적 endpoint·logical RID 제거 결과는 §6 completion 표를 따른다. 그 밖의 제출 시점 pair 종료나
+선택 해제 처리는 [Request와 reply](#request와-reply)를 따른다.
 
 **반환값:** 성공 시 `ZLINK_CONNECT_OK`, 실패 시 `zlink_connect_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
@@ -1241,8 +1242,11 @@ level 유지와 종료 조건은
 `timeout_ms_ == 0`은 requester socket의 request timeout을 snapshot하며 기본값은 5,000 ms다.
 Reply timeout은 request record가 outbound local send queue에 admission된 시점, 즉
 `ZLINK_SUBMIT_OK`를 반환한 시점부터 monotonic하게 흐른다. 대기 토큰이 유지되는 동안은 timeout이
-흐르지 않는다. Admission 뒤 disconnect가 발생해도 request
-payload를 replay하지 않고 correlation과 이미 시작한 budget만 유지한다. Reply와 timeout 중
+흐르지 않는다. Admission 뒤 disconnect가 발생해도 request payload를 replay하지 않는다.
+제출 시점 transport pair의 종료 또는 선택 해제를 처리할 때, 같은 inbound FIFO의 head에서
+이미 완결되어 처리할 수 있는 reply를 같은 resolver가 먼저 처리한다. 앞선 DATA·REQUEST나
+공개 수신의 delivery hold를 건너뛰지 않는다. 이후 그 pair에 남은 pending request만
+`ZLINK_REQUEST_NOT_CONNECTED`(`EHOSTUNREACH`)로 정확히 한 번 종결한다. Reply·timeout·pair 종료 중
 pending correlation을 먼저 제거한 하나만 completion을 만들며 늦은 결과는 버린다.
 
 DEALER-ROUTER single connection에서 ROUTER가 먼저 보낸 DATA와 이후 REPLY·error reply는 같은
@@ -1313,7 +1317,7 @@ RID다. Reconnect 뒤 physical connection identity로 바뀌지 않으며 후속
 | 영구적인 peer-type 거절 | 해당 없음; 대기 토큰은 공통 종료 규칙을 따른다 | `ZLINK_REQUEST_REJECTED` |
 | malformed protocol | 해당 없음; 대기 토큰은 공통 종료 규칙을 따른다 | `ZLINK_REQUEST_PROTOCOL_ERROR` |
 | accepted 뒤 allocation·runtime failure | 해당 없음; Core가 payload를 보관하지 않음 | `ZLINK_REQUEST_INTERNAL_ERROR` |
-| submit 시점 transport pair의 종료 또는 선택에서 물러남(transient disconnect, HANDOVER로 물러남, standby 전환, REJECT로 닫힘 등 원인 불문) | PAIR·DEALER·ROUTER는 transport 종료 자체가 terminal이 아님; 같은 target의 재연결이 WRITABLE을 발행. STREAM은 [STREAM routed send](08-stream.ko.md#4-routed-send)의 `ZLINK_SEND_NOT_CONNECTED`, `ENOTCONN` | reply는 submit 시점 pair로만 전달되므로 Core가 그 pair가 종료되거나 선택에서 물러나는 즉시 `ZLINK_REQUEST_NOT_CONNECTED`(`EHOSTUNREACH`)로 정확히 한 번 종결; caller가 다시 보낸다 |
+| submit 시점 transport pair의 종료 또는 선택에서 물러남(transient disconnect, HANDOVER로 물러남, standby 전환, REJECT로 닫힘 등 원인 불문) | PAIR·DEALER·ROUTER는 transport 종료 자체가 terminal이 아님; 같은 target의 재연결이 WRITABLE을 발행. STREAM은 [STREAM routed send](08-stream.ko.md#4-routed-send)의 `ZLINK_SEND_NOT_CONNECTED`, `ENOTCONN` | [Request와 reply](#request와-reply)의 pair 종료 처리 규칙 참조 |
 | context termination·socket close | record 없음; 대기 토큰과 읽지 않은 record는 내부 폐기 | 진행 중 request와 unread record를 내부 폐기하고 새 completion 전달을 보장하지 않음 |
 
 REQUEST reply는 Core가 enqueue 전에 확보한 contiguous `zlink_msg_t[]`에 보관한다. Wire error

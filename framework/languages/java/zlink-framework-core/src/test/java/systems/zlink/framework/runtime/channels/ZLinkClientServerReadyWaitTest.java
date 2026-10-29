@@ -428,74 +428,78 @@ final class ZLinkClientServerReadyWaitTest {
                             Proxy.newProxyInstance(
                                     getClass().getClassLoader(),
                                     new Class<?>[] {ZLinkBackendDealerSocket.class},
-                                    (proxy, method, args) ->
-                                            switch (method.getName()) {
-                                                case "request" -> {
-                                                    @SuppressWarnings("unchecked")
-                                                    List<Message> parts = (List<Message>) args[0];
-                                                    if (ZLinkClientServerServiceWire.isControlFrame(
-                                                            parts.getFirst().toByteArray())) {
-                                                        assertInstanceOf(
-                                                                ZLinkClientServerServiceWire.Hello
-                                                                        .class,
-                                                                ZLinkClientServerServiceWire.decode(
-                                                                        parts.getFirst()
-                                                                                .toByteArray()));
-                                                        assertEquals(channelTimeout, args[1]);
-                                                        if (helloRequests.incrementAndGet() == 1) {
-                                                            yield admission;
-                                                        }
-                                                        yield secondAdmission;
+                                    (proxy, method, args) -> {
+                                        if (method.isDefault()
+                                                && method.getName().equals("requestTo"))
+                                            return java.lang.reflect.InvocationHandler
+                                                    .invokeDefault(proxy, method, args);
+                                        return switch (method.getName()) {
+                                            case "request" -> {
+                                                @SuppressWarnings("unchecked")
+                                                List<Message> parts = (List<Message>) args[0];
+                                                if (ZLinkClientServerServiceWire.isControlFrame(
+                                                        parts.getFirst().toByteArray())) {
+                                                    assertInstanceOf(
+                                                            ZLinkClientServerServiceWire.Hello
+                                                                    .class,
+                                                            ZLinkClientServerServiceWire.decode(
+                                                                    parts.getFirst()
+                                                                            .toByteArray()));
+                                                    assertEquals(channelTimeout, args[1]);
+                                                    if (helloRequests.incrementAndGet() == 1) {
+                                                        yield admission;
                                                     }
-                                                    requestStarted = time.nanoTime();
-                                                    requestTimeout.set((Duration) args[1]);
-                                                    businessRequests.incrementAndGet();
-                                                    businessRequestStarted.countDown();
-                                                    yield replyImmediately
-                                                            ? CompletableFuture.completedFuture(
-                                                                    received(
-                                                                            Message.from(
-                                                                                    "{\"value\":\"reply\"}")))
-                                                            : new CompletableFuture<
-                                                                    ZLinkBackendReceived>();
+                                                    yield secondAdmission;
                                                 }
-                                                case "recv" -> null;
-                                                case "waitForReadable" -> false;
-                                                case "name" -> "ready-wait-dealer";
-                                                case "hashCode" -> System.identityHashCode(proxy);
-                                                case "equals" -> proxy == args[0];
-                                                case "send" -> {
-                                                    businessSends.incrementAndGet();
-                                                    businessSendStarted.countDown();
-                                                    yield sendAdmission;
-                                                }
-                                                case "close" -> {
-                                                    sendAdmission.completeExceptionally(
-                                                            new systems.zlink.contracts.errors
-                                                                    .ZlinkSubmitException(
-                                                                    systems.zlink.contracts.sockets
-                                                                            .SubmitResult
-                                                                            .TERMINATED));
-                                                    yield null;
-                                                }
-                                                case "connect" -> {
-                                                    connects.incrementAndGet();
-                                                    yield null;
-                                                }
-                                                case "disconnect" -> {
-                                                    disconnects.incrementAndGet();
-                                                    yield null;
-                                                }
-                                                case "receiveAdmission" -> receiveAdmission;
-                                                case "setReceiveAdmission" -> {
-                                                    receiveAdmission = (Runnable) args[0];
-                                                    yield null;
-                                                }
-                                                case "setChannelName" -> null;
-                                                default ->
-                                                        throw new UnsupportedOperationException(
-                                                                method.toString());
-                                            });
+                                                requestStarted = time.nanoTime();
+                                                requestTimeout.set((Duration) args[1]);
+                                                businessRequests.incrementAndGet();
+                                                businessRequestStarted.countDown();
+                                                yield replyImmediately
+                                                        ? CompletableFuture.completedFuture(
+                                                                received(
+                                                                        Message.from(
+                                                                                "{\"value\":\"reply\"}")))
+                                                        : new CompletableFuture<
+                                                                ZLinkBackendReceived>();
+                                            }
+                                            case "recv" -> null;
+                                            case "waitForReadable" -> false;
+                                            case "name" -> "ready-wait-dealer";
+                                            case "hashCode" -> System.identityHashCode(proxy);
+                                            case "equals" -> proxy == args[0];
+                                            case "send" -> {
+                                                businessSends.incrementAndGet();
+                                                businessSendStarted.countDown();
+                                                yield sendAdmission;
+                                            }
+                                            case "close" -> {
+                                                sendAdmission.completeExceptionally(
+                                                        new systems.zlink.contracts.errors
+                                                                .ZlinkSubmitException(
+                                                                systems.zlink.contracts.sockets
+                                                                        .SubmitResult.TERMINATED));
+                                                yield null;
+                                            }
+                                            case "connect" -> {
+                                                connects.incrementAndGet();
+                                                yield null;
+                                            }
+                                            case "disconnect" -> {
+                                                disconnects.incrementAndGet();
+                                                yield null;
+                                            }
+                                            case "receiveAdmission" -> receiveAdmission;
+                                            case "setReceiveAdmission" -> {
+                                                receiveAdmission = (Runnable) args[0];
+                                                yield null;
+                                            }
+                                            case "setChannelName" -> null;
+                                            default ->
+                                                    throw new UnsupportedOperationException(
+                                                            method.toString());
+                                        };
+                                    });
             ZLinkBackendContext context =
                     new ZLinkBackendContext() {
                         @Override
@@ -528,16 +532,26 @@ final class ZLinkClientServerReadyWaitTest {
                                                             },
                                                             (ignoredProxy,
                                                                     socketMethod,
-                                                                    socketArgs) ->
-                                                                    socketMethod
-                                                                                    .getName()
-                                                                                    .equals(
-                                                                                            "request")
-                                                                            ? new CompletableFuture<
-                                                                                    ZLinkBackendReceived>()
-                                                                            : socketMethod.invoke(
-                                                                                    dealer,
-                                                                                    socketArgs));
+                                                                    socketArgs) -> {
+                                                                if (socketMethod.isDefault()
+                                                                        && socketMethod
+                                                                                .getName()
+                                                                                .equals(
+                                                                                        "requestTo"))
+                                                                    return java.lang.reflect
+                                                                            .InvocationHandler
+                                                                            .invokeDefault(
+                                                                                    ignoredProxy,
+                                                                                    socketMethod,
+                                                                                    socketArgs);
+                                                                return socketMethod
+                                                                                .getName()
+                                                                                .equals("request")
+                                                                        ? new CompletableFuture<
+                                                                                ZLinkBackendReceived>()
+                                                                        : socketMethod.invoke(
+                                                                                dealer, socketArgs);
+                                                            });
                                                 }
                                                 default ->
                                                         throw new UnsupportedOperationException(

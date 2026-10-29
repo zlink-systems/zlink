@@ -5,6 +5,8 @@
 #include <iostream>
 #include <limits>
 
+#include "test_json.hpp"
+
 namespace MyGame::DomainChecks
 {
 inline int run ()
@@ -47,7 +49,7 @@ inline int run ()
     now += budget.rejection->retryAfterMs;
     check (domain.move ("p", {10, 2}).accepted, "retry after server delay");
     now += 25;
-    const auto snapshot = nlohmann::json (domain.capture ()).get<FieldPositionSnapshot> ();
+    const auto snapshot = test_json_morpg_fields_domain::decode<FieldPositionSnapshot> (test_json_morpg_fields_domain::object (domain.capture ()));
     FieldPositionDomain restored ("field-1", [&] { return now + 10'000; });
     restored.restore (snapshot);
     check (restored.state ("p") == domain.state ("p"), "relative time snapshot");
@@ -85,10 +87,10 @@ inline int run ()
         party.phase = phase;
         party.runId = phase == RunPhase::Forming ? std::nullopt
                                                 : std::optional<std::string> ("run-" + std::string (32, 'a'));
-        const auto before = nlohmann::json (party);
+        const auto before = test_json_morpg_fields_domain::object (party);
         const auto non_leader_rejection = party.enter ("member");
         check (has_reason (non_leader_rejection, Rejection::not_leader)
-                 && nlohmann::json (party) == before,
+                 && test_json_morpg_fields_domain::object (party) == before,
                "nonleader immutable");
         const auto old_run = party.runId;
         check (!party.enter ("leader"), "leader entry");
@@ -147,8 +149,8 @@ inline int run ()
     check (!run.arrived (run_id, "leader") && !run.arrived (run_id, "member"),
            "party arrivals");
     check (!run.started (run_id) && !run.completed (run_id), "complete state machine");
-    const auto restored_party = nlohmann::json (run).get<PartyRun> ();
-    check (nlohmann::json (restored_party) == nlohmann::json (run), "party snapshot");
+    const auto restored_party = test_json_morpg_fields_domain::decode<PartyRun> (test_json_morpg_fields_domain::object (run));
+    check (test_json_morpg_fields_domain::object (restored_party) == test_json_morpg_fields_domain::object (run), "party snapshot");
     check (!run.enter ("leader") && run.runId != run_id && run.phase == RunPhase::Preparing,
            "fresh run after completion");
 
@@ -174,12 +176,12 @@ inline int run ()
     check (prepared.can_join ("leader", run_id), "prepared member admitted");
     check (!prepared.can_join ("outsider", run_id), "foreign member admitted");
     check (!prepared.can_join ("leader", "other"), "foreign run admitted");
-    const auto prepared_state = nlohmann::json (prepared);
+    const auto prepared_state = test_json_morpg_fields_domain::object (prepared);
     const auto wrong_run = prepared.prepare (PrepareDungeon{"other", party_id, {"leader", "member"}});
     const auto wrong_members = prepared.prepare (PrepareDungeon{run_id, party_id, {"other"}});
     check (wrong_run && wrong_run->reason == Rejection::run_mismatch && wrong_members
              && wrong_members->reason == Rejection::run_mismatch
-             && nlohmann::json (prepared) == prepared_state,
+             && test_json_morpg_fields_domain::object (prepared) == prepared_state,
            "preparation mismatch immutable");
     prepared.arrived ("leader");
     const auto partial_advance = prepared.advance ();
@@ -195,12 +197,12 @@ inline int run ()
     check (prepared.phase == RunPhase::Completed
              && has_reason (completed_advance, Rejection::run_not_active),
            "final stage");
-    const auto restored_dungeon = nlohmann::json (prepared).get<DungeonRun> ();
-    check (nlohmann::json (restored_dungeon) == nlohmann::json (prepared), "dungeon snapshot");
-    const auto view_json = nlohmann::json (run.view (party_id)).dump ();
+    const auto restored_dungeon = test_json_morpg_fields_domain::decode<DungeonRun> (test_json_morpg_fields_domain::object (prepared));
+    check (test_json_morpg_fields_domain::object (restored_dungeon) == test_json_morpg_fields_domain::object (prepared), "dungeon snapshot");
+    const auto view_json = test_json_morpg_fields_domain::object (run.view (party_id)).dump ();
     check (view_json.find ("\"phase\":\"Preparing\"") != std::string::npos,
            "enum name JSON");
-    const auto nullable_json = nlohmann::json (PartyRun{}.view (party_id)).dump ();
+    const auto nullable_json = test_json_morpg_fields_domain::object (PartyRun{}.view (party_id)).dump ();
     check (nullable_json.find ("\"runId\":null") != std::string::npos, "nullable JSON");
     return count;
 }

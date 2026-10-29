@@ -1203,7 +1203,7 @@ test('stream session replies to ping while active heartbeat checks are stopped',
   runtime.start();
   runtime.markConnected('passive-heartbeat-session');
   await clock.flush();
-  runtime.findSession('passive-heartbeat-session').stopLivenessChecks();
+  for (const timer of clock.timers.keys()) clock.clearTimer(timer);
   await clock.advance(6000);
   assert.equal(socket.sent.length, 0);
   socket.emitPacket('passive-heartbeat-session', fakeHeader({
@@ -1223,6 +1223,20 @@ for (const wallJumpMs of [60_000, -60_000]) {
     let elapsedMs = 0;
     t.mock.method(performance, 'now', () => elapsedMs);
     const wallNow = Date.now();
+    const timers = new Map();
+    t.mock.method(globalThis, 'setTimeout', (callback, delayMs) => {
+      const timer = { unref() {} };
+      timers.set(timer, { callback, delayMs });
+      return timer;
+    });
+    t.mock.method(globalThis, 'clearTimeout', timer => timers.delete(timer));
+    const tick = async () => {
+      assert.equal(timers.size, 1);
+      const [timer, scheduled] = [...timers][0];
+      timers.delete(timer);
+      scheduled.callback();
+      await new Promise(resolve => setImmediate(resolve));
+    };
     const socket = new FakeStreamSocket();
     const runtime = createStreamRuntime({
       socket,
@@ -1232,17 +1246,16 @@ for (const wallJumpMs of [60_000, -60_000]) {
     runtime.start();
     runtime.markConnected('monotonic-heartbeat');
     await new Promise(resolve => setImmediate(resolve));
-    const session = runtime.findSession('monotonic-heartbeat');
     elapsedMs = 1000;
-    await session.runLivenessCheck();
+    await tick();
     assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.ping');
 
     t.mock.method(Date, 'now', () => wallNow + wallJumpMs);
     elapsedMs = 4999;
-    await session.runLivenessCheck();
+    await tick();
     assert.deepEqual(socket.disconnects, []);
     elapsedMs = 5000;
-    await session.runLivenessCheck();
+    await tick();
     assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
     assert.deepEqual(socket.disconnects, ['monotonic-heartbeat']);
   });

@@ -1,3 +1,4 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
@@ -70,7 +71,7 @@ function fixture() {
     remoteActorPacketTargetProvider: () => undefined,
     routedTransport: { async submitInfrastructure() { return { status: ready ? ZLinkSubmitStatus.Submitted : ZLinkSubmitStatus.RouteNotConnected }; } }
   });
-  return { runtime, prepare, requested, restored, events, session,
+  return { runtime, node, prepare, requested, restored, events, session,
     connect() { ready = true; connected.resolve(); },
     prepareTarget() { return runtime.handlePrepareControl('mesh', 'attempt', prepare, 'source'); }
   };
@@ -101,7 +102,7 @@ for (const terminal of ['deadline', 'shutdown']) {
     const errors = require('../../packages/framework/dist/contracts');
     const timeout = require('../../packages/framework/dist/runtime/foundation/operation-registry');
     let rejectRoute;
-    f.runtime.options.meshNode().waitForPeerRoute = (_peer, _generation, _deadline, signal) =>
+    f.node.waitForPeerRoute = (_peer, _generation, _deadline, signal) =>
       new Promise((_resolve, reject) => {
         rejectRoute = reject;
         signal.addEventListener('abort', () => reject(signal.reason), { once: true });
@@ -119,8 +120,8 @@ for (const terminal of ['deadline', 'shutdown']) {
     else await f.runtime.drainTargetAttempts();
     await delivered;
     assert.equal(failed.kind, 'failed');
-    assert.equal(f.runtime.targetStages.size, 0);
-    assert.equal(f.runtime.targetAssemblies.size, 0);
+    assert.equal(f.runtime[inspectRuntime]().targetStages, 0);
+    assert.equal(f.runtime[inspectRuntime]().targetAssemblies, 0);
     assert.equal(f.events.filter(e => e === 'abort').length, 1);
     if (terminal === 'deadline') {
       await assert.rejects(operation, error => error.kind === errors.ZLinkFrameworkErrorKind.DeadlineExceeded);
@@ -138,7 +139,7 @@ test('target shutdown during payload assembly sends ShuttingDown and removes ass
     require('../../packages/framework/dist/contracts').ZLinkFrameworkErrorKind.ShuttingDown);
   await f.runtime.drainTargetAttempts();
   await failure;
-  assert.equal(f.runtime.targetAssemblies.size, 0);
+  assert.equal(f.runtime[inspectRuntime]().targetAssemblies, 0);
 });
 
 test('a ready notification after the source deadline cannot produce READY', async (t) => {
@@ -151,6 +152,6 @@ test('a ready notification after the source deadline cannot produce READY', asyn
   f.connect();
   await assert.rejects(operation, error => error.kind ===
     require('../../packages/framework/dist/contracts').ZLinkFrameworkErrorKind.DeadlineExceeded);
-  assert.equal(f.runtime.targetStages.size, 0);
+  assert.equal(f.runtime[inspectRuntime]().targetStages, 0);
   assert.equal(f.events.includes('abort'), true);
 });

@@ -22,6 +22,14 @@ class channel_packet_dispatcher_t
                              const handler_registry_t &handlers,
                              std::function<void ()> before_application_handler = {}) const;
 
+    task_t<runtime::messaging::message_parts_t> dispatch_server_message_in_handler (
+      std::string channel_name,
+      const runtime::messaging::message_parts_t &parts,
+      service_provider_t &services,
+      serializer_registry_t &serializers,
+      const handler_registry_t &handlers,
+      std::function<void ()> before_application_handler = {}) const;
+
   private:
     channel_runtime_t _runtime;
 };

@@ -10,9 +10,10 @@
 namespace zlink::framework::runtime::mesh
 {
 
-service_liveness_registry_t::service_liveness_registry_t (std::chrono::milliseconds probe_interval,
+service_liveness_registry_t::service_liveness_registry_t (runtime::state_lane_t &lane,
+                                                          std::chrono::milliseconds probe_interval,
                                                           std::chrono::milliseconds peer_timeout) :
-    _probe_interval (probe_interval), _peer_timeout (peer_timeout)
+    _probe_interval (probe_interval), _peer_timeout (peer_timeout), _lane (lane)
 {
     if (_probe_interval <= std::chrono::milliseconds::zero () || _peer_timeout <= _probe_interval) {
         throw std::invalid_argument (
@@ -31,22 +32,30 @@ service_liveness_registry_t::admit (std::vector<std::uint8_t> node_routing_id,
                                     std::vector<std::uint8_t> connection_id,
                                     clock_t::time_point now)
 {
+    return _lane
+      .run (
+        [&] { return admit_owned (std::move (node_routing_id), std::move (connection_id), now); })
+      .get ();
+}
+
+service_liveness_registry_t::connection_t
+service_liveness_registry_t::admit_owned (std::vector<std::uint8_t> node_routing_id,
+                                          std::vector<std::uint8_t> connection_id,
+                                          clock_t::time_point now)
+{
     if (node_routing_id.empty () || connection_id.empty ()) {
         throw std::invalid_argument (
           "service liveness admission requires node and connection identities");
     }
-    return _lane
-      .run ([&, this] {
-          const auto found = _peers.find (node_routing_id);
-          if (found != _peers.end () && found->second->connection_id == connection_id)
-              return found->second;
-          auto peer = std::make_shared<peer_t> (std::move (connection_id), now, _peer_timeout);
-          _peers.insert_or_assign (std::move (node_routing_id), peer);
-          // A new peer is due for its first probe at once.
-          _next_due.store (unknown_due, std::memory_order_release);
-          return peer;
-      })
-      .get ();
+
+    const auto found = _peers.find (node_routing_id);
+    if (found != _peers.end () && found->second->connection_id == connection_id)
+        return found->second;
+    auto peer = std::make_shared<peer_t> (std::move (connection_id), now, _peer_timeout);
+    _peers.insert_or_assign (std::move (node_routing_id), peer);
+    // A new peer is due for its first probe at once.
+    _next_due.store (unknown_due, std::memory_order_release);
+    return peer;
 }
 
 service_liveness_registry_t::connection_t
@@ -63,16 +72,18 @@ service_liveness_registry_t::connection (const std::vector<std::uint8_t> &node_r
 bool service_liveness_registry_t::disconnect (const std::vector<std::uint8_t> &node_routing_id,
                                               const std::vector<std::uint8_t> &connection_id)
 {
-    return _lane
-      .run ([&, this] {
-          const auto found = _peers.find (node_routing_id);
-          if (found == _peers.end () || found->second->connection_id != connection_id) {
-              return false;
-          }
-          _peers.erase (found);
-          return true;
-      })
-      .get ();
+    return _lane.run ([&] { return disconnect_owned (node_routing_id, connection_id); }).get ();
+}
+
+bool service_liveness_registry_t::disconnect_owned (
+  const std::vector<std::uint8_t> &node_routing_id, const std::vector<std::uint8_t> &connection_id)
+{
+    const auto found = _peers.find (node_routing_id);
+    if (found == _peers.end () || found->second->connection_id != connection_id) {
+        return false;
+    }
+    _peers.erase (found);
+    return true;
 }
 
 bool service_liveness_registry_t::acknowledge (const std::vector<std::uint8_t> &node_routing_id,
@@ -81,20 +92,26 @@ bool service_liveness_registry_t::acknowledge (const std::vector<std::uint8_t> &
                                                clock_t::time_point now)
 {
     return _lane
-      .run ([&, this] {
-          const auto found = _peers.find (node_routing_id);
-          if (found == _peers.end ()
-              || !std::equal (found->second->connection_id.begin (),
-                              found->second->connection_id.end (), connection_id.begin (),
-                              connection_id.end ()))
-              return false;
-          found->second->record_received (now);
-          if (!found->second->outstanding_probe || *found->second->outstanding_probe != probe_id)
-              return false;
-          found->second->outstanding_probe.reset ();
-          return true;
-      })
+      .run ([&] { return acknowledge_owned (node_routing_id, connection_id, probe_id, now); })
       .get ();
+}
+
+bool service_liveness_registry_t::acknowledge_owned (
+  const std::vector<std::uint8_t> &node_routing_id,
+  std::span<const std::uint8_t> connection_id,
+  std::uint64_t probe_id,
+  clock_t::time_point now)
+{
+    const auto found = _peers.find (node_routing_id);
+    if (found == _peers.end ()
+        || !std::equal (found->second->connection_id.begin (), found->second->connection_id.end (),
+                        connection_id.begin (), connection_id.end ()))
+        return false;
+    found->second->record_received (now);
+    if (!found->second->outstanding_probe || *found->second->outstanding_probe != probe_id)
+        return false;
+    found->second->outstanding_probe.reset ();
+    return true;
 }
 
 std::optional<service_probe_t>
@@ -102,38 +119,45 @@ service_liveness_registry_t::acknowledge_probe (const std::vector<std::uint8_t> 
                                                 std::span<const std::uint8_t> connection_id,
                                                 std::uint64_t probe_id) const
 {
+    return _lane
+      .run ([&] { return acknowledge_probe_owned (node_routing_id, connection_id, probe_id); })
+      .get ();
+}
+
+std::optional<service_probe_t> service_liveness_registry_t::acknowledge_probe_owned (
+  const std::vector<std::uint8_t> &node_routing_id,
+  std::span<const std::uint8_t> connection_id,
+  std::uint64_t probe_id) const
+{
     if (probe_id == 0) {
         return std::nullopt;
     }
-    return _lane
-      .run ([&, this] () -> std::optional<service_probe_t> {
-          const auto found = _peers.find (node_routing_id);
-          if (found == _peers.end ()
-              || !std::equal (found->second->connection_id.begin (),
-                              found->second->connection_id.end (), connection_id.begin (),
-                              connection_id.end ())) {
-              return std::nullopt;
-          }
-          return service_probe_t{
-            node_routing_id,
-            std::vector<std::uint8_t> (connection_id.begin (), connection_id.end ()), probe_id};
-      })
-      .get ();
+
+    const auto found = _peers.find (node_routing_id);
+    if (found == _peers.end ()
+        || !std::equal (found->second->connection_id.begin (), found->second->connection_id.end (),
+                        connection_id.begin (), connection_id.end ())) {
+        return std::nullopt;
+    }
+    return service_probe_t{node_routing_id,
+                           std::vector<std::uint8_t> (connection_id.begin (), connection_id.end ()),
+                           probe_id};
 }
 
 void service_liveness_registry_t::set_admission_pending (bool pending)
 {
-    _lane
-      .run ([this, pending] {
-          if (pending) {
-              if (!_admission_activity)
-                  _admission_activity = clock_t::now ();
-          } else {
-              _admission_activity.reset ();
-          }
-          publish_next_due_on_lane ();
-      })
-      .get ();
+    _lane.run ([this, pending] { set_admission_pending_owned (pending); }).get ();
+}
+
+void service_liveness_registry_t::set_admission_pending_owned (bool pending)
+{
+    if (pending) {
+        if (!_admission_activity)
+            _admission_activity = clock_t::now ();
+    } else {
+        _admission_activity.reset ();
+    }
+    publish_next_due_owned ();
 }
 
 bool service_liveness_registry_t::due (clock_t::time_point now) const noexcept
@@ -142,7 +166,7 @@ bool service_liveness_registry_t::due (clock_t::time_point now) const noexcept
     return next == unknown_due || now.time_since_epoch ().count () >= next;
 }
 
-void service_liveness_registry_t::publish_next_due_on_lane () const
+void service_liveness_registry_t::publish_next_due_owned () const
 {
     const auto admission_due =
       _admission_activity ? (*_admission_activity + _probe_interval).time_since_epoch ().count ()
@@ -160,46 +184,65 @@ service_liveness_tick_t service_liveness_registry_t::tick (clock_t::time_point n
 {
     if (!due (now))
         return {};
-    return _lane
-      .run ([&, this] {
-          service_liveness_tick_t result;
-          for (auto entry = _peers.begin (); entry != _peers.end ();) {
-              if (entry->second->deadline.load (std::memory_order_relaxed) <= now) {
-                  result.timed_out_nodes.push_back (entry->first);
-                  entry = _peers.erase (entry);
-                  continue;
-              }
-              if (entry->second->next_probe <= now) {
-                  if (!entry->second->outstanding_probe) {
-                      if (_next_probe_id == 0) {
-                          _next_probe_id = 1;
-                      }
-                      entry->second->outstanding_probe = _next_probe_id++;
-                  }
-                  result.probes.push_back (service_probe_t{
-                    entry->first, entry->second->connection_id, *entry->second->outstanding_probe});
-                  do {
-                      entry->second->next_probe += _probe_interval;
-                  } while (entry->second->next_probe <= now);
-              }
-              ++entry;
-          }
-          if (_admission_activity)
-              _admission_activity = now;
-          publish_next_due_on_lane ();
-          return result;
-      })
-      .get ();
+    return _lane.run ([&] { return tick_owned (now); }).get ();
+}
+
+service_liveness_tick_t service_liveness_registry_t::tick_owned (clock_t::time_point now)
+{
+    if (!due (now))
+        return {};
+
+    service_liveness_tick_t result;
+    for (auto entry = _peers.begin (); entry != _peers.end ();) {
+        if (entry->second->deadline.load (std::memory_order_relaxed) <= now) {
+            result.timed_out_nodes.push_back (entry->first);
+            entry = _peers.erase (entry);
+            continue;
+        }
+        if (entry->second->next_probe <= now) {
+            if (!entry->second->outstanding_probe) {
+                if (_next_probe_id == 0) {
+                    _next_probe_id = 1;
+                }
+                entry->second->outstanding_probe = _next_probe_id++;
+            }
+            result.probes.push_back (service_probe_t{entry->first, entry->second->connection_id,
+                                                     *entry->second->outstanding_probe});
+            do {
+                entry->second->next_probe += _probe_interval;
+            } while (entry->second->next_probe <= now);
+        }
+        ++entry;
+    }
+    if (_admission_activity)
+        _admission_activity = now;
+    publish_next_due_owned ();
+    return result;
 }
 
 std::optional<service_liveness_registry_t::clock_t::time_point>
 service_liveness_registry_t::next_activity () const
 {
+    const auto next = _next_due.load (std::memory_order_acquire);
+    if (next == unknown_due)
+        return _lane.run ([this] { return next_activity_owned (); }).get ();
+    return activity_from_due (next);
+}
+
+std::optional<service_liveness_registry_t::clock_t::time_point>
+service_liveness_registry_t::next_activity_owned () const
+{
     auto next = _next_due.load (std::memory_order_acquire);
     if (next == unknown_due) {
-        _lane.run ([this] { publish_next_due_on_lane (); }).get ();
+        publish_next_due_owned ();
         next = _next_due.load (std::memory_order_acquire);
     }
+    return activity_from_due (next);
+}
+
+std::optional<service_liveness_registry_t::clock_t::time_point>
+service_liveness_registry_t::activity_from_due (clock_t::rep next)
+{
     if (next == never_due)
         return std::nullopt;
     return clock_t::time_point (clock_t::duration (next));

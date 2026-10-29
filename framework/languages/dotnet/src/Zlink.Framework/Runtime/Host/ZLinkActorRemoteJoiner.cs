@@ -235,6 +235,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{actor.Context.ActorId}' authority changed before handoff."
             );
+        var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(authorityStore);
         var actorAuthorityOwnerGeneration = authority.Snapshot.AuthorityOwnerGeneration;
         var captureRequired = relocation.PolicyKind == 2;
         var predictedPayloadBytes =
@@ -245,8 +246,6 @@ internal sealed class ZLinkActorRemoteJoiner(
             );
         var completionTransferred = false;
         TargetAdmissionReservationRoute? targetReservationRoute = null;
-        var sourceActivation = actorState.LiveActivation;
-        var sourceLeft = false;
         var sourceCaptureStarted = false;
         // Spec 25 §5: source admission seal through the one-way cutover
         // submission terminal, independently of target commit observation.
@@ -260,36 +259,69 @@ internal sealed class ZLinkActorRemoteJoiner(
         );
         try
         {
-            var result = await SubmitRoutedJoinActorTransactionAsync(
-                    actor,
-                    actorRef,
-                    actorState,
-                    target,
-                    request,
-                    actorType,
-                    handoffId,
-                    relocation,
-                    authorityStore,
-                    authority.Snapshot,
-                    sourceAuthority,
-                    actorAuthorityOwnerGeneration,
-                    predictedPayloadBytes,
-                    operationId,
-                    deadline,
-                    reservation => targetReservationRoute = reservation,
-                    () => interruption.Complete(),
-                    () =>
-                    {
-                        sourceCaptureStarted = true;
-                        interruption = runtime.RelocationInterruption.Start(
-                            Diagnostics.ZLinkRelocationUnitKind.Actor
-                        );
-                    },
-                    () => sourceLeft = true,
-                    relocationMetric,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
+            ZLinkActorJoinResult result;
+            try
+            {
+                result = await SubmitRoutedJoinActorTransactionAsync(
+                        actor,
+                        actorRef,
+                        actorState,
+                        target,
+                        request,
+                        actorType,
+                        handoffId,
+                        relocation,
+                        authorityStore,
+                        precommit,
+                        authority.Snapshot,
+                        sourceAuthority,
+                        actorAuthorityOwnerGeneration,
+                        predictedPayloadBytes,
+                        operationId,
+                        deadline,
+                        reservation => targetReservationRoute = reservation,
+                        () => interruption.Complete(),
+                        () =>
+                        {
+                            sourceCaptureStarted = true;
+                            interruption = runtime.RelocationInterruption.Start(
+                                Diagnostics.ZLinkRelocationUnitKind.Actor
+                            );
+                        },
+                        relocationMetric,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (Exception transactionFailure)
+            {
+                relocationMetric.CompleteSource(
+                    null,
+                    transactionFailure is OperationCanceledException
+                        && runtime.ShutdownToken.IsCancellationRequested
+                );
+                try
+                {
+                    await RollbackSourceHandoffAsync(
+                            actor,
+                            actorState,
+                            sourceCaptureStarted,
+                            targetReservationRoute,
+                            handoffId,
+                            precommit,
+                            authorityStore,
+                            authority.Snapshot,
+                            sourceAuthority,
+                            actorRef
+                        )
+                        .ConfigureAwait(false);
+                }
+                catch (Exception rollbackFailure)
+                {
+                    throw new AggregateException(transactionFailure, rollbackFailure);
+                }
+                throw;
+            }
             if (result is ZLinkActorJoinResult.Relayed relayed)
             {
                 completionTransferred = true;
@@ -298,18 +330,24 @@ internal sealed class ZLinkActorRemoteJoiner(
                     try
                     {
                         var settlement = await relayed.SourceCleanup().ConfigureAwait(false);
-                        if (settlement == ZLinkSourceSettlement.SourcePreserved)
+                        if (settlement.Outcome == ZLinkSourceSettlement.SourcePreserved)
                             await RollbackSourceHandoffAsync(
                                     actor,
                                     actorState,
-                                    sourceActivation,
-                                    sourceLeft,
                                     sourceCaptureStarted,
                                     targetReservationRoute,
-                                    handoffId
+                                    handoffId,
+                                    precommit,
+                                    authorityStore,
+                                    settlement.Snapshot
+                                        ?? throw new ZLinkRelocationDataLostException(
+                                            "Source Preserve did not return confirmed authority."
+                                        ),
+                                    sourceAuthority,
+                                    actorRef
                                 )
                                 .ConfigureAwait(false);
-                        relocationMetric.CompleteSource(settlement);
+                        relocationMetric.CompleteSource(settlement.Outcome);
                         return settlement;
                     }
                     catch (Exception error)
@@ -333,42 +371,19 @@ internal sealed class ZLinkActorRemoteJoiner(
             await RollbackSourceHandoffAsync(
                     actor,
                     actorState,
-                    sourceActivation,
-                    sourceLeft,
                     sourceCaptureStarted,
                     targetReservationRoute,
-                    handoffId
+                    handoffId,
+                    precommit,
+                    authorityStore,
+                    authority.Snapshot,
+                    sourceAuthority,
+                    actorRef
                 )
                 .ConfigureAwait(false);
             relocationMetric.CompleteSource(null);
 
             return result;
-        }
-        catch (Exception transactionFailure)
-        {
-            relocationMetric.CompleteSource(
-                null,
-                transactionFailure is OperationCanceledException
-                    && runtime.ShutdownToken.IsCancellationRequested
-            );
-            try
-            {
-                await RollbackSourceHandoffAsync(
-                        actor,
-                        actorState,
-                        sourceActivation,
-                        sourceLeft,
-                        sourceCaptureStarted,
-                        targetReservationRoute,
-                        handoffId
-                    )
-                    .ConfigureAwait(false);
-            }
-            catch (Exception rollbackFailure)
-            {
-                throw new AggregateException(transactionFailure, rollbackFailure);
-            }
-            throw;
         }
         finally
         {
@@ -383,37 +398,85 @@ internal sealed class ZLinkActorRemoteJoiner(
     private async ValueTask RollbackSourceHandoffAsync(
         IZLinkActor actor,
         ZLinkActorRuntimeState actorState,
-        ZLinkSpotActivation? sourceActivation,
-        bool sourceLeft,
         bool sourceCaptureStarted,
         TargetAdmissionReservationRoute? targetReservationRoute,
-        string handoffId
+        string handoffId,
+        ZLinkStandaloneActorRelocationPrecommitCoordinator precommit,
+        IZLinkLocationRepository authorityStore,
+        ZLinkAuthoritySnapshot sourceAuthoritySnapshot,
+        ZLinkActorAuthorityPayload sourceAuthority,
+        ZLinkBackendActorRef sourceActorRef
     )
     {
+        if (sourceCaptureStarted)
+        {
+            var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.Context.ActorId);
+            var relocationId = Guid.ParseExact(targetReservationRoute?.HandoffId ?? handoffId, "N");
+            var authority = await authorityStore
+                .ReadAuthorityAsync(key, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (
+                authority is ZLinkAuthorityReadResult.Found current
+                && ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
+                    current.Snapshot,
+                    relocationId
+                )
+            )
+            {
+                var restored = await precommit
+                    .AbortSourceAsync(key, relocationId, CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (
+                    !ZLinkStandaloneActorRelocationPrecommitCoordinator.IsExactSourceAuthority(
+                        new ZLinkAuthorityReadResult.Found(restored),
+                        sourceAuthoritySnapshot,
+                        sourceAuthority,
+                        requireStoreVersion: false
+                    )
+                )
+                    throw new ZLinkRelocationDataLostException(
+                        "Actor source authority changed during precommit abort."
+                    );
+            }
+            else if (
+                !ZLinkStandaloneActorRelocationPrecommitCoordinator.IsExactSourceAuthority(
+                    authority,
+                    sourceAuthoritySnapshot,
+                    sourceAuthority,
+                    requireStoreVersion: true
+                )
+            )
+                throw new ZLinkRelocationDataLostException(
+                    "Actor source authority changed before rollback."
+                );
+        }
         if (targetReservationRoute is { } reservation)
             await AbortTargetReservationBestEffortAsync(reservation).ConfigureAwait(false);
         List<Exception>? failures = null;
-        if (sourceLeft && sourceActivation is not null)
-        {
-            try
-            {
-                await sourceActivation
-                    .RestoreActorAfterFailedHandoffAsync(actor, CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                (failures ??= []).Add(exception);
-            }
-        }
-
         if (sourceCaptureStarted)
         {
+            if (
+                runtime.LocationLifecycle?.IsOwnerLeaseValid(
+                    new ZLinkLocationOwnerToken(
+                        sourceAuthoritySnapshot.OwnerId,
+                        sourceAuthoritySnapshot.OwnerLeaseGeneration
+                    )
+                ) != true
+            )
+            {
+                await runtime
+                    .FailStandaloneActorRelocationSourceAsync(actorState, sourceActorRef)
+                    .ConfigureAwait(false);
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"Actor '{actor.Context.ActorId}' source owner lease expired during relocation."
+                );
+            }
             try
             {
-                actorState.Handoff.AbortCapture(
-                    (frame, start) => runtime.AdmitActorHandoffFrame(actorState, frame, start)
-                );
+                await runtime
+                    .RestoreStandaloneActorRelocationSourceAsync(actorState)
+                    .ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -441,6 +504,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         string handoffId,
         ZLinkObjectRelocationRegistration relocation,
         IZLinkLocationRepository authorityStore,
+        ZLinkStandaloneActorRelocationPrecommitCoordinator precommit,
         ZLinkAuthoritySnapshot sourceAuthoritySnapshot,
         ZLinkActorAuthorityPayload sourceAuthority,
         ulong actorAuthorityOwnerGeneration,
@@ -450,7 +514,6 @@ internal sealed class ZLinkActorRemoteJoiner(
         Action<TargetAdmissionReservationRoute> setTargetReservation,
         Action markCutoverTerminal,
         Action markSourceCaptureStarted,
-        Action markSourceLeft,
         ZLinkRuntimeMetrics.ZLinkRelocationMetricOperation relocationMetric,
         CancellationToken cancellationToken
     )
@@ -857,7 +920,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                     targetActor
                 ))
                 .ToArray();
-            var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(authorityStore);
             var precommitSnapshot = await precommit
                 .BeginPreparingAsync(
                     currentAuthority.Snapshot,
@@ -976,7 +1038,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 );
             });
 
-            async ValueTask<ZLinkSourceSettlement> SettleSourceCleanupAsync(
+            async ValueTask<ZLinkSourceSettlementResult> SettleSourceCleanupAsync(
                 CancellationToken cancellationToken
             )
             {
@@ -1050,14 +1112,14 @@ internal sealed class ZLinkActorRemoteJoiner(
                 //  work to the source (the caller's rollback); an expired source
                 //  lease ends the unit without reopening its dispatch.
                 if (settlement.Outcome == ZLinkSourceSettlement.SourcePreserved)
-                    return settlement.Outcome;
+                    return settlement;
                 relocationMetric.CompleteSource(settlement.Outcome);
                 if (settlement.Outcome == ZLinkSourceSettlement.SourceLeaseExpired)
                 {
                     await runtime
                         .FailStandaloneActorRelocationSourceAsync(actorState, actorRef)
                         .ConfigureAwait(false);
-                    return settlement.Outcome;
+                    return settlement;
                 }
                 var resultActorRef = targetActor;
                 var trailingFrames = actorState.Handoff.CutoverCaptureToMessageFollow(
@@ -1074,7 +1136,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                     registration.Locations.Options.MessageFollowDuration,
                     registration.Locations.Options.RelocationCutoverWaitTimeout
                 );
-                markSourceLeft();
                 var trailingDeliveries = runtime.RelayStandaloneActorRelocationTrailing(
                     actorState,
                     actorRef,
@@ -1132,7 +1193,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                         $"source_handoff_schedule_rejected actor={actor.Context.ActorId}"
                     );
                 actorState.ForgetSourceSessionRelocation(handoffId);
-                return settlement.Outcome;
+                return settlement;
             }
         }
     }

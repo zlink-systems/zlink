@@ -127,6 +127,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
                              const std::shared_ptr<observer_t> &initial_observer = {}) const;
     boost::asio::awaitable<result_t<void>>
     drain_server_owner (std::shared_ptr<raw_client_server_server_t> server, std::string owner);
+    task_t<void> dispatch_server_record (std::shared_ptr<raw_client_server_server_t> server,
+                                         mesh::service_mailbox_record_t record);
     void stop_servers ();
     void stop_clients ();
 
@@ -150,7 +152,6 @@ class client_server_location_runtime_t final : public client_server_runtime_t
                          std::optional<std::chrono::steady_clock::time_point> deadline);
     task_t<void> complete_ready_waiters ();
 
-    static std::uint64_t make_lifecycle_generation ();
     static std::uint32_t
     effective_max_message_bytes (const channel_capability_snapshot_t &capability);
     static std::vector<std::uint8_t> client_routing_id (const channel_snapshot_t &channel);
@@ -189,8 +190,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::unique_ptr<application_supply_slot_t> _application_supply;
     std::map<std::string, std::string> _advertise_hosts;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+
+    mutable runtime::state_lane_t _lane;
     std::map<std::string, std::unique_ptr<server_entry_t>> _servers;
     std::map<std::string, std::unique_ptr<client_channel_t>> _clients;
     mutable std::map<std::string, std::uint64_t> _snapshot_sequences;

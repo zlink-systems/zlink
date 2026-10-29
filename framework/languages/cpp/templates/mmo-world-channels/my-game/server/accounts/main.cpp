@@ -1,5 +1,6 @@
 #include "server/shared/config.hpp"
 #include "server/shared/http.hpp"
+#include <zlink/framework/contracts/codecs/serializer.hpp>
 #include <iostream>
 #include <thread>
 
@@ -51,7 +52,10 @@ class Accounts
     Accounts (net::io_context &io,
               const std::string &endpoint,
               const std::vector<WorldInfo> &worlds) :
-        acceptor_ (io), worlds_ (nlohmann::json (worlds).dump ())
+        acceptor_ (io), worlds_ (zlink::framework::serializer_registry_t{}
+                                   .get<std::vector<WorldInfo>> ()
+                                   .serialize (worlds)
+                                   .to_string ())
     {
         const auto [host, port] = http_address (endpoint);
         Tcp::resolver resolver (io);
@@ -83,7 +87,9 @@ int main (int argc, char **argv)
         if (argc != 2)
             throw std::invalid_argument ("Usage: my-game-accounts <config.json>");
         const auto config = MyGame::read_json (argv[1]);
-        const auto worlds = config.at ("Worlds").get<std::vector<MyGame::WorldInfo>> ();
+        zlink::framework::serializer_registry_t serializers;
+        const auto worlds = serializers.get<std::vector<MyGame::WorldInfo>> ().deserialize (
+          zlink::framework::encoded_payload_t::from_string (config.at ("Worlds").dump ()));
         if (worlds.empty ())
             throw std::invalid_argument ("Accounts requires worlds");
         MyGame::net::io_context io;

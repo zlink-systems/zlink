@@ -1065,6 +1065,62 @@ void test_pubsub_ready_with_monitor_recv_and_socket_recv ()
     run_pubsub_ready_matrix (monitor_recv_mode);
 }
 
+void test_sub_bind_ready_edge_snapshot_is_ready ()
+{
+    for (int mode = 0; mode != 4; ++mode) {
+        for (int iteration = 0; iteration != 300; ++iteration) {
+            void *sub = test_context_socket (ZLINK_SOCKET_SUB);
+            void *pub = test_context_socket (ZLINK_SOCKET_XPUB);
+            configure_pair_socket (sub);
+            configure_pair_socket (pub);
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (sub, ""));
+
+            zlink_socket_monitor_open_options_t options = {};
+            options.events = ZLINK_EVENT_CONNECTION_READY;
+            void *monitors[] = {zlink_socket_monitor_open (sub, &options),
+                                zlink_socket_monitor_open (pub, &options)};
+            for (size_t i = 0; i != 2; ++i) {
+                TEST_ASSERT_NOT_NULL (monitors[i]);
+                configure_pair_socket (monitors[i]);
+            }
+
+            const bool sub_binds = mode < 2;
+            const bool tcp = (mode % 2) != 0;
+            void *binder = sub_binds ? sub : pub;
+            void *connector = sub_binds ? pub : sub;
+            char endpoint[MAX_SOCKET_STRING];
+            if (tcp)
+                bind_loopback_ipv4 (binder, endpoint, sizeof (endpoint));
+            else {
+                strcpy (endpoint, "inproc://monitor_sub_bind_ready_snapshot");
+                TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (binder, endpoint));
+            }
+            TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (connector, endpoint));
+
+            bool ready[2] = {};
+            for (size_t i = 0; i != 2; ++i) {
+                zlink_socket_monitor_event_t event = {};
+                TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_socket_monitor_recv (
+                  monitors[i], &event, ZLINK_RECV_FLAGS_NONE));
+                TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_CONNECTION_READY, event.event);
+                TEST_ASSERT_TRUE (
+                  (event.flags & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE) != 0);
+                TEST_ASSERT_EQUAL_UINT64 (1, event.value);
+                zlink_monitor_status_t status = {};
+                TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_status (monitors[i], &status));
+                ready[i] = (status.state_flags & ZLINK_MONITOR_STATE_READY) != 0;
+            }
+
+            for (size_t i = 0; i != 2; ++i)
+                TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitors[i]));
+            test_context_socket_close_zero_linger (pub);
+            test_context_socket_close_zero_linger (sub);
+            TEST_ASSERT_TRUE_MESSAGE (ready[0], "SUB first snapshot after ready edge");
+            TEST_ASSERT_TRUE_MESSAGE (ready[1], "XPUB first snapshot after ready edge");
+        }
+    }
+}
+
 void test_pubsub_delivery_ready_snapshot_and_reopen_after_ready ()
 {
     void *pub = test_context_socket (ZLINK_SOCKET_PUB);
@@ -1246,6 +1302,7 @@ int main ()
     setup_test_environment (120);
 
     UNITY_BEGIN ();
+    RUN_TEST (test_sub_bind_ready_edge_snapshot_is_ready);
     RUN_TEST (test_second_monitor_open_preserves_first_monitor);
     RUN_TEST (test_pair_ready_with_monitor_recv_and_socket_recv);
     RUN_TEST (test_dealer_router_ready_with_monitor_recv_and_socket_recv);

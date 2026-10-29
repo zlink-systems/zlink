@@ -486,6 +486,99 @@ void verify_message_follow_invalidation_subscriptions_are_lifetime_safe ()
     runtime->unsubscribe_message_follow_invalidation (first);
 }
 
+void verify_message_follow_unsubscribe_waits_for_capture_destruction ()
+{
+    using namespace zlink::framework;
+
+    struct destruction_gate_t
+    {
+        std::promise<void> entered;
+        std::promise<void> release;
+        std::shared_future<void> released = release.get_future ().share ();
+    };
+    struct captured_resource_t
+    {
+        std::shared_ptr<destruction_gate_t> gate;
+
+        ~captured_resource_t ()
+        {
+            gate->entered.set_value ();
+            gate->released.wait ();
+        }
+    };
+
+    auto state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("message-follow-capture-drain-mesh");
+    auto runtime = std::make_shared<detail::mesh_node_runtime_t> (state);
+    const auto route = protocol::actor_route_fence_t{
+      "message-follow-capture-drain",
+      1,
+      zlink::routing_id_t::from ("message-follow-capture-source").to_bytes (),
+      1,
+      1,
+      1};
+    const auto notice = protocol::message_follow_notice_t{
+      .source = route, .target = route, .original_operation = {1, 1}};
+
+    auto gate = std::make_shared<destruction_gate_t> ();
+    auto captured_resource = std::make_shared<captured_resource_t> ();
+    captured_resource->gate = gate;
+    std::future<void> capture_destruction_entered = gate->entered.get_future ();
+    std::promise<void> callback_entered;
+    std::promise<void> release_callback;
+    const auto callback_released = release_callback.get_future ().share ();
+    std::atomic<std::size_t> calls{0};
+    const auto subscription = runtime->subscribe_message_follow_invalidation (
+      [captured_resource = std::move (captured_resource), &callback_entered, callback_released,
+       &calls] (const auto &) {
+          if (calls.fetch_add (1, std::memory_order_relaxed) == 0) {
+              callback_entered.set_value ();
+              callback_released.wait ();
+          }
+      });
+
+    auto dispatch =
+      std::async (std::launch::async, [&] { runtime->dispatch_message_follow (notice); });
+    const bool callback_started =
+      callback_entered.get_future ().wait_for (2s) == std::future_status::ready;
+    std::promise<void> unsubscribe_started;
+    auto unsubscribe = std::async (std::launch::async, [&] {
+        unsubscribe_started.set_value ();
+        runtime->unsubscribe_message_follow_invalidation (subscription);
+    });
+    unsubscribe_started.get_future ().wait ();
+
+    bool inactive_observed = false;
+    const auto inactive_deadline = std::chrono::steady_clock::now () + 2s;
+    while (callback_started && std::chrono::steady_clock::now () < inactive_deadline) {
+        const auto before = calls.load (std::memory_order_relaxed);
+        runtime->dispatch_message_follow (notice);
+        if (calls.load (std::memory_order_relaxed) == before) {
+            inactive_observed = true;
+            break;
+        }
+    }
+
+    release_callback.set_value ();
+    const bool capture_destruction_started =
+      capture_destruction_entered.wait_for (2s) == std::future_status::ready;
+    const auto unsubscribe_status = unsubscribe.wait_for (50ms);
+    gate->release.set_value ();
+    const auto dispatch_status = dispatch.wait_for (2s);
+    const auto final_unsubscribe_status = unsubscribe.wait_for (2s);
+    if (dispatch_status == std::future_status::ready)
+        dispatch.get ();
+    if (final_unsubscribe_status == std::future_status::ready)
+        unsubscribe.get ();
+
+    assert (callback_started);
+    assert (inactive_observed);
+    assert (capture_destruction_started);
+    assert (unsubscribe_status == std::future_status::timeout);
+    assert (dispatch_status == std::future_status::ready);
+    assert (final_unsubscribe_status == std::future_status::ready);
+}
+
 void verify_actor_calls_keep_selected_route_until_follow_notice ()
 {
     using namespace zlink::framework;
@@ -6562,7 +6655,8 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
     mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
       .descriptor = target_descriptor,
       .runtime_failures =
-        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+        std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
+      .metric_provider = metric_provider.api ()});
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -9469,6 +9563,10 @@ int main (int argc, char **argv)
     zlink::framework::completion_owner_t completion_owner;
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    if (argc == 2 && std::string_view (argv[1]) == "--message-follow-capture-lifetime") {
+        verify_message_follow_unsubscribe_waits_for_capture_destruction ();
+        return 0;
+    }
     verify_host_send_forwarding_allocations ();
     if (argc == 2 && std::string_view (argv[1]) == "--returned-request-dispatch") {
         verify_forwarded_request_return_dispatches_without_source_operation ();

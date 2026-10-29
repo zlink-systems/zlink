@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
@@ -16,6 +17,7 @@ using Zlink.Framework.Runtime;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
@@ -31,6 +33,261 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Theory]
+    [InlineData("normal", false, false)]
+    [InlineData("cancel", false, false)]
+    [InlineData("deadline", false, false)]
+    [InlineData("shutdown", false, false)]
+    [InlineData("normal", true, false)]
+    [InlineData("cancel", true, false)]
+    [InlineData("deadline", true, false)]
+    [InlineData("shutdown", true, false)]
+    [InlineData("normal", false, true)]
+    [InlineData("cancel", false, true)]
+    [InlineData("deadline", false, true)]
+    [InlineData("shutdown", false, true)]
+    [InlineData("normal", true, true)]
+    [InlineData("cancel", true, true)]
+    [InlineData("deadline", true, true)]
+    [InlineData("shutdown", true, true)]
+    [InlineData("lifecycle", false, false)]
+    [InlineData("lifecycle", true, false)]
+    [InlineData("lifecycle", false, true)]
+    [InlineData("lifecycle", true, true)]
+    public async Task Actor_PublicTypedReply_ConvertsAfterOriginalTerminal(
+        string terminal,
+        bool throwing,
+        bool nativeEnvelope
+    )
+    {
+        CountingActorReplyConverter.Reads = 0;
+        CountingActorReplyConverter.Throw = throwing;
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        var clock = new ActorReceiverClock();
+        await using var mesh = new ZLinkManagedMeshNode(
+            context,
+            "entry",
+            deadlineTimeProvider: clock
+        );
+        mesh.SetRoutingId(RoutingId.From("entry-node"));
+        var physicalActor = mesh.CreateActor("actor-a");
+        await using var receiver = new ZLinkBackendSpotNodeWrapper(mesh);
+        var node = new CapturingSpotNode { ActorRequestNode = receiver };
+        var observer = new CapturingMessageFlowObserver();
+        var (runtime, _) = await CreateStartedRuntimeAsync(node, observer);
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var caller = Request();
+            var (record, requestParts) = await ReceiveActorRequest();
+            Assert.Equal(1, mesh.PendingOperationCount);
+            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            var operations = (System.Collections.IDictionary)
+                typeof(ZLinkManagedMeshNode).GetField("_operations", flags)!.GetValue(mesh)!;
+            var pending = Assert.IsType<ZLinkManagedMeshNode.PendingOperation<CountingActorReply>>(
+                operations[record.OperationId.Low]
+            );
+            // Cooperative native input uses the SAME receiver captured before local
+            // submission; no replacement decoder or pending operation is installed.
+            var physical = record
+                .CaptureReplyRoute()!
+                .Target!.GetType()
+                .GetFields(flags | BindingFlags.Public)
+                .Select(field => field.GetValue(record.CaptureReplyRoute()!.Target))
+                .OfType<Action<ZLinkManagedMeshNode.ManagedRequestCompletion>>()
+                .Single();
+            Assert.Equal(0, CountingActorReplyConverter.Reads);
+            var requestHeader = ZLinkStreamProtocolDefaults.DecodeHeader(
+                requestParts[0].AsReadOnlyMemory()
+            );
+            ZLinkMessageParts.DisposeAll(requestParts);
+            Exception? originalFailure = null;
+            if (terminal != "normal")
+            {
+                if (terminal == "cancel")
+                    cancellation.Cancel();
+                else if (terminal == "deadline")
+                {
+                    clock.Timestamp += TimeSpan.FromSeconds(5).Ticks;
+                    typeof(ZLinkManagedMeshNode)
+                        .GetMethod(
+                            "ExpireOperations",
+                            BindingFlags.NonPublic | BindingFlags.Instance
+                        )!
+                        .Invoke(mesh, null);
+                }
+                else if (terminal == "lifecycle")
+                    // Cooperative lifecycle failure enters the existing exact-pair owner.
+                    typeof(ZLinkManagedMeshNode)
+                        .GetMethod("FailNativeDeadline", flags)!
+                        .Invoke(
+                            mesh,
+                            [
+                                pending,
+                                new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.Unavailable,
+                                    "Actor request lifecycle ended."
+                                ),
+                            ]
+                        );
+                else
+                    mesh.CloseSubmissions();
+                originalFailure = await Record.ExceptionAsync(() =>
+                    caller.WaitAsync(TimeSpan.FromSeconds(5))
+                );
+                Assert.NotNull(originalFailure);
+                if (terminal == "cancel")
+                    Assert.Equal(
+                        cancellation.Token,
+                        Assert
+                            .IsAssignableFrom<OperationCanceledException>(originalFailure)
+                            .CancellationToken
+                    );
+                else
+                    Assert.Equal(
+                        terminal == "deadline" ? ZLinkFrameworkErrorKind.DeadlineExceeded
+                            : terminal == "lifecycle" ? ZLinkFrameworkErrorKind.Unavailable
+                            : ZLinkFrameworkErrorKind.ShuttingDown,
+                        Assert.IsType<ZLinkFrameworkException>(originalFailure).Kind
+                    );
+                Assert.Equal(0, mesh.PendingOperationCount);
+                await mesh.Completions.CompletionDrained.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Null(pending.Decode);
+            }
+            var replyHeader = requestHeader with
+            {
+                Kind = ZlinkStreamMessageKind.Response,
+                Name = string.Empty,
+            };
+            using var response = Message.From(
+                ZLinkStreamFrameCodec.Encode(
+                    ZLinkStreamProtocolDefaults.EncodeHeader(replyHeader).Span,
+                    "{\"Value\":\"reply\"}"u8.ToArray()
+                )
+            );
+            if (nativeEnvelope)
+            {
+                Message[] wire =
+                [
+                    Message.From(
+                        ZLinkServiceWireCodec.EncodeReply(
+                            record.OperationId.Low,
+                            (int)RequestResult.Ok,
+                            0
+                        )
+                    ),
+                    ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([
+                        response,
+                    ]),
+                ];
+                typeof(ZLinkManagedMeshNode)
+                    .GetMethod("CompleteNativeApplicationRequest", flags)!
+                    .Invoke(mesh, [pending, RequestResult.Ok, wire, physical]);
+                Assert.All(
+                    wire,
+                    part => Assert.Throws<ObjectDisposedException>(() => _ = part.Size)
+                );
+            }
+            else
+                Assert.Equal(SubmitResult.Ok, record.Reply([response]));
+            if (terminal == "normal")
+            {
+                if (throwing)
+                {
+                    var error = Assert.IsType<ZLinkFrameworkException>(
+                        await Record.ExceptionAsync(() => caller.WaitAsync(TimeSpan.FromSeconds(5)))
+                    );
+                    Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, error.Kind);
+                    Assert.IsType<JsonException>(error.InnerException);
+                }
+                else
+                    Assert.Equal("reply", (await caller.WaitAsync(TimeSpan.FromSeconds(5))).Value);
+            }
+            // The retained SubmitActor callback runs synchronously on this idle lane.
+            Assert.Equal(1, CountingActorReplyConverter.Reads);
+            Assert.Equal(0, mesh.PendingOperationCount);
+            if (originalFailure is not null)
+                Assert.Same(originalFailure, await Record.ExceptionAsync(() => caller));
+            var terminals = observer
+                .Events.Where(e =>
+                    e.ActorId == physicalActor.ActorId && e.Phase is "reply_received" or "failed"
+                )
+                .ToArray();
+            Assert.Single(terminals);
+
+            async Task<CountingActorReply> Request() =>
+                await new ZLinkActorClient(runtime)
+                    .RequestToActor("actor-a", new ProbeRouteMessage("request"))
+                    .Timeout(TimeSpan.FromSeconds(1))
+                    .Async<CountingActorReply>(cancellation.Token);
+
+            async Task<(MeshReceiveRecord, IReadOnlyList<Message>)> ReceiveActorRequest()
+            {
+                var end = System.Diagnostics.Stopwatch.StartNew();
+                while (end.Elapsed < TimeSpan.FromSeconds(5))
+                {
+                    using var ready = new MeshReadyBatch();
+                    mesh.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+                    for (var i = 0; i < ready.Count; i++)
+                    {
+                        using var claim = ready.TakeClaim(i);
+                        using var batch = new MeshReceiveBatch();
+                        while (claim.Receive(batch, RecvFlags.DontWait))
+                        {
+                            for (var j = 0; j < batch.Count; j++)
+                                if (batch[j].OperationKind == MeshOperationKind.ActorRequest)
+                                    return (batch[j], batch.RetainMessage(j));
+                            batch.Reset();
+                        }
+                    }
+                    await Task.Delay(5);
+                }
+                throw new TimeoutException("Real Actor request was not queued.");
+            }
+        }
+        finally
+        {
+            mesh.CloseSubmissions();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [JsonConverter(typeof(CountingActorReplyConverter))]
+    private sealed record CountingActorReply(string Value);
+
+    private sealed class CountingActorReplyConverter : JsonConverter<CountingActorReply>
+    {
+        internal static int Reads;
+        internal static bool Throw;
+
+        public override CountingActorReply Read(
+            ref Utf8JsonReader reader,
+            Type type,
+            JsonSerializerOptions options
+        )
+        {
+            Interlocked.Increment(ref Reads);
+            using var document = JsonDocument.ParseValue(ref reader);
+            if (Throw)
+                throw new JsonException("Actor reply conversion failed.");
+            return new CountingActorReply(document.RootElement.GetProperty("Value").GetString()!);
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            CountingActorReply value,
+            JsonSerializerOptions options
+        ) => throw new NotSupportedException();
+    }
+
+    private sealed class ActorReceiverClock : TimeProvider
+    {
+        internal long Timestamp;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Timestamp;
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -9542,7 +9799,7 @@ public sealed partial class EntrySpotActorDispatchTests
             {
                 var memberRef = actorRef with { ActorId = actorId };
                 if (actorId != actorRef.ActorId)
-                    await CreateTrackedLocalActorOwnershipAsync(
+                    memberRef = await CreateTrackedLocalActorOwnershipAsync(
                         runtime.Services.GetRequiredService<ZLinkLocationRuntime>().Store,
                         runtime.Services.GetRequiredService<ZLinkLocationRuntime>().OwnerToken,
                         runtime
@@ -11055,7 +11312,7 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Null(activation.ExistingLocation);
     }
 
-    private static async ValueTask CreateTrackedLocalActorOwnershipAsync(
+    private static async ValueTask<ZLinkBackendActorRef> CreateTrackedLocalActorOwnershipAsync(
         IZLinkLocationRepository store,
         ZLinkLocationOwnerToken owner,
         ZLinkActorOwnershipCoordinator ownership,
@@ -11080,7 +11337,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 1
             )
         );
-        await ReserveAndCommitLocalAuthorityAsync(
+        var snapshot = await ReserveAndCommitLocalAuthorityAsync(
             store,
             ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId),
             ZLinkPlacementObjectKind.Actor,
@@ -11101,9 +11358,10 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         Assert.NotNull(activation.Activated);
         Assert.Null(activation.ExistingLocation);
+        return actor with { Generation = snapshot.ObjectGeneration };
     }
 
-    private static async ValueTask ReserveAndCommitLocalAuthorityAsync(
+    private static async ValueTask<ZLinkAuthoritySnapshot> ReserveAndCommitLocalAuthorityAsync(
         IZLinkLocationRepository store,
         ZLinkAuthorityKey key,
         ZLinkPlacementObjectKind objectKind,
@@ -11145,9 +11403,11 @@ public sealed partial class EntrySpotActorDispatchTests
                     + $"capabilities={string.Join(',', descriptor.ObjectCapabilities.Select(static value => $"{value.ObjectKind}:{value.StableType}"))}."
             );
         }
-        Assert.IsType<ZLinkObjectCommitResult.Committed>(
-            await store.CommitAsync(reserved.Reservation, payload)
-        );
+        return Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await store.CommitAsync(reserved.Reservation, payload)
+            )
+            .Snapshot;
     }
 
     [Fact]
@@ -12168,7 +12428,7 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         if (includeActorFactory && preseedActorOwnership)
         {
-            await CreateTrackedLocalActorOwnershipAsync(
+            actorRef = await CreateTrackedLocalActorOwnershipAsync(
                 locationStore,
                 locationRuntime.OwnerToken,
                 locationLifecycle.ActorOwnership,
@@ -15350,23 +15610,57 @@ public sealed partial class EntrySpotActorDispatchTests
             }
         }
 
-        public ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
+        public IZLinkBackendSpotNode? ActorRequestNode { get; set; }
+
+        public async ValueTask<TReply> RequestToActorAsync<TReply>(
             ZLinkBackendActorRef actor,
             IReadOnlyList<Message> parts,
             TimeSpan? timeout,
             CancellationToken cancellationToken,
+            Func<IReadOnlyList<Message>, TReply> decodeReply,
+            Func<Exception, Exception> mapFailure,
             Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null
         )
         {
+            if (ActorRequestNode is not null)
+                return await ActorRequestNode.RequestToActorAsync(
+                    actor,
+                    parts,
+                    timeout,
+                    cancellationToken,
+                    decodeReply,
+                    mapFailure,
+                    requestAdmission
+                );
             LastActorRequestTimeout = timeout;
-            cancellationToken.ThrowIfCancellationRequested();
-            ActorRequests.Add((actor, CopyParts(parts)));
-            if (ActorRequestSubmissionHandler is not null)
-                return ActorRequestSubmissionHandler(requestAdmission, cancellationToken);
-            requestAdmission?.Complete();
-            return ValueTask.FromResult(
-                ActorRequestHandler?.Invoke(parts) ?? throw new NotSupportedException()
-            );
+            IReadOnlyList<Message> reply;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ActorRequests.Add((actor, CopyParts(parts)));
+                if (ActorRequestSubmissionHandler is not null)
+                    reply = await ActorRequestSubmissionHandler(
+                        requestAdmission,
+                        cancellationToken
+                    );
+                else
+                {
+                    requestAdmission?.Complete();
+                    reply = ActorRequestHandler?.Invoke(parts) ?? throw new NotSupportedException();
+                }
+            }
+            catch (Exception failure)
+            {
+                throw mapFailure(failure);
+            }
+            try
+            {
+                return decodeReply(reply);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(reply);
+            }
         }
 
         public bool ReplyActorNoBind(

@@ -61,14 +61,33 @@ struct fanout_location_runtime_t::publisher_entry_t
     fanout_publisher_descriptor_t descriptor;
 };
 
-struct fanout_location_runtime_t::subscriber_entry_t
+struct fanout_location_runtime_t::subscriber_resource_t
 {
-    explicit subscriber_entry_t (offload_executor_t &executor) : dispatch_queue (executor) {}
-
     std::string channel_name;
-    std::unique_ptr<raw_fanout_subscriber_t> owner;
-    serial_execution_queue_t dispatch_queue;
+    std::shared_ptr<raw_fanout_subscriber_t> owner;
+    std::shared_ptr<serial_execution_queue_t> dispatch_queue;
+    std::shared_ptr<std::atomic_size_t> active_dispatches =
+      std::make_shared<std::atomic_size_t> (0);
+};
+
+struct fanout_location_runtime_t::subscriber_entry_t : subscriber_resource_t
+{
+    subscriber_entry_t (offload_executor_t &executor,
+                        std::shared_ptr<runtime_failure_collector_t> failures)
+    {
+        dispatch_queue = std::make_shared<serial_execution_queue_t> (
+          executor, serial_execution_queue_options_t{},
+          [failures = std::move (failures)] (const std::string &, const std::exception_ptr &error) {
+              failures->report (error);
+          });
+    }
     std::vector<fanout_publisher_intent_t> desired;
+};
+
+struct fanout_location_runtime_t::resource_snapshot_t
+{
+    std::vector<std::shared_ptr<raw_fanout_publisher_t>> publishers;
+    std::vector<subscriber_resource_t> subscribers;
 };
 
 namespace
@@ -132,7 +151,9 @@ fanout_location_runtime_t::fanout_location_runtime_t (
             application_job_queue_profile_t::balanced,
             static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ()), 1,
             static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ())})),
-    _dispatch_executor (std::move (dispatch_executor))
+    _dispatch_executor (std::move (dispatch_executor)),
+    _lane (*_dispatch_executor),
+    _resources (std::make_shared<const resource_snapshot_t> ())
 {
 }
 
@@ -173,10 +194,8 @@ void fanout_location_runtime_t::start ()
     const auto owner = _locations->current_owner_token ();
     _stop.store (false, std::memory_order_release);
     try {
-        {
-            std::lock_guard lock (_gate);
-            _subscriber_poller = std::make_unique<zlink::poller_t> ();
-        }
+        auto poller = std::make_unique<zlink::poller_t> ();
+        _lane.run ([&] { _subscriber_poller = std::move (poller); }).get ();
         _wake_timer.attach (*_subscriber_poller);
         _application_supply = std::make_unique<application_supply_slot_t> (
           _application_jobs, [this] { _wake_timer.signal (); });
@@ -242,7 +261,12 @@ void fanout_location_runtime_t::start_publisher (const channel_snapshot_t &chann
     if (_listener_statuses)
         _listener_statuses->update (listener_kind_t::fanout, channel.name,
                                     entry->descriptor.endpoint);
-    _publishers.emplace (channel.name, std::move (entry));
+    _lane
+      .run ([&] {
+          _publishers.emplace (channel.name, std::move (entry));
+          publish_resources_on_lane ();
+      })
+      .get ();
     _channel_runtime.bind_fanout_transport (
       channel.name, [this, name = channel.name] (std::string topic, std::string packet_name,
                                                  std::string content_type, zlink::message_t message,
@@ -254,12 +278,32 @@ void fanout_location_runtime_t::start_publisher (const channel_snapshot_t &chann
 
 void fanout_location_runtime_t::start_subscriber (const channel_snapshot_t &channel)
 {
-    auto entry = std::make_unique<subscriber_entry_t> (*_dispatch_executor);
+    auto entry = std::make_unique<subscriber_entry_t> (*_dispatch_executor,
+                                                       _channel_runtime.runtime_failures ());
     entry->channel_name = channel.name;
-    entry->owner = std::make_unique<raw_fanout_subscriber_t> (
+    entry->owner = std::make_shared<raw_fanout_subscriber_t> (
       _channel_runtime.core_context (), _subscriber_poller.get (),
       channel.subscriber.subscription_topics, _channel_runtime.runtime_failures ());
-    _subscribers.emplace (channel.name, std::move (entry));
+    _lane
+      .run ([&] {
+          _subscribers.emplace (channel.name, std::move (entry));
+          publish_resources_on_lane ();
+      })
+      .get ();
+}
+
+void fanout_location_runtime_t::publish_resources_on_lane ()
+{
+    auto resources = std::make_shared<resource_snapshot_t> ();
+    for (const auto &[_, publisher] : _publishers)
+        resources->publishers.push_back (publisher->owner);
+    for (const auto &[_, subscriber] : _subscribers)
+        resources->subscribers.push_back (*subscriber);
+    // These lifetime claims contain no desired, descriptor or observation state.
+    // Start installs them before the loop; stop joins the loop before retiring them.
+    std::atomic_store_explicit (&_resources,
+                                std::shared_ptr<const resource_snapshot_t> (std::move (resources)),
+                                std::memory_order_release);
 }
 
 void fanout_location_runtime_t::run ()
@@ -269,9 +313,16 @@ void fanout_location_runtime_t::run ()
         const auto now = std::chrono::steady_clock::now ();
         if (now >= next_reconcile) {
             try {
-                publish_descriptors (location_write_intent_t::renew);
+                if (!_descriptor_renewal || _descriptor_renewal->await_ready ()) {
+                    if (_descriptor_renewal) {
+                        auto previous = std::move (*_descriptor_renewal);
+                        _descriptor_renewal.reset ();
+                        previous.await_resume ();
+                    }
+                    _descriptor_renewal.emplace (
+                      publish_descriptors (location_write_intent_t::renew));
+                }
                 reconcile_subscribers ();
-                publish_snapshot_changes ();
             }
             catch (...) {
                 _channel_runtime.runtime_failures ()->report (std::current_exception ());
@@ -279,12 +330,13 @@ void fanout_location_runtime_t::run ()
             next_reconcile = now + _locations->options ().polling_interval;
         }
         pump ();
-        publish_snapshot_changes ();
+        request_snapshot_changes ();
         if (_stop.load (std::memory_order_acquire))
             break;
         auto wake_at = next_reconcile;
-        for (const auto &[_, publisher] : _publishers)
-            wake_at = std::min (wake_at, publisher->owner->next_activity ());
+        const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
+        for (const auto &publisher : resources->publishers)
+            wake_at = std::min (wake_at, publisher->next_activity ());
         const auto after_pump = std::chrono::steady_clock::now ();
         if (wake_at <= after_pump)
             continue;
@@ -307,23 +359,33 @@ void fanout_location_runtime_t::wait_for_activity (std::chrono::milliseconds tim
     }
 }
 
-bool fanout_location_runtime_t::publish_descriptors (location_write_intent_t intent)
+task_t<bool> fanout_location_runtime_t::publish_descriptors (location_write_intent_t intent)
 {
-    std::lock_guard publish_lock (_descriptor_publish_mutex);
+    auto completion = std::make_shared<task_completion_source_t<void>> ();
+    struct release_t
+    {
+        std::shared_ptr<task_completion_source_t<void>> completion;
+        ~release_t () { completion->complete (result_t<void>::success ()); }
+    } release{completion};
+    // The lane orders whole external publications. Waiting for the predecessor
+    // happens after run_task has left its turn, including on failure paths.
+    co_await _lane.run_task ([this, completion] {
+        auto previous = std::exchange (_descriptor_publication, completion);
+        return previous ? previous->task () : task_t<void> (result_t<void>::success ());
+    });
     const auto owner = _locations->current_owner_token ();
     if (!owner)
-        return false;
+        co_return false;
     struct pending_descriptor_t
     {
         std::string channel_name;
         fanout_publisher_descriptor_t descriptor;
         location_write_intent_t intent;
     };
-    std::vector<pending_descriptor_t> pending;
     bool published = true;
-    {
-        std::lock_guard lock (_gate);
-        const auto state = current_state (*_locations);
+    const auto state = current_state (*_locations);
+    auto pending = co_await _lane.run_task ([this, owner, state, intent, &published] {
+        std::vector<pending_descriptor_t> result;
         for (const auto &[channel_name, publisher] : _publishers) {
             const bool new_owner =
               publisher->descriptor.owner_id.empty ()
@@ -344,42 +406,42 @@ bool fanout_location_runtime_t::publish_descriptors (location_write_intent_t int
             descriptor.state = state;
             descriptor.owner_id = owner->owner_id;
             descriptor.lease_generation = owner->lease_generation;
-            pending.push_back (pending_descriptor_t{channel_name, std::move (descriptor),
-                                                    new_owner ? location_write_intent_t::new_claim
-                                                              : location_write_intent_t::renew});
+            result.push_back (
+              {channel_name, std::move (descriptor),
+               new_owner ? location_write_intent_t::new_claim : location_write_intent_t::renew});
         }
-    }
+        return result;
+    });
     for (auto &item : pending) {
-        const auto written =
-          infrastructure_result ([&] {
-              return _locations->descriptor_write_confirmed (
-                [&] { return _store->update_fanout_publisher (item.descriptor, item.intent); });
-          }).value ();
+        const auto written = co_await _locations->descriptor_write_confirmed (
+          [&] { return _store->update_fanout_publisher (item.descriptor, item.intent); });
         if (!written) {
             published = false;
             continue;
         }
-        std::lock_guard lock (_gate);
-        const auto found = _publishers.find (item.channel_name);
-        if (found == _publishers.end ())
-            continue;
-        found->second->descriptor = std::move (item.descriptor);
+        co_await _lane.run_task ([this, &item] {
+            // stop_publishers may already own the entry; its draining write wins.
+            const auto found = _publishers.find (item.channel_name);
+            if (found != _publishers.end ())
+                found->second->descriptor = std::move (item.descriptor);
+        });
     }
-    return published;
+    co_return published;
 }
 
 bool fanout_location_runtime_t::republish_after_store_recovery (location_write_intent_t intent)
 {
-    return publish_descriptors (intent);
+    return publish_descriptors (intent).result ().value ();
 }
 
 void fanout_location_runtime_t::reconcile_subscribers ()
 {
-    for (auto &[_, subscriber] : _subscribers)
-        reconcile_subscriber (*subscriber);
+    const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
+    for (const auto &subscriber : resources->subscribers)
+        reconcile_subscriber (subscriber);
 }
 
-void fanout_location_runtime_t::reconcile_subscriber (subscriber_entry_t &subscriber)
+void fanout_location_runtime_t::reconcile_subscriber (const subscriber_resource_t &subscriber)
 {
     std::vector<fanout_publisher_intent_t> desired;
     location_page_request_t page;
@@ -396,10 +458,16 @@ void fanout_location_runtime_t::reconcile_subscriber (subscriber_entry_t &subscr
         page.continuation_token = listed.continuation_token;
     } while (page.continuation_token);
     subscriber.owner->reconcile_automatic (desired);
-    {
-        std::lock_guard lock (_gate);
-        subscriber.desired = std::move (desired);
-    }
+    if (!_lane.try_post (
+          [this, name = subscriber.channel_name, desired = std::move (desired)] () mutable {
+              try {
+                  _subscribers.at (name)->desired = std::move (desired);
+              }
+              catch (...) {
+                  _channel_runtime.runtime_failures ()->report (std::current_exception ());
+              }
+          }))
+        throw std::runtime_error ("fanout reconcile publication rejected");
 }
 
 fanout_channel_snapshot_t fanout_location_runtime_t::snapshot (std::string channel_name) const
@@ -407,8 +475,9 @@ fanout_channel_snapshot_t fanout_location_runtime_t::snapshot (std::string chann
     if (!is_observable_channel (channel_name))
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "automatic Fanout channel is not configured: " + channel_name);
-    std::lock_guard lock (_gate);
-    return publish_snapshot_locked (build_snapshot_locked (channel_name));
+    return _lane
+      .run ([&] { return publish_snapshot_on_lane (build_snapshot_on_lane (channel_name)); })
+      .get ();
 }
 
 std::unique_ptr<fanout_runtime_observation_t> fanout_location_runtime_t::observe (
@@ -421,13 +490,17 @@ std::unique_ptr<fanout_runtime_observation_t> fanout_location_runtime_t::observe
     if (!is_observable_channel (channel_name))
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "automatic Fanout channel is not configured: " + channel_name);
-    auto value = std::make_shared<observer_t> (capacity, std::move (observer));
+    auto value =
+      std::make_shared<observer_t> (capacity, std::move (observer), _locations->monitoring ());
     value->start ();
     {
-        std::lock_guard lock (_gate);
-        _observers[channel_name].push_back (value);
-        const auto current = build_snapshot_locked (channel_name);
-        publish_snapshot_locked (current, value);
+        _lane
+          .run ([&] {
+              _observers[channel_name].push_back (value);
+              const auto current = build_snapshot_on_lane (channel_name);
+              publish_snapshot_on_lane (current, value);
+          })
+          .get ();
     }
     return std::make_unique<fanout_observation_t> (std::move (value));
 }
@@ -442,7 +515,7 @@ bool fanout_location_runtime_t::is_observable_channel (std::string_view channel_
 }
 
 fanout_channel_snapshot_t
-fanout_location_runtime_t::build_snapshot_locked (const std::string &channel_name) const
+fanout_location_runtime_t::build_snapshot_on_lane (const std::string &channel_name) const
 {
     fanout_channel_snapshot_t result;
     result.channel_name = channel_name;
@@ -499,7 +572,7 @@ bool fanout_location_runtime_t::snapshot_equivalent (
                           });
 }
 
-fanout_channel_snapshot_t fanout_location_runtime_t::publish_snapshot_locked (
+fanout_channel_snapshot_t fanout_location_runtime_t::publish_snapshot_on_lane (
   fanout_channel_snapshot_t current, const std::shared_ptr<observer_t> &initial_observer) const
 {
     const auto &channel_name = current.channel_name;
@@ -529,27 +602,47 @@ fanout_channel_snapshot_t fanout_location_runtime_t::publish_snapshot_locked (
 
 void fanout_location_runtime_t::publish_snapshot_changes ()
 {
-    std::lock_guard lock (_gate);
+    _lane.run ([this] { publish_snapshot_changes_on_lane (); }).get ();
+}
+
+void fanout_location_runtime_t::publish_snapshot_changes_on_lane () const
+{
     for (const auto &channel : _channels) {
         if (is_observable_channel (channel.name))
-            publish_snapshot_locked (build_snapshot_locked (channel.name));
+            (void) publish_snapshot_on_lane (build_snapshot_on_lane (channel.name));
+    }
+}
+
+void fanout_location_runtime_t::request_snapshot_changes ()
+{
+    if (_snapshot_publication && !_snapshot_publication->await_ready ())
+        return;
+    try {
+        if (_snapshot_publication) {
+            auto previous = std::move (*_snapshot_publication);
+            _snapshot_publication.reset ();
+            previous.await_resume ();
+        }
+        _snapshot_publication.emplace (
+          _lane.run_task ([this] { publish_snapshot_changes_on_lane (); }));
+    }
+    catch (...) {
+        _channel_runtime.runtime_failures ()->report (std::current_exception ());
     }
 }
 
 void fanout_location_runtime_t::pump ()
 {
     const auto now = std::chrono::steady_clock::now ();
-    for (auto &[_, publisher] : _publishers)
-        (void) publisher->owner->tick (now);
-    std::vector<subscriber_entry_t *> subscribers;
-    subscribers.reserve (_subscribers.size ());
-    for (auto &[_, subscriber] : _subscribers)
-        subscribers.push_back (subscriber.get ());
+    const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
+    for (const auto &publisher : resources->publishers)
+        (void) publisher->tick (now);
+    const auto &subscribers = resources->subscribers;
     if (subscribers.empty ())
         return;
     const auto start = _subscriber_pump_cursor % subscribers.size ();
     for (std::size_t offset = 0; offset < subscribers.size (); ++offset) {
-        auto &subscriber = *subscribers[(start + offset) % subscribers.size ()];
+        const auto &subscriber = subscribers[(start + offset) % subscribers.size ()];
         receive_batch_budget_t budget;
         while (budget.can_receive ()) {
             _application_supply->ensure_waiter ();
@@ -586,51 +679,89 @@ void fanout_location_runtime_t::pump ()
                 auto packet_name = received->payload.packet_name;
                 auto channel_name = subscriber.channel_name;
                 auto topic = received->topic;
-                subscriber.dispatch_queue.post_async (
-                  subscriber.channel_name,
-                  [this, message = std::move (message), inbound = std::move (inbound),
-                   retained = std::move (retained), runtime = std::move (runtime),
-                   packet_name = std::move (packet_name), channel_name = std::move (channel_name),
-                   topic = std::move (topic)] (auto complete) mutable {
-                      auto scope = std::make_shared<zlink::framework::detail::service_scope_t> (
-                        zlink::framework::detail::service_scope_t::create (
-                          _services,
-                          zlink::framework::detail::service_scope_kind_t::handler_invocation));
-                      auto dispatched = runtime.dispatch_send_async (
-                        channel_name, topic, packet_name, scope->provider (), *_serializers,
-                        *_handlers, std::move (message), std::move (inbound));
-                      detail::observe_task_completion (
-                        dispatched,
-                        [scope = std::move (scope), retained = std::move (retained),
-                         runtime = std::move (runtime), packet_name = std::move (packet_name),
-                         channel_name = std::move (channel_name), topic = std::move (topic),
-                         complete = std::move (complete)] (const result_t<void> &result) mutable {
-                            static_cast<void> (scope);
-                            static_cast<void> (retained);
-                            if (!result) {
-                                zlink::framework::detail::dispatch_error_reporter_t (
-                                  runtime.dispatch_options_ref ())
-                                  .report_lazy ([&] {
-                                      return message_dispatch_error_event_t{
-                                        .surface = dispatch_error_surface_t::classic_fanout,
-                                        .message_kind = dispatch_message_kind_t::send,
-                                        .reason =
-                                          zlink::framework::detail::dispatch_reason_from_error (
-                                            result.error ()),
-                                        .action = dispatch_error_action_t::drop,
-                                        .packet_name = packet_name,
-                                        .channel_name = channel_name,
-                                        .topic = topic,
-                                        .exception = result.error ()
-                                                       ? std::make_exception_ptr (*result.error ())
-                                                       : std::exception_ptr{}};
-                                  });
-                            }
-                            complete ([] {});
-                        });
-                  });
+                const auto finish_dispatch = [active = subscriber.active_dispatches,
+                                              progress = _dispatch_progress] {
+                    {
+                        std::lock_guard lock (progress->mutex);
+                        active->fetch_sub (1, std::memory_order_acq_rel);
+                    }
+                    progress->changed.notify_all ();
+                };
+                std::unique_lock lock (_dispatch_progress->mutex);
+                subscriber.active_dispatches->fetch_add (1, std::memory_order_acq_rel);
+                bool accepted = false;
+                try {
+                    accepted = subscriber.dispatch_queue->try_post_async (
+                      subscriber.channel_name,
+                      [this, finish_dispatch, message = std::move (message),
+                       inbound = std::move (inbound), retained = std::move (retained),
+                       runtime = std::move (runtime), packet_name = std::move (packet_name),
+                       channel_name = std::move (channel_name),
+                       topic = std::move (topic)] (auto complete) mutable {
+                          try {
+                              auto scope =
+                                std::make_shared<zlink::framework::detail::service_scope_t> (
+                                  zlink::framework::detail::service_scope_t::create (
+                                    _services, zlink::framework::detail::service_scope_kind_t::
+                                                 handler_invocation));
+                              // A ChannelName pipeline does not inherit the FIFO's serial turn.
+                              // The hot task enters before this start turn advances to the next record.
+                              detail::serial_turn_scope_t pipeline_turn ({});
+                              auto dispatched = runtime.dispatch_send_on_handler_executor (
+                                channel_name, topic, packet_name, scope->provider (), *_serializers,
+                                *_handlers, std::move (message), std::move (inbound));
+                              detail::observe_task_terminal (
+                                dispatched,
+                                [scope = std::move (scope), retained = std::move (retained),
+                                 runtime = std::move (runtime),
+                                 packet_name = std::move (packet_name),
+                                 channel_name = std::move (channel_name), topic = std::move (topic),
+                                 finish_dispatch] (const result_t<void> &result) mutable {
+                                    static_cast<void> (scope);
+                                    static_cast<void> (retained);
+                                    if (!result) {
+                                        zlink::framework::detail::dispatch_error_reporter_t (
+                                          runtime.dispatch_options_ref ())
+                                          .report_lazy ([&] {
+                                              return message_dispatch_error_event_t{
+                                                .surface = dispatch_error_surface_t::classic_fanout,
+                                                .message_kind = dispatch_message_kind_t::send,
+                                                .reason = zlink::framework::detail::
+                                                  dispatch_reason_from_error (result.error ()),
+                                                .action = dispatch_error_action_t::drop,
+                                                .packet_name = packet_name,
+                                                .channel_name = channel_name,
+                                                .topic = topic,
+                                                .exception =
+                                                  result.error ()
+                                                    ? std::make_exception_ptr (*result.error ())
+                                                    : std::exception_ptr{}};
+                                          });
+                                    }
+                                    scope.reset ();
+                                    retained.reset ();
+                                    finish_dispatch ();
+                                });
+                          }
+                          catch (...) {
+                              finish_dispatch ();
+                              throw;
+                          }
+                          complete ([] {});
+                      });
+                }
+                catch (...) {
+                    subscriber.active_dispatches->fetch_sub (1, std::memory_order_acq_rel);
+                    _dispatch_progress->changed.notify_all ();
+                    throw;
+                }
+                if (!accepted) {
+                    subscriber.active_dispatches->fetch_sub (1, std::memory_order_acq_rel);
+                    _dispatch_progress->changed.notify_all ();
+                }
             }
             catch (...) {
+                _channel_runtime.runtime_failures ()->report (std::current_exception ());
             }
             if (budget.exhausted ())
                 break;
@@ -651,13 +782,16 @@ task_t<void> fanout_location_runtime_t::publish (const std::string &channel_name
                                      "fanout runtime is shutting down");
     std::shared_ptr<raw_fanout_publisher_t> publisher;
     {
-        std::lock_guard lock (_gate);
-        const auto found = _publishers.find (channel_name);
-        if (found == _publishers.end ()
-            || found->second->descriptor.state != framework_runtime_state_t::serving)
-            throw framework_exception_t (framework_error_kind_t::unavailable,
-                                         "fanout publisher is not serving");
-        publisher = found->second->owner;
+        _lane
+          .run ([&] {
+              const auto found = _publishers.find (channel_name);
+              if (found == _publishers.end ()
+                  || found->second->descriptor.state != framework_runtime_state_t::serving)
+                  throw framework_exception_t (framework_error_kind_t::unavailable,
+                                               "fanout publisher is not serving");
+              publisher = found->second->owner;
+          })
+          .get ();
     }
     if (_stop.load (std::memory_order_acquire))
         throw framework_exception_t (framework_error_kind_t::shutting_down,
@@ -667,26 +801,61 @@ task_t<void> fanout_location_runtime_t::publish (const std::string &channel_name
     co_await publisher->publish (channel_name, topic, encoded);
 }
 
+bool fanout_location_runtime_t::accepted_callbacks_drained (const resource_snapshot_t &resources)
+{
+    return std::all_of (
+      resources.subscribers.begin (), resources.subscribers.end (), [] (const auto &subscriber) {
+          return subscriber.active_dispatches->load (std::memory_order_acquire) == 0;
+      });
+}
+
+void fanout_location_runtime_t::seal_application_dispatch () noexcept
+{
+    const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
+    std::lock_guard lock (_dispatch_progress->mutex);
+    for (const auto &subscriber : resources->subscribers)
+        subscriber.dispatch_queue->close ();
+}
+
+bool fanout_location_runtime_t::wait_for_accepted_callbacks_until (
+  std::chrono::steady_clock::time_point deadline) noexcept
+{
+    const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
+    std::unique_lock lock (_dispatch_progress->mutex);
+    return _dispatch_progress->changed.wait_until (
+      lock, deadline, [&] { return accepted_callbacks_drained (*resources); });
+}
+
 void fanout_location_runtime_t::stop ()
 {
+    _lane.throw_if_reentrant ();
     runtime_failure_collector_t failures;
     const bool was_stopped = _stop.exchange (true, std::memory_order_acq_rel);
     _wake_timer.signal ();
     if (_thread.joinable ())
         failures.capture ([&] { _thread.join (); });
+    if (_descriptor_renewal) {
+        failures.capture ([&] { _descriptor_renewal->result ().value (); });
+        _descriptor_renewal.reset ();
+    }
+    if (_snapshot_publication) {
+        failures.capture ([&] { _snapshot_publication->result ().value (); });
+        _snapshot_publication.reset ();
+    }
+    failures.capture ([&] {
+        _lane
+          .run_task ([this] {
+              return _descriptor_publication ? _descriptor_publication->task ()
+                                             : task_t<void> (result_t<void>::success ());
+          })
+          .result ()
+          .value ();
+    });
     failures.capture ([&] { runtime_failure_collector_t::close_resources (_application_supply); });
     failures.capture ([&] { _wake_timer.detach (); });
-    std::vector<std::string> publisher_channels;
-    bool has_publishers = false;
-    bool has_subscribers = false;
-    {
-        std::lock_guard lock (_gate);
-        publisher_channels.reserve (_publishers.size ());
-        for (const auto &[channel_name, _] : _publishers)
-            publisher_channels.push_back (channel_name);
-        has_publishers = !_publishers.empty ();
-        has_subscribers = !_subscribers.empty ();
-    }
+    const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
+    bool has_publishers = !resources->publishers.empty ();
+    bool has_subscribers = !resources->subscribers.empty ();
     if (!was_stopped || has_publishers || has_subscribers) {
         has_subscribers = !failures.capture ([&] { stop_subscribers (); });
         has_publishers = !failures.capture ([&] { stop_publishers (); });
@@ -694,49 +863,62 @@ void fanout_location_runtime_t::stop ()
     /* Keep the automatic binding until its owner has rejected and completed
      * every pending retry. Removing it first lets the generic publish path
      * fall through to the manual publisher during shutdown. */
-    for (const auto &channel_name : publisher_channels)
-        failures.capture ([&] { _channel_runtime.unbind_fanout_transport (channel_name); });
-    if (!has_subscribers && !has_publishers && failures.capture ([&] {
-            if (_subscriber_poller)
-                _subscriber_poller->close ();
-        })) {
-        std::lock_guard lock (_gate);
-        _subscriber_poller.reset ();
+    for (const auto &channel : _channels) {
+        if (channel.publisher.enabled && channel.publisher.discovery)
+            failures.capture ([&] { _channel_runtime.unbind_fanout_transport (channel.name); });
     }
-    if (!was_stopped || has_publishers || has_subscribers)
-        failures.capture ([&] { publish_snapshot_changes (); });
+    const bool poller_closed = !has_subscribers && !has_publishers && failures.capture ([&] {
+        if (_subscriber_poller)
+            _subscriber_poller->close ();
+    });
+    failures.capture ([&] {
+        _lane
+          .run ([&] {
+              if (poller_closed)
+                  _subscriber_poller.reset ();
+              if (!was_stopped || has_publishers || has_subscribers)
+                  publish_snapshot_changes_on_lane ();
+          })
+          .get ();
+    });
     failures.rethrow_if_failed ();
 }
 
 void fanout_location_runtime_t::stop_subscribers ()
 {
     runtime_failure_collector_t failures;
-    std::map<std::string, subscriber_entry_t *> subscribers;
+    const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
+    for (const auto &subscriber : resources->subscribers)
+        subscriber.dispatch_queue->close ();
+    for (const auto &subscriber : resources->subscribers)
+        failures.capture ([&] { subscriber.dispatch_queue->drain (); });
     {
-        std::lock_guard lock (_gate);
-        for (auto &[name, subscriber] : _subscribers)
-            subscribers.emplace (name, subscriber.get ());
+        std::unique_lock lock (_dispatch_progress->mutex);
+        _dispatch_progress->changed.wait (lock,
+                                          [&] { return accepted_callbacks_drained (*resources); });
     }
-    for (auto &[_, subscriber] : subscribers)
-        subscriber->dispatch_queue.close ();
-    for (auto &[_, subscriber] : subscribers)
-        failures.capture ([&] { subscriber->dispatch_queue.drain (); });
-    for (auto &[_, subscriber] : subscribers)
-        failures.capture ([&] { subscriber->owner->close (); });
+    for (const auto &subscriber : resources->subscribers)
+        failures.capture ([&] { subscriber.owner->close (); });
     failures.rethrow_if_failed ();
-    std::lock_guard lock (_gate);
-    _subscribers.clear ();
+    _lane
+      .run ([&] {
+          _subscribers.clear ();
+          publish_resources_on_lane ();
+      })
+      .get ();
 }
 
 void fanout_location_runtime_t::stop_publishers ()
 {
     runtime_failure_collector_t failures;
-    std::map<std::string, publisher_entry_t *> publishers;
-    {
-        std::lock_guard lock (_gate);
-        for (auto &[name, publisher] : _publishers)
-            publishers.emplace (name, publisher.get ());
-    }
+    auto publishers = _lane
+                        .run ([this] {
+                            decltype (_publishers) result;
+                            result.swap (_publishers);
+                            publish_resources_on_lane ();
+                            return result;
+                        })
+                        .get ();
     for (auto &[_, publisher] : publishers) {
         failures.capture ([&] { publisher->owner->close (); });
         failures.capture ([&] {
@@ -753,23 +935,31 @@ void fanout_location_runtime_t::stop_publishers ()
                     publisher->descriptor = std::move (draining);
             }
         });
+        const auto &descriptor = publisher->descriptor;
         failures.capture ([&] {
             (void) _store
-              ->remove_fanout_publisher (
-                {publisher->descriptor.channel_name, publisher->descriptor.publisher_rid},
-                {publisher->descriptor.owner_id, publisher->descriptor.lease_generation})
+              ->remove_fanout_publisher ({descriptor.channel_name, descriptor.publisher_rid},
+                                         {descriptor.owner_id, descriptor.lease_generation})
               .result ()
               .value ();
         });
         if (_listener_statuses)
             failures.capture ([&] {
-                _listener_statuses->remove (listener_kind_t::fanout,
-                                            publisher->descriptor.channel_name);
+                _listener_statuses->remove (listener_kind_t::fanout, descriptor.channel_name);
             });
     }
-    failures.rethrow_if_failed ();
-    std::lock_guard lock (_gate);
-    _publishers.clear ();
+    try {
+        failures.rethrow_if_failed ();
+    }
+    catch (...) {
+        _lane
+          .run ([&] {
+              _publishers.swap (publishers);
+              publish_resources_on_lane ();
+          })
+          .get ();
+        throw;
+    }
 }
 
 bool fanout_location_runtime_t::owner_is_live (

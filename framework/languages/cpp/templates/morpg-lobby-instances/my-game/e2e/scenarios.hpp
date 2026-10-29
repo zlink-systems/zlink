@@ -1,6 +1,8 @@
 #pragma once
 #include "client.hpp"
 #include <regex>
+#include "test_json.hpp"
+
 namespace MyGame::E2E
 {
 inline void same_actor (const SessionInfo &before, const SessionInfo &after)
@@ -37,11 +39,11 @@ inline DungeonView enter (Client &p1, Client &p2)
     require (rejected.reason == Rejection::not_ready, "Unready party admitted");
     p1.send(ViewRequest{});
     const auto unchanged = p1.receive<PartyView>([](const auto &) { return true; });
-    require(nlohmann::json(unchanged) == nlohmann::json(joined), "Rejected entry changed state");
+    require(test_json_morpg_lobby_domain::encode (unchanged) == test_json_morpg_lobby_domain::encode (joined), "Rejected entry changed state");
     const auto denied = p2.exchange<EnterDungeonRequest, ActionRejected>({});
     require(denied.reason == Rejection::not_leader && denied.retryAfterMs == 0, "Non-leader allowed");
     p2.send(ViewRequest{});
-    require(nlohmann::json(p2.receive<PartyView>([](const auto &) { return true; })) == nlohmann::json(joined), "Non-leader changed state");
+    require(test_json_morpg_lobby_domain::encode (p2.receive<PartyView>([](const auto &) { return true; })) == test_json_morpg_lobby_domain::encode (joined), "Non-leader changed state");
     const auto internal = p2.exchange<JoinDungeon, ActionRejected>({"dungeon-forged", "run-forged"});
     require(internal.reason == Rejection::packet_not_allowed && internal.retryAfterMs == 0, "Internal packet allowed");
     p1.send (ReadyRequest{});

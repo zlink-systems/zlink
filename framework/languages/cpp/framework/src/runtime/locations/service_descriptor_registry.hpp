@@ -114,8 +114,7 @@ class service_descriptor_registry_t
     static void notify (std::vector<watch_callback_t> callbacks,
                         service_descriptor_event_t event) noexcept;
 
-    offload_executor_t _lane_executor;
-    mutable state_lane_t _lane{_lane_executor};
+    mutable state_lane_t _lane;
     std::map<service_descriptor_key_t, service_descriptor_record_t> _records;
     std::map<std::uint64_t, watcher_t> _watchers;
     std::uint64_t _change_stamp = 0;

@@ -64,8 +64,7 @@ struct route_channel_runtime_t::ready_observer_t
 struct route_channel_runtime_t::state_t
 {
     std::string _router_channel_id;
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    mutable runtime::state_lane_t _lane;
     std::optional<zlink::routing_id_t> _routing_id;
     std::chrono::milliseconds _default_request_timeout{
       runtime::configuration::default_request_timeout};

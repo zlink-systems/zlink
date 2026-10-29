@@ -39,9 +39,9 @@ class ctx_inproc_registry_t
     bool pend_connection (const std::string &addr_, const endpoint_t &endpoint_, pipe_t **pipes_);
     void connect_pending (const char *addr_, socket_base_t *bind_socket_);
     bool has_pending_for_socket (const std::string &addr_, const socket_base_t *socket_) const;
-    size_t materialize_pending_for_socket (const std::string &addr_,
-                                           const socket_base_t *socket_,
-                                           socket_base_t *bind_socket_);
+    size_t materialize_pending (const std::string &addr_,
+                                const socket_base_t *socket_,
+                                socket_base_t *bind_socket_);
     void collect_pending_addresses (std::vector<std::string> *out_) const;
 
   private:
@@ -66,8 +66,7 @@ class ctx_inproc_registry_t
     static void connect_inproc_sockets (socket_base_t *bind_socket_,
                                         const options_t &bind_options_,
                                         const pending_connection_t &pending_connection_,
-                                        side side_,
-                                        bool materialization_ = false);
+                                        side side_);
 
     typedef std::map<std::string, endpoint_t> endpoints_t;
     typedef std::multimap<std::string, pending_connection_t> pending_connections_t;

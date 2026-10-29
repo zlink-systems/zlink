@@ -11,7 +11,6 @@ namespace fx = zlink::framework;
 class Session final : public fx::packet_stream_session_t
 {
     fx::actor_manager_t &actors_;
-    fx::serializer_registry_t &serializers_;
     static constexpr std::array<std::string_view, 5> allowed_packets{
         EnterRegionRequest::packet_name,
         MoveRequest::packet_name,
@@ -21,8 +20,8 @@ class Session final : public fx::packet_stream_session_t
     };
 
   public:
-    Session (fx::actor_manager_t &actors, fx::serializer_registry_t &serializers) :
-        actors_ (actors), serializers_ (serializers)
+    Session (fx::actor_manager_t &actors) :
+        actors_ (actors)
     {
     }
     fx::task_t<void> on_connected (fx::stream_t &) override { co_return; }
@@ -34,12 +33,12 @@ class Session final : public fx::packet_stream_session_t
     }
     fx::task_t<void> on_packet (fx::stream_t &stream,
                                 const fx::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         if (std::find (allowed_packets.begin (), allowed_packets.end (), dispatch.packet_name)
             == allowed_packets.end ()) {
             co_await stream
-              .write_packet (zlink::message_t::from_json (
+              .write_packet (fx::message_t::from (
                 ActionRejected{Rejection::packet_not_allowed, 0}))
               .packet_name (ActionRejected::packet_name)
               .async ();
@@ -49,8 +48,7 @@ class Session final : public fx::packet_stream_session_t
         if (bound.empty ()) {
             if (dispatch.packet_name != EnterRegionRequest::packet_name)
                 throw std::invalid_argument ("EnterRegionRequest must be first");
-            const auto request = serializers_.get<EnterRegionRequest> ().deserialize (
-              fx::encoded_payload_t::from_bytes (payload.bytes ()));
+            const auto request = payload.decode<EnterRegionRequest> ();
             const auto ensured =
               co_await actors_.get_or_create (fx::actor_id_t (request.PlayerId), Names::player)
                 .in_mesh (Names::mesh)

@@ -223,6 +223,12 @@ void zlink::pipe_t::acknowledge_peer_termination_unlocked (
 
 void zlink::pipe_t::process_pipe_term ()
 {
+    // The socket command owner is also the inbound reader. Resolve its
+    // published FIFO before invalidating lifecycle or releasing pair routing;
+    // correlation release must run outside the outbound gate.
+    if (_sink && (_state == active || _state == delimiter_received
+                  || _state == term_req_sent1))
+        _sink->pipe_peer_terminating (this);
     bool drain_complete = false;
     {
         scoped_lock_t lock (_out_sync);
@@ -323,8 +329,10 @@ void zlink::pipe_t::process_pipe_term_ack ()
     // Only a locally initiated close reaches its final ack without a peer
     // term transition. Publish the logical termination exactly once in both
     // orders; owners must retire routes before inbound drain can delay release.
-    if (ack_peer)
+    if (ack_peer) {
+        _sink->pipe_peer_terminating (this);
         _sink->pipe_peer_terminated (this, true);
+    }
     _sink->pipe_terminated (this);
 
     // A Completion reader can still be outside the socket receive mutex after

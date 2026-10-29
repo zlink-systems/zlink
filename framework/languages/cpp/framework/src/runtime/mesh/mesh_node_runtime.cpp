@@ -77,11 +77,18 @@ struct mesh_node_runtime_t::message_follow_subscription_state_t
         {
             std::lock_guard lock (mutex);
             assert (in_flight != 0);
-            --in_flight;
-            if (!active && in_flight == 0)
+            if (!active && in_flight == 1) {
                 retired_handler = std::move (handler);
-            terminal.notify_all ();
+            } else {
+                --in_flight;
+                terminal.notify_all ();
+                return;
+            }
         }
+        retired_handler = nullptr;
+        std::lock_guard lock (mutex);
+        --in_flight;
+        terminal.notify_all ();
     }
 
     void deactivate_and_wait () noexcept
@@ -428,17 +435,9 @@ framework_exception_t configuration_error (std::string message)
     return framework_exception_t (framework_error_kind_t::protocol_error, std::move (message));
 }
 
-std::uint64_t next_connection_intent_id ()
-{
-    static std::atomic_uint64_t next{1};
-    return next.fetch_add (1, std::memory_order_relaxed);
-}
-
 } // namespace
 
 mesh_node_builder_state_t::mesh_node_builder_state_t (std::string name) :
-    lane_executor (),
-    lane (lane_executor),
     mesh_name (name),
     spot_state (std::make_shared<spot_node_builder_state_t> (name)),
     spot_builder (spot_state)
@@ -768,6 +767,8 @@ void mesh_node_runtime_t::start (
               _state->advertise_host, _state->socket.receive_timeout, _state->auto_hwm_profile,
               _state->application_jobs};
             native_options.runtime_failures = _state->spot_state->runtime_failures ();
+            if (const auto &monitoring = _state->spot_state->monitoring)
+                native_options.metric_provider = monitoring->metric_provider;
             auto options = host::host_options_t{
               std::move (native_options), spot_snapshot.entry_spot_name.value_or ("entry"),
               std::move (stable_types),   _owner_lease_fencing_margin,
@@ -791,6 +792,7 @@ void mesh_node_runtime_t::start (
             _user_spot_store ? (manual ? "manual_and_redis" : "redis") : "manual";
       })
       .get ();
+    const auto metric_provider = node_options.mesh.metric_provider;
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
     if (_delay_owner)
         node->set_delay_owner (*_delay_owner);
@@ -883,7 +885,8 @@ void mesh_node_runtime_t::start (
     if (_relocation_authority && _relocation_store)
         node->configure_relocation (_relocation_authority, _relocation_store,
                                     _aggregate_relocation_authority, _relocation_limits);
-    _state->spot_state->activation_admission->configure_metrics (_state->mesh_name);
+    _state->spot_state->activation_admission->configure_metrics (_state->mesh_name,
+                                                                 metric_provider);
     node->configure_relocation_gate (std::move (relocation_gate), std::move (native_spot_target),
                                      std::move (relocation_resume));
     node->start ();
@@ -898,31 +901,25 @@ void mesh_node_runtime_t::start (
           peer_connections = _state->peer_connections;
       })
       .get ();
-    _peer_connection_intent_lane
-      .run ([&] {
-          for (const auto &peer : peer_connections) {
-              const auto intent = peer.expected_routing_id
-                                    ? node->connect_peer (peer.endpoint, *peer.expected_routing_id)
-                                    : node->connect_peer (peer.endpoint);
-              if (intent)
-                  _peer_connection_intents.emplace (peer.endpoint, next_connection_intent_id ());
-          }
-      })
-      .get ();
+    for (const auto &peer : peer_connections)
+        node->transport ().connect_peer_intent (peer);
     _node = std::move (node);
     const auto callback_gate = _peer_callback_gate;
-    auto runtime_peer_connect = [this, callback_gate] (const mesh_peer_connection_t &connection) {
+    const auto weak_node = std::weak_ptr<host::public_host_runtime_t> (_node);
+    auto runtime_peer_connect = [weak_node,
+                                 callback_gate] (const mesh_peer_connection_t &connection) {
         {
             std::lock_guard lock (callback_gate->mutex);
             if (callback_gate->stopping)
                 return;
             ++callback_gate->active;
         }
+        std::shared_ptr<host::public_host_runtime_t> node;
         try {
-            if (connection.expected_routing_id)
-                connect_peer (*connection.expected_routing_id, connection.endpoint);
-            else
-                connect_peer (connection.endpoint);
+            node = weak_node.lock ();
+            if (node)
+                node->transport ().connect_peer_intent (
+                  connection.endpoint, connection.expected_routing_id, 0, "default", false);
         }
         catch (...) {
             std::lock_guard lock (callback_gate->mutex);
@@ -934,19 +931,32 @@ void mesh_node_runtime_t::start (
         if (--callback_gate->active == 0)
             callback_gate->changed.notify_all ();
     };
-    auto runtime_peer_disconnect = [this,
-                                    callback_gate] (const mesh_peer_connection_t &connection) {
+    auto runtime_peer_disconnect = [weak_node, callback_gate,
+                                    failures = _state->spot_state->runtime_failures ()] (
+                                     const mesh_peer_connection_t &connection) {
         {
             std::lock_guard lock (callback_gate->mutex);
             if (callback_gate->stopping)
                 return;
             ++callback_gate->active;
         }
+        std::shared_ptr<host::public_host_runtime_t> node;
         try {
-            if (connection.expected_routing_id)
-                disconnect_peer (*connection.expected_routing_id, connection.endpoint);
-            else
-                disconnect_peer (connection.endpoint);
+            node = weak_node.lock ();
+            if (node) {
+                if (connection.expected_routing_id) {
+                    (void) failures->capture ([&] {
+                        node->transport ().disconnect_peer_intent (*connection.expected_routing_id,
+                                                                   connection.endpoint, false);
+                    });
+                } else {
+                    try {
+                        node->transport ().disconnect_peer_intent (connection.endpoint);
+                    }
+                    catch (...) {
+                    }
+                }
+            }
         }
         catch (...) {
             std::lock_guard lock (callback_gate->mutex);
@@ -1841,8 +1851,8 @@ void mesh_node_runtime_t::dispatch_message_follow (
 
             ~dispatch_guard_t ()
             {
-                message_follow_subscription_state_t::current_dispatch = frame.previous;
                 state->finish_dispatch ();
+                message_follow_subscription_state_t::current_dispatch = frame.previous;
             }
         } dispatch_guard (subscription.get ());
         try {
@@ -1931,7 +1941,7 @@ void mesh_node_runtime_t::stop ()
         return;
     }
     _node->transport ().mailbox ().bind_application_dispatch ({}, {});
-    _peer_connection_intent_lane.run ([&] { _peer_connection_intents.clear (); }).get ();
+    _node->transport ().clear_peer_connection_intents ();
     for (auto &[_, spot] : _spots)
         (void) spot.close ();
     _spots.clear ();
@@ -1956,33 +1966,18 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
 {
     if (!_node || endpoint.empty ())
         return;
-    _peer_connection_intent_lane
-      .run ([&] {
-          const auto submitted =
-            _node->connect_peer (endpoint, expected_routing_id, expected_lifecycle_generation,
-                                 std::move (security_identity), automatic);
-          if (submitted) {
-              const auto [intent, inserted] = _peer_connection_intents.try_emplace (endpoint);
-              if (inserted)
-                  intent->second = next_connection_intent_id ();
-          }
-      })
-      .get ();
+    const auto node = _node;
+    node->transport ().connect_peer_intent (endpoint, expected_routing_id,
+                                            expected_lifecycle_generation,
+                                            std::move (security_identity), automatic);
 }
 
 void mesh_node_runtime_t::connect_peer (const std::string &endpoint, std::string security_identity)
 {
     if (!_node || endpoint.empty ())
         return;
-    _peer_connection_intent_lane
-      .run ([&] {
-          if (_node->connect_peer (endpoint)) {
-              const auto [intent, inserted] = _peer_connection_intents.try_emplace (endpoint);
-              if (inserted)
-                  intent->second = next_connection_intent_id ();
-          }
-      })
-      .get ();
+    const auto node = _node;
+    node->transport ().connect_peer_intent (endpoint, std::nullopt, 0, "default", false);
     static_cast<void> (security_identity);
 }
 
@@ -2009,15 +2004,9 @@ void mesh_node_runtime_t::disconnect_peer (const std::string &endpoint) noexcept
 {
     if (!_node || endpoint.empty ())
         return;
+    const auto node = _node;
     try {
-        _peer_connection_intent_lane
-          .run ([&] {
-              const auto found = _peer_connection_intents.find (endpoint);
-              _node->disconnect_peer (endpoint);
-              if (found != _peer_connection_intents.end ())
-                  _peer_connection_intents.erase (found);
-          })
-          .get ();
+        node->transport ().disconnect_peer_intent (endpoint);
     }
     catch (...) {
     }
@@ -2029,6 +2018,7 @@ void mesh_node_runtime_t::disconnect_peer (const zlink::routing_id_t &expected_r
 {
     if (!_node || endpoint.empty ())
         return;
+    const auto node = _node;
     (void) _state->spot_state->runtime_failures ()->capture ([&] {
         const bool manual =
           automatic
@@ -2043,21 +2033,9 @@ void mesh_node_runtime_t::disconnect_peer (const zlink::routing_id_t &expected_r
                                        });
                })
                .get ();
-        _peer_connection_intent_lane
-          .run ([&] {
-              if (automatic && (manual || !_peer_connection_intents.contains (endpoint)))
-                  return;
-              const auto endpoint_retained =
-                _node->disconnect_peer (expected_routing_id.to_bytes (), endpoint);
-              /* A replacement RID can already be admitted through the same
-             * configured endpoint when the stale descriptor retires. The raw
-             * owner deliberately preserves that physical endpoint; preserve the
-             * matching auto-connect intent too, otherwise the next reconcile
-             * submits a duplicate connect and can preempt the admitted route. */
-              if (!endpoint_retained)
-                  _peer_connection_intents.erase (endpoint);
-          })
-          .get ();
+        if (manual)
+            return;
+        node->transport ().disconnect_peer_intent (expected_routing_id, endpoint, automatic);
     });
 }
 

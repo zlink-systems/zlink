@@ -70,6 +70,9 @@ final class ZLinkChannelReceiveFlowStateTest {
                                 ZLinkBackendRouterSocket.class.getClassLoader(),
                                 new Class<?>[] {ZLinkBackendRouterSocket.class},
                                 (ignored, method, arguments) -> {
+                                    if (method.isDefault() && method.getName().equals("requestTo"))
+                                        return java.lang.reflect.InvocationHandler.invokeDefault(
+                                                ignored, method, arguments);
                                     if (method.getName().equals("setReceiveFlowState")) {
                                         flowCalls.incrementAndGet();
                                         throw new ZlinkConfigException(ConfigResult.INVALID_STATE);

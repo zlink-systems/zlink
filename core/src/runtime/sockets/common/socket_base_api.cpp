@@ -171,6 +171,16 @@ void zlink::socket_base_t::finish_close_handoff (int handoff_timeout_ms_)
 
 void zlink::socket_base_t::finish_close_reap ()
 {
+    {
+        std::lock_guard<std::recursive_mutex> lock (endpoint_runtime ().attempts_sync);
+        std::set<connection_attempt_result_t *> attempts;
+        endpoint_runtime ().inprocs.collect_attempts (&attempts);
+        for (auto &entry : endpoint_runtime ().endpoints)
+            if (entry.second.connection_attempt)
+                attempts.insert (entry.second.connection_attempt.get ());
+        for (auto *attempt : attempts)
+            attempt->registration = connection_attempt_result_t::removed;
+    }
     stop_inproc_reconnect_scheduler ();
     socket_completion::close (&completion_runtime (),
                               _ctx_terminated ? ETERM : ESHUTDOWN);
@@ -279,12 +289,12 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     // still needs its socket owner until the termination handshake finishes.
     // Only final release permits skipping ownership; otherwise close must
     // include the pipe and complete its pending delimiter/ack exchange.
+    bool already_attached = false;
     {
         scoped_lock_t lock (monitor_runtime ().sync);
         if (pipe_->has_completed_termination ())
             return;
-        const bool already_attached =
-          endpoint_runtime ().attached_pipes.contains (pipe_);
+        already_attached = endpoint_runtime ().attached_pipes.contains (pipe_);
         if (!already_attached)
             endpoint_runtime ().attach_pipe (pipe_);
     }
@@ -500,9 +510,11 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             // its callback will remove the FQ/LB registration we add here.
             application_active = application->is_lifecycle_active ();
             if (application_active) {
-                xattach_pipe (
-                  application, subscribe_to_all_,
-                  locally_initiated_ || application->is_locally_initiated ());
+                // Pending unpaired inproc pipes are already admitted. Validation
+                // reports readiness without registering the same pipe twice.
+                if (pair_id != 0 || !already_attached)
+                    xattach_pipe (application, subscribe_to_all_,
+                                  locally_initiated_ || application->is_locally_initiated ());
                 if (application->get_transport_pair_id () != 0
                     && application->get_transport_lane_count () == 1u)
                     (void) reclassify_transport_pair_application_head (
@@ -520,6 +532,8 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         // no application pipe. xattach_pipe() has now published scheduler and
         // route state; the matcher rechecks exact writability before moving
         // any token to the completion queue.
+        if (transport_validated_)
+            update_inproc_connection_attempt (application, true);
         notify_send_writable (application);
     }
     if (ready_application && ready_completion
@@ -857,6 +871,8 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
         if ((events_ & ZLINK_POLLOUT) && has_out ())
             events |= ZLINK_POLLOUT;
 
+        if ((events_ & ZLINK_POLLCONNECT) && has_connection_attempt_change ())
+            events |= ZLINK_POLLCONNECT;
         *out_ = events;
     }
     return 0;
@@ -922,6 +938,8 @@ int zlink::socket_base_t::get_events_internal (
         events |= ZLINK_POLLOUT;
     if ((events_ & ZLINK_POLLROUTE) && has_route_change ())
         events |= ZLINK_POLLROUTE;
+    if ((events_ & ZLINK_POLLCONNECT) && has_connection_attempt_change ())
+        events |= ZLINK_POLLCONNECT;
 
     *out_ = events;
     return 0;
@@ -1169,15 +1187,10 @@ void zlink::socket_base_t::discard_count1_completion_ready_pipes ()
     }
 }
 
-bool zlink::socket_base_t::reclassify_transport_pair_application_head (
-  pipe_t *pipe_, bool claim_private_head_)
+bool zlink::socket_base_t::completion_blocked_by_public_delivery (pipe_t *pipe_)
 {
-    if (!pipe_ || pipe_->get_transport_pair_id () == 0
-        || pipe_->get_transport_lane () != transport_lane_application
-        || pipe_->get_transport_lane_count () != 1u
-        || !pipe_->transport_pair_application_ready_cached ())
+    if (!pipe_ || pipe_->get_transport_lane_count () != 1u)
         return false;
-
     const transport_pair_key_t key (pipe_->get_transport_pair_id (),
                                     pipe_->get_transport_pair_generation ());
     //  A ready count-1 Application pipe answers the common topology question
@@ -1190,7 +1203,7 @@ bool zlink::socket_base_t::reclassify_transport_pair_application_head (
         if (it == _transport_pairs.end () || !it->second.ready
             || it->second.expected_lane_count != 1u
             || it->second.application != pipe_)
-            return false;
+            return true;
         if (_public_part_receive_delivery_hold_active
             && (!_public_part_receive_delivery_hold_pipe
                 || (_public_part_receive_delivery_hold_pipe == pipe_
@@ -1199,9 +1212,24 @@ bool zlink::socket_base_t::reclassify_transport_pair_application_head (
                 _public_part_receive_delivery_hold_pipe = pipe_;
                 _public_part_receive_delivery_hold_key = key;
             }
-            return false;
+            return true;
         }
     }
+
+    return false;
+}
+
+bool zlink::socket_base_t::reclassify_transport_pair_application_head (
+  pipe_t *pipe_, bool claim_private_head_)
+{
+    if (!pipe_ || pipe_->get_transport_pair_id () == 0
+        || pipe_->get_transport_lane () != transport_lane_application
+        || pipe_->get_transport_lane_count () != 1u
+        || !pipe_->transport_pair_application_ready_cached ())
+        return false;
+
+    if (completion_blocked_by_public_delivery (pipe_))
+        return false;
 
     const pipe_normalized_head_kind_t head =
       pipe_->probe_normalized_head_kind ();
@@ -1788,12 +1816,37 @@ void zlink::socket_base_t::hiccuped (pipe_t *pipe_)
         xhiccuped (pipe_);
 }
 
+void zlink::socket_base_t::pipe_peer_terminating (pipe_t *pipe_)
+{
+    if (pipe_->get_transport_pair_id () == 0 || !request_reply_state ())
+        return;
+
+    pipe_t *source = pipe_;
+    distinct_pipe_lifetime_refs_t refs (pipe_);
+    if (pipe_->get_transport_lane_count () == 2u) {
+        scoped_lock_t lock (_transport_pairs_sync);
+        const transport_pair_key_t key (pipe_->get_transport_pair_id (),
+                                        pipe_->get_transport_pair_generation ());
+        transport_pairs_t::iterator it = _transport_pairs.find (key);
+        if (it != _transport_pairs.end () && it->second.completion_source ()
+            && refs.retain (it->second.completion_source ()))
+            source = it->second.completion_source ();
+    }
+    socket_reqrep_internal::completion_discard_t discard;
+    socket_reqrep_internal::completion_pipe_drain_result_t result;
+    do {
+        {
+            const socket_receive_entry_scope_t entry (receive_runtime ());
+            result = socket_reqrep_internal::process_completion_pipe (
+              this, source, &discard, true);
+        }
+        socket_reqrep_internal::release_completion_discard (&discard);
+    } while (result == socket_reqrep_internal::completion_pipe_discard_deferred);
+}
+
 void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_complete_)
 {
     LIBZLINK_UNUSED (drain_complete_);
-    socket_reqrep_internal::fail_pending_requests_for_transport_pair (
-      request_reply_state (), pipe_->get_transport_pair_id (),
-      pipe_->get_transport_pair_generation ());
     const uint64_t pair_id = pipe_->get_transport_pair_id ();
     const uint64_t pair_generation = pipe_->get_transport_pair_generation ();
     const bool completion =
@@ -1838,6 +1891,7 @@ void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_compl
       !completion && !is_terminating () && options.reconnect_ivl > 0
       && endpoint_runtime ().inprocs.endpoint_for_pipe (
         pipe_, &inproc_reconnect_endpoint);
+    update_inproc_connection_attempt (pipe_, false);
     // Physical termination is observable before inbound records are drained.
     // The inproc pipe claim prevents final release from publishing a second edge.
     event_disconnected (
@@ -1847,8 +1901,9 @@ void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_compl
     // pipe_peer_terminated runs under the command owner. Queue the reconnect so
     // connect_internal does not re-enter that owner while handling this pipe.
     if (reconnect_inproc && !is_terminating ()) {
-        const bool scheduled = schedule_inproc_reconnect (
-          inproc_reconnect_endpoint, endpoint_pair);
+        const bool scheduled =
+          schedule_inproc_reconnect (inproc_reconnect_endpoint, endpoint_pair,
+                                     endpoint_runtime ().inprocs.attempt_for_pipe (pipe_));
         zlink_assert (scheduled || is_terminating () || _ctx_terminated);
     }
 }

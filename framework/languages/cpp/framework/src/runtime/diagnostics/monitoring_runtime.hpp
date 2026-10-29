@@ -2,6 +2,7 @@
 #pragma once
 
 #include <opentelemetry/metrics/meter.h>
+#include "runtime/diagnostics/metric_provider.hpp"
 
 #include <zlink/framework/contracts/configuration/logging.hpp>
 #include <zlink/framework/contracts/monitoring/spot_events.hpp>
@@ -119,8 +120,9 @@ class monitoring_runtime_state_t
 {
   public:
     monitoring_runtime_state_t ();
-    runtime::offload_executor_t lane_executor;
-    mutable runtime::state_lane_t lane{lane_executor};
+    void use_metric_provider (runtime::metric_provider_t provider);
+    runtime::metric_provider_t metric_provider = runtime::noop_metric_provider ();
+    mutable runtime::state_lane_t lane;
     logger_t<> diagnostics_logger;
     std::shared_ptr<runtime::runtime_failure_collector_t> runtime_failures;
     opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> metric_meter;

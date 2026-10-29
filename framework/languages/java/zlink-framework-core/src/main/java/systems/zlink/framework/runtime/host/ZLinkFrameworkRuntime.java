@@ -344,8 +344,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         });
         runtimeHandlers.add(ZLinkRouteMeshRuntimeOptions.class, this.routeMeshRuntimeOptions);
 
-        prepareConstruction(runtimeHandlers);
-
         ZLinkFrameworkSpotSubsystem spotSubsystem =
                 ZLinkFrameworkSpotSubsystem.create(
                         options,
@@ -429,7 +427,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         this.backendContext,
                         this.spots,
                         this.actors);
-        // Spot·Actor service 등록이 plan 캐시를 비우므로 STREAM 시작 전에 최종 catalog를 준비한다.
+        // Spot·Actor service 등록을 마친 catalog로 STREAM 시작 전에 생성 절차를 준비한다.
         prepareConstruction(runtimeHandlers);
         this.streams = streamSubsystem.streams();
         if (this.streams != null) {

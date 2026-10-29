@@ -10,6 +10,6 @@ internal abstract record ZLinkActorJoinResult
 
     // Relay readiness transfers public completion to the target. Source
     // authority settlement only decides how to release the retained work.
-    public sealed record Relayed(Func<ValueTask<ZLinkSourceSettlement>> SourceCleanup)
+    public sealed record Relayed(Func<ValueTask<ZLinkSourceSettlementResult>> SourceCleanup)
         : ZLinkActorJoinResult;
 }

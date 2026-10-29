@@ -150,15 +150,23 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             var header = ZLinkStreamProtocolDefaults.DecodeHeader(parts[0].AsReadOnlyMemory());
             terminal?.SetRoute(meshName, actor.NodeRid.ToString(), header.CorrelationId);
             TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorRequest);
-            var reply = await SubmitActorRequestAsync<TReply>(
-                    node,
-                    actor.ToBackend(),
-                    parts,
-                    remainingTimeout,
-                    cancellationToken,
-                    requestAdmission: requestAdmission
-                )
-                .ConfigureAwait(false);
+            TReply reply;
+            try
+            {
+                reply = await SubmitActorRequest<TReply>(
+                        node,
+                        actor.ToBackend(),
+                        parts,
+                        remainingTimeout,
+                        cancellationToken,
+                        requestAdmission: requestAdmission
+                    )
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+            }
             terminal?.Succeeded();
             return reply;
         }
@@ -276,7 +284,7 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         );
     }
 
-    private async ValueTask<TReply> SubmitActorRequestAsync<TReply>(
+    private ValueTask<TReply> SubmitActorRequest<TReply>(
         IZLinkBackendSpotNode node,
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
@@ -285,43 +293,26 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ZLinkRequestAdmission? requestAdmission = null
     )
     {
-        IReadOnlyList<Message> reply;
-        try
-        {
-            reply = await node.RequestToActorAsync(
-                    actor,
-                    parts,
-                    timeout,
-                    cancellationToken,
-                    requestAdmission: requestAdmission
-                )
-                .ConfigureAwait(false);
-        }
-        catch (ZlinkSubmitException error)
-        {
-            throw MapSubmitException(error, "Actor request");
-        }
-        catch (ZLinkRequestTerminalException terminal)
-        {
-            throw MapRequestException(terminal, "Actor request");
-        }
-        catch (ZlinkRequestException error)
-        {
-            throw MapRequestException(error, "Actor request");
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(parts);
-        }
-
-        try
-        {
-            return ZLinkActorReplyDecoder.Decode<TReply>(reply, runtime.Flow.CaptureEnabled);
-        }
-        finally
-        {
-            ZLinkMessageParts.DisposeAll(reply);
-        }
+        var captureFlow = runtime.Flow.CaptureEnabled;
+        return node.RequestToActorAsync<TReply>(
+            actor,
+            parts,
+            timeout,
+            cancellationToken,
+            reply => ZLinkActorReplyDecoder.Decode<TReply>(reply, captureFlow),
+            static failure =>
+                failure switch
+                {
+                    ZlinkSubmitException error => MapSubmitException(error, "Actor request"),
+                    ZLinkRequestTerminalException terminal => MapRequestException(
+                        terminal,
+                        "Actor request"
+                    ),
+                    ZlinkRequestException error => MapRequestException(error, "Actor request"),
+                    _ => failure,
+                },
+            requestAdmission
+        );
     }
 
     private async ValueTask<ZLinkSpotNodeRuntime> GetActorSpotNodeAsync(

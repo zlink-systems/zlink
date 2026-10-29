@@ -6,23 +6,30 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
-import java.util.function.Supplier;
-
 final class ZLinkServiceStateOwnershipTest {
     @Test
-    void livenessStateWorkHasAnActualLaneOwnerAndRejectsReentry() throws Exception {
-        var registry = new ZLinkServiceLivenessRegistry();
-        var entry =
-                ZLinkServiceLivenessRegistry.class.getDeclaredMethod("inStateLane", Supplier.class);
-        entry.setAccessible(true);
-        entry.invoke(
-                registry,
-                (Supplier<Void>)
+    void livenessStateWorkHasAnActualLaneOwnerAndRejectsReentry() {
+        var lane = new ZLinkStateLane(Runnable::run);
+        var registry =
+                new ZLinkServiceLivenessRegistry(
+                        ZLinkServiceLivenessRegistry.DEFAULT_PROBE_INTERVAL,
+                        ZLinkServiceLivenessRegistry.DEFAULT_PEER_TIMEOUT,
+                        lane);
+        assertEquals(0, registry.size());
+        var reentry =
+                lane.runAsync(
                         () -> {
-                            assertNotNull(ZLinkStateLane.current());
-                            assertThrows(IllegalStateException.class, registry::size);
+                            assertSame(lane, ZLinkStateLane.current());
+                            assertTrue(lane.isOnLane());
+                            assertEquals(0, registry.size());
+                            assertThrows(
+                                    IllegalStateException.class, () -> lane.awaitTurn(() -> 0));
+                            assertThrows(IllegalStateException.class, () -> lane.runAsync(() -> 0));
                             return null;
                         });
+        reentry.toCompletableFuture().join();
         assertEquals(0, registry.size());
+        lane.closeAsync().toCompletableFuture().join();
+        assertThrows(IllegalStateException.class, registry::size);
     }
 }

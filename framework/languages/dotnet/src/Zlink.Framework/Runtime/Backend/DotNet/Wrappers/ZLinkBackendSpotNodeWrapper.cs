@@ -1376,66 +1376,26 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             ownsParts: true
         );
 
-    public async ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
+    public ValueTask<TReply> RequestToActorAsync<TReply>(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
         CancellationToken cancellationToken,
+        Func<IReadOnlyList<Message>, TReply> decodeReply,
+        Func<Exception, Exception> mapFailure,
         ZLinkRequestAdmission? requestAdmission = null
-    )
-    {
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>();
-        var correlationId = _node.AllocateOperationId();
-        var submit = _completions.RegisterBeforeSubmit(
-            correlationId,
-            (record, replyParts) =>
-            {
-                if (record.SubmitFailure is { } submitFailure)
-                {
-                    ZLinkMessageParts.DisposeAll(replyParts);
-                    completion.TrySetException(submitFailure);
-                    return;
-                }
-                var result = ZLinkMeshCompletionTable.MapResult(
-                    record.TerminalResult,
-                    record.FailureErrno
-                );
-                if (result == RequestResult.Ok)
-                {
-                    completion.TrySetResult(replyParts);
-                    return;
-                }
-
-                ZLinkMessageParts.DisposeAll(replyParts);
-                //  Application terminal from an actor request reply — carry the
-                //  fine failure code so the actor client's classifier can refine
-                //  it (spec 32-framework-error-model:81-118).
-                completion.TrySetException(
-                    new Messaging.ZLinkRequestTerminalException(result, record.FailureErrno)
-                );
-            },
-            id =>
-                _node.RequestToActor(
-                    ToNativeActor(actor),
-                    parts,
-                    id,
-                    timeout ?? default,
-                    requestAdmission: requestAdmission
-                )
+    ) =>
+        new(
+            _node.RequestToActorAsync<TReply>(
+                ToNativeActor(actor),
+                parts,
+                timeout ?? default,
+                cancellationToken,
+                decodeReply,
+                mapFailure,
+                requestAdmission
+            )
         );
-        if (submit != SubmitResult.Ok)
-            throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submit);
-        await using (
-            _completions
-                .RegisterCancellation(
-                    correlationId,
-                    cancellationToken,
-                    () => completion.TrySetCanceled(cancellationToken)
-                )
-                .ConfigureAwait(false)
-        )
-            return await completion.Task.ConfigureAwait(false);
-    }
 
     // Relocated Actor Message Follow reply with no active binding. Spec 31 §5: once a
     // session closes, a late Actor reply is not delivered to a new session or

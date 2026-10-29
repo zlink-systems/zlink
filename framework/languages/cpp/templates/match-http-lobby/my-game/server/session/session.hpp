@@ -8,7 +8,6 @@ namespace fx = zlink::framework;
 class Session final : public fx::packet_stream_session_t
 {
     fx::actor_manager_t &actors_;
-    fx::serializer_registry_t &serializers_;
 
     static bool client_packet_allowed (std::string_view packet)
     {
@@ -20,14 +19,14 @@ class Session final : public fx::packet_stream_session_t
     static fx::task_t<void> reject_packet (fx::stream_t &stream)
     {
         const auto response =
-          zlink::message_t::from_json (ActionRejected{Rejection::packet_not_allowed});
+          fx::message_t::from (ActionRejected{Rejection::packet_not_allowed});
         co_await stream.write_packet (response).packet_name (ActionRejected::packet_name).async ();
         co_return;
     }
 
   public:
-    Session (fx::actor_manager_t &actors, fx::serializer_registry_t &serializers) :
-        actors_ (actors), serializers_ (serializers)
+    Session (fx::actor_manager_t &actors) :
+        actors_ (actors)
     {
     }
     fx::task_t<void> on_connected (fx::stream_t &) override { co_return; }
@@ -39,7 +38,7 @@ class Session final : public fx::packet_stream_session_t
     }
     fx::task_t<void> on_packet (fx::stream_t &stream,
                                 const fx::session_message_context_t &dispatch,
-                                const zlink::message_t &payload) override
+                                const zlink::framework::message_t &payload) override
     {
         if (!client_packet_allowed (dispatch.packet_name)) {
             co_await reject_packet (stream);
@@ -51,8 +50,7 @@ class Session final : public fx::packet_stream_session_t
                 co_await reject_packet (stream);
                 co_return;
             }
-            const auto request = serializers_.get<JoinRoomRequest> ().deserialize (
-              fx::encoded_payload_t::from_bytes (payload.bytes ()));
+            const auto request = payload.decode<JoinRoomRequest> ();
             const auto ensured =
               co_await actors_.get_or_create (fx::actor_id_t (request.playerId), Names::player)
                 .in_mesh (Names::mesh)

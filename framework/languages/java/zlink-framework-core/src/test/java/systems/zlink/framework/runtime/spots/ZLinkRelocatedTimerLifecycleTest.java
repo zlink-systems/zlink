@@ -1187,10 +1187,8 @@ final class ZLinkRelocatedTimerLifecycleTest {
                 factory -> factory.disableRelocation());
         try (var framework = ZLinkFrameworkRuntimeTestAccess.start(options)) {
             var host = (ZLinkSpotRuntime) framework.spotManager();
-            var field = ZLinkSpotRuntime.class.getDeclaredField("spotLifecycle");
-            field.setAccessible(true);
             scenario.run(
-                    (ZLinkSpotLifecycle) field.get(host),
+                    host.spotLifecycle(),
                     ZLinkSpotTimerRelocationEnvelope.encode(
                             ZLinkRelocatedTimerRebindTest.snapshot(false)));
         }

@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../internal-observation';
 import { constants as osConstants } from 'node:os';
 import { ApplicationIngressRecordOwner } from '../application-jobs/application-ingress-record-owner';
 import type {
@@ -177,6 +178,17 @@ interface ControlSendState {
  * It owns protocol, admission, mailbox, request and liveness state.
  */
 export class RawServiceMeshRuntime {
+  [inspectRuntime](nodeRoutingId?: string) {
+    return Object.freeze({
+      pendingControlSends: this.controlSends.size,
+      selectedRouteGeneration:
+        nodeRoutingId === undefined ? undefined : this.selectedRoutes.get(nodeRoutingId),
+      peerRouteObservers: this.peerRouteChanged.size,
+      peerConnectionIntentObservers: this.peerConnectionIntentRemoved.size,
+      expectedPeers: this.expectedPeers.size
+    });
+  }
+
   readonly topology: ServiceTopologyRegistry;
   readonly mailbox: ServiceMailbox;
   readonly liveness: ServiceLivenessRegistry;
@@ -1453,8 +1465,7 @@ export class RawServiceMeshRuntime {
     for (const nodeRoutingId of result.timedOutNodes) {
       const peer = this.topology.peer(nodeRoutingId);
       if (peer === undefined) continue;
-      this.requireStarted().disconnectRid!(nodeRoutingId);
-      this.removePeer(peer);
+      this.removePeer(peer, () => this.requireStarted().disconnectRid!(nodeRoutingId));
     }
     return result;
   }
@@ -1763,17 +1774,22 @@ export class RawServiceMeshRuntime {
     this.endpointOnlyPeers.delete(endpoint);
   }
 
-  private removePeer(peer: AdmittedServicePeer): void {
+  private removePeer(peer: AdmittedServicePeer, disconnectPhysical?: () => void): void {
     this.topology.disconnect(peer.descriptor.nodeRoutingId, peer.connectionId);
     this.liveness.disconnect(
       peer.descriptor.nodeRoutingId,
       peer.liveness?.connectionId ?? peer.connectionId
     );
-    this.onPeerDisconnected?.(
-      peer.descriptor.nodeRoutingId,
-      peer.descriptor.advertisedEndpoint,
-      peer.descriptor.lifecycleGeneration
-    );
+    try {
+      disconnectPhysical?.();
+    } finally {
+      // The logical admission has ended even when the physical disconnect reports a failure.
+      this.onPeerDisconnected?.(
+        peer.descriptor.nodeRoutingId,
+        peer.descriptor.advertisedEndpoint,
+        peer.descriptor.lifecycleGeneration
+      );
+    }
   }
 
   private requireStarted(): ZLinkRawRouterPort {

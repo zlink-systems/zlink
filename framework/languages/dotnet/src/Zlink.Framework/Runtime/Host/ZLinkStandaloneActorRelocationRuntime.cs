@@ -454,7 +454,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         restoredPrecommit = true;
                     }
                     if (
-                        !IsExactSourceAuthority(
+                        !ZLinkStandaloneActorRelocationPrecommitCoordinator.IsExactSourceAuthority(
                             authority,
                             found.Snapshot,
                             sourceAuthority,
@@ -502,26 +502,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             relocationMetric.CompleteSource(null);
             runtime.CompleteSessionRelocation(actor.Context.MeshName, relocationId);
         }
-    }
-
-    private static bool IsExactSourceAuthority(
-        ZLinkAuthorityReadResult current,
-        ZLinkAuthoritySnapshot expected,
-        ZLinkActorAuthorityPayload expectedPayload,
-        bool requireStoreVersion
-    )
-    {
-        return current is ZLinkAuthorityReadResult.Found found
-            && (!requireStoreVersion || found.Snapshot.StoreVersion == expected.StoreVersion)
-            && found.Snapshot.ObjectGeneration == expected.ObjectGeneration
-            && found.Snapshot.AuthorityOwnerGeneration == expected.AuthorityOwnerGeneration
-            && found.Snapshot.OwnerId == expected.OwnerId
-            && found.Snapshot.OwnerLeaseGeneration == expected.OwnerLeaseGeneration
-            && ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                found.Snapshot.Payload.Span,
-                out var payload
-            )
-            && payload == expectedPayload;
     }
 
     /// <summary>

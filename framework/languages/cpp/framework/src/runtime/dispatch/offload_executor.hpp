@@ -5,12 +5,12 @@
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
-#include <mutex>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <queue>
-#include <string>
 #include <stop_token>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -55,11 +55,15 @@ class offload_executor_t
     // Internal scheduling retains its separate entry point because shutdown
     // handling differs from public worker submission.
     virtual bool try_submit_internal (std::function<void ()> work);
+    // Retains already-started asynchronous work in the existing drain count
+    // without retaining a worker. The caller releases it at physical terminal.
+    std::shared_ptr<void> retain_internal_work ();
     // Initial placement uses the workers already created by the constructor.
     bool start_role (std::shared_ptr<role_t> role);
     // Only the current holder calls this, at a receive rotation boundary.
     bool try_assign_role (std::shared_ptr<role_t> role);
-    // Seals submission and drains application work while receive roles keep progressing.
+    // Seals submission and drains application work while receive roles keep
+    // progressing.
     void drain_application ();
     void submit (std::function<void ()> work);
     void request_stop () noexcept;
@@ -87,6 +91,7 @@ class offload_executor_t
     };
 
     void worker_loop ();
+    void complete_work_locked ();
     void start_worker_locked ();
     void retire_current_worker_locked ();
     void join_retired_workers_locked ();
@@ -109,5 +114,8 @@ class offload_executor_t
     std::size_t _live_workers = 0;
     std::size_t _idle_workers = 0;
 };
+
+// Runtimes share one process pool and retain it until their lanes have drained.
+std::shared_ptr<offload_executor_t> infrastructure_executor ();
 
 } // namespace zlink::framework::runtime

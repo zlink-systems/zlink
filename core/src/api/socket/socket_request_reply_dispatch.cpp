@@ -203,7 +203,7 @@ void release_completion_discard (completion_discard_t *discard_)
     errno = saved_errno;
 }
 
-completion_pipe_drain_result_t process_completion_pipe (
+static completion_pipe_drain_result_t process_completion_records (
   zlink::socket_base_t *socket_, zlink::pipe_t *pipe_,
   completion_discard_t *discard_)
 {
@@ -501,6 +501,33 @@ void fail_pending_requests_for_transport_pair (
           return take_next_socket_pending_request_for_transport_pair_locked (
             state, transport_pair_id_, transport_pair_generation_, pending);
       });
+}
+
+completion_pipe_drain_result_t process_completion_pipe (
+  zlink::socket_base_t *socket_, zlink::pipe_t *pipe_,
+  completion_discard_t *discard_, bool pair_terminating_)
+{
+    completion_pipe_drain_result_t result = completion_pipe_drained;
+    // Both ordinary progress and pair retirement enter this resolver. The
+    // published pipe exposes only complete records; DATA/REQUEST at its head
+    // retains the existing FIFO boundary. Retirement has no later owner turn.
+    if (socket_ && pipe_
+        && !socket_->completion_blocked_by_public_delivery (pipe_)
+        && (pipe_->get_transport_lane_count () == 1u
+            || pipe_->get_transport_lane () == transport_lane_completion)) {
+        do {
+            result = process_completion_records (socket_, pipe_, discard_);
+        } while (pair_terminating_
+                 && result == completion_pipe_budget_exhausted);
+    }
+    if (!pair_terminating_ || !socket_ || !pipe_)
+        return result;
+    if (result == completion_pipe_discard_deferred)
+        return result;
+    fail_pending_requests_for_transport_pair (
+      socket_->request_reply_state (), pipe_->get_transport_pair_id (),
+      pipe_->get_transport_pair_generation ());
+    return result;
 }
 
 static void discard_request_reply_state_for_close (
