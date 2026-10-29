@@ -3,6 +3,8 @@ package systems.zlink.framework.runtime.internal.service;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 
@@ -10,6 +12,7 @@ import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.BiConsumer;
 
 /** Tests the registration/submission boundary with a controlled binding submission. */
 final class ZLinkServiceOperationOwnerTurnTest {
@@ -109,6 +112,122 @@ final class ZLinkServiceOperationOwnerTurnTest {
             assertFalse(second.isDone());
             assertTrue(registry.complete(id, "second"));
             assertEquals("second", second.join());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void cancelledEntryTerminalCannotCompleteAReusedIdentity(boolean failure) throws Exception {
+        try (var registry = new ZLinkServiceOperationRegistry()) {
+            UUID id = UUID.randomUUID();
+            var terminal = new AtomicReference<BiConsumer<String, Throwable>>();
+            var discarded = new AtomicInteger();
+            var old =
+                    registry.<String>submitTerminal(
+                            id,
+                            Duration.ofSeconds(30),
+                            callback -> {
+                                terminal.set(callback);
+                                return null;
+                            },
+                            value -> {
+                                assertEquals("old reply", value);
+                                discarded.incrementAndGet();
+                            });
+            assertNotNull(terminal.get());
+            assertTrue(old.cancel(false));
+            assertThrows(CancellationException.class, () -> old.get(1, TimeUnit.SECONDS));
+            assertTrue(old.isCancelled());
+            assertEquals(0, registry.pendingCount());
+            var current =
+                    ZLinkCompletionBridge.await(
+                            registry.<String>register(id, Duration.ofSeconds(30)));
+            terminal.get()
+                    .accept(
+                            failure ? null : "old reply",
+                            failure ? new IllegalStateException("old failure") : null);
+            assertEquals(1, registry.pendingCount());
+            assertFalse(current.isDone());
+            assertEquals(failure ? 0 : 1, discarded.get());
+            assertTrue(registry.complete(id, "current reply"));
+            assertEquals("current reply", current.get(1, TimeUnit.SECONDS));
+            assertEquals(failure ? 0 : 1, discarded.get());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void expiredEntryTerminalCannotCompleteAReusedIdentity(boolean failure) throws Exception {
+        var clock = new AtomicLong();
+        try (var registry =
+                new ZLinkServiceOperationRegistry(
+                        command -> new Thread(), new IllegalStateException("closed"), clock::get)) {
+            UUID id = UUID.randomUUID();
+            var terminal = new AtomicReference<BiConsumer<String, Throwable>>();
+            var discarded = new AtomicInteger();
+            var old =
+                    registry.<String>submitTerminal(
+                            id,
+                            Duration.ofMillis(1),
+                            callback -> {
+                                terminal.set(callback);
+                                return null;
+                            },
+                            value -> {
+                                assertEquals("old reply", value);
+                                discarded.incrementAndGet();
+                            });
+            clock.set(TimeUnit.MILLISECONDS.toNanos(2));
+            assertEquals(1, ZLinkCompletionBridge.await(registry.expire(clock.get())));
+            assertInstanceOf(
+                    TimeoutException.class,
+                    assertThrows(ExecutionException.class, () -> old.get(1, TimeUnit.SECONDS))
+                            .getCause());
+            var current =
+                    ZLinkCompletionBridge.await(registry.<String>register(id, Duration.ofHours(1)));
+            terminal.get()
+                    .accept(
+                            failure ? null : "old reply",
+                            failure ? new IllegalStateException("old failure") : null);
+            assertEquals(1, registry.pendingCount());
+            assertFalse(current.isDone());
+            assertEquals(failure ? 0 : 1, discarded.get());
+            assertTrue(registry.complete(id, "current reply"));
+            assertEquals("current reply", current.get(1, TimeUnit.SECONDS));
+            assertEquals(failure ? 0 : 1, discarded.get());
+        }
+    }
+
+    @Test
+    void discardedEntrySubmissionThrowCannotCompleteAReusedIdentity() throws Exception {
+        try (var registry = new ZLinkServiceOperationRegistry()) {
+            UUID id = UUID.randomUUID();
+            var current = new AtomicReference<ZLinkServiceOperationRegistry.Operation<String>>();
+            var old =
+                    registry.<String>submitTerminal(
+                            id,
+                            Duration.ofSeconds(30),
+                            terminal -> {
+                                assertTrue(registry.discard(id));
+                                current.set(
+                                        ZLinkCompletionBridge.await(
+                                                registry.<String>register(
+                                                        id, Duration.ofSeconds(30))));
+                                throw new IllegalStateException("old submission failure");
+                            },
+                            ignored -> fail("submission produced no value"));
+            assertFalse(old.isDone());
+            assertFalse(old.cancel(false));
+            assertEquals(1, registry.pendingCount());
+            assertFalse(current.get().isDone());
+            var expected = new IllegalStateException("current failure");
+            assertTrue(registry.completeExceptionally(id, expected));
+            assertSame(
+                    expected,
+                    assertThrows(
+                                    ExecutionException.class,
+                                    () -> current.get().get(1, TimeUnit.SECONDS))
+                            .getCause());
         }
     }
 }

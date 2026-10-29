@@ -8,7 +8,14 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
@@ -16,10 +23,215 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkJavaRawMeshNodeHelloRetryTest {
     private static final Duration IO_DEADLINE = Duration.ofSeconds(2);
+
+    @Test
+    void selectedHelloBeforeSnapshotReadiesBothPeersOnFirstExchange() throws Exception {
+        var localRid = RoutingId.from("snapshot-local");
+        var remoteRid = RoutingId.from("snapshot-remote");
+        var wire = new ZLinkServiceM6AWireCodec();
+        try (var context = Zlink.createContext()) {
+            var localPort = new ZLinkJavaRawServicePort(context);
+            var remotePort = new ZLinkJavaRawServicePort(context);
+            var localRouter = localPort.openRouter(localRid);
+            var remoteRouter = remotePort.openRouter(remoteRid);
+            var localDescriptor = descriptor(localRid, 2);
+            var remoteDescriptor = descriptor(remoteRid, 2);
+            var mutations = new AtomicLong();
+            var offOwnerMutations = new AtomicLong();
+            var readiness =
+                    new java.util.HashMap<RoutingId, String>() {
+                        @Override
+                        public String put(RoutingId rid, String connection) {
+                            mutations.incrementAndGet();
+                            if (!localPort.stateLane().isOnLane())
+                                offOwnerMutations.incrementAndGet();
+                            return super.put(rid, connection);
+                        }
+                    };
+            var localTopology =
+                    systems.zlink.framework.runtime.internal.service
+                            .ZLinkServiceTopologyRegistryTesting.create(
+                            localDescriptor, localPort.stateLane(), readiness);
+            var remoteTopology =
+                    new ZLinkServiceTopologyRegistry(remoteDescriptor, remotePort.stateLane());
+            try (var local =
+                            ZLinkJavaRawMeshNodeTesting.create(
+                                    "hello-retry",
+                                    localPort,
+                                    localRouter,
+                                    localDescriptor,
+                                    localTopology,
+                                    java.util.Map.of(),
+                                    Runnable::run);
+                    var remote =
+                            ZLinkJavaRawMeshNodeTesting.create(
+                                    "hello-retry",
+                                    remotePort,
+                                    remoteRouter,
+                                    remoteDescriptor,
+                                    remoteTopology,
+                                    java.util.Map.of(),
+                                    Runnable::run);
+                    var events =
+                            new PeerReadyEvents(
+                                    remoteRid,
+                                    localPort.stateLane()::isOnLane,
+                                    local::readyPeerCount)) {
+                var endpoint = "inproc://snapshot-" + java.util.UUID.randomUUID();
+                localRouter.options().probe(true);
+                remoteRouter.options().probe(true);
+                localRouter.bind(endpoint);
+                remoteRouter.connect(endpoint);
+                localPort.ensureReceivePollerRegistered(localRouter);
+                remotePort.ensureReceivePollerRegistered(remoteRouter);
+                long deadline = System.nanoTime() + IO_DEADLINE.toNanos();
+                while (localPort.routesSnapshot(localRouter).isEmpty()
+                        || remotePort.routesSnapshot(remoteRouter).isEmpty()) {
+                    assertTrue(System.nanoTime() < deadline, "Core must select both routes");
+                    Thread.onSpinWait();
+                }
+                // No pump/tick/framework route observation precedes these first HELLOs.
+                localPort
+                        .send(
+                                localRouter,
+                                remoteRid,
+                                List.of(
+                                        wire.encodeAdmission(
+                                                ServiceWireConstants.COMMAND_HELLO,
+                                                localDescriptor)))
+                        .toCompletableFuture()
+                        .join();
+                remotePort
+                        .send(
+                                remoteRouter,
+                                localRid,
+                                List.of(
+                                        wire.encodeAdmission(
+                                                ServiceWireConstants.COMMAND_HELLO,
+                                                remoteDescriptor)))
+                        .toCompletableFuture()
+                        .join();
+                long delivered =
+                        dispatchNext(
+                                local, localPort, localRouter, ServiceWireConstants.COMMAND_HELLO);
+                assertNotEquals(0L, delivered);
+                assertEquals(
+                        ZLinkJavaRawMeshNode.routeConnectionId(delivered),
+                        localTopology.peer(remoteRid).orElseThrow().connectionId());
+                dispatchNext(remote, remotePort, remoteRouter, ServiceWireConstants.COMMAND_HELLO);
+                dispatchNext(remote, remotePort, remoteRouter, ServiceWireConstants.COMMAND_ADMIT);
+                dispatchNext(local, localPort, localRouter, ServiceWireConstants.COMMAND_ADMIT);
+                assertTrue(localTopology.isReady(remoteRid));
+                assertTrue(remoteTopology.isReady(localRid));
+                assertEquals(1, local.readyPeerCount());
+                assertEquals(1, remote.readyPeerCount());
+                assertTrue(local.observePeerRoute(remoteRid).ready());
+                assertTrue(remote.observePeerRoute(localRid).ready());
+                assertTrue(mutations.get() > 0, "actual admission mutates the injected source map");
+                assertEquals(0, offOwnerMutations.get());
+                assertEquals(1, events.count.get());
+                assertEquals(0, events.ownerCallbacks.get());
+                assertEquals(
+                        1,
+                        events.observedReadyCount.get(),
+                        "READY handler reenters the final root");
+
+                // Finish the original UPDATEs before the next expected command in each FIFO.
+                dispatchNext(local, localPort, localRouter, ServiceWireConstants.COMMAND_UPDATE);
+                assertEquals(
+                        ServiceWireConstants.COMMAND_UPDATE,
+                        receive(remotePort, remoteRouter, wire));
+                local.observePeerAdmissionExpectation(
+                                remoteRid,
+                                remoteDescriptor.advertisedEndpoint(),
+                                remoteDescriptor.lifecycleGeneration(),
+                                "mismatched-security",
+                                systems.zlink.framework.locations.ZLinkMeshNodeObjectRole.SERVER)
+                        .toCompletableFuture()
+                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                remotePort
+                        .send(
+                                remoteRouter,
+                                localRid,
+                                List.of(
+                                        wire.encodeAdmission(
+                                                ServiceWireConstants.COMMAND_HELLO,
+                                                remoteDescriptor)))
+                        .toCompletableFuture()
+                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                dispatchNext(local, localPort, localRouter, ServiceWireConstants.COMMAND_HELLO);
+                assertEquals(
+                        ServiceWireConstants.COMMAND_REJECT,
+                        receive(remotePort, remoteRouter, wire));
+                assertEquals(1, events.warnings.get());
+                assertEquals(
+                        2,
+                        events.observedCallbacks.get(),
+                        "both synchronous log callbacks were observed");
+                assertEquals(
+                        0,
+                        events.ownerCallbacks.get(),
+                        "warning and READY handlers run after the owner commit");
+                assertEquals(
+                        1,
+                        events.observedReadyCount.get(),
+                        "warning handler can reenter the published root");
+                assertEquals(0, offOwnerMutations.get());
+            }
+        }
+    }
+
+    @Test
+    void invalidAdmissionPayloadStillRejectsAfterTheHeaderClaimCloses() throws Exception {
+        var localRid = RoutingId.from("invalid-local");
+        var remoteRid = RoutingId.from("invalid-remote");
+        var wire = new ZLinkServiceM6AWireCodec();
+        try (var context = Zlink.createContext();
+                var remotePort = new ZLinkJavaRawServicePort(context)) {
+            var localPort = new ZLinkJavaRawServicePort(context);
+            var localRouter = localPort.openRouter(localRid, true);
+            var localDescriptor = descriptor(localRid, 2);
+            var topology = new ZLinkServiceTopologyRegistry(localDescriptor, localPort.stateLane());
+            try (var local =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "hello-retry",
+                            localPort,
+                            localRouter,
+                            localDescriptor,
+                            topology,
+                            java.util.Map.of(),
+                            Runnable::run)) {
+                var remoteRouter = remotePort.openRouter(remoteRid);
+                remoteRouter.options().probe(true);
+                String endpoint = "inproc://invalid-admission-" + java.util.UUID.randomUUID();
+                localRouter.bind(endpoint);
+                remoteRouter.connect(endpoint);
+                var invalid =
+                        new systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec()
+                                .encode(
+                                        new systems.zlink.framework.runtime.internal.service
+                                                .ZLinkServiceWireFrame(
+                                                ServiceWireConstants.COMMAND_ADMIT, 0, List.of()))
+                                .getFirst();
+                remotePort
+                        .send(remoteRouter, localRid, List.of(invalid))
+                        .toCompletableFuture()
+                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                dispatchNext(local, localPort, localRouter, ServiceWireConstants.COMMAND_ADMIT);
+                assertTrue(topology.peers().isEmpty());
+                assertTrue(local.peers().isEmpty());
+                assertEquals(
+                        ServiceWireConstants.COMMAND_REJECT,
+                        wire.decodeHeader(receiveFrame(remotePort, remoteRouter)).command());
+            }
+        }
+    }
 
     @Test
     void helloAwaitingAdmitUsesLivenessPeriodsRatherThanReceiveRotations() throws Exception {
@@ -43,7 +255,10 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
             var router = port.openRouter(localRid);
             set(node, "router", router);
             set(node, "localDescriptor", descriptor(localRid));
-            set(node, "topology", new ZLinkServiceTopologyRegistry(descriptor(localRid)));
+            set(
+                    node,
+                    "topology",
+                    new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane()));
             String endpoint = "inproc://hello-cadence-" + java.util.UUID.randomUUID();
             peer.bind(endpoint);
             node.connectPeer(endpoint, remoteRid);
@@ -96,16 +311,20 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "hello-retry");
                 var peerPort = new ZLinkJavaRawServicePort(context);
-                var peer = peerPort.openRouter(remoteRid)) {
+                var peer = peerPort.openRouter(remoteRid);
+                var readyEvents = new PeerReadyEvents(remoteRid)) {
             var port = (ZLinkJavaRawServicePort) field(node, "port");
             var router = port.openRouter(localRid);
             String endpoint = "inproc://hello-retry-" + java.util.UUID.randomUUID();
             router.bind(endpoint);
             set(node, "router", router);
             set(node, "localDescriptor", descriptor(localRid));
-            set(node, "topology", new ZLinkServiceTopologyRegistry(descriptor(localRid)));
+            set(
+                    node,
+                    "topology",
+                    new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane()));
             if (withIntent) {
-                String peerEndpoint = descriptor(remoteRid).advertisedEndpoint();
+                String peerEndpoint = descriptor(remoteRid, 2).advertisedEndpoint();
                 peer.bind(peerEndpoint);
                 node.connectPeer(peerEndpoint, remoteRid);
             } else {
@@ -176,11 +395,31 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                             List.of(
                                     wire.encodeAdmission(
                                             ServiceWireConstants.COMMAND_HELLO,
-                                            descriptor(remoteRid))))
+                                            descriptor(remoteRid, 2))))
                     .toCompletableFuture()
                     .get(2, java.util.concurrent.TimeUnit.SECONDS);
             dispatchNext(node, port, router);
             assertEquals(ServiceWireConstants.COMMAND_ADMIT, receive(peerPort, peer, wire));
+            assertEquals(
+                    0,
+                    node.status().admittedPeerCount(),
+                    "successful local ADMIT submission must not make the peer ready");
+            assertEquals(0, readyEvents.count.get());
+            assertFalse(node.isCanonicalRelocationTargetAdmitted(remoteRid, 1));
+            assertFalse(node.observePeerRoute(remoteRid).ready());
+            assertEquals(0, node.readyPeerCount());
+            assertEquals(0, node.readyChannelMemberCount("orders"));
+            assertTrue(node.selectPlacementTarget().isEmpty());
+            try (var body = Message.from(new byte[] {1})) {
+                assertNotReady(node.sendNode(remoteRid, null, List.of(body)));
+                assertNotReady(
+                        node.requestNode(
+                                remoteRid, null, List.of(body), IO_DEADLINE, null, null, null));
+                assertNotReady(node.sendChannel("orders", null, List.of(body)));
+                assertNotReady(
+                        node.requestChannel(
+                                "orders", null, List.of(body), IO_DEADLINE, null, null, null));
+            }
             var publish =
                     ZLinkJavaRawMeshNode.class.getDeclaredMethod(
                             "publishLocalDescriptor", ZLinkServiceNodeDescriptor.class);
@@ -215,7 +454,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                             List.of(
                                     wire.encodeAdmission(
                                             ServiceWireConstants.COMMAND_HELLO,
-                                            descriptor(remoteRid))))
+                                            descriptor(remoteRid, 2))))
                     .toCompletableFuture()
                     .get(2, java.util.concurrent.TimeUnit.SECONDS);
             dispatchNext(node, port, router);
@@ -230,22 +469,124 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                             List.of(
                                     wire.encodeAdmission(
                                             ServiceWireConstants.COMMAND_ADMIT,
-                                            descriptor(remoteRid))))
+                                            descriptor(remoteRid, 2))))
                     .toCompletableFuture()
                     .get(2, java.util.concurrent.TimeUnit.SECONDS);
             dispatchNext(node, port, router);
+            assertEquals(1, node.status().admittedPeerCount());
+            assertEquals(1, readyEvents.count.get());
+            assertTrue(node.isCanonicalRelocationTargetAdmitted(remoteRid, 1));
+            assertTrue(node.observePeerRoute(remoteRid).ready());
+            assertEquals(1, node.readyPeerCount());
+            assertEquals(1, node.readyChannelMemberCount("orders"));
+            assertEquals(remoteRid, node.selectPlacementTarget().orElseThrow());
             byte[] update = receiveFrame(peerPort, peer);
             assertEquals(
                     descriptor(localRid, 2),
                     wire.decodeAdmission(update, ServiceWireConstants.COMMAND_UPDATE, localRid));
-            tick(node, System.nanoTime());
-            // ADMIT sends UPDATE and the next management turn sends a liveness probe.
-            // That FIFO marker proves the turn sent no further HELLO, without a timed absence test.
-            int command;
-            do {
-                command = receive(peerPort, peer, wire);
-                assertNotEquals(ServiceWireConstants.COMMAND_HELLO, command);
-            } while (command != ServiceWireConstants.COMMAND_LIVENESS_PROBE);
+            peerPort.send(
+                            peer,
+                            localRid,
+                            List.of(
+                                    wire.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_ADMIT,
+                                            descriptor(remoteRid, 2))))
+                    .toCompletableFuture()
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            dispatchNext(node, port, router);
+            assertEquals(ServiceWireConstants.COMMAND_UPDATE, receive(peerPort, peer, wire));
+            assertEquals(1, node.status().admittedPeerCount(), "duplicate ADMIT is idempotent");
+            assertEquals(
+                    1, readyEvents.count.get(), "duplicate ADMIT must not announce ready again");
+            assertEquals(1, node.readyChannelMemberCount("orders"));
+            try (var body = Message.from(new byte[] {1})) {
+                node.sendNode(remoteRid, null, List.of(body))
+                        .toCompletableFuture()
+                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(ServiceWireConstants.COMMAND_NODE_SEND, receive(peerPort, peer, wire));
+                node.sendChannel("orders", null, List.of(body))
+                        .toCompletableFuture()
+                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(
+                        ServiceWireConstants.COMMAND_CHANNEL_SEND, receive(peerPort, peer, wire));
+            }
+            for (int period = 0; period < 2; period++) {
+                tick(node, System.nanoTime() + Duration.ofSeconds(5L * period).toNanos());
+                // A subsequent probe proves this management turn submitted no HELLO.
+                int command;
+                do {
+                    command = receive(peerPort, peer, wire);
+                    assertNotEquals(ServiceWireConstants.COMMAND_HELLO, command);
+                } while (command != ServiceWireConstants.COMMAND_LIVENESS_PROBE);
+            }
+        }
+    }
+
+    private static final class PeerReadyEvents extends java.util.logging.Handler
+            implements AutoCloseable {
+        private final java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
+        private final String message;
+        private final AtomicLong count = new AtomicLong();
+        private final AtomicLong warnings = new AtomicLong();
+        private final AtomicLong ownerCallbacks = new AtomicLong();
+        private final AtomicLong observedCallbacks = new AtomicLong();
+        private final AtomicLong observedReadyCount = new AtomicLong();
+        private final String warningSuffix;
+        private final java.util.function.BooleanSupplier isOnLane;
+        private final java.util.function.LongSupplier readyPeerCount;
+
+        PeerReadyEvents(RoutingId peer) {
+            this(peer, null, null);
+        }
+
+        PeerReadyEvents(
+                RoutingId peer,
+                java.util.function.BooleanSupplier isOnLane,
+                java.util.function.LongSupplier readyPeerCount) {
+            message = "ZLINK_FRAMEWORK_PEER_READY mesh=hello-retry peer=" + peer;
+            warningSuffix = " advertisedEndpoint=" + descriptor(peer, 2).advertisedEndpoint();
+            this.isOnLane = isOnLane;
+            this.readyPeerCount = readyPeerCount;
+            logger.addHandler(this);
+        }
+
+        @Override
+        public void publish(java.util.logging.LogRecord record) {
+            boolean ready = message.equals(record.getMessage());
+            boolean warning =
+                    record.getMessage().contains("expected-route-mismatch mismatchFields=")
+                            && record.getMessage().endsWith(warningSuffix);
+            if (ready) count.incrementAndGet();
+            if (warning) warnings.incrementAndGet();
+            if ((ready || warning) && isOnLane != null) {
+                observedCallbacks.incrementAndGet();
+                if (isOnLane.getAsBoolean()) ownerCallbacks.incrementAndGet();
+                observedReadyCount.set(readyPeerCount.getAsLong());
+            }
+        }
+
+        @Override
+        public void flush() {}
+
+        @Override
+        public void close() {
+            logger.removeHandler(this);
+        }
+    }
+
+    private static void assertNotReady(CompletionStage<?> result) {
+        var failure =
+                assertThrows(CompletionException.class, () -> result.toCompletableFuture().join());
+        var cause = failure.getCause();
+        if (cause instanceof ZlinkSubmitException submit) {
+            assertEquals(SubmitResult.NOT_CONNECTED, submit.getResult());
+        } else if (cause instanceof ZlinkRequestException request) {
+            assertEquals(RequestResult.NOT_CONNECTED, request.getResult());
+        } else {
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    assertInstanceOf(ZLinkFrameworkException.class, cause).kind());
         }
     }
 
@@ -265,10 +606,21 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
         }
     }
 
-    private static void dispatchNext(
+    private static long dispatchNext(
             ZLinkJavaRawMeshNode node, ZLinkJavaRawServicePort port, RouterSocket router)
             throws Exception {
+        return dispatchNext(node, port, router, -1);
+    }
+
+    private static long dispatchNext(
+            ZLinkJavaRawMeshNode node,
+            ZLinkJavaRawServicePort port,
+            RouterSocket router,
+            int expectedCommand)
+            throws Exception {
+        long deadline = System.nanoTime() + IO_DEADLINE.toNanos();
         while (true) {
+            assertTrue(System.nanoTime() < deadline, "expected admission record before deadline");
             assertTrue(port.waitForReadable(router, IO_DEADLINE));
             var inbound = port.receive(router);
             assertNotNull(inbound);
@@ -276,19 +628,26 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 inbound.close();
                 continue;
             }
-            var dispatch =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "dispatch", ZLinkJavaRawServicePort.Inbound.class);
-            dispatch.setAccessible(true);
-            dispatch.invoke(node, inbound);
-            return;
+            long generation = inbound.routeGeneration();
+            if (expectedCommand >= 0) {
+                try {
+                    assertEquals(
+                            expectedCommand,
+                            new ZLinkServiceM6AWireCodec()
+                                    .decodeHeader(inbound.frames().getFirst())
+                                    .command());
+                } catch (Throwable failure) {
+                    inbound.close();
+                    throw failure;
+                }
+            }
+            node.dispatch(inbound);
+            return generation;
         }
     }
 
-    private static void tick(ZLinkJavaRawMeshNode node, long now) throws Exception {
-        var method = ZLinkJavaRawMeshNode.class.getDeclaredMethod("tickLiveness", long.class);
-        method.setAccessible(true);
-        method.invoke(node, now);
+    private static void tick(ZLinkJavaRawMeshNode node, long now) {
+        node.tickLiveness(now);
     }
 
     private static void invoke(Object owner, String name) throws Exception {
@@ -320,17 +679,17 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 1,
                 revision,
                 "inproc://" + rid,
-                List.of(),
+                List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
                 revision == 1
                         ? ZLinkServiceNodeDescriptor.State.PREPARING
                         : ZLinkServiceNodeDescriptor.State.SERVING,
                 ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
                 1,
                 List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
-                ZLinkServiceNodeDescriptor.ObjectRole.NONE,
+                ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
                 1,
                 1,
-                0,
+                100,
                 0,
                 0);
     }

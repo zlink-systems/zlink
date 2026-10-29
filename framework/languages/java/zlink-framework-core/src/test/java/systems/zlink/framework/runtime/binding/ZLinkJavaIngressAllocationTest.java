@@ -290,14 +290,16 @@ public final class ZLinkJavaIngressAllocationTest {
             try (var packet = Message.from("allocation.packet");
                     var body = Message.from(new byte[PAYLOAD_BYTES])) {
                 try (var reply =
-                        source.requestNode(
-                                        target,
-                                        null,
-                                        List.of(packet, body),
-                                        REQUEST_TIMEOUT,
-                                        null,
-                                        null,
-                                        null)
+                        source.inSourceTurn(
+                                        () ->
+                                                source.requestNode(
+                                                        target,
+                                                        null,
+                                                        List.of(packet, body),
+                                                        REQUEST_TIMEOUT,
+                                                        null,
+                                                        null,
+                                                        null))
                                 .toCompletableFuture()
                                 .get(5, TimeUnit.SECONDS)) {
                     assertNotNull(reply);
