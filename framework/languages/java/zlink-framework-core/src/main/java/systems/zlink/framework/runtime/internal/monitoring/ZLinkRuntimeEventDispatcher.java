@@ -22,18 +22,6 @@ public final class ZLinkRuntimeEventDispatcher {
                 .log("ZLink runtime task failed");
     }
 
-    public void publishObserverFailure(String sourceName, String callbackName, Throwable failure) {
-        Throwable actual = Objects.requireNonNull(failure, "failure");
-        LOGGER.atError()
-                .setCause(actual)
-                .addKeyValue("event", RUNTIME_ERROR_EVENT)
-                .addKeyValue("kind", "message_flow_observer_failed")
-                .addKeyValue("source", sourceName)
-                .addKeyValue("callback", callbackName)
-                .addKeyValue("exception_type", actual.getClass().getName())
-                .log("ZLink runtime callback failed");
-    }
-
     public void publishHostStatus(ZLinkFrameworkRuntimeStatus status) {
         publishHostStatus(status, null, null);
     }

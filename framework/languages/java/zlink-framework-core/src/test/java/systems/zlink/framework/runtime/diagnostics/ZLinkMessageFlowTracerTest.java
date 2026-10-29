@@ -43,6 +43,76 @@ import java.util.logging.Logger;
 
 // MFLOW-001/002/003/011: mode gating + runtime live toggle + structured output.
 class ZLinkMessageFlowTracerTest {
+    @org.junit.jupiter.api.BeforeEach
+    void finishPriorProviderDeliveriesBeforeInstallingTestHandlers() {
+        ZLinkTelemetryTestFence.awaitIdle();
+    }
+
+    @Test
+    void blockedLoggerDoesNotBlockProducer() throws Exception {
+        blockedLoggerProducer(false);
+    }
+
+    @Test
+    void blockedLoggerRunsOnDedicatedThread() throws Exception {
+        blockedLoggerProducer(true);
+    }
+
+    private static void blockedLoggerProducer(boolean checkThread) throws Exception {
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var delivered = new AtomicReference<Thread>();
+        Handler handler =
+                new Handler() {
+                    public void publish(LogRecord record) {
+                        delivered.set(Thread.currentThread());
+                        entered.countDown();
+                        try {
+                            release.await();
+                        } catch (InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+
+                    public void flush() {}
+
+                    public void close() {}
+                };
+        boolean parents = logger.getUseParentHandlers();
+        Level level = logger.getLevel();
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        logger.addHandler(handler);
+        var tracer = tracer(options(ZLinkMessageFlowLogMode.NORMAL));
+        var returned = new java.util.concurrent.CountDownLatch(1);
+        Thread producer =
+                new Thread(
+                        () -> {
+                            tracer.trace(flow(ZLinkMessageFlowOutcome.DISPATCHED));
+                            returned.countDown();
+                        },
+                        "message-operation-producer");
+        try {
+            producer.start();
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            if (checkThread) {
+                assertTrue(delivered.get() != producer, "provider must use dedicated worker");
+            } else {
+                assertTrue(
+                        returned.await(1, java.util.concurrent.TimeUnit.SECONDS),
+                        "producer must return while provider remains blocked");
+            }
+        } finally {
+            release.countDown();
+            producer.join(5000);
+            ZLinkTelemetryTestFence.awaitIdle();
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(parents);
+            logger.setLevel(level);
+        }
+    }
+
     @Test
     void channelTraceGateAllocatesNothingWhenOff() {
         var off = tracer(options(ZLinkMessageFlowLogMode.OFF));
@@ -60,6 +130,22 @@ class ZLinkMessageFlowTracerTest {
                         > 0L);
     }
 
+    private static void awaitRecords(List<String> records, int count) {
+        long end = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        synchronized (records) {
+            while (records.size() < count) {
+                long remaining = end - System.nanoTime();
+                if (remaining <= 0) throw new AssertionError("provider receipt missing");
+                try {
+                    java.util.concurrent.TimeUnit.NANOSECONDS.timedWait(records, remaining);
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(failure);
+                }
+            }
+        }
+    }
+
     private static ZLinkDispatchOptionsRegistration options(ZLinkMessageFlowLogMode mode) {
         ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
         options.messageFlow(mode);
@@ -71,11 +157,11 @@ class ZLinkMessageFlowTracerTest {
                 options, ZLinkHandlerActivator.reflection(), Runnable::run);
     }
 
-    private static ZLinkMessageFlowEvent flow(ZLinkMessageFlowOutcome phase) {
+    static ZLinkMessageFlowEvent flow(ZLinkMessageFlowOutcome phase) {
         return flow(phase, null);
     }
 
-    private static ZLinkMessageFlowEvent flow(ZLinkMessageFlowOutcome phase, Long messageSize) {
+    static ZLinkMessageFlowEvent flow(ZLinkMessageFlowOutcome phase, Long messageSize) {
         return new ZLinkMessageFlowEvent(
                 phase,
                 ZLinkDispatchErrorSurface.CHANNEL,
@@ -134,7 +220,10 @@ class ZLinkMessageFlowTracerTest {
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
-                        records.add(record.getMessage());
+                        synchronized (records) {
+                            records.add(record.getMessage());
+                            records.notifyAll();
+                        }
                     }
 
                     @Override
@@ -160,6 +249,7 @@ class ZLinkMessageFlowTracerTest {
                 for (boolean direct : new boolean[] {true, false}) {
                     for (boolean explicitFlow : new boolean[] {true, false}) {
                         for (boolean explicitSession : new boolean[] {true, false}) {
+                            ZLinkTelemetryTestFence.awaitIdle();
                             records.clear();
                             var options = options(ZLinkMessageFlowLogMode.NORMAL);
                             options.traceSampleRate(0.0d);
@@ -193,6 +283,7 @@ class ZLinkMessageFlowTracerTest {
                                 point.trace(event);
                             }
                             assertEquals(1L, tracer.tracedCount());
+                            awaitRecords(records, 1);
                             assertEquals(1, records.size());
                             String record = records.getFirst();
                             assertTrue(record.contains(" corr=corr-1"), record);
@@ -215,6 +306,7 @@ class ZLinkMessageFlowTracerTest {
                 }
             }
         } finally {
+            ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
             logger.setUseParentHandlers(useParentHandlers);
             logger.setLevel(previousLevel);
@@ -229,7 +321,10 @@ class ZLinkMessageFlowTracerTest {
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
-                        records.add(record.getMessage());
+                        synchronized (records) {
+                            records.add(record.getMessage());
+                            records.notifyAll();
+                        }
                     }
 
                     @Override
@@ -272,6 +367,7 @@ class ZLinkMessageFlowTracerTest {
 
             assertEquals(1L, reporter.reportedCount());
             assertEquals(1L, reporter.flow().tracedCount());
+            awaitRecords(records, 1);
             assertEquals(1, records.size());
             String record = records.getFirst();
             assertTrue(record.contains("event_id=zlink.dispatch_error"), record);
@@ -285,6 +381,7 @@ class ZLinkMessageFlowTracerTest {
             assertFalse(record.contains(" session="), record);
             assertEquals(0L, reporter.flow().providerFailureCount());
         } finally {
+            ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
             logger.setUseParentHandlers(useParentHandlers);
             logger.setLevel(previousLevel);
@@ -299,7 +396,10 @@ class ZLinkMessageFlowTracerTest {
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
-                        records.add(record.getMessage());
+                        synchronized (records) {
+                            records.add(record.getMessage());
+                            records.notifyAll();
+                        }
                     }
 
                     @Override
@@ -321,6 +421,7 @@ class ZLinkMessageFlowTracerTest {
         try (var ignored = ZLinkFlowContext.enter(ambient)) {
             for (boolean explicitFlow : new boolean[] {true, false}) {
                 for (boolean switchAfterBegin : new boolean[] {true, false}) {
+                    ZLinkTelemetryTestFence.awaitIdle();
                     records.clear();
                     var options = options(ZLinkMessageFlowLogMode.NORMAL);
                     var live = new AtomicReference<>(ZLinkMessageFlowLogMode.NORMAL);
@@ -342,6 +443,7 @@ class ZLinkMessageFlowTracerTest {
                     point.trace(event);
 
                     assertEquals(1L, tracer.tracedCount());
+                    awaitRecords(records, 1);
                     assertEquals(1, records.size());
                     String record = records.getFirst();
                     assertTrue(record.contains(" corr=corr-1"), record);
@@ -367,6 +469,7 @@ class ZLinkMessageFlowTracerTest {
                 }
             }
         } finally {
+            ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
             logger.setUseParentHandlers(useParentHandlers);
             logger.setLevel(previousLevel);
@@ -403,7 +506,10 @@ class ZLinkMessageFlowTracerTest {
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
-                        records.add(record.getMessage());
+                        synchronized (records) {
+                            records.add(record.getMessage());
+                            records.notifyAll();
+                        }
                     }
 
                     @Override
@@ -420,10 +526,12 @@ class ZLinkMessageFlowTracerTest {
         try {
             tracer(options).trace(flow(ZLinkMessageFlowOutcome.RECEIVED, 42L));
 
+            awaitRecords(records, 1);
             assertEquals(1, records.size());
             assertFalse(records.getFirst().contains("message_size_bytes="));
             assertFalse(records.getFirst().contains("size=42"));
         } finally {
+            ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
             logger.setUseParentHandlers(useParentHandlers);
             logger.setLevel(level);
@@ -843,7 +951,10 @@ class ZLinkMessageFlowTracerTest {
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
-                        records.add(record.getMessage());
+                        synchronized (records) {
+                            records.add(record.getMessage());
+                            records.notifyAll();
+                        }
                     }
 
                     @Override
@@ -882,6 +993,7 @@ class ZLinkMessageFlowTracerTest {
                         null,
                         error);
             }
+            awaitRecords(records, 2);
             assertEquals(2, records.size());
             for (String record : records) {
                 assertTrue(
@@ -890,6 +1002,7 @@ class ZLinkMessageFlowTracerTest {
                         record);
             }
         } finally {
+            ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
             logger.setUseParentHandlers(useParentHandlers);
             logger.setLevel(previousLevel);
