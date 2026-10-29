@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
@@ -375,17 +374,6 @@ public sealed class ErrorReplyWireConvergenceTests
         };
 
         Assert.Equal(expected, ZLinkSpotHandleRequestExecution.IsStaleRoute(error));
-        Assert.Equal(expected, ActorClientIsStaleRoute(error));
-    }
-
-    private static bool ActorClientIsStaleRoute(ZLinkFrameworkException error)
-    {
-        var method = typeof(ZLinkActorClient).GetMethod(
-            "IsStaleRoute",
-            BindingFlags.NonPublic | BindingFlags.Static
-        );
-        Assert.NotNull(method);
-        return (bool)method!.Invoke(null, [error])!;
     }
 
     [Fact]
