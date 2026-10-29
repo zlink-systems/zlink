@@ -8121,13 +8121,12 @@ TEST (ActorMaintenanceJoin, CanonicalReplayMaterializesBodyWithoutInvocationCach
     header.channel_name = mesh_name;
     header.message_name = record_t::packet_name;
     header.content_type = "application/json";
-    wire::application_payload_t::multipart_t parts;
-    parts.push_back (fw::runtime::messaging::envelope_codec_t{}.encode_header (header));
-    parts.push_back (zlink::message_t::from (zlink::detail::json_profile::encode (record_t{73})));
+    auto encoded = fw::detail::encode_actor_packet (
+      header, zlink::message_t::from (zlink::detail::json_profile::encode (record_t{73})));
     wire::frozen_application_record_t frozen;
     frozen.kind = wire::frozen_record_kind_t::actor_send;
     frozen.body = wire::frozen_actor_application_body_t{
-      {}, wire::application_payload_t::from_parts (std::move (parts))};
+      {}, wire::application_payload_t::from_parts (std::move (encoded).take_items ())};
     auto record = std::make_shared<fw::runtime::serial_application_record_t> ();
     record->payload ().emplace ();
     record->payload ()->application_record = std::move (frozen);
