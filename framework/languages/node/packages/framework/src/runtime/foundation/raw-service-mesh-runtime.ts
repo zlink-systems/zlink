@@ -927,8 +927,10 @@ export class RawServiceMeshRuntime {
     if (request.reply === undefined || request.correlation === undefined) {
       throw new TypeError('Reply requires a request mailbox record.');
     }
-    const header = encodeReplyHeader(request.correlation, terminalResult, failureCode);
-    request.reply(terminalResult === 0 ? [header, this.applicationFrame(payload)] : [header]);
+    request.reply([
+      encodeReplyHeader(request.correlation, terminalResult, failureCode),
+      ...(terminalResult === 0 ? [this.applicationFrame(payload)] : [])
+    ]);
   }
 
   async pumpOne(

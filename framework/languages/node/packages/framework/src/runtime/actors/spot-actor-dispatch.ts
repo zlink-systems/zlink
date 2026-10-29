@@ -173,20 +173,16 @@ export class ZLinkSpotActorDispatcher {
     return this.execute(async () => {
       const descriptor = this.requirePacket(ZLinkActorPacketKind.Send, actor, packetName);
       const message = decode(resolveMessageTypeForDecode(descriptor.messageType));
-      this.options.onHandlerStart?.();
       await this.invokeHandler<ZLinkSpotActorSendHandler<ZLinkSpot, ZLinkActor, TMessage>, void>(
         actor,
         descriptor,
-        (handler, method) =>
-          runActorHandlerWithDeferredJoins(() =>
-            method.call(
-              handler,
-              this.options.spot,
-              actor,
-              this.createContext(packetName, context),
-              message
-            )
-          )
+        (handler, method) => {
+          const handlerContext = this.createContext(packetName, context);
+          return runActorHandlerWithDeferredJoins(() => {
+            this.options.onHandlerStart?.();
+            return method.call(handler, this.options.spot, actor, handlerContext, message);
+          });
+        }
       );
     });
   }
@@ -262,20 +258,16 @@ export class ZLinkSpotActorDispatcher {
     return this.execute(async () => {
       const descriptor = this.requirePacket(ZLinkActorPacketKind.Request, actor, packetName);
       const request = decode(resolveMessageTypeForDecode(descriptor.messageType));
-      this.options.onHandlerStart?.();
       return await this.invokeHandler<
         ZLinkSpotActorRequestHandler<ZLinkSpot, ZLinkActor, TRequest, TReply>,
         TResult
-      >(actor, descriptor, (handler, method) =>
-        runActorHandlerWithDeferredJoins(
-          () =>
-            method.call(
-              handler,
-              this.options.spot,
-              actor,
-              this.createContext(packetName, context),
-              request
-            ),
+      >(actor, descriptor, (handler, method) => {
+        const handlerContext = this.createContext(packetName, context);
+        return runActorHandlerWithDeferredJoins(
+          () => {
+            this.options.onHandlerStart?.();
+            return method.call(handler, this.options.spot, actor, handlerContext, request);
+          },
           (reply) =>
             afterReply(reply, {
               metadata: ZLinkMessageMetadataEmpty.values,
@@ -288,8 +280,8 @@ export class ZLinkSpotActorDispatcher {
                   metadata: ZLinkMessageMetadataEmpty.values,
                   compressPayload: false
                 })
-        )
-      );
+        );
+      });
     });
   }
 

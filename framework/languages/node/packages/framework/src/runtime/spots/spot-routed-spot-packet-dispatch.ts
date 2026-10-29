@@ -206,13 +206,14 @@ export class ZLinkRoutedSpotPacketDispatch {
           resolveFirstHandlerTurn?.();
           resolveFirstHandlerTurn = undefined;
           context.activationRecord?.onHandlerTurnStarted?.();
-          releaseApplicationJobPermitBeforeHandler();
-          response = await handler.handle(current.spot, payload, {
+          const handlerContext = {
             channelName: context.channelName,
             contentType: context.contentType,
             packetName: packetName!,
             metadata: zlinkMessageMetadata({})
-          });
+          };
+          releaseApplicationJobPermitBeforeHandler();
+          response = await handler.handle(current.spot, payload, handlerContext);
         }
       } catch (error) {
         rejectFirstHandlerTurn?.(error);

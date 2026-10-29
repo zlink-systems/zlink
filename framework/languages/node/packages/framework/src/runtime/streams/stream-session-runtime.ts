@@ -504,7 +504,6 @@ export class ZLinkStreamSessionRuntime {
                 this.context.routingId === undefined ? undefined : String(this.context.routingId)
             }
           );
-          releaseApplicationJobPermitBeforeHandler();
           flowIfEnabled(
             this.options.dispatchErrors?.flow,
             ZLinkMessageFlowOutcome.Dispatched
@@ -517,15 +516,20 @@ export class ZLinkStreamSessionRuntime {
             sourceRid:
               this.context.routingId === undefined ? undefined : String(this.context.routingId)
           });
-          await session.onDispatch?.(
-            createSessionDispatchContext(inboundHeader, dispatchActor),
-            wrapFrameworkPayloadMessage(
+          if (session.onDispatch !== undefined) {
+            const sessionDispatchContext = createSessionDispatchContext(
+              inboundHeader,
+              dispatchActor
+            );
+            const frameworkPayload = wrapFrameworkPayloadMessage(
               dispatchPayload,
               this.options.messageSerializers,
               streamCodecContentType(inboundHeader.codec),
               inboundHeader.name
-            )
-          );
+            );
+            releaseApplicationJobPermitBeforeHandler();
+            await session.onDispatch(sessionDispatchContext, frameworkPayload);
+          }
           if (streamKind === ZLinkDispatchMessageKind.Send) {
             flowIfEnabled(
               this.options.dispatchErrors?.flow,

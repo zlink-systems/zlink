@@ -4,48 +4,78 @@ const test = require('node:test');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+function trace(registryOnly = false) {
+  const result = spawnSync(
+    process.execPath,
+    ['--no-opt', '--expose-gc', path.join(__dirname, 'fixtures/typed-request-allocation-trace.js')],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        NODE_TEST_CONTEXT: undefined,
+        ZLINK_TRACE_REGISTRY_ONLY: registryOnly ? '1' : '0'
+      }
+    }
+  );
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  return JSON.parse(result.stdout.trim());
+}
+
 // Spec 08 E3 requires the registry entry and its deadline. With --no-opt,
-// V8 records the bigint id, entry, deadline number and earliest deadline
-// read as four containers. The id was already in the old budget.
+// The fractional clock reference materializes the bigint id, entry, clock value
+// and deadline value as four containers. The id was already in the old budget.
 // Calibrate the added three in the same snapshot, and separately reject any
 // extra per-request allocation in the registration implementation itself.
+// Both cases use the same GC and compilation flags, and a fixed set of paired
+// windows separates steady per-call cost from one-time VM allocations.
 function registrationOverhead(metrics) {
   assert.ok(metrics.identity.objects >= metrics.count, 'identity control is observed');
-  assert.ok(metrics.requiredRegistration.objects >= metrics.count, 'required registration is observed');
-  assert.ok(metrics.requiredRegistration.objects <= 4 * metrics.control.objects,
-    'registration adds containers beyond the required entry, identity and deadline values');
-  const registered = metrics.sites.filter(site =>
-    !site.registrationControl && site.module === '/runtime/foundation/operation-registry.js' &&
-    ['registerObserved', 'notePending'].includes(site.name)
-  ).reduce((sum, site) => sum + site.objects, 0);
-  assert.ok(registered <= metrics.requiredRegistration.objects,
-    'request registration exceeds the standalone required registration control');
+  assert.ok(
+    metrics.requiredRegistration.objects >= metrics.count,
+    'required registration is observed'
+  );
+  assert.ok(
+    metrics.requiredRegistration.objects <= 4 * metrics.control.objects,
+    'registration adds containers beyond the required entry, identity and deadline values'
+  );
+  const registered = metrics.sites
+    .filter(
+      (site) =>
+        !site.registrationControl &&
+        site.module === '/runtime/foundation/operation-registry.js' &&
+        ['registerObserved', 'notePending'].includes(site.name)
+    )
+    .reduce((sum, site) => sum + site.objects, 0);
+  assert.ok(
+    registered <= metrics.requiredRegistration.objects,
+    'request registration exceeds the standalone required registration control'
+  );
   return Math.max(0, metrics.requiredRegistration.objects - metrics.identity.objects);
 }
 
-test('registry allocation trace includes required registration and rejects an allocating control', async (t) => {
-  const { trace } = require('./fixtures/typed-request-allocation-trace');
-  const metrics = await trace({ registryOnly: true });
+test('registry allocation trace includes required registration and rejects an allocating control', (t) => {
+  const metrics = trace(true);
+  t.diagnostic(JSON.stringify(metrics));
   assert.ok(registrationOverhead(metrics) > 0);
   const allocating = structuredClone(metrics);
   allocating.requiredRegistration.objects += metrics.control.objects;
   assert.throws(() => registrationOverhead(allocating), /beyond the required entry/);
   const requestAllocating = structuredClone(metrics);
-  requestAllocating.sites.push({ module: '/runtime/foundation/operation-registry.js',
-    name: 'registerObserved', objects: metrics.control.objects, registrationControl: false });
+  // Exceed the whole reference even when clock boxes are attributed outside
+  // registerObserved. The positive registration bound remains unchanged.
+  requestAllocating.sites.push({
+    module: '/runtime/foundation/operation-registry.js',
+    name: 'registerObserved',
+    objects: metrics.requiredRegistration.objects,
+    registrationControl: false
+  });
   assert.throws(() => registrationOverhead(requestAllocating), /exceeds the standalone/);
-  t.diagnostic(JSON.stringify(metrics));
 });
 
 test('V8 trace records completion owner allocations and an allocating control', (t) => {
-  const result = spawnSync(
-    process.execPath,
-    ['--no-opt', '--expose-gc', path.join(__dirname, 'fixtures/typed-request-allocation-trace.js')],
-    { encoding: 'utf8', env: { ...process.env, NODE_TEST_CONTEXT: undefined } }
-  );
-  assert.ifError(result.error);
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  const metrics = JSON.parse(result.stdout.trim());
+  const metrics = trace();
+  t.diagnostic(JSON.stringify(metrics));
   assert.equal(metrics.count, 100);
   assert.ok(metrics.control.objects >= metrics.count, 'allocating control is observed');
   assert.ok(metrics.total.objects > metrics.count, 'request allocations are observed');
@@ -59,7 +89,8 @@ test('V8 trace records completion owner allocations and an allocating control', 
   assert.ok(observer.objects >= metrics.count, 'binding observer container is observed');
   assert.ok(completionObjects >= metrics.count, 'completion owner is observed');
   const budget = 23 * metrics.control.objects + registrationOverhead(metrics);
-  assert.ok(completionObjects <= budget,
-    `${completionObjects} completion objects exceed ${budget} control containers including required registration`);
-  t.diagnostic(JSON.stringify(metrics));
+  assert.ok(
+    completionObjects <= budget,
+    `${completionObjects} completion objects exceed ${budget} control containers including required registration`
+  );
 });

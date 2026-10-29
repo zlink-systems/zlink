@@ -2396,9 +2396,6 @@ test('ClientServer readiness and HWM admission retain one logical request entry'
     OperationRegistry
   } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
   const {
-    waitRequestReply
-  } = require('../../packages/framework/dist/runtime/messaging/request-deadline');
-  const {
     bindingRequestReply
   } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
   const register = t.mock.method(OperationRegistry.prototype, 'register');
@@ -2456,4 +2453,3 @@ function physicalRequest(work) {
     return entry.promise;
   };
 }
-

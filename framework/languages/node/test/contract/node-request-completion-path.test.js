@@ -139,6 +139,50 @@ test('an observed remote request registers once without a registry Promise', asy
   }
 });
 
+for (const method of ['requestToNode', 'requestToChannel']) {
+  test(`observed remote ${method} expires through Framework maintenance exactly once`, (t) => {
+    t.mock.method(performance, 'now', () => 100);
+    const runtime = createRuntime();
+    const events = [];
+    let failBinding;
+    let submissions = 0;
+    runtime.router = {
+      request(_target, _parts, _timeout, _reply, fail) {
+        submissions++;
+        failBinding = fail;
+      }
+    };
+    const peer = { descriptor: { nodeRoutingId: 'target' } };
+    runtime.topology.readyPeer = () => peer;
+    runtime.topology.selectChannel = () => peer;
+    runtime.isPeerRouteReady = () => true;
+    const observer = {
+      operationCompleted: (id, value, kind) => events.push({ id, value, kind }),
+      operationFailed: (id, error, kind) => events.push({ id, error, kind })
+    };
+    try {
+      const pending = runtime[method]('target', payload(), 10, undefined, observer, 7);
+      assert.equal(submissions, 1);
+      assert.equal(runtime.pendingOperationCount, 1);
+      assert.equal(runtime.operations.nextDeadlineMs(), 110);
+      assert.equal(runtime.expireOperations(109, Infinity), 0);
+      assert.equal(events.length, 0);
+      assert.equal(runtime.expireOperations(110, Infinity), 1);
+      assert.equal(runtime.pendingOperationCount, 0);
+      assert.equal(events.length, 1);
+      assert.equal(events[0].id, pending.id);
+      assert.equal(events[0].kind, 7);
+      assert.equal(events[0].error.name, 'OperationTimeoutError');
+      failBinding(new Error('late binding failure'));
+      assert.equal(runtime.expireOperations(120, Infinity), 0);
+      assert.equal(events.length, 1);
+    } finally {
+      runtime.operations.close();
+      runtime.mailbox.close();
+    }
+  });
+}
+
 test('observed registry terminals reach the observer exactly once on reply, timeout and close', () => {
   const now = { value: 0 };
   const registry = new OperationRegistry({ now: () => now.value });
