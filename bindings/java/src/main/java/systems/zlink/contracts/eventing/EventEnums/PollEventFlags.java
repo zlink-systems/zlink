@@ -22,11 +22,10 @@ public enum PollEventFlags {
      * produce one; WRITABLE send recovery is signaled through POLLOUT.
      */
     POLLCOMPLETION(32),
-    /**
-     * A ROUTER's selected routes changed; read
-     * {@code RouterSocket.routesSnapshot()}.
-     */
-    POLLROUTE(64);
+    /** A ROUTER's selected routes changed; read {@code RouterSocket.routesSnapshot()}. */
+    POLLROUTE(64),
+    /** Connection attempts changed; read the socket connectionAttemptsSnapshot(). */
+    POLLCONNECT(128);
 
     private final int mask;
 

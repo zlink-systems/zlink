@@ -2,7 +2,6 @@
 
 package systems.zlink.contracts.sockets;
 
-import java.util.List;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyOperation;
@@ -10,10 +9,16 @@ import systems.zlink.contracts.messaging.ReplyToken;
 import systems.zlink.contracts.messaging.RequestOperation;
 import systems.zlink.contracts.messaging.SendOperation;
 
+import java.util.List;
+
 /** Routes messages to peers addressed by routing id; the request/reply server side. */
 public interface RouterSocket extends Socket {
     void bind(String endpoint);
     void connect(String endpoint);
+
+    /** Copies the current Core connection-attempt facts and acknowledges their readiness. */
+    List<ConnectionAttempt> connectionAttemptsSnapshot();
+
     void unbind(String endpoint);
     void disconnect(String endpoint);
     void disconnectRid(RoutingId routingId);

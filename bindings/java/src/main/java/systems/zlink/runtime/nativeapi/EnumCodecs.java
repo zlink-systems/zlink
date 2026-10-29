@@ -2,13 +2,17 @@
 
 package systems.zlink.runtime.nativeapi;
 
-import systems.zlink.contracts.sockets.AutoHwmProfile;
-import systems.zlink.contracts.sockets.AutoHwmRecalcReason;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.MonitorSourceKind;
 import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.sockets.AutoHwmProfile;
+import systems.zlink.contracts.sockets.AutoHwmRecalcReason;
+import systems.zlink.contracts.sockets.ConnectionAttemptState;
+import systems.zlink.contracts.sockets.ConnectionFailureKind;
+import systems.zlink.contracts.sockets.ConnectionFailureStage;
 import systems.zlink.contracts.sockets.RidDuplicatePolicy;
 import systems.zlink.contracts.sockets.SocketType;
+
 import java.util.EnumSet;
 
 /**
@@ -16,6 +20,44 @@ import java.util.EnumSet;
  */
 public final class EnumCodecs {
     private EnumCodecs() {
+    }
+
+    public static ConnectionAttemptState connectionAttemptStateFromValue(int value) {
+        return switch (value) {
+            case 0 -> ConnectionAttemptState.CONNECTING;
+            case 1 -> ConnectionAttemptState.CONNECTED;
+            case 2 -> ConnectionAttemptState.ATTEMPT_FAILED;
+            default -> throw invalid("ConnectionAttemptState", value);
+        };
+    }
+
+    public static ConnectionFailureKind connectionFailureKindFromValue(int value) {
+        return switch (value) {
+            case 0 -> ConnectionFailureKind.NONE;
+            case 1 -> ConnectionFailureKind.REFUSED;
+            case 2 -> ConnectionFailureKind.ENDPOINT_MISSING;
+            case 3 -> ConnectionFailureKind.TIMED_OUT;
+            case 4 -> ConnectionFailureKind.UNREACHABLE;
+            case 5 -> ConnectionFailureKind.NAME_RESOLUTION;
+            case 6 -> ConnectionFailureKind.AUTH_FAILED;
+            case 7 -> ConnectionFailureKind.PROTOCOL_FAILED;
+            case 8 -> ConnectionFailureKind.CONNECTION_LOST;
+            case 9 -> ConnectionFailureKind.OTHER;
+            default -> throw invalid("ConnectionFailureKind", value);
+        };
+    }
+
+    public static ConnectionFailureStage connectionFailureStageFromValue(int value) {
+        return switch (value) {
+            case 0 -> ConnectionFailureStage.NONE;
+            case 1 -> ConnectionFailureStage.RESOLVE;
+            case 2 -> ConnectionFailureStage.TRANSPORT;
+            case 3 -> ConnectionFailureStage.TLS;
+            case 4 -> ConnectionFailureStage.WEBSOCKET;
+            case 5 -> ConnectionFailureStage.CORE_HANDSHAKE;
+            case 6 -> ConnectionFailureStage.ESTABLISHED;
+            default -> throw invalid("ConnectionFailureStage", value);
+        };
     }
 
     public static int autoHwmProfileValue(AutoHwmProfile value) {
@@ -131,14 +173,7 @@ public final class EnumCodecs {
     }
 
     public static int pollEventFlagValue(PollEventFlags value) {
-        return switch (value) {
-            case POLLIN -> 1;
-            case POLLOUT -> 2;
-            case POLLERR -> 4;
-            case POLLPRI -> 8;
-            case POLLCOMPLETION -> 32;
-            case POLLROUTE -> 64;
-        };
+        return value.mask();
     }
 
     public static int pollEventMask(PollEventFlags... values) {
