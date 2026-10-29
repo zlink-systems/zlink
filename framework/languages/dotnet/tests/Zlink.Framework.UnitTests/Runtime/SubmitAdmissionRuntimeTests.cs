@@ -132,13 +132,21 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
                 return true;
             }
         );
-        var create = nodeType
-            .GetMethods(flags)
-            .Single(method =>
-                method.Name == "CreateOperation"
-                && method.GetParameters().Length == 7
-                && method.GetParameters()[1].ParameterType == typeof(MeshOperationId)
-            );
+        var create = nodeType.GetMethod(
+            "CreateOperation",
+            flags,
+            [
+                typeof(MeshOperationKind),
+                typeof(MeshOperationId),
+                typeof(ulong).MakeByRefType(),
+                typeof(ZLinkManagedMeshNode.PendingOperation).MakeByRefType(),
+                typeof(bool),
+                typeof(TimeSpan?),
+                typeof(TimeSpan?),
+                typeof(ZLinkRequestAdmission),
+                typeof(ulong?),
+            ]
+        )!;
         object?[] arguments =
         [
             MeshOperationKind.ActorRequest,
@@ -148,15 +156,12 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
             awaited,
             null,
             null,
+            null,
+            null,
         ];
-        create.Invoke(node, arguments);
+        // Capture the original caller task before the dispatcher clears its receiver.
+        var callerTask = (Task?)create.Invoke(node, arguments);
         var pending = arguments[3]!;
-        // Capture the caller task before terminal delivery clears the index's
-        // reference to its dispatcher receiver (spec 01 §10.1).
-        var receiver = pending.GetType().GetProperty("AwaitedCompletion", flags)!.GetValue(pending);
-        var callerTask = receiver is null
-            ? null
-            : (Task)receiver.GetType().GetProperty("Task")!.GetValue(receiver)!;
         try
         {
             await (Task)
@@ -170,6 +175,9 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
                             new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
                             TimeSpan.FromSeconds(5),
                             default(CancellationToken),
+                            null,
+                            null,
+                            null,
                         ]
                     )!;
             if (awaited)

@@ -191,12 +191,33 @@ public sealed partial class StatefulServiceRuntimeTests
         };
         LivenessField<Dictionary<RoutingId, ZLinkMeshPeer>>(owner, "_peersByRid").Add(rid, peer);
         SetLivenessField(owner, "_socket", socket);
+        var delivered = 0;
+        typeof(ZLinkManagedMeshNode)
+            .GetEvent(
+                "PeerConnectionIntentRemoved",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            )!
+            .GetAddMethod(nonPublic: true)!
+            .Invoke(
+                owner,
+                [
+                    new Func<RoutingId, Action?>(removed =>
+                    {
+                        Assert.Equal(rid, removed);
+                        return () => delivered++;
+                    }),
+                ]
+            );
         try
         {
             // A closed concrete socket exercises failure before logical removal.
             // It is never registered with the process receive pool.
             socket.Dispose();
+            owner.DisconnectPeer(rid, checked(peer.LifecycleGeneration + 1));
+            Assert.Equal(0, delivered);
+            Assert.Equal(1U, owner.Status().AdmittedPeerCount);
             Assert.Throws<ObjectDisposedException>(() => owner.DisconnectPeer(rid));
+            Assert.Equal(1, delivered);
             Assert.Single(owner.Peers(), candidate => candidate.RoutingId == rid);
             Assert.Equal(1U, owner.Status().AdmittedPeerCount);
         }

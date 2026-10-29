@@ -116,11 +116,11 @@ public sealed partial class RelocationBehaviorConformanceTests
     }
 
     [Fact]
-    public Task ActorJoin_Entry_replays_a_replaced_prepare_peer() =>
+    public Task ActorJoin_Entry_preserves_source_after_replaced_prepare_peer() =>
         VerifyPrepareFailureAsync(userSpot: false, replayable: true);
 
     [Fact]
-    public Task ActorJoin_UserSpot_replays_a_replaced_prepare_peer() =>
+    public Task ActorJoin_UserSpot_preserves_source_after_replaced_prepare_peer() =>
         VerifyPrepareFailureAsync(userSpot: true, replayable: true);
 
     [Fact]
@@ -131,18 +131,53 @@ public sealed partial class RelocationBehaviorConformanceTests
     public Task ActorJoin_UserSpot_restores_FIFO_before_failure_completion() =>
         VerifyPrepareFailureAsync(userSpot: true, replayable: false);
 
-    private static async Task VerifyPrepareFailureAsync(bool userSpot, bool replayable)
+    [Fact]
+    public Task Canonical_prepare_native_timeout_preserves_typed_deadline_failure() =>
+        VerifyPrepareFailureAsync(
+            userSpot: false,
+            replayable: true,
+            PrepareRollbackFault.NativeTimeout
+        );
+
+    [Theory]
+    [InlineData(PrepareRollbackFault.StoreFailure)]
+    [InlineData(PrepareRollbackFault.ForeignAuthority)]
+    [InlineData(PrepareRollbackFault.LeaseExpiredBeforeFifo)]
+    public Task ActorJoin_keeps_source_closed_when_prepare_rollback_is_unconfirmed(
+        PrepareRollbackFault fault
+    ) =>
+        VerifyPrepareFailureAsync(
+            userSpot: fault == PrepareRollbackFault.LeaseExpiredBeforeFifo,
+            replayable: true,
+            fault
+        );
+
+    public enum PrepareRollbackFault
+    {
+        None,
+        StoreFailure,
+        ForeignAuthority,
+        LeaseExpiredBeforeFifo,
+        NativeTimeout,
+    }
+
+    private static async Task VerifyPrepareFailureAsync(
+        bool userSpot,
+        bool replayable,
+        PrepareRollbackFault fault = PrepareRollbackFault.None
+    )
     {
         var path = Environment.GetEnvironmentVariable(
             RelocationBehaviorHost.FlowPathEnvironmentVariable
         );
         if (path is not null)
-            path += $".{(userSpot ? "user" : "entry")}-{(replayable ? "replay" : "restore")}";
+            path +=
+                $".{(userSpot ? "user" : "entry")}-{(replayable ? "replay" : "restore")}-{fault}";
         using var listener = path is null ? null : new TestHostMessageFlowListener(path);
         var trace = new RelocationBehaviorTrace
         {
-            ExpectedJoinAccepted = replayable,
-            ExpectedDeliveryNode = replayable ? "target" : "source",
+            ExpectedJoinAccepted = false,
+            ExpectedDeliveryNode = "source",
             ConfigureTarget = context =>
                 context.Handlers.AddActorPacket<BeginUserSpotBehaviorJoinHandler, BehaviorActor>(
                     nameof(BeginBehaviorJoin)
@@ -150,9 +185,15 @@ public sealed partial class RelocationBehaviorConformanceTests
         };
         trace.ReleaseTargetLifecycle.SetResult();
         trace.ReleaseSourceLeave.SetResult();
-        var transport = new CanonicalRelocationTransportProbe(trace);
+        var transport = new CanonicalRelocationTransportProbe(
+            trace,
+            holdTargetReady: fault == PrepareRollbackFault.NativeTimeout
+        );
         transport.ReleaseCutoverSend.SetResult();
         var store = new RecordingLocationStore(new ZLinkInMemoryProviderLocationStore(), trace);
+        var sourceTime =
+            fault == PrepareRollbackFault.LeaseExpiredBeforeFifo ? new ManualTimeProvider() : null;
+        sourceTime?.AdvanceWallClockOnly(DateTimeOffset.UtcNow - sourceTime.GetUtcNow());
         var relocationStore = new SynchronizedRelocationStore();
         var actorId = $"restore-actor-{Guid.NewGuid():N}";
         var targetSpotId = $"restore-target-{Guid.NewGuid():N}";
@@ -164,6 +205,8 @@ public sealed partial class RelocationBehaviorConformanceTests
             relocationStore,
             registerTargetSpot: userSpot,
             canonicalTransportProbe: transport,
+            timeProvider: sourceTime,
+            locationTimeProvider: sourceTime,
             configureServices: services =>
                 services.AddTransient<BeginUserSpotBehaviorJoinHandler>(),
             spotType: "restore-source-spot"
@@ -223,7 +266,18 @@ public sealed partial class RelocationBehaviorConformanceTests
         var prepares = new ConcurrentQueue<ZLinkServiceWireCodec.RelocationPrepareRecord>();
         var socketField = typeof(ZLinkManagedMeshNode).GetField("_socket", PrivateInstance)!;
         var socket = (IRouterSocket)socketField.GetValue(native)!;
-        socketField.SetValue(native, PrepareRequestRecorder.Create(socket, prepares));
+        var nativePrepare = new TaskCompletionSource<RequestSubmission>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        socketField.SetValue(
+            native,
+            PrepareRequestRecorder.Create(
+                socket,
+                prepares,
+                fault == PrepareRollbackFault.NativeTimeout ? TimeSpan.FromMilliseconds(250) : null,
+                submission => nativePrepare.TrySetResult(submission)
+            )
+        );
         var injected = 0;
         using var progress = new ActivityListener
         {
@@ -242,6 +296,16 @@ public sealed partial class RelocationBehaviorConformanceTests
                     || Interlocked.Exchange(ref injected, 1) != 0
                 )
                     return;
+                if (fault == PrepareRollbackFault.NativeTimeout)
+                {
+                    var nativeId = prepares.Single().RelocationId;
+                    store.HeldSourceAbort = Guid.ParseExact(
+                        $"{nativeId.High:x16}{nativeId.Low:x16}",
+                        "N"
+                    );
+                    trace.Record("nativePrepareSubmitted");
+                    return;
+                }
                 // Publish the replacement peer snapshot before its route notification.
                 // No binding state or Core selection policy is changed by this fixture.
                 var lane = (ZLinkStateLane)
@@ -262,6 +326,8 @@ public sealed partial class RelocationBehaviorConformanceTests
                     })
                 );
                 trace.Record("preparePeerReplaced");
+                var id = prepares.Single().RelocationId;
+                store.HeldSourceAbort = Guid.ParseExact($"{id.High:x16}{id.Low:x16}", "N");
             },
         };
         ActivitySource.AddActivityListener(progress);
@@ -274,7 +340,7 @@ public sealed partial class RelocationBehaviorConformanceTests
         trace.OnPublicJoinCompleted = async _ =>
         {
             Assert.Empty(trace.DeliveredMarkers);
-            if (!replayable)
+            if (fault == PrepareRollbackFault.None)
             {
                 Assert.False(sourceState.Handoff.IsSourceMigrationInProgress);
                 var mailbox = (ZLinkActorSerialExecutor)
@@ -324,9 +390,179 @@ public sealed partial class RelocationBehaviorConformanceTests
                 transport.ReleasePrepareCall.SetException(
                     new InvalidOperationException("Injected prepare failure.")
                 );
+            if (fault == PrepareRollbackFault.NativeTimeout)
+            {
+                await transport.TargetPreparedBeforeReadySend.Task.WaitAsync(
+                    TimeSpan.FromSeconds(5)
+                );
+                var submission = await nativePrepare.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await submission.Admitted.WaitAsync(TimeSpan.FromSeconds(5));
+                var terminal = await Assert.ThrowsAsync<ZlinkRequestException>(async () =>
+                    await submission.Reply.WaitAsync(TimeSpan.FromSeconds(5))
+                );
+                Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, terminal.Result);
+                var mapped = Assert.IsType<ZLinkFrameworkException>(
+                    await transport.PrepareFailure.Task.WaitAsync(TimeSpan.FromSeconds(5))
+                );
+                if (path is not null)
+                    File.WriteAllText(
+                        path + ".native-terminal",
+                        $"Admitted={submission.Admitted.IsCompletedSuccessfully}\nNative={terminal.Result}\nPublic={mapped.Kind}\n{mapped}"
+                    );
+                Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, mapped.Kind);
+                Assert.Same(terminal, mapped.InnerException);
+                store.ReleaseSourceAbortWrite.TrySetResult();
+                await trace.WaitAsync("completionCallbackStarted");
+                completionRelease.TrySetResult();
+                await source
+                    .Runtime.WaitForAcceptedActorHandoffsAsync(CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Single(prepares);
+                return;
+            }
+            if (replayable)
+            {
+                var completed = await Task.WhenAny(
+                    store.SourceAbortWriteStarted.Task,
+                    trace.WaitAsync("completionCallbackStarted")
+                );
+                Assert.Same(store.SourceAbortWriteStarted.Task, completed);
+                Assert.True(sourceState.Handoff.IsSourceMigrationInProgress);
+                Assert.Empty(trace.DeliveredMarkers);
+                Assert.Empty(trace.JoinCompletions);
+                Assert.False(saved.IsCompleted);
+                Assert.False(prefix.IsCompleted);
+                Assert.Equal(0, trace.TargetAuthorityMutationCount);
+                if (fault == PrepareRollbackFault.StoreFailure)
+                    store.SourceAbortWriteFailure = new IOException(
+                        "Injected source Preserve write failure."
+                    );
+                if (fault == PrepareRollbackFault.ForeignAuthority)
+                {
+                    var captured = Assert.IsType<ZLinkAuthoritySnapshot>(store.CapturedSourceAbort);
+                    Assert.True(
+                        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                            captured.Payload.Span,
+                            out var projection
+                        )
+                    );
+                    Assert.True(
+                        ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
+                            projection.SteadyAuthorityPayload.Span,
+                            out var steady
+                        )
+                    );
+                    Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                        await new ZLinkProviderLocationRepository(
+                            store
+                        ).CompareExchangeAuthorityAsync(
+                            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
+                            captured.StoreVersion,
+                            new ZLinkAuthorityMutation.Put(
+                                ZLinkActorAuthorityPayloadCodec.Encode(
+                                    steady with
+                                    {
+                                        NodeRid = RoutingId.From("foreign-source"),
+                                    }
+                                ),
+                                ZLinkAuthorityGenerationTransition.Preserve,
+                                null,
+                                null
+                            )
+                        )
+                    );
+                }
+                if (fault == PrepareRollbackFault.LeaseExpiredBeforeFifo)
+                {
+                    var owner = source.Runtime.LocationLifecycle!.OwnerToken;
+                    Assert.True(source.Runtime.LocationLifecycle.IsOwnerLeaseValid(owner));
+                    sourceTime!.AdvanceMonotonicOnly(
+                        source.Runtime.Registration.Locations.Options.OwnerLeaseTtl
+                    );
+                    Assert.False(source.Runtime.LocationLifecycle.IsOwnerLeaseValid(owner));
+                }
+                store.ReleaseSourceAbortWrite.SetResult();
+            }
             await trace.WaitAsync("completionCallbackStarted");
-            if (!replayable)
-                Assert.Equal(2, await sourceFifoAdmission.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            if (fault != PrepareRollbackFault.None)
+            {
+                Assert.Empty(trace.DeliveredMarkers);
+                Assert.Single(prepares);
+                Assert.Equal(1, store.SourceAbortWriteCount);
+                Assert.IsType<ZLinkActorJoinCompletion.Failed>(
+                    Assert.Single(trace.JoinCompletions).Completion
+                );
+                Assert.False(transport.ReadyReplyReceived.Task.IsCompleted);
+                Assert.False(transport.CutoverSendStarted.Task.IsCompleted);
+                Assert.Equal(0, trace.TargetAuthorityMutationCount);
+                completionRelease.SetResult();
+                await source
+                    .Runtime.WaitForAcceptedActorHandoffsAsync(CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Empty(trace.DeliveredMarkers);
+                if (fault != PrepareRollbackFault.LeaseExpiredBeforeFifo)
+                {
+                    Assert.True(sourceState.Handoff.IsSourceMigrationInProgress);
+                    Assert.Null(store.ConfirmedSourceAbort);
+                    Assert.False(saved.IsCompleted);
+                    Assert.False(prefix.IsCompleted);
+                }
+                else
+                {
+                    Assert.True(sourceState.Handoff.RetainsSourceTombstone);
+                    Assert.Equal(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        (
+                            await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                                await saved.WaitAsync(TimeSpan.FromSeconds(5))
+                            )
+                        ).Kind
+                    );
+                    Assert.Equal(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        (
+                            await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                                await prefix.WaitAsync(TimeSpan.FromSeconds(5))
+                            )
+                        ).Kind
+                    );
+                }
+                return;
+            }
+            Assert.Equal(2, await sourceFifoAdmission.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+            if (replayable)
+            {
+                var confirmed = Assert.IsType<ZLinkAuthoritySnapshot>(store.ConfirmedSourceAbort);
+                var captured = Assert.IsType<ZLinkAuthoritySnapshot>(store.CapturedSourceAbort);
+                Assert.NotEqual(captured.StoreVersion, confirmed.StoreVersion);
+                Assert.Equal(captured.ObjectGeneration, confirmed.ObjectGeneration);
+                Assert.Equal(captured.AuthorityOwnerGeneration, confirmed.AuthorityOwnerGeneration);
+                Assert.Equal(captured.OwnerId, confirmed.OwnerId);
+                Assert.Equal(captured.OwnerLeaseGeneration, confirmed.OwnerLeaseGeneration);
+                Assert.True(
+                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                        captured.Payload.Span,
+                        out var capturedProjection
+                    )
+                );
+                Assert.Equal(
+                    capturedProjection.SteadyAuthorityPayload.ToArray(),
+                    confirmed.Payload.ToArray()
+                );
+                Assert.False(
+                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                        confirmed.Payload.Span,
+                        out _
+                    )
+                );
+                Assert.True(
+                    trace.Events.ToList().IndexOf("sourcePreserveConfirmed")
+                        < trace.Events.ToList().IndexOf("completionCallbackStarted")
+                );
+                Assert.False(transport.ReadyReplyReceived.Task.IsCompleted);
+                Assert.False(transport.CutoverSendStarted.Task.IsCompleted);
+                Assert.Equal(0, trace.TargetAuthorityMutationCount);
+            }
             Assert.False(saved.IsCompleted);
             Assert.False(prefix.IsCompleted);
             completionRelease.SetResult();
@@ -341,10 +577,18 @@ public sealed partial class RelocationBehaviorConformanceTests
             if (replayable)
             {
                 Assert.Equal(1, injected);
-                Assert.True(prepares.Count >= 2);
+                Assert.Single(prepares);
                 Assert.Single(prepares.Select(record => record.RelocationId).Distinct());
                 Assert.Single(prepares.Select(record => record.DeadlineUnixMs).Distinct());
                 Assert.Single(prepares.Select(record => record.TargetAttemptGeneration).Distinct());
+                Assert.Equal(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    Assert
+                        .IsType<ZLinkActorJoinCompletion.Failed>(
+                            trace.JoinCompletions.Single().Completion
+                        )
+                        .Kind
+                );
             }
             else
             {
@@ -371,6 +615,8 @@ public sealed partial class RelocationBehaviorConformanceTests
             completionRelease.TrySetResult();
             trace.ReleaseJoinHandler.TrySetResult();
             transport.ReleasePrepareCall.TrySetResult();
+            transport.ReleaseTargetReadySend.TrySetResult();
+            store.ReleaseSourceAbortWrite.TrySetResult();
         }
     }
 
@@ -418,16 +664,22 @@ internal class PrepareRequestRecorder : DispatchProxy
 {
     private IRouterSocket _socket = null!;
     private ConcurrentQueue<ZLinkServiceWireCodec.RelocationPrepareRecord> _prepares = null!;
+    private TimeSpan? _nativePrepareTimeout;
+    private Action<RequestSubmission>? _observePrepareSubmission;
 
     internal static IRouterSocket Create(
         IRouterSocket socket,
-        ConcurrentQueue<ZLinkServiceWireCodec.RelocationPrepareRecord> prepares
+        ConcurrentQueue<ZLinkServiceWireCodec.RelocationPrepareRecord> prepares,
+        TimeSpan? nativePrepareTimeout = null,
+        Action<RequestSubmission>? observePrepareSubmission = null
     )
     {
         var proxy = Create<IRouterSocket, PrepareRequestRecorder>();
         var recorder = (PrepareRequestRecorder)(object)proxy;
         recorder._socket = socket;
         recorder._prepares = prepares;
+        recorder._nativePrepareTimeout = nativePrepareTimeout;
+        recorder._observePrepareSubmission = observePrepareSubmission;
         return proxy;
     }
 
@@ -435,7 +687,12 @@ internal class PrepareRequestRecorder : DispatchProxy
     {
         ArgumentNullException.ThrowIfNull(method);
         if (method.Name == nameof(IRouterSocket.Request))
-            return new RecordedRequest(_socket.Request((RoutingId)arguments![0]!), _prepares);
+            return new RecordedRequest(
+                _socket.Request((RoutingId)arguments![0]!),
+                _prepares,
+                _nativePrepareTimeout,
+                _observePrepareSubmission
+            );
         try
         {
             return method.Invoke(_socket, arguments);
@@ -449,10 +706,13 @@ internal class PrepareRequestRecorder : DispatchProxy
 
     private sealed class RecordedRequest(
         RequestOperation request,
-        ConcurrentQueue<ZLinkServiceWireCodec.RelocationPrepareRecord> prepares
+        ConcurrentQueue<ZLinkServiceWireCodec.RelocationPrepareRecord> prepares,
+        TimeSpan? nativePrepareTimeout,
+        Action<RequestSubmission>? observePrepareSubmission
     ) : RequestOperation, RequestSubmitOperation
     {
         private RequestSubmitOperation _submission = null!;
+        private bool _prepare;
 
         public RequestSubmitOperation Message(Message message)
         {
@@ -463,7 +723,10 @@ internal class PrepareRequestRecorder : DispatchProxy
                     out _
                 )
             )
+            {
+                _prepare = true;
                 prepares.Enqueue(prepare!);
+            }
             _submission = _submission is null
                 ? request.Message(message)
                 : _submission.Message(message);
@@ -472,13 +735,18 @@ internal class PrepareRequestRecorder : DispatchProxy
 
         public RequestSubmitOperation Timeout(TimeSpan timeout)
         {
-            _submission = _submission.Timeout(timeout);
+            _submission = _submission.Timeout(_prepare ? nativePrepareTimeout ?? timeout : timeout);
             return this;
         }
 
         public IReadOnlyList<Message> Submit() => _submission.Submit();
 
-        public RequestSubmission Async(CancellationToken cancellationToken = default) =>
-            _submission.Async(cancellationToken);
+        public RequestSubmission Async(CancellationToken cancellationToken = default)
+        {
+            var submission = _submission.Async(cancellationToken);
+            if (_prepare)
+                observePrepareSubmission?.Invoke(submission);
+            return submission;
+        }
     }
 }
