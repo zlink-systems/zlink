@@ -251,6 +251,7 @@ public sealed partial class StatefulServiceRuntimeTests
     private sealed class CapturingMeshSocketContext(IContext inner) : IContext
     {
         public IRouterSocket? Router { get; private set; }
+        public Action? BeforeSend { get; set; }
         public ZlinkConnectException? DisconnectFailure { get; set; }
         public int DisconnectRidCalls { get; private set; }
         public IContextOptions Options => inner.Options;
@@ -259,7 +260,7 @@ public sealed partial class StatefulServiceRuntimeTests
         {
             var router = inner.CreateRouterSocket();
             Router = router;
-            if (DisconnectFailure is null)
+            if (DisconnectFailure is null && BeforeSend is null)
                 return router;
 
             var proxy = DispatchProxy.Create<IRouterSocket, CapturingRouterSocketProxy>();
@@ -272,7 +273,8 @@ public sealed partial class StatefulServiceRuntimeTests
                         return;
                     DisconnectFailure = null;
                     throw failure;
-                }
+                },
+                () => BeforeSend?.Invoke()
             );
             return proxy;
         }
@@ -308,17 +310,26 @@ public sealed partial class StatefulServiceRuntimeTests
         public class CapturingRouterSocketProxy : DispatchProxy
         {
             private IRouterSocket _inner = null!;
+            internal IRouterSocket Native => _inner;
             private Action? _beforeDisconnectRid;
+            private Action? _beforeSend;
 
-            public void Initialize(IRouterSocket inner, Action beforeDisconnectRid)
+            public void Initialize(
+                IRouterSocket inner,
+                Action beforeDisconnectRid,
+                Action? beforeSend = null
+            )
             {
                 _inner = inner;
                 _beforeDisconnectRid = beforeDisconnectRid;
+                _beforeSend = beforeSend;
             }
 
             protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
             {
                 ArgumentNullException.ThrowIfNull(targetMethod);
+                if (targetMethod.Name == nameof(IRouterSocket.Send))
+                    _beforeSend?.Invoke();
                 if (targetMethod.Name == nameof(IRouterSocket.DisconnectRid))
                     _beforeDisconnectRid?.Invoke();
                 try
