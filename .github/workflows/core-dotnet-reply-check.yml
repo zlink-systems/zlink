@@ -18,7 +18,82 @@ permissions:
   contents: read
 
 jobs:
+  prepare-packages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      candidate_sha: ${{ steps.source.outputs.candidate_sha }}
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      ZLinkFrameworkTargetFrameworks: net10.0
+    steps:
+      - name: Checkout candidate source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+
+      - name: Resolve candidate source once
+        id: source
+        shell: bash
+        run: echo "candidate_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          package-manager-cache: false
+
+      # The public binding's Linux payload must be verified on its native host.
+      - name: Prepare source packages with verified Linux Core input
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ steps.source.outputs.candidate_sha }}
+        run: |
+          package_root="$RUNNER_TEMP/reply-check/packages"
+          nuget_source="$package_root/nuget"
+          mkdir -p "$nuget_source"
+          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
+          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
+          httpclient_version=$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' framework/languages/dotnet/VERSION)
+          test -n "$core_version"
+          test -n "$binding_version"
+          test -n "$httpclient_version"
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "$core_version" --platform linux-x64 --cache-dir .artifacts/core-release)
+          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj -c Release -o "$nuget_source" \
+            "-p:ZLinkCoreVersion=$core_version" -p:ZLinkCoreSource=local \
+            "-p:ZLinkLinuxX64NativeRoot=$core_prefix/lib" \
+            "-p:ZLinkCoreProvenancePath=$core_prefix/share/zlink/core-package-provenance.json"
+          dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj \
+            -c Release -o "$nuget_source"
+          test -s "$nuget_source/Zlink.$binding_version.nupkg"
+          test -s "$nuget_source/Zlink.HttpClient.$httpclient_version.nupkg"
+          cp "$core_prefix/share/zlink/core-package-provenance.json" \
+            "$package_root/binding-linux-payload-provenance.json"
+          printf 'candidate_sha=%s\nverification_sha=%s\ncore_version=%s\nbinding_version=%s\nhttpclient_version=%s\n' \
+            "$CANDIDATE_SHA" "$GITHUB_SHA" "$core_version" "$binding_version" "$httpclient_version" \
+            > "$package_root/source-and-packages.txt"
+          cd "$package_root"
+          shasum -a 256 nuget/*.nupkg binding-linux-payload-provenance.json source-and-packages.txt \
+            > package-sha256.txt
+
+      - name: Retain prepared packages and provenance
+        uses: actions/upload-artifact@v6
+        with:
+          name: reply-check-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reply-check/packages
+          if-no-files-found: error
+          retention-days: 14
+
   accepted-reply:
+    needs: prepare-packages
     runs-on: macos-15
     timeout-minutes: 60
     env:
@@ -38,7 +113,7 @@ jobs:
       - name: Checkout candidate source
         uses: actions/checkout@v5
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: ${{ needs.prepare-packages.outputs.candidate_sha }}
           path: candidate
           persist-credentials: false
 
@@ -48,15 +123,17 @@ jobs:
             8.0.x
             10.0.x
 
-      - uses: actions/setup-node@v5
+      - name: Download prepared source packages
+        uses: actions/download-artifact@v7
         with:
-          node-version: 20
-          package-manager-cache: false
+          name: reply-check-packages-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reply-check/packages
 
       - name: Build source Core and check accepted replies
         shell: bash
         working-directory: candidate
         env:
+          REPLY_CHECK_CANDIDATE_SHA: ${{ needs.prepare-packages.outputs.candidate_sha }}
           NUGET_PACKAGES: ${{ runner.temp }}/reply-check/nuget-cache
           REPLY_CHECK_RESULTS: ${{ runner.temp }}/reply-check/results
         run: |
