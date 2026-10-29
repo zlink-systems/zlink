@@ -418,7 +418,8 @@ class state_lane_t
     // Queues synchronous state work without waiting for it.  Its exception is
     // intentionally contained so one fire-and-forget callback cannot strand
     // the turns behind it.
-    bool try_post (std::function<void ()> work);
+    bool try_post (std::function<void ()> work,
+                   std::function<void (std::exception_ptr)> abandon = {});
 
     void throw_if_reentrant () const;
     bool is_on_lane () const noexcept;

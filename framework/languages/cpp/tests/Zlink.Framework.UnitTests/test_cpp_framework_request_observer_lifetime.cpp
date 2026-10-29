@@ -292,8 +292,10 @@ void verify_late_reply_after_registry_terminal ()
         require (submitted.result ().value (), "request was not admitted");
     }
     auto claim = fixture.claim ();
-    require (fixture.requester.expire_requests (std::chrono::steady_clock::now () + 10s) == 1,
-             "operation did not expire");
+    require (
+      fixture.requester.expire_requests (std::chrono::steady_clock::now () + 10s).result ().value ()
+        == 1,
+      "operation did not expire");
     fixture.wait (completed, 1);
     const auto receipt = fixture.requester.liveness ().connection (target);
     require (static_cast<bool> (receipt), "request connection receipt is missing");
