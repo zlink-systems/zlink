@@ -73,23 +73,6 @@ detail::backend::raw_message_t request_failure_reply_parts (std::uint64_t correl
       correlation, result, messaging::request_failure_mapper_t{}.reply_failure_code (result))};
 }
 
-// The same bounded surface axis serves accumulation and metric/flow projection.
-struct inbound_surface_t
-{
-    protocol::command send;
-    protocol::command request;
-    const char *metric_surface;
-    dispatch_error_surface_t flow_surface;
-};
-constexpr std::array inbound_surfaces{
-  inbound_surface_t{protocol::command::nodeSend, protocol::command::nodeRequest, "node",
-                    dispatch_error_surface_t::node},
-  inbound_surface_t{protocol::command::channelSend, protocol::command::channelRequest, "channel",
-                    dispatch_error_surface_t::route_mesh_channel},
-  inbound_surface_t{protocol::command::spotSend, protocol::command::spotRequest, "spot",
-                    dispatch_error_surface_t::spot_route},
-  inbound_surface_t{protocol::command::actorSend, protocol::command::actorRequest, "actor",
-                    dispatch_error_surface_t::spot_actor}};
 using ::zlink::framework::detail::mesh_trace_enabled;
 
 const char *admission_rejection_reason (peer_admission_result_t result) noexcept
@@ -413,10 +396,6 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
         if (registration.instrument)
             registration.instrument->AddCallback (&publish_peer_metrics, &registration);
     }
-    _drop_metric =
-      meter->CreateDoubleObservableCounter ("zlink.mesh_node.messages.dropped", "", "{message}");
-    if (_drop_metric)
-        _drop_metric->AddCallback (&publish_drop_metrics, this);
 }
 
 raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
@@ -424,8 +403,6 @@ raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
     for (auto &registration : _peer_metrics)
         if (registration.instrument)
             registration.instrument->RemoveCallback (&publish_peer_metrics, &registration);
-    if (_drop_metric)
-        _drop_metric->RemoveCallback (&publish_drop_metrics, this);
     if (!_options.runtime_failures->capture ([&] { close (); })) {
         _options.runtime_failures->retain (
           [context = std::move (_context), socket_mutex = std::move (_socket_mutex),
@@ -3105,22 +3082,6 @@ void raw_mesh_node_owner_t::publish_peer_metrics (opentelemetry::metrics::Observ
     observer->Observe (static_cast<double> (count),
                        {{"mesh_name", owner._options.descriptor.mesh_name},
                         {"source", owner._options.metric_source}});
-}
-
-void raw_mesh_node_owner_t::publish_drop_metrics (opentelemetry::metrics::ObserverResult result,
-                                                  void *state)
-{
-    const auto &owner = *static_cast<raw_mesh_node_owner_t *> (state);
-    auto observer = opentelemetry::nostd::get<
-      opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<double>>> (result);
-    for (std::size_t index = 0; index < inbound_surfaces.size (); ++index) {
-        observer->Observe (
-          static_cast<double> (owner._inbound_drops[index].load (std::memory_order_relaxed)),
-          {{"mesh_name", owner._options.descriptor.mesh_name},
-           {"surface", inbound_surfaces[index].metric_surface},
-           {"message_kind", "send"},
-           {"reason", "backpressure"}});
-    }
 }
 
 raw_mesh_pump_result_t

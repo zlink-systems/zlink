@@ -1954,7 +1954,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp
     "framework-unit;framework-regression;framework-actor;stream")
   target_link_libraries(test_cpp_framework_actor_gateway PRIVATE
-    zlink::framework_codec_protobuf)
+    zlink::framework_codec_protobuf opentelemetry-cpp::metrics)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_actor_terminal_sdk
+    COMMAND test_cpp_framework_actor_gateway --terminal-sdk
+    LABELS "framework-unit;framework-contract;framework-actor;framework-monitoring"
+    TIER contract
+    TIMEOUT 30)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   foreach(termination_case physical logical disconnect-then-shutdown)
