@@ -41,6 +41,7 @@ class channel_host_service_t final : public hosted_service_t, public hosted_serv
     void stop () noexcept override;
 
   private:
+    friend struct manual_channel_server_test_access_t;
     class server_loop_t;
     class subscriber_loop_t;
 

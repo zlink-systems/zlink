@@ -31,6 +31,12 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
         return true;
     }
 
+    std::size_t pending_work () const
+    {
+        std::lock_guard lock (_wake->mutex);
+        return _ready.size ();
+    }
+
     bool run_one ()
     {
         std::function<void ()> work;
