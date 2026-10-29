@@ -851,6 +851,11 @@ socket을 local endpoint에 binding한다. endpoint 문자열은
 - `wss://interface:port` (TLS 위의 WebSocket; `ZLINK_HAVE_WSS` build에서만)
 - `tls://interface:port` (TLS 암호화 TCP; `ZLINK_HAVE_TLS` build에서만)
 
+IP 기반 bind 주소의 주소 부분은 숫자 IP 주소로 먼저 해석한다. 해석되면 NIC의 주소 조회나
+DNS 조회 없이 그 주소를 사용한다. 숫자 IP 주소가 아니면 NIC 이름으로 조회하고, 해당 NIC가
+없으면 허용된 주소 이름 해석을 수행한다. `*`의 전체 interface 지정과 IPv6 주소의 대괄호
+표기는 그대로 지원한다.
+
 socket은 여러 endpoint에 binding할 수 있다. TCP의 경우 port 0을 지정하면
 시스템이 임시 port를 할당한다. 실제 endpoint를 가져오려면
 `ZLINK_OPT_LAST_ENDPOINT`를 사용한다.
