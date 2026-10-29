@@ -9,7 +9,6 @@ export interface ZLinkActorRoutedJoinTransport {
   canRouteChannel?(routerChannelId: string): boolean;
   canRoutePacketChannel?(routerChannelId: string): boolean;
   request<TReply>(
-    entry: ZLinkRequestResult<TReply>,
     routerChannelId: string,
     targetNodeRid: string,
     packetName: string | undefined,

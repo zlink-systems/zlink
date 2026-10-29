@@ -1,4 +1,3 @@
-const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
@@ -131,9 +130,8 @@ function fixture({
   const coordinator = new framework.ZLinkActorNativeJoinCoordinator({
     node,
     completionTableProvider: () => ({
-       submit(submit, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-        submit(resultOwner);
+      async submit(submit) {
+        submit();
         return {
           terminalResult: 0,
           failureErrno: 0,
@@ -145,9 +143,7 @@ return resultOwner.observe((async () => {
             location: { spotId: target.spotId, spotGeneration: 1n, membershipEpoch: 2n }
           }
         };
-
-})());
-}
+      }
     }),
     spotRouteResolver: {
       async resolve() {

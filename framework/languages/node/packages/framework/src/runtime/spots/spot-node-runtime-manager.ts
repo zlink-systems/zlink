@@ -365,7 +365,9 @@ export class ZLinkSpotNodeRuntimeManager {
       let pump: ZLinkMeshDispatchPump | undefined;
       const completions = new ZLinkMeshCompletionTable();
       try {
-        node.setCompletionTable(completions);
+        node.setCompletionHandler((terminal, materialize) =>
+          completions.complete(terminal, materialize)
+        );
         node.setBind(bind);
         if (spotNode.router?.advertiseHost !== undefined) {
           node.setAdvertiseHost(spotNode.router.advertiseHost);

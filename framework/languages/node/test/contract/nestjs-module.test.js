@@ -122,7 +122,7 @@ function exposeLegacyTestSpotAsMeshNode(spotNode) {
       return { reset() {}, close() {} };
     },
     setReadyHandler() {},
-    setCompletionTable() {},
+    setCompletionHandler() {},
     drainReady() {
       return { ok: false, hasResidue: false, records: [] };
     }

@@ -1,4 +1,3 @@
-const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const { createRelayHost } = require('./fixtures/relay-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -64,9 +63,8 @@ test('command 44 cross-node route preserves the binding for the next Actor Join 
     undefined,
     service,
     {
-       submit(submit, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-        const pending = submit(resultOwner);
+      async submit(submit) {
+        const pending = submit();
         const result = await pending.promise;
         return {
           terminalResult: result?.terminalResult ?? 0,
@@ -77,9 +75,7 @@ return resultOwner.observe((async () => {
               : undefined,
           parts: []
         };
-
-})());
-}
+      }
     }
   );
   const { host, relay: hostRelay } = createRelayHost({

@@ -2,7 +2,7 @@ import type { PendingOperation, OperationObserver } from '../foundation/operatio
 import {
   createZLinkRequest,
   mapZLinkRequestReply,
-  observeZLinkRequestReply,
+  prepareZLinkRequestReply,
   identityRequestReply,
   type ZLinkRequestResult
 } from '../messaging/request-result';
@@ -372,14 +372,9 @@ function createAddressedSpotRequestCall(
     submit<TReply>(signal?: AbortSignal) {
       markSubmitted(options);
       rejectSameSpotAsyncRequest(serial, spotId, 'async');
-      return createZLinkRequest<TReply>(
-        (entry) =>
-          observeZLinkRequestReply(
-            begin<TReply>(signal, entry.confirm),
-            identityRequestReply,
-            identityRequestReply,
-            entry
-          ),
+      return createZLinkRequest(
+        (onAdmitted) =>
+          prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -518,14 +513,9 @@ function wrapRequestCall(
       return this;
     },
     submit<TReply>(signal?: AbortSignal) {
-      return createZLinkRequest<TReply>(
-        (entry) =>
-          observeZLinkRequestReply(
-            begin<TReply>(signal, entry.confirm),
-            identityRequestReply,
-            identityRequestReply,
-            entry
-          ),
+      return createZLinkRequest(
+        (onAdmitted) =>
+          prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -641,14 +631,9 @@ function wrapRoutedSpotRequestCall(
     },
     submit<TReply>(signal?: AbortSignal) {
       rejectSameSpotAsyncRequest(serial, spot.spotId, 'async');
-      return createZLinkRequest<TReply>(
-        (entry) =>
-          observeZLinkRequestReply(
-            begin<TReply>(signal, entry.confirm),
-            identityRequestReply,
-            identityRequestReply,
-            entry
-          ),
+      return createZLinkRequest(
+        (onAdmitted) =>
+          prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },

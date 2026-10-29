@@ -1,4 +1,4 @@
-const { observeZLinkRequestReply, ZLinkRequestResult, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const telemetry = require('./helpers/telemetry-log-capture');
@@ -479,9 +479,9 @@ test('physical disconnect preserves its captured binding while close uses the cu
       getState: () => ({ boundSession: { ...target, bindingGeneration: 8n } })
     }),
     routeTransport: {
-      request: (entry, ...args) => observeZLinkRequestReply((async () => {
+      request: (...args) => prepareZLinkRequestReply((async () => {
         sent.push(args[3]);
-      })(), identityRequestReply, identityRequestReply, entry)
+      })(), identityRequestReply)
     }
   });
   await relay.notifyRemoteActorDisconnected('actor', target, undefined, undefined, {

@@ -1489,7 +1489,7 @@ test('mesh completion submission registers before a completion can arrive', asyn
   const completion = table.submit(() => {
     queueMicrotask(() => complete(1n, 'first'));
     return { high: 1n, low: 1n };
-  }).pending;
+  });
   const retained = await completion;
   try {
     assert.equal(retained.parts[0].data().toString(), 'first');
@@ -1507,7 +1507,7 @@ test('mesh completion submission rejects when submit synchronously disposes the 
     table.submit(() => {
       table.dispose();
       return { high: 1n, low: 2n };
-    }).pending,
+    }),
     /Mesh completion table is disposed/
   );
 });

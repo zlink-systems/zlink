@@ -1,4 +1,3 @@
-const { ZLinkRequestResult } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -32,13 +31,10 @@ function capturingTransport(capture, submissionError = new Error('captured')) {
     () => ({
       meshNode: () => node,
       meshCompletionTable: () => ({
-        submit(operation, _signal, resultOwner = new ZLinkRequestResult()) {
-return resultOwner.observe((async () => {
-          operation(resultOwner);
+        submit(operation) {
+          operation();
           throw new Error('The capturing submission must throw before completion registration.');
-
-})());
-}
+        }
       })
     })
   );
