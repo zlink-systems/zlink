@@ -13,19 +13,12 @@ const {
   ReadyDomain
 } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
-function harness(table, checkSlot = true) {
+function harness(table, checkSlot = true, stateful) {
   let resolve;
   const promise = new Promise((done) => {
     resolve = done;
   });
-  const backend = new ZLinkNodeRawMeshBackend('completion', 'local', {});
-  backend.setCompletionHandler((terminal, materialize) => table.complete(terminal, materialize));
-  let ready = 0;
-  backend.setReadyHandler(() => {
-    ready++;
-    return 0;
-  });
-  backend.runtime = {
+  const raw = {
     mailbox: new ServiceMailbox(),
     close() {
       this.mailbox.close();
@@ -36,7 +29,14 @@ function harness(table, checkSlot = true) {
       return { id: 7n, promise };
     }
   };
-  return { backend, resolve, ready: () => ready };
+  const backend = new ZLinkNodeRawMeshBackend('completion', 'local', {}, undefined, undefined, undefined, undefined, { raw, stateful });
+  if (table) backend.setCompletionHandler((terminal, materialize) => table.complete(terminal, materialize));
+  let ready = 0;
+  backend.setReadyHandler(() => {
+    ready++;
+    return 0;
+  });
+  return { backend, raw, resolve, ready: () => ready };
 }
 
 test('registered completion reaches its caller with the infrastructure pump stopped', async (t) => {
@@ -91,7 +91,6 @@ for (const terminal of ['cancel', 'close']) {
 
 test('immediate terminal rejection uses the registered owner without infrastructure readiness', async () => {
   const table = new ZLinkMeshCompletionTable();
-  const h = harness(table);
   const {
     ServiceStatefulRuntime
   } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
@@ -99,7 +98,7 @@ test('immediate terminal rejection uses the registered owner without infrastruct
     wireReplyFailureException
   } = require('../../packages/framework/dist/runtime/framework-errors-internal');
   const { ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/internal');
-  h.backend.stateful = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'local', 1n);
+  const h = harness(table, true, new ServiceStatefulRuntime({ setServiceIngress() {} }, 'local', 1n));
   const result = await table.submit(() =>
     h.backend.closeActorBoundSession({ actorId: 'missing', nodeRid: 'local', generation: 1n }, 1n)
   );
@@ -114,8 +113,7 @@ test('immediate terminal rejection uses the registered owner without infrastruct
 
 test('raw pull completion uses the existing mailbox and releases its claim', async () => {
   const table = new ZLinkMeshCompletionTable();
-  const h = harness(table, false);
-  h.backend.completionHandler = undefined;
+  const h = harness(undefined, false);
   const operation = h.backend.requestToNode('peer', [Buffer.from('request')]);
   h.resolve({ terminalResult: 0, failureCode: 0 });
   for (let i = 0; i < 8; i++) await Promise.resolve();
@@ -129,7 +127,7 @@ test('raw pull completion uses the existing mailbox and releases its claim', asy
     const records = claim.recvBatch(receive).records;
     assert.deepEqual(records[0].operationId, operation);
     assert.equal(records[0].terminalResult, 0);
-    assert.equal(h.backend.runtime.mailbox.pendingMessages('infrastructure'), 0);
+    assert.equal(h.raw.mailbox.pendingMessages('infrastructure'), 0);
   } finally {
     claim.release();
     ready.close();

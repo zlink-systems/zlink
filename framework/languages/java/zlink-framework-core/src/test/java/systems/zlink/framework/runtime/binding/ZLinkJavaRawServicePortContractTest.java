@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -305,7 +307,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
-            try (var incoming = port.receiveNow(target).orElseThrow()) {
+            try (var incoming = port.receiveNow(target)) {
+                assertNotNull(incoming);
                 Message original = incoming.received().parts().getFirst();
                 // The byte-array control view is lazy and shares the receive owner.
                 original.mutableDataBuffer().put(0, (byte) 7);
@@ -319,6 +322,307 @@ final class ZLinkJavaRawServicePortContractTest {
             port.waitForReadable(caller, Duration.ofSeconds(2));
             assertEquals(9, reply.get(2, TimeUnit.SECONDS));
         }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false",
+        "false,true",
+        "true,false",
+        "true,true"
+    })
+    void durableLogicalTerminalRetainsTheNativeReplyReceiver(boolean cancel, boolean codecThrows)
+            throws Exception {
+        var decoded = new java.util.concurrent.atomic.AtomicInteger();
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        var observerClosed = new java.util.concurrent.CompletableFuture<Void>();
+        var physical =
+                new java.util.concurrent.atomic.AtomicReference<
+                        java.util.concurrent.CompletionStage<?>>();
+        var payload = new java.util.concurrent.atomic.AtomicReference<Message>();
+        var codecFailure = new IllegalStateException("controlled codec failure");
+        try (var port = new ZLinkJavaRawServicePort();
+                var operations =
+                        new systems.zlink.framework.runtime.internal.service
+                                .ZLinkServiceOperationRegistry(
+                                new IllegalStateException("closed"))) {
+            var targetId = RoutingId.from("durable-native-target");
+            var target = port.openRouter(targetId);
+            var caller = port.openRouter(RoutingId.from("durable-native-caller"));
+            port.ensureReceivePollerRegistered(caller);
+            String endpoint = "inproc://durable-native-receiver-" + System.nanoTime();
+            target.bind(endpoint);
+            caller.connect(endpoint);
+            var result =
+                    ZLinkJavaDurableRequest.<Integer>request(
+                                    () -> List.of(new byte[] {1}),
+                                    (frames, remaining, admission, terminal) -> {
+                                        attempts.incrementAndGet();
+                                        var reply =
+                                                port.requestTo(
+                                                        caller,
+                                                        targetId,
+                                                        frames,
+                                                        remaining,
+                                                        parts -> {
+                                                            decoded.incrementAndGet();
+                                                            payload.set(parts.getFirst());
+                                                            int value =
+                                                                    parts.getFirst()
+                                                                            .dataBuffer()
+                                                                            .get(0);
+                                                            if (codecThrows) throw codecFailure;
+                                                            return value;
+                                                        },
+                                                        admission,
+                                                        terminal);
+                                        physical.set(reply);
+                                        return reply;
+                                    },
+                                    () ->
+                                            new systems.zlink.framework.runtime.internal.backend
+                                                    .ZLinkInternalMeshNode.PeerRouteObservation(
+                                                    1, true),
+                                    (changed, ended) -> () -> observerClosed.complete(null),
+                                    action -> {
+                                        if (port.stateLane().isOnLane()) {
+                                            action.run();
+                                            return java.util.concurrent.CompletableFuture
+                                                    .completedStage(null);
+                                        }
+                                        return port.stateLane()
+                                                .runNowOrQueue(
+                                                        () -> {
+                                                            action.run();
+                                                            return null;
+                                                        });
+                                    },
+                                    Duration.ofSeconds(5),
+                                    operations)
+                            .toCompletableFuture();
+            assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
+            Throwable cancellation = null;
+            try (var incoming = port.receiveNow(target)) {
+                assertNotNull(incoming);
+                assertEquals(1, attempts.get());
+                assertEquals(0, decoded.get());
+                assertFalse(physical.get().toCompletableFuture().isDone());
+                if (cancel) {
+                    assertTrue(result.cancel(false));
+                    cancellation = result.handle((reply, failure) -> failure).join();
+                    assertInstanceOf(
+                            java.util.concurrent.CancellationException.class, cancellation);
+                    observerClosed.get(2, TimeUnit.SECONDS);
+                    port.stateLane().awaitTurn(() -> null);
+                    assertEquals(0, operations.pendingCount());
+                    assertFalse(physical.get().toCompletableFuture().isDone());
+                } else {
+                    assertEquals(1, operations.pendingCount());
+                    assertFalse(observerClosed.isDone());
+                }
+                port.reply(
+                        target,
+                        incoming.source(),
+                        incoming.requestSequence(),
+                        List.of(new byte[] {7}));
+            }
+            port.waitForReadable(caller, Duration.ofSeconds(2));
+            physical.get().toCompletableFuture().get(2, TimeUnit.SECONDS);
+            port.stateLane().awaitTurn(() -> null);
+            if (cancel) {
+                assertSame(cancellation, result.handle((reply, failure) -> failure).join());
+            } else if (codecThrows) {
+                var failure =
+                        assertThrows(
+                                ExecutionException.class, () -> result.get(2, TimeUnit.SECONDS));
+                assertSame(codecFailure, failure.getCause());
+            } else {
+                assertEquals(7, result.get(2, TimeUnit.SECONDS));
+            }
+            observerClosed.get(2, TimeUnit.SECONDS);
+            assertEquals(0, operations.pendingCount());
+            assertEquals(1, attempts.get());
+            assertEquals(1, decoded.get());
+            assertFalse(physical.get().toCompletableFuture().isCancelled());
+            assertNotNull(payload.get());
+            assertConsumed(payload.get());
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false",
+        "false,true",
+        "true,false",
+        "true,true"
+    })
+    void registryLogicalTerminalRetainsTheNativeReplyReceiver(boolean cancel, boolean codecThrows)
+            throws Exception {
+        var decoded = new java.util.concurrent.atomic.AtomicInteger();
+        var payload = new java.util.concurrent.atomic.AtomicReference<Message>();
+        var codecObserved = new java.util.concurrent.CompletableFuture<Void>();
+        var codecFailure = new IllegalStateException("controlled registry codec failure");
+        try (var port = new ZLinkJavaRawServicePort()) {
+            var targetId = RoutingId.from("registry-native-target");
+            var target = port.openRouter(targetId);
+            var caller = port.openRouter(RoutingId.from("registry-native-caller"));
+            port.ensureReceivePollerRegistered(caller);
+            String endpoint = "inproc://registry-native-receiver-" + System.nanoTime();
+            target.bind(endpoint);
+            caller.connect(endpoint);
+            var request = Message.from(new byte[] {1});
+            var result =
+                    port.requestMessages(
+                                    caller,
+                                    targetId,
+                                    List.of(request),
+                                    Duration.ofSeconds(5),
+                                    parts -> {
+                                        decoded.incrementAndGet();
+                                        payload.set(parts.getFirst());
+                                        int value = parts.getFirst().dataBuffer().get(0);
+                                        codecObserved.complete(null);
+                                        if (codecThrows) throw codecFailure;
+                                        return value;
+                                    },
+                                    ignored -> {},
+                                    null,
+                                    null)
+                            .toCompletableFuture();
+            assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
+            Throwable cancellation = null;
+            try (var incoming = port.receiveNow(target)) {
+                assertNotNull(incoming);
+                assertEquals(0, decoded.get());
+                assertEquals(1, port.operationRegistry().pendingCount());
+                assertConsumed(request);
+                if (cancel) {
+                    assertTrue(result.cancel(false));
+                    cancellation =
+                            result.handle((reply, failure) -> failure).get(2, TimeUnit.SECONDS);
+                    assertInstanceOf(
+                            java.util.concurrent.CancellationException.class, cancellation);
+                    port.stateLane().awaitTurn(() -> null);
+                    assertTrue(result.isCancelled());
+                    assertEquals(0, port.operationRegistry().pendingCount());
+                }
+                port.reply(
+                        target,
+                        incoming.source(),
+                        incoming.requestSequence(),
+                        List.of(new byte[] {7}));
+            }
+            port.waitForReadable(caller, Duration.ofSeconds(2));
+            codecObserved.get(2, TimeUnit.SECONDS);
+            port.stateLane().awaitTurn(() -> null);
+            if (cancel) {
+                assertSame(cancellation, result.handle((reply, failure) -> failure).join());
+                assertTrue(result.isCancelled());
+            } else if (codecThrows) {
+                var failure =
+                        assertThrows(
+                                ExecutionException.class, () -> result.get(2, TimeUnit.SECONDS));
+                assertSame(codecFailure, failure.getCause());
+            } else {
+                assertEquals(7, result.get(2, TimeUnit.SECONDS));
+            }
+            assertEquals(1, decoded.get());
+            assertEquals(0, port.operationRegistry().pendingCount());
+            assertNotNull(payload.get());
+            assertConsumed(payload.get());
+            assertNull(port.receiveNow(target), "the held native request must not be resubmitted");
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false",
+        "false,true",
+        "true,false",
+        "true,true"
+    })
+    void startedLocalCanonicalProducerSurvivesLogicalCancellation(
+            boolean cancel, boolean invalidReply) throws Exception {
+        var physical = new java.util.concurrent.CompletableFuture<byte[]>();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var local = RoutingId.from("registry-local-canonical");
+        var port = new ZLinkJavaRawServicePort();
+        try (var node =
+                ZLinkJavaRawMeshNodeTesting.create(
+                        "registry-local",
+                        port,
+                        null,
+                        null,
+                        null,
+                        java.util.Map.of(),
+                        Runnable::run)) {
+            node.setRoutingId(local);
+            node.setCanonicalRelocationControlHandler(
+                    (source, sequence, command) -> {
+                        calls.incrementAndGet();
+                        return physical;
+                    });
+            var admitted = new java.util.concurrent.CompletableFuture<Void>();
+            var caller =
+                    node.requestCanonicalRelocationPrepare(
+                                    local, canonicalCommand(40), Duration.ofSeconds(5), admitted)
+                            .toCompletableFuture();
+            admitted.get(2, TimeUnit.SECONDS);
+            assertEquals(1, calls.get());
+            assertEquals(1, node.operationRegistry().pendingCount());
+            assertFalse(physical.isDone());
+            Throwable cancellation = null;
+            if (cancel) {
+                assertTrue(caller.cancel(false));
+                cancellation = caller.handle((value, failure) -> failure).get(2, TimeUnit.SECONDS);
+                assertInstanceOf(java.util.concurrent.CancellationException.class, cancellation);
+                assertEquals(0, node.operationRegistry().pendingCount());
+                assertFalse(physical.isDone());
+            }
+            byte[] reply = invalidReply ? canonicalCommand(40) : canonicalCommand(30);
+            assertTrue(physical.complete(reply));
+            if (cancel) {
+                assertSame(cancellation, caller.handle((value, failure) -> failure).join());
+                assertTrue(caller.isCancelled());
+            } else if (invalidReply) {
+                var failure =
+                        assertThrows(
+                                ExecutionException.class, () -> caller.get(2, TimeUnit.SECONDS));
+                assertInstanceOf(IllegalArgumentException.class, failure.getCause());
+                assertEquals(
+                        "canonical relocation prepare reply must be READY or FAILED",
+                        failure.getCause().getMessage());
+            } else {
+                byte[] decoded = caller.get(2, TimeUnit.SECONDS);
+                assertArrayEquals(reply, decoded);
+                org.junit.jupiter.api.Assertions.assertNotSame(reply, decoded);
+            }
+            assertFalse(physical.isCancelled());
+            assertEquals(1, calls.get());
+            assertEquals(0, node.operationRegistry().pendingCount());
+        }
+    }
+
+    private static byte[] canonicalCommand(int command) throws Exception {
+        for (java.nio.file.Path current = java.nio.file.Path.of("").toAbsolutePath();
+                current != null;
+                current = current.getParent()) {
+            for (String relative :
+                    List.of(
+                            "framework/runtime/protocol/golden/relocation-control-v1.json",
+                            "runtime/protocol/golden/relocation-control-v1.json")) {
+                var file = current.resolve(relative);
+                if (!java.nio.file.Files.isRegularFile(file)) continue;
+                for (var entry :
+                        new com.fasterxml.jackson.databind.ObjectMapper()
+                                .readTree(java.nio.file.Files.readString(file))
+                                .path("canonical")) {
+                    if (entry.path("command").asInt() == command)
+                        return java.util.HexFormat.of().parseHex(entry.path("hex").asText());
+                }
+            }
+        }
+        throw new IllegalStateException("canonical relocation command was not found: " + command);
     }
 
     @Test
@@ -347,7 +651,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
-            try (var incoming = port.receiveNow(target).orElseThrow()) {
+            try (var incoming = port.receiveNow(target)) {
+                assertNotNull(incoming);
                 Message rejected = Message.from(expected);
                 assertThrows(
                         IllegalArgumentException.class,
@@ -412,7 +717,8 @@ final class ZLinkJavaRawServicePortContractTest {
                     .get(2, TimeUnit.SECONDS);
             assertConsumed(sent);
             assertTrue(port.waitForReadable(receiver, Duration.ofSeconds(2)));
-            try (var inbound = port.receiveNow(receiver).orElseThrow()) {
+            try (var inbound = port.receiveNow(receiver)) {
+                assertNotNull(inbound);
                 assertArrayEquals(new byte[] {1, 2, 3}, inbound.frames().getFirst());
             }
 
@@ -460,7 +766,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
-            try (var inbound = port.receiveNow(target).orElseThrow()) {
+            try (var inbound = port.receiveNow(target)) {
+                assertNotNull(inbound);
                 port.reply(
                         target,
                         inbound.source(),
@@ -484,7 +791,8 @@ final class ZLinkJavaRawServicePortContractTest {
                                     null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
-            try (var ignored = port.receiveNow(target).orElseThrow()) {
+            try (var ignored = port.receiveNow(target)) {
+                assertNotNull(ignored);
                 // Keep the request unanswered so its accepted async path times out.
             }
             port.waitForReadable(caller, Duration.ofSeconds(2));
@@ -538,7 +846,8 @@ final class ZLinkJavaRawServicePortContractTest {
             assertTrue(
                     Duration.ofNanos(System.nanoTime() - sentAt).compareTo(Duration.ofMillis(250))
                             < 0);
-            try (var inbound = port.receiveNow(left).orElseThrow()) {
+            try (var inbound = port.receiveNow(left)) {
+                assertNotNull(inbound);
                 assertArrayEquals(new byte[] {1}, inbound.frames().getFirst());
             }
         }
@@ -614,19 +923,19 @@ final class ZLinkJavaRawServicePortContractTest {
             first[0] = 9;
             second[0] = 9;
 
-            Optional<ZLinkJavaRawServicePort.Inbound> received = Optional.empty();
-            while (received.isEmpty()) {
+            ZLinkJavaRawServicePort.Inbound received = null;
+            while (received == null) {
                 received = port.receive(left);
                 if (System.nanoTime() >= deadline) {
                     throw new AssertionError("raw multipart receive timed out");
                 }
-                if (received.isEmpty()) {
+                if (received == null) {
                     Thread.sleep(1);
                 }
             }
 
-            assertEquals(rightRid, received.orElseThrow().source());
-            try (var inbound = received.orElseThrow()) {
+            assertEquals(rightRid, received.source());
+            try (var inbound = received) {
                 List<byte[]> retained = inbound.frames();
                 assertArrayEquals(new byte[] {1, 2, 3}, retained.get(0));
                 assertArrayEquals(new byte[] {4, 5, 6}, retained.get(1));
@@ -695,9 +1004,11 @@ final class ZLinkJavaRawServicePortContractTest {
             throws Exception {
         int receivedCount = 0;
         while (receivedCount < expected) {
-            if (port.receive(router).isPresent()) {
-                receivedCount++;
-                continue;
+            try (var inbound = port.receive(router)) {
+                if (inbound != null) {
+                    receivedCount++;
+                    continue;
+                }
             }
             if (System.nanoTime() >= deadline) {
                 throw new AssertionError("raw concurrent multipart receive timed out");

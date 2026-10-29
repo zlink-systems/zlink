@@ -84,7 +84,7 @@ command -v conan >/dev/null || { echo "Conan 2 is required" >&2; exit 1; }
 command -v cmake >/dev/null || { echo "CMake is required" >&2; exit 1; }
 # One compile per core: the macOS runner (3 cores, 7 GB) swapped under a fixed -j8 and took 75 min
 # where Linux took 7 (#1005).
-build_jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu)"
+build_jobs="${CMAKE_BUILD_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu)}"
 command -v ninja >/dev/null || { echo "Ninja is required" >&2; exit 1; }
 if command -v python3 >/dev/null 2>&1; then
   python_command=python3
@@ -156,8 +156,8 @@ class ZlinkBootstrap(ConanFile):
             self.requires(requirement, transitive_headers=True, transitive_libs=True)
 ''', encoding='utf-8', newline='\n')
 # The archive ships these packages for consumers' own direct use (the Framework
-# configs' nlohmann_json, the samples' Boost.Asio and Bingo's Protobuf schema);
-# every other third-party library is embedded privately in the shared libraries.
+# configs' nlohmann_json and OpenTelemetry API, the samples' Boost.Asio and
+# Bingo's Protobuf schema); every other third-party library is embedded privately in the shared libraries.
 consumer = pathlib.Path(sys.argv[2]).parent / "consumer"
 consumer.mkdir(exist_ok=True)
 (consumer / "conanfile.py").write_text(f'''from conan import ConanFile
@@ -166,7 +166,7 @@ import sys
 sys.path.insert(0, {str(recipe.parent)!r})
 from conanfile import ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS, ZlinkFrameworkConan
 
-CONSUMER_PACKAGES = ("nlohmann_json", "boost", "protobuf")
+CONSUMER_PACKAGES = ("nlohmann_json", "boost", "protobuf", "opentelemetry-cpp")
 
 class ZlinkConsumer(ConanFile):
     name = "zlink-consumer"
@@ -559,24 +559,32 @@ case "$platform" in
 esac
 
 # The Framework configs' consumer dependencies are exactly zlink, zlink_cpp,
-# Threads and nlohmann_json (plus each other), and no exported target links a
-# third-party library the shared libraries embed.
+# Threads, nlohmann_json and the OpenTelemetry API (plus each other). No
+# exported target links a third-party library the shared libraries embed.
 for config in "$prefix"/lib/cmake/zlink_framework*/*Config.cmake \
     "$prefix"/lib/cmake/zlink_http_client_cpp/*Config.cmake \
     "$prefix"/lib/cmake/zlink_stream_connector_cpp/*Config.cmake; do
   while IFS= read -r dependency; do
     case "$dependency" in
-      zlink|zlink_cpp|Threads|nlohmann_json|zlink_framework_cpp|zlink_http_client_cpp|zlink_stream_connector_cpp) ;;
+      zlink|zlink_cpp|Threads|nlohmann_json|opentelemetry-cpp|zlink_framework_cpp|zlink_http_client_cpp|zlink_stream_connector_cpp) ;;
       *) echo "unexpected consumer dependency $dependency in $(basename "$config")" >&2; exit 1 ;;
     esac
   done < <(sed -n 's/^[[:space:]]*find_dependency(\([^ )]*\).*/\1/p' "$config")
 done
-embedded_target_pattern='(redis\+\+|hiredis|libuv|opentelemetry-cpp|lz4|Boost|absl)::'
+embedded_target_pattern='(redis\+\+|hiredis|libuv|lz4|Boost|absl)::'
 if grep -Eq "$embedded_target_pattern" "$prefix"/lib/cmake/zlink_*/*Targets*.cmake; then
   grep -En "$embedded_target_pattern" "$prefix"/lib/cmake/zlink_*/*Targets*.cmake >&2
   echo "an exported Framework target links an embedded third-party library" >&2
   exit 1
 fi
+
+# Public headers require the API target; SDK and exporter targets remain private.
+while IFS= read -r target; do
+  [[ "$target" == opentelemetry-cpp::api ]] || {
+    echo "unexpected exported OpenTelemetry target $target" >&2
+    exit 1
+  }
+done < <(grep -Eoh 'opentelemetry-cpp::[[:alnum:]_.:+-]+' "$prefix"/lib/cmake/zlink_*/*Targets*.cmake)
 
 archive="$output_dir/zlink-framework-cpp-$version-$platform.tar.gz"
 source_date_epoch="${SOURCE_DATE_EPOCH:-0}"

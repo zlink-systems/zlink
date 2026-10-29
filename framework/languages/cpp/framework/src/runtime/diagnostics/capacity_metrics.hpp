@@ -32,7 +32,7 @@ class capacity_metrics_t
       std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring) :
         _monitoring (std::move (monitoring))
     {
-        auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+        auto provider = _monitoring->metric_provider;
         if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
             return;
         auto meter = provider->GetMeter ("zlink.framework");

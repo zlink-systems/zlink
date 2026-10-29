@@ -155,7 +155,7 @@ void population_retirement_orders_after_pending_configuration ()
     require (objects.commit_create (created.attempt) == stateful::stateful_error_t::none,
              "Actor commit failed");
     auto release = stateful::stateful_object_runtime_test_access_t::hold_lane (objects);
-    auto configured = objects.configure_population_metrics ("population-mesh");
+    auto configured = objects.configure_population_metrics ("population-mesh", provider.api ());
     auto retirement = objects.retire_population_metrics_async ();
     const bool ordered = retirement.wait_for (0ms) == std::future_status::timeout;
     release.set_value ();
@@ -168,10 +168,12 @@ void population_retirement_orders_after_pending_configuration ()
 
 void stopped_population_retirement ()
 {
-    metric_test::provider_t provider;
+    metric_test::provider_t provider (false);
     completion_owner_t owner;
     auto objects = std::make_unique<stateful::stateful_object_runtime_t> ();
-    objects->configure_population_metrics ("stopped-population").result ().value ();
+    objects->configure_population_metrics ("stopped-population", provider.api ())
+      .result ()
+      .value ();
     objects->replace_placement_candidates ({{.mesh_name = "stopped-population",
                                              .node_id = "node",
                                              .stable_types = {"player"},
@@ -217,8 +219,8 @@ void activation_metrics_configured_once ()
 {
     metric_test::provider_t provider;
     auto admission = std::make_shared<detail::activation_admission_t> ();
-    admission->configure_metrics ("first-mesh");
-    admission->configure_metrics ("second-mesh");
+    admission->configure_metrics ("first-mesh", provider.api ());
+    admission->configure_metrics ("second-mesh", provider.api ());
     require (admission->try_enter ("actor:test"), "activation was rejected");
     require (point (provider, "zlink.object.activation.active", {{"mesh_name", "first-mesh"}}) == 1,
              "reconfiguration replaced the activation callback owner");
@@ -232,6 +234,7 @@ void host_lifecycle ()
 {
     metric_test::provider_t provider;
     auto app = app_t::create ();
+    app.use_metric_provider (provider.api ());
     require (point (provider, "zlink.host.state", {{"state", "preparing"}}) == 1,
              "host Preparing state missing");
     const auto relocation = app.relocate ({}).result ().value ();
@@ -260,6 +263,7 @@ void serving_relocated_stopped ()
 {
     metric_test::provider_t provider;
     auto app = app_t::create ();
+    app.use_metric_provider (provider.api ());
     struct runner_t
     {
         app_t &app;
@@ -475,7 +479,9 @@ void provider_failure_preserves_shutdown ()
     options.descriptor.lifecycle_generation = options.descriptor.descriptor_revision = 1;
     options.descriptor.advertised_endpoint = "tcp://127.0.0.1:0";
     options.metric_channel_names = {"unavailable-channel"};
-    mesh::service_topology_registry_t available (options.descriptor, options.metric_channel_names);
+    zlink::framework::runtime::state_lane_t available_lane;
+    mesh::service_topology_registry_t available (available_lane, options.descriptor,
+                                                 options.metric_channel_names);
     const auto expected_missing = available.select ("unavailable-channel");
     require (!expected_missing, "missing channel unexpectedly selected a member");
     opentelemetry::metrics::Provider::SetMeterProvider (
@@ -489,6 +495,7 @@ void provider_failure_preserves_shutdown ()
              "unavailable meter changed the missing-member result");
     node.close ();
     auto app = app_t::create ();
+    app.use_metric_provider (opentelemetry::metrics::Provider::GetMeterProvider ());
     require (app.shutdown (1s).result ().value ().outcome == termination_outcome_t::stopped,
              "unavailable meter changed host Shutdown result");
 }

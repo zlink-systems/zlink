@@ -374,13 +374,8 @@ target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
   ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
 target_link_libraries(zlink_framework PUBLIC zlink::cpp zlink::framework_provider_abstractions)
-if(ZLINK_FRAMEWORK_CPP_SHARED)
-  # C++ exports metrics through runtime.status(), not an OpenTelemetry provider API.
-  # Adding a provider-injection boundary would therefore be a spec change.
-  target_link_libraries(zlink_framework PRIVATE opentelemetry-cpp::api)
-else()
-  target_link_libraries(zlink_framework PUBLIC opentelemetry-cpp::api)
-endif()
+# Applications own the SDK, reader and exporter for the supplied Metrics API provider.
+target_link_libraries(zlink_framework PUBLIC opentelemetry-cpp::api)
 if(WIN32)
   target_link_libraries(zlink_framework PUBLIC bcrypt)
 endif()
@@ -817,12 +812,12 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     COMPONENT HttpClient)
 endif()
 
-set(ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
+set(ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES "find_dependency(opentelemetry-cpp CONFIG COMPONENTS api)\n")
 set(ZLINK_HTTP_CLIENT_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 set(ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES
-    "find_dependency(opentelemetry-cpp CONFIG COMPONENTS api)\n"
+    "${ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES}"
     "find_package(protobuf CONFIG QUIET)\n"
     "if(NOT protobuf_FOUND)\n"
     "  find_dependency(Protobuf MODULE)\n"
@@ -2199,6 +2194,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
     ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/serial-execution-v1.json"
     ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/runtime-observation-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_session_control_priority
+    COMMAND test_cpp_framework_execution --session-control-priority
+    LABELS "framework-unit;framework-contract;execution;stream"
+    TIER unit
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_fanout_state_owner
+    COMMAND test_cpp_framework_execution --fanout-state-owner
+    LABELS "framework-unit;framework-contract;execution;topology"
+    TIER unit
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_binding_state_owner
+    COMMAND test_cpp_framework_actor_gateway --binding-state-owner
+    LABELS "framework-unit;framework-contract;execution;stream"
+    TIER unit
+    TIMEOUT 30)
   add_executable(test_cpp_framework_lane_getters
     tests/Zlink.Framework.UnitTests/test_cpp_framework_lane_getters.cpp
     tests/support/allocation_counter.cpp)
@@ -2211,6 +2224,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     NAME test_cpp_framework_lane_getters
     COMMAND test_cpp_framework_lane_getters
     LABELS "framework-unit;framework-contract;framework-regression;execution"
+    TIER unit
+    TIMEOUT 30)
+  add_executable(test_cpp_framework_shared_infrastructure
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_shared_infrastructure.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_shared_infrastructure)
+  target_compile_features(test_cpp_framework_shared_infrastructure PRIVATE cxx_std_20)
+  target_link_libraries(test_cpp_framework_shared_infrastructure PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_shared_infrastructure PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_shared_infrastructure
+    COMMAND test_cpp_framework_shared_infrastructure
+    LABELS "framework-unit;framework-regression;execution"
     TIER unit
     TIMEOUT 30)
   add_executable(test_cpp_framework_state_lane
@@ -2663,6 +2690,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 15
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_metrics_contract.py
     LABELS "framework-unit;framework-contract;framework-observability;metrics")
+  add_zlink_framework_test(
+    test_cpp_framework_metric_provider
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_metric_provider.cpp
+    "framework-unit;framework-contract;framework-observability;metrics"
+    contract)
+  target_link_libraries(test_cpp_framework_metric_provider PRIVATE opentelemetry-cpp::metrics)
   add_zlink_framework_test(
     test_cpp_framework_runtime_metrics
     tests/Zlink.Framework.UnitTests/test_cpp_framework_runtime_metrics.cpp

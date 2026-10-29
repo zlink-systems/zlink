@@ -10,15 +10,10 @@
 namespace zlink::framework::runtime::mesh
 {
 
-service_liveness_registry_t::service_liveness_registry_t (
-  std::chrono::milliseconds probe_interval,
-  std::chrono::milliseconds peer_timeout,
-  runtime::offload_executor_t *infrastructure_executor) :
-    _probe_interval (probe_interval),
-    _peer_timeout (peer_timeout),
-    _lane_executor (infrastructure_executor ? nullptr
-                                            : std::make_unique<runtime::offload_executor_t> ()),
-    _lane (infrastructure_executor ? *infrastructure_executor : *_lane_executor)
+service_liveness_registry_t::service_liveness_registry_t (runtime::state_lane_t &lane,
+                                                          std::chrono::milliseconds probe_interval,
+                                                          std::chrono::milliseconds peer_timeout) :
+    _probe_interval (probe_interval), _peer_timeout (peer_timeout), _lane (lane)
 {
     if (_probe_interval <= std::chrono::milliseconds::zero () || _peer_timeout <= _probe_interval) {
         throw std::invalid_argument (
@@ -151,17 +146,18 @@ std::optional<service_probe_t> service_liveness_registry_t::acknowledge_probe_ow
 
 void service_liveness_registry_t::set_admission_pending (bool pending)
 {
-    _lane
-      .run ([this, pending] {
-          if (pending) {
-              if (!_admission_activity)
-                  _admission_activity = clock_t::now ();
-          } else {
-              _admission_activity.reset ();
-          }
-          publish_next_due_owned ();
-      })
-      .get ();
+    _lane.run ([this, pending] { set_admission_pending_owned (pending); }).get ();
+}
+
+void service_liveness_registry_t::set_admission_pending_owned (bool pending)
+{
+    if (pending) {
+        if (!_admission_activity)
+            _admission_activity = clock_t::now ();
+    } else {
+        _admission_activity.reset ();
+    }
+    publish_next_due_owned ();
 }
 
 bool service_liveness_registry_t::due (clock_t::time_point now) const noexcept

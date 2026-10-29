@@ -1,3 +1,5 @@
+const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
+const { createPublisherRuntime } = require('./fixtures/publisher-runtime');
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -29,17 +31,28 @@ const {
 } = require('../../packages/framework/dist/runtime/host/runtime-shutdown');
 
 test('channel lifecycle retains a failed receive poller owner', async () => {
-  const lifecycle = new ZLinkChannelRuntimeLifecycle({
-    spotRouteBridges: new Map(),
-    sockets: { async dispose() {} }
-  });
   let attempts = 0;
   const failure = new Error('first receive poller close failed');
-  lifecycle.channelReceiveLoops.push({
-    async stop() {
-      if (++attempts === 1) throw failure;
-    }
+  const registration = framework.createFrameworkRegistration({});
+  registration.channels.set('work', {
+    server: { bind: 'inproc://close-failure' },
+    sendHandlers: [{ packetName: 'Probe', handler() {} }]
   });
+  const lifecycle = new ZLinkChannelRuntimeLifecycle({
+    registration,
+    spotRouteBridges: new Map(),
+    spotRoutes: { spotRouteNode() {} },
+    dispatchServices: { dispatchErrorReporter() {}, handlerFilters: () => [] },
+    sockets: {
+      startLocalClientServerConnections() {}, startManualClientServerConnections() {},
+      channelRouter: () => ({}), clientServerServerPeersForChannel: () => [],
+      async dispose() {}
+    },
+    adapter: { createReadablePoller: () => ({
+      dispose() { if (++attempts === 1) throw failure; }
+    }) }
+  });
+  lifecycle.start({ run: () => Promise.resolve(), errorSink: {} });
   await assert.rejects(lifecycle.dispose(), (error) => error === failure);
   await lifecycle.dispose();
   assert.equal(attempts, 2);
@@ -77,30 +90,27 @@ test('channel registry owns a socket before startup configuration can fail', asy
 });
 
 test('fanout registry retains a failed subscriber for subsequent close', async () => {
-  const registry = new ZLinkChannelSocketRegistry(
-    framework.createFrameworkRegistration({}),
-    {},
-    {}
-  );
   let attempts = 0;
   const failure = new Error('first subscriber close failed');
-  const monitor = { async dispose() {} };
-  registry.fanoutConnections.set('publisher', {
-    monitor,
-    subscriber: {
-      disconnect() {},
-      async dispose() {
-        if (++attempts === 1) throw failure;
-      }
-    }
-  });
-  registry.ownedResources.add(monitor);
+  const monitor = { onEvent() {}, async dispose() {} };
+  const subscriber = {
+    setChannelName() {}, setSubscription() {}, connect() {}, disconnect() {},
+    async dispose() { if (++attempts === 1) throw failure; }
+  };
+  const registration = framework.createFrameworkRegistration({});
+  registration.channels.set('work', { subscriber: {} });
+  const registry = new ZLinkChannelSocketRegistry(
+    registration, { createSubscriberSocket: () => subscriber }, {},
+    { openSocketMonitor: () => monitor }
+  );
+  registry.openFanoutSubscriberConnection('work', 'publisher', 'inproc://publisher', {});
   await assert.rejects(
     registry.closeFanoutSubscriberConnection('publisher'),
     (error) => error === failure
   );
   await registry.closeFanoutSubscriberConnection('publisher');
   assert.equal(attempts, 2);
+  await registry.dispose();
 });
 
 test('shutdown reports a failed socket and defers context disposal', async () => {
@@ -157,14 +167,14 @@ test('start rollback propagates failed socket cleanup and defers context disposa
 });
 
 test('raw mesh backend retains its failed transport owner', async () => {
-  const backend = new ZLinkNodeRawMeshBackend('play', 'close-failure', {});
   let attempts = 0;
   const failure = new Error('first transport close failed');
-  backend.runtime = {
+  const raw = {
     close() {
       if (++attempts === 1) throw failure;
     }
   };
+  const backend = new ZLinkNodeRawMeshBackend('play', 'close-failure', {}, undefined, undefined, undefined, undefined, { raw });
   await assert.rejects(
     () => backend.close(),
     (error) => error === failure
@@ -174,18 +184,17 @@ test('raw mesh backend retains its failed transport owner', async () => {
 });
 
 test('channel registry retains a failed socket for subsequent disposal', async () => {
-  const registry = new ZLinkChannelSocketRegistry(
-    framework.createFrameworkRegistration({}),
-    {},
-    {}
-  );
   let attempts = 0;
   const failure = new Error('first channel socket close failed');
-  registry.clientDealers.set('play', {
-    async dispose() {
-      if (++attempts === 1) throw failure;
-    }
-  });
+  const registration = framework.createFrameworkRegistration({});
+  registration.channels.set('play', { client: {} });
+  const registry = new ZLinkChannelSocketRegistry(registration, {
+    createDealerSocket: () => ({
+      setChannelName() {},
+      async dispose() { if (++attempts === 1) throw failure; }
+    })
+  }, {});
+  registry.clientDealer('play');
   await assert.rejects(registry.dispose(), (error) => error === failure);
   await registry.dispose();
   assert.equal(attempts, 2);
@@ -202,13 +211,15 @@ test('channel registry releases each successfully closed native socket', async (
     if (++attempts === 1) throw new Error('second socket close failed');
     closeSecond();
   });
+  const registration = framework.createFrameworkRegistration({});
+  registration.channels.set('first', { client: {} });
+  registration.channels.set('second', { client: {} });
+  const sockets = [wrapSocket(first), wrapSocket(second)];
   const registry = new ZLinkChannelSocketRegistry(
-    framework.createFrameworkRegistration({}),
-    {},
-    {}
+    registration, { createDealerSocket: () => sockets.shift() }, {}
   );
-  registry.clientDealers.set('first', wrapSocket(first));
-  registry.clientDealers.set('second', wrapSocket(second));
+  registry.clientDealer('first');
+  registry.clientDealer('second');
   t.after(() => {
     closeFirst();
     closeSecond();
@@ -220,17 +231,22 @@ test('channel registry releases each successfully closed native socket', async (
 });
 
 test('stream manager retains a failed socket for subsequent disposal', async () => {
-  const manager = new ZLinkStreamRuntimeManager({});
   let attempts = 0;
   const failure = new Error('first stream socket close failed');
-  manager.nodes.set('play', {
-    nativeSessionServices: [],
-    socket: {
-      async dispose() {
-        if (++attempts === 1) throw failure;
-      }
+  const startupFailure = new Error('stop after the stream socket is owned');
+  const registration = framework.createFrameworkRegistration({});
+  registration.streamNodes.set('play', { bind: 'tcp://127.0.0.1:0' });
+  const manager = new ZLinkStreamRuntimeManager({
+    registration,
+    backendAdapterFactory: {
+      createMonitoringAdapter: () => ({}),
+      createStreamAdapter: () => ({ createStreamSocket: () => ({
+        bind() { throw startupFailure; },
+        async dispose() { if (++attempts === 1) throw failure; }
+      }) })
     }
   });
+  assert.throws(() => manager.start(), (error) => error === startupFailure);
   await assert.rejects(manager.dispose(), (error) => error === failure);
   await manager.dispose();
   assert.equal(attempts, 2);
@@ -374,8 +390,8 @@ test('spot disposal rejects work while close is pending and shares close', async
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   let attempts = 0;
-  const manager = new ZLinkSpotNodeRuntimeManager({ detachedTaskRunner: {} });
-  manager.publishers.set('mesh', { async close() { ++attempts; await gate; } });
+  const managerOptions = { detachedTaskRunner: {} };
+  const manager = await createPublisherRuntime('mesh', { async close() { ++attempts; await gate; } }, managerOptions);
   const first = manager.dispose();
   const second = manager.dispose();
   try {
@@ -403,8 +419,8 @@ for (const kind of ['client', 'fanout']) {
       assert.throws(() => kind === 'client'
         ? registry.openClientServerConnection('work', 'broken', 'tcp://127.0.0.1:1', {})
         : registry.openFanoutSubscriberConnection('work', 'broken', 'tcp://127.0.0.1:1', {}), (error) => error === failure);
-      assert.equal(registry.clientServerConnections.size, 0);
-      assert.equal(registry.fanoutConnections.size, 0);
+      assert.equal(registry[inspectRuntime]().clientServerConnections, 0);
+      assert.equal(registry[inspectRuntime]().fanoutConnections, 0);
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(attempts, 1);
       assert.ok(reported.includes(closeFailure));

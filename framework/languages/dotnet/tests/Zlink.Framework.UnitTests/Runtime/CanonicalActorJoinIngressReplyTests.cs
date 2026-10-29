@@ -562,7 +562,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
-    public async Task ManagedSource_Command28Request_Retries_Same_Correlation_After_Lost_Reply()
+    public async Task ManagedSource_Command28Request_LostReplyEndsWithoutResubmission()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         ReplySubmitOperation? firstReplyRoute = null;
@@ -609,6 +609,15 @@ public sealed class CanonicalActorJoinIngressReplyTests
         );
 
         var operationId = source.AllocateOperationId();
+        var completionDeliveries = 0;
+        source.SetCompletionHandlerCore(
+            (record, _) =>
+            {
+                if (record.Kind == MeshRecordKind.Completion && record.OperationId == operationId)
+                    Interlocked.Increment(ref completionDeliveries);
+                return false;
+            }
+        );
         var request = new ZLinkBackendCanonicalActorJoinRequest(
             new ZLinkBackendActorRef(sourceRid, "actor-lost-reply", 11),
             source.Status().LifecycleGeneration,
@@ -670,41 +679,65 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 CancellationToken.None
             );
         var firstDecision = await AdmitAsync(firstIngress);
+        Assert.False(firstDecision.Accepted);
+        var duplicateDecision = await AdmitAsync(firstIngress);
+        Assert.Same(firstDecision, duplicateDecision);
+        Assert.Equal(1, Volatile.Read(ref executions));
         using var firstReply = Message.From(firstDecision.Reply);
         Assert.Equal(
             SubmitResult.Ok,
             firstIngress.ReplyJoin(ActorJoinResult.Rejected, [firstReply])
         );
+        Assert.NotNull(firstReplyRoute);
+        Assert.Equal(0, Volatile.Read(ref replySubmits));
 
         // The lower source RID's outbound direction wins reciprocal HANDOVER.
-        // Core ends the admitted attempt with NOT_CONNECTED, so the sender can
-        // replay inside the original deadline without an artificial attempt cut.
+        // The binding's physical-loss result ends this started operation.
         source.ConnectPeer(target.Status().LocalEndpoint, targetRid);
-
-        var retryIngress = await ReceiveActorJoinAsync(target, TimeSpan.FromSeconds(7));
-        Assert.Equal(firstIngress.OperationId, retryIngress.OperationId);
-        var retryDecision = await AdmitAsync(retryIngress);
-        Assert.Same(firstDecision, retryDecision);
-        Assert.Equal(1, Volatile.Read(ref executions));
-        using var retryReply = Message.From(retryDecision.Reply);
-        Assert.Equal(
-            SubmitResult.Ok,
-            retryIngress.ReplyJoin(ActorJoinResult.Rejected, [retryReply])
-        );
 
         var (completion, replyParts) = await ReceiveCompletionAsync(source, operationId);
         try
         {
             Assert.Equal(operationId, completion.OperationId);
-            Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
-            var join = Assert.IsType<ActorJoinCompletion>(completion.JoinCompletion);
-            Assert.Equal(ActorJoinResult.Rejected, join.JoinResult);
-            var applicationReply = Assert.Single(replyParts);
-            Assert.Equal(
-                "{\"reason\":\"ZoneMaintenance\"}"u8.ToArray(),
-                applicationReply.AsReadOnlyMemory().ToArray()
+            Assert.Equal((int)RequestResult.NotConnected, completion.TerminalResult);
+            Assert.Null(completion.JoinCompletion);
+            Assert.Empty(replyParts);
+            Assert.Equal(1, Volatile.Read(ref completionDeliveries));
+            Assert.Equal(1, Volatile.Read(ref executions));
+            Assert.Equal(0, Volatile.Read(ref replySubmits));
+            await WaitUntilAsync(() =>
+                source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
             );
-            Assert.Equal(1, Volatile.Read(ref replySubmits));
+            foreach (
+                var (node, domain) in new[]
+                {
+                    (target, MeshReadyDomains.Application),
+                    (source, MeshReadyDomains.Infrastructure),
+                }
+            )
+            {
+                using var ready = new MeshReadyBatch();
+                node.DrainReady(domain, ready, RecvFlags.DontWait);
+                for (var index = 0; index < ready.Count; index++)
+                {
+                    using var claim = ready.TakeClaim(index);
+                    using var received = new MeshReceiveBatch();
+                    while (claim.Receive(received, RecvFlags.DontWait))
+                    {
+                        for (var recordIndex = 0; recordIndex < received.Count; recordIndex++)
+                        {
+                            var record = received[recordIndex];
+                            Assert.False(
+                                record.OperationKind == MeshOperationKind.ActorJoin
+                                    && record.OperationId.Low == operationId.Low
+                            );
+                        }
+                        received.Reset();
+                    }
+                }
+            }
+            Assert.Equal(1, Volatile.Read(ref completionDeliveries));
+            Assert.Equal(0, Volatile.Read(ref replySubmits));
         }
         finally
         {

@@ -100,13 +100,19 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     {
         if (_client_server && _client_server_started)
             _client_server->seal_application_dispatch ();
+        if (_fanout)
+            _fanout->seal_application_dispatch ();
     }
 
     bool wait_for_accepted_callbacks_until (
       std::chrono::steady_clock::time_point deadline) noexcept override
     {
-        return !_client_server || !_client_server_started
-               || _client_server->wait_for_accepted_callbacks_until (deadline);
+        const bool client_server_drained =
+          !_client_server || !_client_server_started
+          || _client_server->wait_for_accepted_callbacks_until (deadline);
+        const bool fanout_drained =
+          !_fanout || _fanout->wait_for_accepted_callbacks_until (deadline);
+        return client_server_drained && fanout_drained;
     }
 
     bool publish_descriptor_state (framework_runtime_state_t state) noexcept override

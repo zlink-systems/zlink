@@ -68,8 +68,8 @@ class logging_state_t
     bool capture_records = true;
     static constexpr std::size_t default_captured_record_limit = 4096;
     std::size_t max_captured_records = default_captured_record_limit;
-    runtime::offload_executor_t lane_executor;
-    mutable runtime::state_lane_t lane{lane_executor};
+
+    mutable runtime::state_lane_t lane;
 };
 
 std::string format_record (const log_record_t &record)

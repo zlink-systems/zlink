@@ -4249,8 +4249,8 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     auto scheduler = std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ();
-    scheduler->publication_fence (
-      zlink::framework::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (zlink::framework::test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     node->worker_executor = scheduler;
     node->channel_runtime =
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
@@ -4483,8 +4483,8 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("actor-a");
     auto scheduler = std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ();
-    scheduler->publication_fence (
-      zlink::framework::test::state_lane_publication_fence (node->lane, node->lane_executor));
+    scheduler->publication_fence (zlink::framework::test::state_lane_publication_fence (
+      node->lane, *::zlink::framework::runtime::infrastructure_executor ()));
     node->worker_executor = scheduler;
     node->channel_runtime =
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
@@ -8233,8 +8233,61 @@ int actor_error_payload_vectors ()
     return 0;
 }
 
+namespace zlink::framework::runtime
+{
+struct state_lane_test_access_t
+{
+    static bool has_pending (state_lane_t &lane)
+    {
+        const std::lock_guard lock (lane._mailbox_mutex);
+        return !lane._mailbox.empty ();
+    }
+};
+}
+
+int binding_context_uses_gateway_state_lane ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto manager = gateway.manager ();
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ().share ();
+    auto holder = std::async (std::launch::async, [&] {
+        state->sync ([&] {
+            entered.set_value ();
+            released.wait ();
+        });
+    });
+    entered.get_future ().wait ();
+    std::atomic_bool returned{false};
+    auto configure = std::async (std::launch::async, [&] {
+        session_actor_manager_access_t::bind_native (manager, [] (actor_ref_t, std::uint64_t) {
+            return task_t<void> (result_t<void>::success ());
+        });
+        returned.store (true, std::memory_order_release);
+    });
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    bool queued = false;
+    while (!(queued = runtime::state_lane_test_access_t::has_pending (state->lane))
+           && !returned.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    const bool completed_while_held = returned.load (std::memory_order_acquire);
+    release.set_value ();
+    holder.get ();
+    configure.get ();
+    return queued && !completed_while_held ? 0 : 1;
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--binding-state-owner")
+        return binding_context_uses_gateway_state_lane ();
+    if (argc == 1 && binding_context_uses_gateway_state_lane () != 0)
+        return 1;
     if (const auto framing = actor_reply_framing_vectors (); framing != 0)
         return 500 + framing;
 

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/execution/state_lane.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -21,9 +22,10 @@
 #include <zlink/Contracts/Eventing/poller.hpp>
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -56,6 +58,9 @@ class fanout_location_runtime_t final : public fanout_runtime_t
 
     void start ();
     void stop ();
+    void seal_application_dispatch () noexcept;
+    bool
+    wait_for_accepted_callbacks_until (std::chrono::steady_clock::time_point deadline) noexcept;
     bool republish_after_store_recovery (
       location_write_intent_t intent = location_write_intent_t::new_claim);
     bool empty () const noexcept;
@@ -70,21 +75,29 @@ class fanout_location_runtime_t final : public fanout_runtime_t
       zlink::framework::observation_detail::runtime_observer_state_t<fanout_channel_snapshot_t>;
 
   private:
+    friend struct fanout_location_runtime_test_access_t;
     struct publisher_entry_t;
     struct subscriber_entry_t;
+    struct subscriber_resource_t;
+    struct resource_snapshot_t;
+
+    static bool accepted_callbacks_drained (const resource_snapshot_t &resources);
+    void publish_resources_on_lane ();
 
     void start_publisher (const channel_snapshot_t &channel,
                           const std::optional<location_owner_token_t> &owner);
     void start_subscriber (const channel_snapshot_t &channel);
     void run ();
-    bool publish_descriptors (location_write_intent_t intent);
+    task_t<bool> publish_descriptors (location_write_intent_t intent);
     void reconcile_subscribers ();
-    void reconcile_subscriber (subscriber_entry_t &subscriber);
+    void reconcile_subscriber (const subscriber_resource_t &subscriber);
     void publish_snapshot_changes ();
+    void publish_snapshot_changes_on_lane () const;
+    void request_snapshot_changes ();
     fanout_channel_snapshot_t
-    publish_snapshot_locked (fanout_channel_snapshot_t current,
-                             const std::shared_ptr<observer_t> &initial_observer = {}) const;
-    fanout_channel_snapshot_t build_snapshot_locked (const std::string &channel_name) const;
+    publish_snapshot_on_lane (fanout_channel_snapshot_t current,
+                              const std::shared_ptr<observer_t> &initial_observer = {}) const;
+    fanout_channel_snapshot_t build_snapshot_on_lane (const std::string &channel_name) const;
     bool is_observable_channel (std::string_view channel_name) const noexcept;
     static bool snapshot_equivalent (const fanout_channel_snapshot_t &left,
                                      const fanout_channel_snapshot_t &right) noexcept;
@@ -116,11 +129,21 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     const handler_registry_t *_handlers;
     std::shared_ptr<application_job_queue_t> _application_jobs;
     std::unique_ptr<application_supply_slot_t> _application_supply;
+    struct dispatch_progress_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+    };
+    const std::shared_ptr<dispatch_progress_t> _dispatch_progress =
+      std::make_shared<dispatch_progress_t> ();
     std::shared_ptr<offload_executor_t> _dispatch_executor;
     std::unique_ptr<zlink::poller_t> _subscriber_poller;
     eventing::runtime_wake_timer_t _wake_timer;
-    mutable std::mutex _gate;
-    std::mutex _descriptor_publish_mutex;
+    mutable state_lane_t _lane;
+    std::shared_ptr<task_completion_source_t<void>> _descriptor_publication;
+    std::optional<task_t<bool>> _descriptor_renewal;
+    std::optional<task_t<void>> _snapshot_publication;
+    std::shared_ptr<const resource_snapshot_t> _resources;
     std::map<std::string, std::unique_ptr<publisher_entry_t>> _publishers;
     std::map<std::string, std::unique_ptr<subscriber_entry_t>> _subscribers;
     mutable std::map<std::string, std::uint64_t> _snapshot_sequences;
@@ -132,4 +155,3 @@ class fanout_location_runtime_t final : public fanout_runtime_t
 };
 
 } // namespace zlink::framework::runtime::fanout
-#include <mutex>

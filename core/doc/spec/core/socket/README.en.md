@@ -182,10 +182,8 @@ connector therefore observes that pipe's termination through its monitor and
 reconnects per its connect intent, and an attempt made after the existing pipe
 has terminated is admitted. The wire carries no rejection reason; the connector
 only observes the termination of its own pair. A request already admitted on
-the rejected pipe therefore ends exactly once with `ZLINK_REQUEST_NOT_CONNECTED`
-(errno `EHOSTUNREACH`) as soon as that pair terminates, under the single rule of
-the section 6 completion table (submit-time pair terminated, whatever the
-cause), and the caller resubmits. Flows that reconnect often should use
+the rejected pipe follows the pair-termination rule in
+[Request and reply](#request-and-reply). Flows that reconnect often should use
 `ZLINK_RID_DUPLICATE_HANDOVER`. The
 READY event a connector observes means the transport connection was established,
 not that the peer ROUTER admitted the routing id. Under `ZLINK_RID_DUPLICATE_HANDOVER`, a reconnecting pipe
@@ -195,13 +193,10 @@ If pipes in opposite directions collide (regardless of the policy), both peers
 compare their routing IDs and choose the same single direction, and the pipe of
 the losing direction is kept as standby rather than closed
 ([ROUTER §5](07-router.en.md)). A request already admitted on the direction that loses that
-choice does not carry over to the chosen direction: its reply stays scoped to
-the transport pair that was active at submit time, so it cannot complete
-through the new direction. Core completes that request exactly once with
-`ZLINK_REQUEST_NOT_CONNECTED` (errno `EHOSTUNREACH`) as soon as its pair is
-superseded by the handover, without waiting for the request's own timeout. The
-caller resubmits through the handed-over direction after receiving that
-completion. Which pipe is selected for each RID is observed through the snapshot in
+choice does not carry over to the chosen direction. Replies remain scoped to
+the submit-time transport pair and cannot complete through the new direction.
+Request completion when that pair leaves the selection follows
+[Request and reply](#request-and-reply). Which pipe is selected for each RID is observed through the snapshot in
 [ROUTER §10.1](07-router.en.md#101-observing-the-selected-route).
 
 This option is meaningful only for sockets that can observe a peer-advertised
@@ -905,6 +900,12 @@ Binds the socket to a local endpoint. The endpoint string uses the format
 - `wss://interface:port` (WebSocket over TLS; only in `ZLINK_HAVE_WSS` builds)
 - `tls://interface:port` (TLS-encrypted TCP; only in `ZLINK_HAVE_TLS` builds)
 
+First parse the address portion of an IP-based bind address as a numeric IP
+address. If it parses, use that address without looking up a NIC address or
+performing a DNS lookup. Otherwise, look it up as a NIC name; if no matching
+NIC exists, perform the permitted address-name resolution. The wildcard `*`
+and bracketed IPv6 addresses remain supported.
+
 A socket can be bound to multiple endpoints. For TCP, if port 0 is specified
 the system assigns an ephemeral port; use `ZLINK_OPT_LAST_ENDPOINT` to retrieve
 the actual endpoint.
@@ -1092,10 +1093,10 @@ asynchronous teardown of the removed connection's physical resources may overlap
 started by a following `zlink_connect(endpoint)`, and the new attempt's progress does not depend on monitor
 event consumption or on observing the previous connection's terminal edge (05-polling §3 command
 progress). A same-RID registration still present on the remote ROUTER is handled by the §4 RID duplicate
-policy (REJECT/HANDOVER). A REQUEST admitted on the removed connection ends per the completion contract:
-explicit endpoint/logical RID removal is `NOT_FOUND`; any other termination of the submit-time pair (transient
-physical disconnect, yielding to a handover, REJECT close) is `NOT_CONNECTED` whatever the cause (section 6
-completion table).
+policy (REJECT/HANDOVER). For a REQUEST admitted on the removed connection, the
+section 6 completion table defines the explicit endpoint or logical RID removal
+result. Other termination or deselection of the submit-time pair follows
+[Request and reply](#request-and-reply).
 
 **Returns:** `ZLINK_CONNECT_OK` on success; otherwise a `zlink_connect_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
@@ -1346,10 +1347,14 @@ the same as for a SEND wait token in
 default is 5,000 ms. The reply timeout begins monotonically when the request
 record enters the outbound local send queue, that is, when `ZLINK_SUBMIT_OK` is
 returned; it does not run while a wait token is outstanding. A disconnect after
-admission does not replay the request payload;
-correlation and the running budget remain. The first resolver to remove pending
-correlation, reply or timeout, creates the completion and discards the late
-result.
+admission does not replay the request payload. When processing termination or
+deselection of the submit-time transport pair, the same resolver first processes
+complete replies already reachable at the head of its inbound FIFO. It does not
+bypass preceding DATA or REQUEST records, or a public-receive delivery hold. It
+then completes only the requests still pending for that pair, exactly once,
+with `ZLINK_REQUEST_NOT_CONNECTED` (`EHOSTUNREACH`). Only the reply, timeout, or
+pair-termination path that first removes the pending correlation produces a
+completion; late results are discarded.
 
 On a DEALER-ROUTER single connection, DATA sent first by the ROUTER and a later REPLY or error reply
 use the same FIFO. If DEALER does not dequeue the preceding DATA or keeps local PAUSED in effect, the
@@ -1429,7 +1434,7 @@ not a capability for a later send target.
 | Permanent peer-type rejection | not applicable; the wait token follows the common termination rules | `ZLINK_REQUEST_REJECTED` |
 | Malformed protocol | not applicable; the wait token follows the common termination rules | `ZLINK_REQUEST_PROTOCOL_ERROR` |
 | Allocation or runtime failure after acceptance | not applicable; Core retains no payload | `ZLINK_REQUEST_INTERNAL_ERROR` |
-| Termination of the submit-time transport pair or its removal from the selection (transient disconnect, HANDOVER supersession, standby transition, REJECT close — whatever the cause) | PAIR, DEALER, and ROUTER: the transport termination itself is not a terminal; reconnect of the same target publishes WRITABLE. STREAM: `ZLINK_SEND_NOT_CONNECTED`, `ENOTCONN` per [STREAM routed send](08-stream.en.md#4-routed-send) | the reply is pinned to the submit-time pair, so Core completes the request exactly once with `ZLINK_REQUEST_NOT_CONNECTED` (`EHOSTUNREACH`) as soon as that pair terminates or leaves the selection; the caller resubmits |
+| Termination of the submit-time transport pair or its removal from the selection (transient disconnect, HANDOVER supersession, standby transition, REJECT close — whatever the cause) | PAIR, DEALER, and ROUTER: the transport termination itself is not a terminal; reconnect of the same target publishes WRITABLE. STREAM: `ZLINK_SEND_NOT_CONNECTED`, `ENOTCONN` per [STREAM routed send](08-stream.en.md#4-routed-send) | See the pair-termination rule in [Request and reply](#request-and-reply) |
 | Context termination or socket close | no record; wait tokens and unread records are discarded internally | internally discard in-progress requests and unread records; no new completion is guaranteed |
 
 Core stores a REQUEST reply in a contiguous `zlink_msg_t[]` allocated before

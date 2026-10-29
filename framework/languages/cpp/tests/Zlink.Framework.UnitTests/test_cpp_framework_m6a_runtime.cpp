@@ -1125,7 +1125,8 @@ void verify_actor_create_from_dispatch_thread_does_not_block ()
 
 void verify_topology_snapshot_and_connection_fence ()
 {
-    mesh::service_topology_registry_t topology (descriptor ("local"));
+    zlink::framework::runtime::state_lane_t topology_lane;
+    mesh::service_topology_registry_t topology (topology_lane, descriptor ("local"));
     auto peer = descriptor ("peer", "tcp://127.0.0.1:7001");
     peer.state = mesh::service_node_state_t::serving;
     const auto first_connection = bytes ("connection-a");
@@ -1175,14 +1176,16 @@ void verify_route_mesh_descriptor_uses_generated_capability ()
     assert (local.protocol_capabilities.size () == 2);
     assert (local.protocol_capabilities.at (0) == "framework-service-v12");
     assert (local.protocol_capabilities.at (1) == protocol::required_capability);
-    mesh::service_topology_registry_t topology (local);
+    zlink::framework::runtime::state_lane_t topology_lane;
+    mesh::service_topology_registry_t topology (topology_lane, local);
     (void) topology;
 
     auto stale = local;
     stale.protocol_capabilities = {"framework-service-v12"};
     bool rejected = false;
     try {
-        mesh::service_topology_registry_t invalid (std::move (stale));
+        zlink::framework::runtime::state_lane_t invalid_lane;
+        mesh::service_topology_registry_t invalid (invalid_lane, std::move (stale));
         (void) invalid;
     }
     catch (const std::invalid_argument &) {
@@ -1200,7 +1203,8 @@ void verify_admission_follows_latest_observed_route ()
     auto lower = descriptor ("aa");
     auto higher = descriptor ("zz", "tcp://127.0.0.1:7003");
     higher.state = mesh::service_node_state_t::serving;
-    mesh::service_topology_registry_t lower_topology (lower);
+    zlink::framework::runtime::state_lane_t lower_topology_lane;
+    mesh::service_topology_registry_t lower_topology (lower_topology_lane, lower);
 
     assert (lower_topology.admit (higher, bytes ("route-1"))
             == mesh::peer_admission_result_t::admitted);
@@ -1211,7 +1215,8 @@ void verify_admission_follows_latest_observed_route ()
     assert (lower_topology.peer (bytes ("zz"))->connection_id == bytes ("route-2"));
     assert (!lower_topology.disconnect (bytes ("zz"), bytes ("route-1")));
     assert (lower_topology.peer (bytes ("zz"))->connection_id == bytes ("route-2"));
-    mesh::service_liveness_registry_t liveness;
+    zlink::framework::runtime::state_lane_t liveness_lane;
+    mesh::service_liveness_registry_t liveness (liveness_lane);
     liveness.admit (bytes ("zz"), bytes ("route-2"),
                     mesh::service_liveness_registry_t::clock_t::now ());
     assert (!liveness.disconnect (bytes ("zz"), bytes ("route-1")));
@@ -1222,7 +1227,8 @@ void verify_admission_follows_latest_observed_route ()
 
 void verify_lifecycle_token_requires_current_discovery_expectation ()
 {
-    mesh::service_topology_registry_t topology (descriptor ("local"));
+    zlink::framework::runtime::state_lane_t topology_lane;
+    mesh::service_topology_registry_t topology (topology_lane, descriptor ("local"));
     auto generation_99 = descriptor ("peer", "tcp://127.0.0.1:7099");
     generation_99.lifecycle_generation = 99;
     generation_99.state = mesh::service_node_state_t::serving;
@@ -1439,7 +1445,8 @@ void verify_object_client_connection_requirement ()
     remote.state = mesh::service_node_state_t::serving;
 
     assert (mesh::route_mesh_connection_not_required (local, remote));
-    mesh::service_topology_registry_t topology (local);
+    zlink::framework::runtime::state_lane_t topology_lane;
+    mesh::service_topology_registry_t topology (topology_lane, local);
     assert (topology.admit (remote, bytes ("client-only-connection"))
             == mesh::peer_admission_result_t::not_required);
     assert (topology.peers ().empty ());
@@ -1515,7 +1522,8 @@ void verify_signed_weight_contract ()
     auto local = descriptor ("weight-local");
     local.channels = {{"weighted", 100}};
     local.placement_weight = 100;
-    mesh::service_topology_registry_t topology (local);
+    zlink::framework::runtime::state_lane_t topology_lane;
+    mesh::service_topology_registry_t topology (topology_lane, local);
 
     auto weight_100 = descriptor ("weight-100", "tcp://127.0.0.1:7101");
     weight_100.channels = {{"weighted", 100}};
@@ -1576,7 +1584,8 @@ void verify_signed_weight_contract ()
     invalid_negative.channels.front ().weight = -1;
     bool rejected_negative = false;
     try {
-        mesh::service_topology_registry_t invalid (invalid_negative);
+        zlink::framework::runtime::state_lane_t invalid_lane;
+        mesh::service_topology_registry_t invalid (invalid_lane, invalid_negative);
     }
     catch (const std::invalid_argument &) {
         rejected_negative = true;
@@ -1587,7 +1596,8 @@ void verify_signed_weight_contract ()
     invalid_upper.placement_weight = 10001;
     bool rejected_upper = false;
     try {
-        mesh::service_topology_registry_t invalid (invalid_upper);
+        zlink::framework::runtime::state_lane_t invalid_lane;
+        mesh::service_topology_registry_t invalid (invalid_lane, invalid_upper);
     }
     catch (const std::invalid_argument &) {
         rejected_upper = true;
@@ -1839,7 +1849,8 @@ void verify_liveness_shared_record_contract ()
         std::size_t expected_probes;
         std::istringstream fields (row);
         assert (fields >> kind >> received_ms >> alive_ms >> expires_ms >> expected_probes);
-        mesh::service_liveness_registry_t owner;
+        zlink::framework::runtime::state_lane_t owner_lane;
+        mesh::service_liveness_registry_t owner (owner_lane);
         const auto start = mesh::service_liveness_registry_t::clock_t::time_point{};
         const auto peer = bytes ("peer");
         auto receipt = owner.admit (peer, bytes ("current"), start);
@@ -1932,7 +1943,8 @@ void verify_liveness_reuses_probe_and_fences_reconnect ()
 {
     {
         // Transport liveness §3: admission immediately makes the first probe due.
-        mesh::service_liveness_registry_t owner;
+        zlink::framework::runtime::state_lane_t owner_lane;
+        mesh::service_liveness_registry_t owner (owner_lane);
         const auto admitted = mesh::service_liveness_registry_t::clock_t::time_point{};
         owner.admit (bytes ("initial-peer"), bytes ("initial-pair"), admitted);
         assert (owner.tick (admitted).probes.size () == 1);
@@ -1940,7 +1952,8 @@ void verify_liveness_reuses_probe_and_fences_reconnect ()
         assert (owner.tick (admitted + 5s).probes.size () == 1);
     }
     {
-        mesh::service_liveness_registry_t owner;
+        zlink::framework::runtime::state_lane_t owner_lane;
+        mesh::service_liveness_registry_t owner (owner_lane);
         const auto start = mesh::service_liveness_registry_t::clock_t::time_point{};
         const auto peer = bytes ("peer");
         const auto connection = bytes ("pair");
@@ -1952,7 +1965,8 @@ void verify_liveness_reuses_probe_and_fences_reconnect ()
         assert (owner.tick (start + 29s).timed_out_nodes
                 == std::vector<std::vector<std::uint8_t>>{peer});
     }
-    mesh::service_liveness_registry_t liveness (10ms, 30ms);
+    zlink::framework::runtime::state_lane_t liveness_lane;
+    mesh::service_liveness_registry_t liveness (liveness_lane, 10ms, 30ms);
     const auto node = bytes ("peer");
     const auto first_connection = bytes ("connection-a");
     const auto replacement_connection = bytes ("connection-b");
@@ -2198,6 +2212,71 @@ void verify_client_server_stale_admission_reply_is_discarded ()
     }
     assert (!client.ready ());
     replacement->close ();
+}
+
+void verify_client_server_close_drains_parked_control_reply ()
+{
+    zlink::framework::runtime::offload_executor_t infrastructure (1);
+    protocol::client_server_server_admission_t descriptor{"client-server-close-drain",
+                                                          bytes ("server-close-drain"),
+                                                          41,
+                                                          1,
+                                                          100,
+                                                          mesh::service_node_state_t::serving,
+                                                          "security-close-drain",
+                                                          1024 * 1024,
+                                                          "tcp://127.0.0.1:0"};
+    client_server::raw_client_server_server_t server (
+      zlink::framework::test::runtime_failure_options (
+        client_server::raw_client_server_server_options_t{descriptor}),
+      {}, &infrastructure);
+    server.start ();
+    const auto expected = server.descriptor ();
+    std::promise<void> entered;
+    auto callback_entered = entered.get_future ();
+    std::promise<void> release;
+    const auto released = release.get_future ().share ();
+    std::atomic_bool first{true};
+    zlink::poller_t client_poller;
+    auto options = zlink::framework::test::runtime_failure_options (
+      client_server::raw_client_server_client_options_t{
+        bytes ("client-close-drain"),
+        {expected.channel_name, expected.security_identity, expected.effective_max_message_bytes},
+        expected});
+    options.transport_poller = &client_poller;
+    options.control_reply_parked = [&] {
+        if (first.exchange (false)) {
+            entered.set_value ();
+            released.wait ();
+        }
+    };
+    client_server::raw_client_server_client_t client (std::move (options));
+    client.start ();
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while (callback_entered.wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) client.drain_monitor_events (std::chrono::steady_clock::now ()).result ().value ();
+        (void) server.drain_monitor_events (std::chrono::steady_clock::now ());
+        (void) server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
+        // Drive the binding completion owner without applying the parked reply.
+        zlink::poll_event_t event;
+        (void) client_poller.wait (&event, 1, 0ms);
+        std::this_thread::sleep_for (1ms);
+    }
+    const bool parked = callback_entered.wait_for (0ms) == std::future_status::ready;
+    if (!parked) {
+        release.set_value ();
+        assert (parked);
+        return;
+    }
+    auto closing = client.close_task ();
+    const bool waited_for_reply_lane = !closing.await_ready ();
+    // Release before asserting so a regression cannot strand the fixture's callback.
+    release.set_value ();
+    closing.result ().value ();
+    assert (waited_for_reply_lane);
+    client.close_task ().result ().value ();
+    server.close ();
 }
 
 void verify_client_server_plain_hello_is_rejected ()
@@ -2549,7 +2628,9 @@ void verify_client_server_weighted_selection ()
     const auto tie_selected = rid_tiebreak.select (tied);
     assert (tie_selected && *tie_selected == "connection-z");
 
-    mesh::service_topology_registry_t topology (descriptor ("route-local"));
+    zlink::framework::runtime::state_lane_t topology_lane;
+
+    mesh::service_topology_registry_t topology (topology_lane, descriptor ("route-local"));
     auto route_a = descriptor ("route-a");
     auto route_b = descriptor ("route-b");
     route_a.state = mesh::service_node_state_t::serving;
@@ -2581,7 +2662,9 @@ void verify_client_server_weighted_selection ()
     weighted_route_b.channels.front ().weight = 100;
     weighted_route_a.state = mesh::service_node_state_t::serving;
     weighted_route_b.state = mesh::service_node_state_t::serving;
-    mesh::service_topology_registry_t weighted_topology (descriptor ("weighted-route-local"));
+    zlink::framework::runtime::state_lane_t weighted_topology_lane;
+    mesh::service_topology_registry_t weighted_topology (weighted_topology_lane,
+                                                         descriptor ("weighted-route-local"));
     assert (weighted_topology.admit (weighted_route_a, bytes ("weighted-route-connection-a"))
             == mesh::peer_admission_result_t::admitted);
     assert (weighted_topology.admit (weighted_route_b, bytes ("weighted-route-connection-b"))
@@ -2606,7 +2689,10 @@ void verify_client_server_weighted_selection ()
         assert (selected_route && selected_route.value () == bytes ("weighted-route-a"));
     }
 
-    mesh::service_topology_registry_t cycle_topology (descriptor ("cycle-route-local"));
+    zlink::framework::runtime::state_lane_t cycle_topology_lane;
+
+    mesh::service_topology_registry_t cycle_topology (cycle_topology_lane,
+                                                      descriptor ("cycle-route-local"));
     auto cycle_route_a = descriptor ("cycle-route-a");
     auto cycle_route_b = descriptor ("cycle-route-b");
     cycle_route_a.channels.front ().weight = 5;
@@ -2675,7 +2761,8 @@ void verify_raw_owner_node_send_and_liveness (
         .descriptor = descriptor ("raw-b"),
         .dispatch = dispatch,
         .runtime_failures =
-          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
+        .metric_provider = metric_provider.api ()},
       second_context);
     assert (first.topology ().local_descriptor ().state == mesh::service_node_state_t::preparing);
     assert (second.topology ().local_descriptor ().state == mesh::service_node_state_t::preparing);
@@ -4358,7 +4445,8 @@ void verify_durable_attempt_waits_for_admit (protocol::command kind)
 
 void verify_topology_ready_is_remote_admit_on_current_route ()
 {
-    mesh::service_topology_registry_t topology (descriptor ("ready-local"));
+    zlink::framework::runtime::state_lane_t topology_lane;
+    mesh::service_topology_registry_t topology (topology_lane, descriptor ("ready-local"));
     auto remote = descriptor ("ready-remote");
     remote.state = mesh::service_node_state_t::serving;
     auto observe = topology.observe_peer (remote.node_routing_id);
@@ -4623,6 +4711,8 @@ int main (int argc, char **argv)
                 verify_bound_session_bind_retries_until_route_is_admitted ();
             else if (name == "close-reply")
                 verify_bound_session_close_reply_grammar ();
+            else if (name == "client-server-close-drain")
+                verify_client_server_close_drains_parked_control_reply ();
             else if (name == "silent")
                 verify_unadmitted_route (false);
             else if (name == "prepare")
@@ -4639,6 +4729,8 @@ int main (int argc, char **argv)
                 verify_bound_session_bind_does_not_replay_after_route_change ();
             else if (name == "create")
                 verify_actor_create_retries_until_route_is_admitted ();
+            else if (name == "stale-rid-retained")
+                verify_stale_rid_disconnect_preserves_same_endpoint_replacement ();
             else if (name == "bilateral")
                 verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ();
             else if (name == "join")
@@ -4741,6 +4833,7 @@ int main (int argc, char **argv)
     verify_location_descriptor_cas_snapshot_and_watch ();
     verify_manual_and_automatic_classic_fanout ();
     verify_client_server_stale_admission_reply_is_discarded ();
+    verify_client_server_close_drains_parked_control_reply ();
     verify_client_server_plain_hello_is_rejected ();
     verify_client_server_independent_raw_path ();
     verify_client_server_admits_before_monitor_drain ();

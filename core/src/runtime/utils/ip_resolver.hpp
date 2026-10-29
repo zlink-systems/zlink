@@ -82,7 +82,7 @@ class ip_resolver_t
     ip_resolver_options_t _options;
 
     int resolve_nic_name (ip_addr_t *ip_addr_, const char *nic_);
-    int resolve_getaddrinfo (ip_addr_t *ip_addr_, const char *addr_);
+    int resolve_getaddrinfo (ip_addr_t *ip_addr_, const char *addr_, bool numeric_only_ = false);
 
 #if defined ZLINK_HAVE_WINDOWS
     int get_interface_name (unsigned long index_, char **dest_) const;

@@ -10,6 +10,548 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
 {
     private static readonly TimeSpan CompletionBound = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RegistrationTimeout = TimeSpan.FromSeconds(30);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RegistrationCancellationKeepsOriginalTokenAndOneTerminal(bool alreadyCanceled)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "registration-cancel");
+        var actor = CreateRegistrationActor(node, "registration-cancel-actor");
+        using var request = Message.From("registration request");
+        for (var iteration = 0; iteration < 64; iteration++)
+        {
+            using var cancellation = new CancellationTokenSource();
+            if (alreadyCanceled)
+                cancellation.Cancel();
+            var cancel = alreadyCanceled ? Task.CompletedTask : Task.Run(cancellation.Cancel);
+            var completion = RequestActor(node, actor, request, cancellation.Token, static _ => 7);
+            await cancel;
+            var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
+            Assert.Equal(cancellation.Token, error.CancellationToken);
+            Assert.True(completion.IsCanceled);
+            await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+            Assert.Equal(0, node.PendingOperationCount);
+            DrainApplicationRequests(node);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvalidRegistrationCompletesOriginalCallerWithoutDecoding(
+        bool invalidLifecycle
+    )
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "registration-invalid");
+        var valid = node.AllocateOperationId();
+        var invalid = invalidLifecycle
+            ? new MeshOperationId(valid.High ^ 1UL, valid.Low)
+            : new MeshOperationId(valid.High, 0);
+        var completion = node.RequestDirectWireAsync(
+                RoutingId.From("registration-invalid-target"),
+                Array.Empty<Message>(),
+                RegistrationTimeout,
+                CancellationToken.None,
+                operationId: invalid
+            )
+            .AsTask();
+        await Assert.ThrowsAsync<ArgumentException>(() => completion);
+        await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+        Assert.Equal(0, node.PendingOperationCount);
+    }
+
+    [Fact]
+    public async Task DuplicateRegistrationCannotRemoveOriginalOperation()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var server = context.CreateRouterSocket();
+        using var client = context.CreateRouterSocket();
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "registration-duplicate",
+            directRequestSocket: client
+        );
+        var target = RoutingId.From("registration-duplicate-target");
+        server.SetRoutingId(target);
+        client.SetRoutingId(RoutingId.From("registration-duplicate-source"));
+        server.Options.ReceiveTimeout = CompletionBound;
+        var endpoint = $"inproc://registration-duplicate-{Guid.NewGuid():N}";
+        server.Bind(endpoint);
+        poller.Add(client, PollEventFlags.PollRoute | PollEventFlags.PollCompletion, 1);
+        client.Connect(endpoint);
+        var events = new PollEvent[1];
+        while (client.RoutesSnapshot().Count == 0)
+            Assert.True(poller.Wait(events, CompletionBound) > 0);
+        poller.Modify(client, PollEventFlags.PollCompletion);
+        var id = node.AllocateOperationId();
+        using var request = Message.From("first");
+        var first = node.RequestDirectWireAsync(
+                target,
+                [request],
+                RegistrationTimeout,
+                CancellationToken.None,
+                operationId: id
+            )
+            .AsTask();
+        using var received = Received.Create();
+        Assert.True(server.Recv(received));
+        Assert.Equal(
+            "first",
+            System.Text.Encoding.UTF8.GetString(received.SinglePartOrThrow().AsReadOnlySpan())
+        );
+        var duplicate = node.RequestDirectWireAsync(
+                target,
+                Array.Empty<Message>(),
+                RegistrationTimeout,
+                CancellationToken.None,
+                operationId: id
+            )
+            .AsTask();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => duplicate);
+        Assert.False(first.IsCompleted);
+        Assert.Equal(1, node.PendingOperationCount);
+        using var reply = Message.From(BitConverter.GetBytes(true));
+        received.Reply().Message(reply).Submit();
+        Assert.True(poller.Wait(events, CompletionBound) > 0);
+        var parts = await first.WaitAsync(CompletionBound);
+        try
+        {
+            Assert.True(BitConverter.ToBoolean(Assert.Single(parts).AsReadOnlySpan()));
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+        await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+        Assert.Equal(0, node.PendingOperationCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WakeFailureUsesOnlyTheAtomicTakeWinner(bool cancelBeforeFailure)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "registration-wake-failure");
+        var actor = CreateRegistrationActor(node, "registration-wake-actor");
+        using var request = Message.From("registration request");
+        using var cancellation = new CancellationTokenSource();
+        var decodes = 0;
+        var failure = new InvalidOperationException("wake observer failure");
+        node.ReceiveWakeObserver = () =>
+        {
+            if (cancelBeforeFailure)
+                cancellation.Cancel();
+            throw failure;
+        };
+        var completion = RequestActor(node, actor, request, cancellation.Token, _ => ++decodes);
+        node.ReceiveWakeObserver = null;
+        if (cancelBeforeFailure)
+        {
+            var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                completion
+            );
+            Assert.Equal(cancellation.Token, canceled.CancellationToken);
+        }
+        else
+            Assert.Same(
+                failure,
+                await Assert.ThrowsAsync<InvalidOperationException>(() => completion)
+            );
+        await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+        Assert.Equal(0, node.PendingOperationCount);
+        Assert.Equal(0, decodes);
+        Assert.Empty(DrainApplicationRequests(node));
+    }
+
+    [Fact]
+    public async Task ContendedRegistrationObservesCancellationBeforeItPublishes()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var lane = new ZLinkStateLane();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "registration-contended",
+            operationLane: lane
+        );
+        var actor = CreateRegistrationActor(node, "registration-contended-actor");
+        using var request = Message.From("registration request");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holding = lane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task.WaitAsync(CompletionBound);
+        using var cancellation = new CancellationTokenSource();
+        var decodes = 0;
+        var completion = RequestActor(node, actor, request, cancellation.Token, _ => ++decodes);
+        try
+        {
+            Assert.False(completion.IsCompleted);
+            cancellation.Cancel();
+        }
+        finally
+        {
+            release.SetResult();
+        }
+        await holding;
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+        Assert.Equal(0, node.PendingOperationCount);
+        Assert.Equal(0, decodes);
+        Assert.Empty(DrainApplicationRequests(node));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActorReplyCodecSurvivesCancellationBeforePhysicalSubmission(bool throwing)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var clock = new BeforeActorSubmitTimeProvider();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "actor-codec-before-submit",
+            deadlineTimeProvider: clock
+        );
+        var actor = CreateRegistrationActor(node, "actor-codec-before-submit-actor");
+        using var request = Message.From("request");
+        using var cancellation = new CancellationTokenSource();
+        var decodes = 0;
+        IReadOnlyList<Message>? decodedParts = null;
+        var barrierEntered = false;
+        node.ReceiveWakeObserver = () =>
+        {
+            node.ReceiveWakeObserver = null;
+            // Registration has returned from the operation lane. The next timestamp
+            // is the deadline check after the original exact-pair lookup succeeds.
+            clock.BeforeTimestamp = () =>
+            {
+                barrierEntered = true;
+                cancellation.Cancel();
+                node.Completions.CompletionDrained.WaitAsync(CompletionBound)
+                    .GetAwaiter()
+                    .GetResult();
+                Assert.Equal(0, node.PendingOperationCount);
+            };
+        };
+        var completion = RequestActor(
+            node,
+            actor,
+            request,
+            cancellation.Token,
+            parts =>
+            {
+                decodes++;
+                decodedParts = parts;
+                var value = BitConverter.ToInt32(Assert.Single(parts).AsReadOnlySpan());
+                if (throwing)
+                    throw new InvalidOperationException("late codec failure");
+                return value;
+            }
+        );
+        Assert.True(barrierEntered);
+        var original = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
+        Assert.Equal(cancellation.Token, original.CancellationToken);
+        Assert.Equal(0, decodes);
+        var submissions = 0;
+        using var reply = Message.From(BitConverter.GetBytes(7));
+        using (var ready = new MeshReadyBatch())
+        {
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            for (var index = 0; index < ready.Count; index++)
+            {
+                using var claim = ready.TakeClaim(index);
+                using var received = new MeshReceiveBatch();
+                while (claim.Receive(received, RecvFlags.DontWait))
+                {
+                    for (var record = 0; record < received.Count; record++)
+                    {
+                        Assert.Equal(MeshRecordKind.ActorRequest, received[record].Kind);
+                        submissions++;
+                        Assert.Equal(SubmitResult.Ok, received[record].Reply([reply]));
+                    }
+                    received.Reset();
+                }
+            }
+        }
+        Assert.Equal(1, submissions);
+        Assert.Equal(1, decodes);
+        Assert.NotNull(decodedParts);
+        Assert.All(
+            decodedParts,
+            part => Assert.Throws<ObjectDisposedException>(() => part.AsReadOnlySpan())
+        );
+        Assert.Equal(0, node.PendingOperationCount);
+        Assert.True(completion.IsCanceled);
+        var stillCanceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            completion
+        );
+        Assert.Equal(cancellation.Token, stillCanceled.CancellationToken);
+        await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+        Assert.Empty(DrainApplicationRequests(node));
+    }
+
+    private sealed class BeforeActorSubmitTimeProvider : TimeProvider
+    {
+        internal Action? BeforeTimestamp;
+
+        public override long GetTimestamp()
+        {
+            var before = Interlocked.Exchange(ref BeforeTimestamp, null);
+            before?.Invoke();
+            return 0;
+        }
+    }
+
+    [Fact]
+    public async Task DuplicateRelocationRegistrationPreservesTheOriginalReference()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "registration-relocation-duplicate"
+        );
+        var source = SetRequestSource(node);
+        var actor = CreateRegistrationActor(node, "registration-relocation-actor");
+        using var request = Message.From("registration request");
+        using var cancellation = new CancellationTokenSource();
+        var decodes = 0;
+        var first = RequestActor(node, actor, request, cancellation.Token, _ => ++decodes);
+        var id = Assert.Single(DrainApplicationRequests(node));
+        Assert.False(first.IsCompleted);
+        Assert.Equal(1, node.PendingOperationCount);
+        cancellation.Cancel();
+        var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+        Assert.Equal(cancellation.Token, canceled.CancellationToken);
+        Assert.Equal(0, node.PendingOperationCount);
+        Assert.Throws<InvalidOperationException>(() =>
+            node.RequestToActor(actor, [request], id, RegistrationTimeout)
+        );
+        var payload = new[] { Message.From("late") };
+        var result = node.TryCompleteRelocationReply(Relay(id), payload);
+        Assert.Equal(ZLinkRelocationReplyCompletionState.AlreadyTerminal, result.State);
+        Assert.Equal(source, result.RequestSource);
+        Assert.Throws<ObjectDisposedException>(() => payload[0].AsReadOnlySpan());
+        Assert.True(first.IsCanceled);
+        var stillCanceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+        Assert.Equal(cancellation.Token, stillCanceled.CancellationToken);
+        Assert.Equal(0, decodes);
+        Assert.Empty(DrainApplicationRequests(node));
+        await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+        Assert.Equal(0, node.PendingOperationCount);
+    }
+
+    [Fact]
+    public async Task CancellationRejectsLateDecoderAndReleasesDispatcherReservation()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "registration-late-decoder");
+        var source = SetRequestSource(node);
+        var actor = CreateRegistrationActor(node, "registration-late-decoder-actor");
+        using var request = Message.From("registration request");
+        using var cancellation = new CancellationTokenSource();
+        var decodes = 0;
+        int Decode(IReadOnlyList<Message> parts)
+        {
+            Interlocked.Increment(ref decodes);
+            return BitConverter.ToInt32(Assert.Single(parts).AsReadOnlySpan());
+        }
+        var completion = RequestActor(node, actor, request, cancellation.Token, Decode);
+        var id = Assert.Single(DrainApplicationRequests(node));
+        cancellation.Cancel();
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+        var latePayload = new[] { Message.From(BitConverter.GetBytes(7)) };
+        var late = node.TryCompleteRelocationReply(Relay(id), latePayload);
+        Assert.Equal(ZLinkRelocationReplyCompletionState.AlreadyTerminal, late.State);
+        Assert.Equal(source, late.RequestSource);
+        Assert.Throws<ObjectDisposedException>(() => latePayload[0].AsReadOnlySpan());
+        Assert.Equal(0, decodes);
+        Assert.True(completion.IsCanceled);
+        var stillCanceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            completion
+        );
+        Assert.Equal(cancellation.Token, stillCanceled.CancellationToken);
+        Assert.Equal(0, node.PendingOperationCount);
+
+        var live = RequestActor(node, actor, request, CancellationToken.None, Decode);
+        var liveId = Assert.Single(DrainApplicationRequests(node));
+        var livePayload = new[] { Message.From(BitConverter.GetBytes(7)) };
+        var accepted = node.TryCompleteRelocationReply(Relay(liveId), livePayload);
+        Assert.Equal(ZLinkRelocationReplyCompletionState.TerminalReceived, accepted.State);
+        Assert.Equal(source, accepted.RequestSource);
+        Assert.Equal(7, await live.WaitAsync(CompletionBound));
+        Assert.Equal(1, decodes);
+        Assert.Throws<ObjectDisposedException>(() => livePayload[0].AsReadOnlySpan());
+        await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+        Assert.Equal(0, node.PendingOperationCount);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task RegistrationClockFailureCompletesOriginalCallerAndRemovesPublishedEntries(
+        int pendingCountAtFailure
+    )
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var clock = new RegistrationFailureTimeProvider();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "registration-clock-failure",
+            deadlineTimeProvider: clock
+        );
+        var actor = CreateRegistrationActor(node, "registration-clock-failure-actor");
+        using var request = Message.From("registration request");
+        var failure = new InvalidOperationException("registration clock failure");
+        clock.FailWhen = () => node.PendingOperationCount == pendingCountAtFailure;
+        clock.Failure = failure;
+        var decodes = 0;
+        var completion = RequestActor(node, actor, request, CancellationToken.None, _ => ++decodes);
+        Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => completion));
+        Assert.True(clock.Failed);
+        await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+        Assert.Equal(0, node.PendingOperationCount);
+        Assert.Equal(0, decodes);
+        Assert.Empty(DrainApplicationRequests(node));
+    }
+
+    [Fact]
+    public async Task BaseRegistrationPreservesWakeFailureThrowSurface()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "base-registration-wake-failure");
+        var failure = new InvalidOperationException("base wake failure");
+        node.ReceiveWakeObserver = () => throw failure;
+        Assert.Same(
+            failure,
+            Assert.Throws<InvalidOperationException>(() =>
+                node.TryBeginOperation(
+                    MeshOperationKind.SpotRequest,
+                    TimeSpan.FromSeconds(30),
+                    out _
+                )
+            )
+        );
+        node.ReceiveWakeObserver = null;
+        Assert.Equal(0, node.PendingOperationCount);
+        await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
+    }
+
+    private static ActorRef CreateRegistrationActor(ZLinkManagedMeshNode node, string actorId)
+    {
+        if (node.RoutingId.IsEmpty)
+            node.SetRoutingId(RoutingId.From(actorId));
+        var actor = node.CreateActor(actorId);
+        using var ready = new MeshReadyBatch();
+        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        for (var index = 0; index < ready.Count; index++)
+        {
+            using var claim = ready.TakeClaim(index);
+            using var received = new MeshReceiveBatch();
+            Assert.True(claim.Receive(received, RecvFlags.DontWait));
+            for (var record = 0; record < received.Count; record++)
+                Assert.Equal(MeshRecordKind.SpotControl, received[record].Kind);
+        }
+        return actor;
+    }
+
+    private static Task<int> RequestActor(
+        ZLinkManagedMeshNode node,
+        ActorRef actor,
+        Message request,
+        CancellationToken token,
+        Func<IReadOnlyList<Message>, int> decode
+    ) =>
+        node.RequestToActorAsync(
+            actor,
+            [request],
+            RegistrationTimeout,
+            token,
+            decode,
+            static error => error,
+            null
+        );
+
+    private static MeshOperationId[] DrainApplicationRequests(ZLinkManagedMeshNode node)
+    {
+        using var ready = new MeshReadyBatch();
+        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        var ids = new List<MeshOperationId>();
+        for (var index = 0; index < ready.Count; index++)
+        {
+            using var claim = ready.TakeClaim(index);
+            using var received = new MeshReceiveBatch();
+            Assert.True(claim.Receive(received, RecvFlags.DontWait));
+            for (var record = 0; record < received.Count; record++)
+            {
+                Assert.Equal(MeshRecordKind.ActorRequest, received[record].Kind);
+                ids.Add(received[record].OperationId);
+            }
+        }
+        return ids.ToArray();
+    }
+
+    private static ZLinkServiceWireCodec.RequestSourceFence SetRequestSource(
+        ZLinkManagedMeshNode node
+    )
+    {
+        node.SetRoutingId(RoutingId.From("registration-relay-source"));
+        var source = new ZLinkServiceWireCodec.RequestSourceFence(
+            "registration-relay-owner",
+            1,
+            node.RoutingId,
+            node.AllocateOperationId().High
+        );
+        node.SetLocalRequestSourceFence(source);
+        return source;
+    }
+
+    private static ZLinkServiceWireCodec.ReplyRelayRecord Relay(MeshOperationId id) =>
+        new(
+            id,
+            id.Low,
+            new ZLinkServiceWireCodec.RelocationWireId(1, 1),
+            1,
+            new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                "registration-relay-target",
+                1,
+                RoutingId.From("registration-relay-target"),
+                1,
+                "registration-relay-root"
+            ),
+            1,
+            1,
+            (uint)RequestResult.Ok,
+            ServiceWireConstants.FrameworkErrorCode.None
+        );
+
+    private sealed class RegistrationFailureTimeProvider : TimeProvider
+    {
+        internal Func<bool>? FailWhen;
+        internal Exception? Failure;
+        internal bool Failed;
+
+        public override long GetTimestamp()
+        {
+            if (!Failed && Failure is { } error && FailWhen!())
+            {
+                Failed = true;
+                throw error;
+            }
+            return 0;
+        }
+    }
 
     [Fact]
     public async Task IdleReceiveOwnerWaitsForReadinessWithoutAPeriodicDeadline()
@@ -23,6 +565,9 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         var poller = new ControlledReceivePoller { CaptureIdleWait = true };
+        // Pool bootstrap can wait while monitor registration is still queued.
+        // Measure the configured node's idle wait, preserving the same deadline assertion.
+        poller.CanObserveIdleWait = () => poller.MonitorRegistered.Task.IsCompleted;
         await using var node = new ZLinkManagedMeshNode(
             context,
             "idle-wait",
@@ -340,9 +885,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         }
     }
 
-    // Spec 08 §4.2: a receive rotation runs its management work once. With no
-    // peer activity due, that work is the two uncontended node turns that read
-    // liveness and operation deadlines; it creates no empty result container.
+    // Supervisor ruling for #2758: adapting this contract to spec 01 §10.1 is
+    // classification A. After the reserved empty visit (if any), spec 01 §10.1
+    // requires zero idle operation-owner turns. This node starts without a reservation. The
+    // allocation baseline therefore includes only liveness's existing turn.
+    // The second phase adds one turn and must fail that same cost assertion.
     [Fact]
     public async Task IdleReceiveRotationManagementAddsNoAllocationBeyondItsNodeTurns()
     {
@@ -350,13 +897,24 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         const int iterations = 1000;
         var poller = new ControlledReceivePoller();
         await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var operationLane = new ZLinkStateLane();
         var node = new ZLinkManagedMeshNode(
             context,
             "idle-rotation-allocation",
-            receivePollerFactory: () => poller
+            receivePollerFactory: () => poller,
+            operationLane: operationLane
         );
         node.SetRoutingId(RoutingId.From("idle-rotation-allocation"));
         await using var lane = new ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var occupied = operationLane.RunAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+        });
+        await entered.Task;
+        var addTurn = false;
         long actual = 0;
         long baseline = 0;
         var rotations = 0;
@@ -364,13 +922,17 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         SemaphoreSlim rotated = new(0);
         // The window opens after the controlled poller returns and closes before
         // its next wait, so it holds only the node's own rotation.
-        poller.AfterWait = () => last = GC.GetAllocatedBytesForCurrentThread();
+        poller.AfterWait = () =>
+        {
+            last = GC.GetAllocatedBytesForCurrentThread();
+            if (addTurn)
+                _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
+        };
         poller.BeforeWait = () =>
         {
             var now = GC.GetAllocatedBytesForCurrentThread();
             var measured = now - last;
             var start = GC.GetAllocatedBytesForCurrentThread();
-            _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
             _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
             var control = GC.GetAllocatedBytesForCurrentThread() - start;
             if (rotations > warmup)
@@ -399,9 +961,23 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 actual == baseline,
                 $"idle rotation={actual}B, node turns={baseline}B, excess={actual - baseline}B/{iterations}"
             );
+            addTurn = true;
+            actual = baseline = 0;
+            rotations = 0;
+            for (var index = 0; index < warmup + iterations; index++)
+            {
+                node.SignalReceiveOwner();
+                Assert.True(await rotated.WaitAsync(CompletionBound));
+            }
+            Assert.Throws<Xunit.Sdk.TrueException>(() => Assert.True(actual == baseline));
+            output.WriteLine(
+                $"negative control: extra owner turn actual={actual}B baseline={baseline}B"
+            );
         }
         finally
         {
+            release.SetResult();
+            await occupied;
             var shutdown = node.DisposeAsync();
             poller.ReleaseWait();
             await shutdown;
@@ -747,6 +1323,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         internal bool FailRearm { get; init; }
         internal bool RespectTimeoutAfterWake { get; init; }
         internal bool CaptureIdleWait { get; init; }
+        internal Func<bool>? CanObserveIdleWait { get; set; }
         internal readonly TaskCompletionSource MonitorRegistered = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -780,8 +1357,9 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             {
                 // Zero-time turns apply startup registrations and pending wakes.
                 // Observe the first blocking wait, preserving even a finite deadline.
-                if (timeout != TimeSpan.Zero)
+                if (timeout != TimeSpan.Zero && (CanObserveIdleWait?.Invoke() ?? true))
                     IdleWait.TrySetResult(timeout);
+                BeforeWait?.Invoke();
                 return _inner.Wait(destination, timeout);
             }
             if (++_waitCount == 1)

@@ -35,3 +35,10 @@ function createRelayHost(options, internalOptions) {
 }
 
 module.exports = { createRelayHost };
+
+function createRelayMeshHost(options, internalOptions) {
+  const meshRuntime = {};
+  return { ...createRelayHost(options, { ...internalOptions, spotNodeRuntime: meshRuntime }), meshRuntime };
+}
+
+module.exports.createRelayMeshHost = createRelayMeshHost;

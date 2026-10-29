@@ -157,9 +157,13 @@ const char *drain_state_name (drain_state_t state) noexcept
 
 // A no-op provider has no collection path. Real providers own reader/view
 // selection; the Framework does not infer it from log sinks or log levels.
-monitoring_runtime_state_t::monitoring_runtime_state_t ()
+monitoring_runtime_state_t::monitoring_runtime_state_t () = default;
+void monitoring_runtime_state_t::use_metric_provider (runtime::metric_provider_t provider)
 {
-    const auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+    metric_instruments.clear ();
+    metric_meter = {};
+    metric_provider = provider ? std::move (provider) : runtime::noop_metric_provider ();
+    provider = metric_provider;
     if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()) == nullptr)
         metric_meter = provider->GetMeter ("zlink.framework");
 }

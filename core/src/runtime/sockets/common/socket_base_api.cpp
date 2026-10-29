@@ -1187,15 +1187,10 @@ void zlink::socket_base_t::discard_count1_completion_ready_pipes ()
     }
 }
 
-bool zlink::socket_base_t::reclassify_transport_pair_application_head (
-  pipe_t *pipe_, bool claim_private_head_)
+bool zlink::socket_base_t::completion_blocked_by_public_delivery (pipe_t *pipe_)
 {
-    if (!pipe_ || pipe_->get_transport_pair_id () == 0
-        || pipe_->get_transport_lane () != transport_lane_application
-        || pipe_->get_transport_lane_count () != 1u
-        || !pipe_->transport_pair_application_ready_cached ())
+    if (!pipe_ || pipe_->get_transport_lane_count () != 1u)
         return false;
-
     const transport_pair_key_t key (pipe_->get_transport_pair_id (),
                                     pipe_->get_transport_pair_generation ());
     //  A ready count-1 Application pipe answers the common topology question
@@ -1208,7 +1203,7 @@ bool zlink::socket_base_t::reclassify_transport_pair_application_head (
         if (it == _transport_pairs.end () || !it->second.ready
             || it->second.expected_lane_count != 1u
             || it->second.application != pipe_)
-            return false;
+            return true;
         if (_public_part_receive_delivery_hold_active
             && (!_public_part_receive_delivery_hold_pipe
                 || (_public_part_receive_delivery_hold_pipe == pipe_
@@ -1217,9 +1212,24 @@ bool zlink::socket_base_t::reclassify_transport_pair_application_head (
                 _public_part_receive_delivery_hold_pipe = pipe_;
                 _public_part_receive_delivery_hold_key = key;
             }
-            return false;
+            return true;
         }
     }
+
+    return false;
+}
+
+bool zlink::socket_base_t::reclassify_transport_pair_application_head (
+  pipe_t *pipe_, bool claim_private_head_)
+{
+    if (!pipe_ || pipe_->get_transport_pair_id () == 0
+        || pipe_->get_transport_lane () != transport_lane_application
+        || pipe_->get_transport_lane_count () != 1u
+        || !pipe_->transport_pair_application_ready_cached ())
+        return false;
+
+    if (completion_blocked_by_public_delivery (pipe_))
+        return false;
 
     const pipe_normalized_head_kind_t head =
       pipe_->probe_normalized_head_kind ();
@@ -1806,12 +1816,37 @@ void zlink::socket_base_t::hiccuped (pipe_t *pipe_)
         xhiccuped (pipe_);
 }
 
+void zlink::socket_base_t::pipe_peer_terminating (pipe_t *pipe_)
+{
+    if (pipe_->get_transport_pair_id () == 0 || !request_reply_state ())
+        return;
+
+    pipe_t *source = pipe_;
+    distinct_pipe_lifetime_refs_t refs (pipe_);
+    if (pipe_->get_transport_lane_count () == 2u) {
+        scoped_lock_t lock (_transport_pairs_sync);
+        const transport_pair_key_t key (pipe_->get_transport_pair_id (),
+                                        pipe_->get_transport_pair_generation ());
+        transport_pairs_t::iterator it = _transport_pairs.find (key);
+        if (it != _transport_pairs.end () && it->second.completion_source ()
+            && refs.retain (it->second.completion_source ()))
+            source = it->second.completion_source ();
+    }
+    socket_reqrep_internal::completion_discard_t discard;
+    socket_reqrep_internal::completion_pipe_drain_result_t result;
+    do {
+        {
+            const socket_receive_entry_scope_t entry (receive_runtime ());
+            result = socket_reqrep_internal::process_completion_pipe (
+              this, source, &discard, true);
+        }
+        socket_reqrep_internal::release_completion_discard (&discard);
+    } while (result == socket_reqrep_internal::completion_pipe_discard_deferred);
+}
+
 void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_complete_)
 {
     LIBZLINK_UNUSED (drain_complete_);
-    socket_reqrep_internal::fail_pending_requests_for_transport_pair (
-      request_reply_state (), pipe_->get_transport_pair_id (),
-      pipe_->get_transport_pair_generation ());
     const uint64_t pair_id = pipe_->get_transport_pair_id ();
     const uint64_t pair_generation = pipe_->get_transport_pair_generation ();
     const bool completion =

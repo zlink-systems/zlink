@@ -194,8 +194,8 @@ class channel_runtime_state_t
         std::chrono::milliseconds)>;
 
     std::map<std::string, channel_snapshot_t> channels;
-    runtime::offload_executor_t lane_executor{1, "zlink-channel-state"};
-    mutable runtime::state_lane_t lane{lane_executor};
+
+    mutable runtime::state_lane_t lane;
     std::chrono::milliseconds default_request_timeout{
       runtime::configuration::default_request_timeout};
     std::size_t pending = 0;
@@ -320,7 +320,7 @@ class channel_runtime_t
                                  zlink::message_t message,
                                  detail::inbound_message_context_t inbound) const;
 
-    boost::asio::awaitable<result_t<zlink::message_t>>
+    task_t<result_t<zlink::message_t>>
     dispatch_request_on_handler_executor (std::string channel_name,
                                           std::string topic,
                                           std::string packet_name,
@@ -358,7 +358,7 @@ class channel_runtime_t
                               zlink::message_t message,
                               detail::inbound_message_context_t inbound) const;
 
-    boost::asio::awaitable<void>
+    task_t<void>
     dispatch_send_on_handler_executor (std::string channel_name,
                                        std::string topic,
                                        std::string packet_name,
@@ -412,7 +412,10 @@ class channel_runtime_t
     void bind_fanout_transport (std::string channel_name,
                                 channel_runtime_state_t::fanout_publish_t publish);
     void unbind_fanout_transport (const std::string &channel_name) noexcept;
-    runtime::offload_executor_t &state_executor () const noexcept { return _state->lane_executor; }
+    runtime::offload_executor_t &state_executor () const noexcept
+    {
+        return _state->lane.executor ();
+    }
     std::shared_ptr<runtime::runtime_failure_collector_t> runtime_failures () const
     {
         return runtime_failures_for (_state->monitoring);

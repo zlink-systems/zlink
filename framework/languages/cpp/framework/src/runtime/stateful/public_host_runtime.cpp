@@ -1048,7 +1048,8 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
      * relocation replay wire; the host outlives the coordinator it owns. */
     _relocation_wire->set_flow_capture_provider ([this] { return capture_flow (); });
     const auto &descriptor = _options.mesh.descriptor;
-    _relocation_metrics = std::make_shared<runtime::relocation_metrics_t> ();
+    _relocation_metrics =
+      std::make_shared<runtime::relocation_metrics_t> (_options.mesh.metric_provider);
     // This host's own object record is not a new target selection: the node placement weight
     // belongs to Framework placement (MeshNode §5.1), so the local candidate keeps the default
     // weight and weight 0 never blocks this node's own objects such as its Entry Spot.
@@ -1330,20 +1331,22 @@ void public_host_runtime_t::configure_late_session_route_update (
 
 void public_host_runtime_t::start ()
 {
-    auto population_metrics = _lifecycle_configuration_lane
-                                .run ([&] {
-                                    if (_started || _closing) {
-                                        return task_t<void> (result_t<void>::success ());
-                                    }
-                                    auto configured = _objects.configure_population_metrics (
-                                      _options.mesh.descriptor.mesh_name);
-                                    auto owner = std::make_unique<completion_owner_t> ();
-                                    _transport->start ();
-                                    _completion_owner = std::move (owner);
-                                    _started = true;
-                                    return configured;
-                                })
-                                .get ();
+    auto population_metrics =
+      _lifecycle_configuration_lane
+        .run ([&] {
+            if (_started || _closing) {
+                return task_t<void> (result_t<void>::success ());
+            }
+            _instance_activation_metrics.connect (_options.mesh.metric_provider);
+            auto configured = _objects.configure_population_metrics (
+              _options.mesh.descriptor.mesh_name, _options.mesh.metric_provider);
+            auto owner = std::make_unique<completion_owner_t> ();
+            _transport->start ();
+            _completion_owner = std::move (owner);
+            _started = true;
+            return configured;
+        })
+        .get ();
     population_metrics.result ().value ();
 }
 
@@ -1410,32 +1413,9 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
                                           std::string security_identity,
                                           bool automatic)
 {
-    return _peer_endpoint_lane
-      .run ([&] {
-          auto expected_key = expected ? expected->to_string () : std::string{};
-          if (automatic && expected
-              && (_transport->peer_route (expected->to_bytes ()).first != 0
-                  || std::any_of (
-                    _peer_endpoints.begin (), _peer_endpoints.end (), [&] (const auto &intent) {
-                        return intent.first == endpoint || intent.second == expected_key;
-                    })))
-              return false;
-          bool connected = false;
-          if (expected) {
-              auto descriptor = _options.mesh.descriptor;
-              descriptor.node_routing_id = expected->to_bytes ();
-              descriptor.advertised_endpoint = endpoint;
-              descriptor.lifecycle_generation = expected_lifecycle_generation;
-              descriptor.security_identity = std::move (security_identity);
-              connected = _transport->connect_peer (endpoint, std::move (descriptor));
-          } else {
-              connected = _transport->connect_peer (endpoint);
-          }
-          if (connected)
-              _peer_endpoints.insert_or_assign (endpoint, std::move (expected_key));
-          return connected;
-      })
-      .get ();
+    return _transport->connect_peer_endpoint (endpoint, std::move (expected),
+                                              expected_lifecycle_generation,
+                                              std::move (security_identity), automatic);
 }
 
 void public_host_runtime_t::expect_peer (const std::string &endpoint,
@@ -1459,18 +1439,13 @@ void public_host_runtime_t::forget_peer (const std::string &endpoint,
 
 void public_host_runtime_t::disconnect_peer (const std::string &endpoint) noexcept
 {
-    _peer_endpoint_lane.run ([&] { _peer_endpoints.erase (endpoint); }).get ();
-    _transport->disconnect_peer (endpoint);
+    _transport->disconnect_peer_endpoint (endpoint);
 }
 
 bool public_host_runtime_t::disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
                                              const std::string &endpoint) noexcept
 {
-    const auto endpoint_retained = _transport->disconnect_peer (expected_routing_id, endpoint);
-    if (!endpoint_retained) {
-        _peer_endpoint_lane.run ([&] { _peer_endpoints.erase (endpoint); }).get ();
-    }
-    return endpoint_retained;
+    return _transport->disconnect_peer_endpoint (expected_routing_id, endpoint);
 }
 
 node_status_t public_host_runtime_t::status () const
@@ -1680,7 +1655,7 @@ void public_host_runtime_t::configure_instance_spot_operations (
           for (const auto &type : materializer.metric_types)
               _instance_admission_metrics.emplace (
                 type, std::make_shared<runtime::instance_spot_admission_metrics_t> (
-                        _options.mesh.descriptor.mesh_name, type));
+                        _options.mesh.descriptor.mesh_name, type, _options.mesh.metric_provider));
           _instance_spot_materializer =
             std::make_shared<const instance_spot_activation_materializer_t> (
               std::move (materializer));

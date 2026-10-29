@@ -673,6 +673,8 @@ final class ZLinkNodeSubmitTurnTest {
                 lane = new ZLinkStateLane(laneExecutor);
                 setField(sockets, "stateLane", lane);
             }
+            // This unmanaged backend's operation owner is the fixture's source lane.
+            setField(field(field(runtime, "callRuntime"), "operations"), "owner", lane);
         }
 
         void register(Duration timeout) {
@@ -857,6 +859,10 @@ final class ZLinkNodeSubmitTurnTest {
                                     getClass().getClassLoader(),
                                     new Class<?>[] {ZLinkBackendRouterSocket.class},
                                     (proxy, method, args) -> {
+                                        if (method.isDefault()
+                                                && method.getName().equals("requestTo"))
+                                            return java.lang.reflect.InvocationHandler
+                                                    .invokeDefault(proxy, method, args);
                                         if (method.getName().equals("send")) {
                                             assertSame(lane, ZLinkStateLane.current());
                                             sends.incrementAndGet();

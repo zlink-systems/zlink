@@ -1664,6 +1664,119 @@ void test_blocking_request_send_drains_owned_completions_to_break_hwm_cycle ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, destroy_result);
 }
 
+void test_handover_resolves_queued_reply_before_pair_failure ()
+{
+    void *requester = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *old_peer = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *new_peer = test_context_socket (ZLINK_SOCKET_ROUTER);
+    set_routing_id_text (requester, "handover-requester");
+    set_routing_id_text (old_peer, "handover-peer");
+    set_routing_id_text (new_peer, "handover-peer");
+    const int handover = ZLINK_RID_DUPLICATE_HANDOVER;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (requester, ZLINK_OPT_RID_DUPLICATE_POLICY,
+                        &handover, sizeof handover));
+    contract_socket_pair_t old_pair (requester, old_peer, 31, 1);
+    const zlink_routing_id_t peer_rid = make_rid ("handover-peer");
+    int old_context = 1;
+    int unanswered_context = 2;
+    const zlink_completion_id_t old_id = send_router_request_to (
+      requester, peer_rid, "old-request", &old_context);
+    const router_part_t old_request = receive_router_part_now (old_peer);
+    const zlink_completion_id_t unanswered_id = send_router_request_to (
+      requester, peer_rid, "unanswered-request", &unanswered_context);
+    (void) receive_router_part_now (old_peer);
+
+    // Register the completion owner before flushing the reply so command
+    // progress cannot drain it before the replacement Application is attached.
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (poller);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_poller_add (poller, requester, requester, ZLINK_POLLCOMPLETION));
+    zlink_msg_t reply;
+    init_part (&reply, "old-reply");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_reply (old_peer, &old_request.source_rid, old_request.reply_token,
+                   &reply, 1));
+    assert_part_consumed (&reply);
+    TEST_ASSERT_TRUE (old_pair.completion[0]->check_read ());
+
+    contract_socket_pair_t new_pair (requester, new_peer, 31, 2);
+    // Handover changes the old Application RID, while its Completion source
+    // retains the submitted RID and original pair identity.
+    TEST_ASSERT_TRUE (
+      old_pair.application[0]->get_routing_id ().size () != peer_rid.size
+      || memcmp (old_pair.application[0]->get_routing_id ().data (),
+                  peer_rid.data, peer_rid.size) != 0);
+    TEST_ASSERT_EQUAL_UINT64 (peer_rid.size,
+      old_pair.completion[0]->get_routing_id ().size ());
+    TEST_ASSERT_EQUAL_MEMORY (peer_rid.data,
+      old_pair.completion[0]->get_routing_id ().data (), peer_rid.size);
+    bool old_seen = false;
+    bool unanswered_seen = false;
+    int old_result = -1;
+    size_t old_reply_count = 0;
+    std::string old_payload;
+    for (size_t i = 0; i != 2; ++i) {
+        zlink_completion_t completion = receive_completion_now (requester);
+        if (completion.completion_id == old_id) {
+            TEST_ASSERT_FALSE (old_seen);
+            old_seen = true;
+            old_result = completion.request_result;
+            old_reply_count = completion.reply_part_count;
+            if (old_reply_count == 1)
+                old_payload = part_string (&completion.reply_parts[0]);
+            TEST_ASSERT_EQUAL_PTR (&old_context, completion.user_context);
+        } else {
+            TEST_ASSERT_EQUAL_UINT64 (unanswered_id, completion.completion_id);
+            TEST_ASSERT_FALSE (unanswered_seen);
+            unanswered_seen = true;
+            TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_NOT_CONNECTED,
+                                   completion.request_result);
+            TEST_ASSERT_EQUAL_PTR (&unanswered_context, completion.user_context);
+        }
+        zlink_completion_close (&completion);
+    }
+    TEST_ASSERT_TRUE (old_seen);
+    TEST_ASSERT_TRUE (unanswered_seen);
+
+    int new_context = 3;
+    const zlink_completion_id_t new_id = send_router_request_to (
+      requester, peer_rid, "new-request", &new_context);
+    const router_part_t new_request = receive_router_part_now (new_peer);
+    init_part (&reply, "new-reply");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_reply (new_peer, &new_request.source_rid, new_request.reply_token,
+                   &reply, 1));
+    assert_part_consumed (&reply);
+    zlink_completion_t completion = receive_completion_now (requester);
+    TEST_ASSERT_EQUAL_UINT64 (new_id, completion.completion_id);
+    TEST_ASSERT_EQUAL_PTR (&new_context, completion.user_context);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+    TEST_ASSERT_EQUAL_UINT64 (1, completion.reply_part_count);
+    TEST_ASSERT_EQUAL_STRING ("new-reply",
+      part_string (&completion.reply_parts[0]).c_str ());
+    zlink_completion_close (&completion);
+    init_empty_completion (&completion);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_NO_DATA,
+      zlink_completion_recv (requester, &completion, ZLINK_RECV_FLAGS_DONTWAIT));
+    assert_empty_completion (completion);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_poller_remove (poller, requester));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
+    test_context_socket_close_zero_linger (requester);
+    test_context_socket_close_zero_linger (old_peer);
+    test_context_socket_close_zero_linger (new_peer);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, old_result);
+    TEST_ASSERT_EQUAL_UINT64 (1, old_reply_count);
+    TEST_ASSERT_EQUAL_STRING ("old-reply", old_payload.c_str ());
+}
+
 void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
 {
     const char *const requester_rid_text = "completion-budget-requester";
@@ -1934,8 +2047,9 @@ void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
       (owner_event.events & ZLINK_POLLCOMPLETION) != 0);
 
     //  The in-flight owner may publish exactly the 64 records it completed
-    //  before the barrier. The detached source's remaining records must never
-    //  be consumed by a stale tail requeue.
+    //  before the barrier. Pair termination then resolves the remaining
+    //  complete replies already in the source FIFO, each exactly once; a stale
+    //  tail requeue must not deliver any of them again.
     const size_t after_barrier_completion = next_a_completion + budget;
     for (size_t i = next_a_completion; i != after_barrier_completion; ++i) {
         zlink_completion_t completion;
@@ -1966,10 +2080,9 @@ void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, detached_result);
         TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST,
                                detached_completion.kind);
-        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_NOT_CONNECTED,
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK,
                                detached_completion.request_result);
-        TEST_ASSERT_EQUAL_UINT64 (0,
-                                  detached_completion.reply_part_count);
+        TEST_ASSERT_EQUAL_UINT64 (2, detached_completion.reply_part_count);
         size_t matched = a_record_count;
         for (size_t i = after_barrier_completion; i != a_record_count; ++i) {
             if (completion_ids_a[i] == detached_completion.completion_id) {
@@ -1984,6 +2097,8 @@ void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
         detached_request_seen[matched] = true;
         zlink_completion_close (&detached_completion);
     }
+    for (size_t i = after_barrier_completion; i != a_record_count; ++i)
+        TEST_ASSERT_TRUE (detached_request_seen[i]);
     TEST_ASSERT_FALSE (as_socket (requester)->test_completion_pair_queued (
       pair_a_id, pair_a_generation));
 
@@ -2232,6 +2347,8 @@ void test_count1_completion_ready_queue_preserves_fifo_and_reuses_pipe_node ()
 int main ()
 {
     UNITY_BEGIN ();
+    if (should_run_phase3_request_test ("test_handover_resolves_queued_reply_before_pair_failure"))
+        RUN_TEST (test_handover_resolves_queued_reply_before_pair_failure);
     if (should_run_phase3_request_test ("test_logical_rid_revoke_returns_checked_out_reply_capacity_once"))
         RUN_TEST (test_logical_rid_revoke_returns_checked_out_reply_capacity_once);
     if (should_run_phase3_request_test ("test_router_reply_whole_record_runtime_failure_retains_token"))
