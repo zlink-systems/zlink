@@ -1376,19 +1376,23 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             ownsParts: true
         );
 
-    public ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
+    public ValueTask<TReply> RequestToActorAsync<TReply>(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
         CancellationToken cancellationToken,
+        Func<IReadOnlyList<Message>, TReply> decodeReply,
+        Func<Exception, Exception> mapFailure,
         ZLinkRequestAdmission? requestAdmission = null
     ) =>
         new(
-            _node.RequestToActorAsync(
+            _node.RequestToActorAsync<TReply>(
                 ToNativeActor(actor),
                 parts,
                 timeout ?? default,
                 cancellationToken,
+                decodeReply,
+                mapFailure,
                 requestAdmission
             )
         );
