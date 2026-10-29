@@ -1005,7 +1005,8 @@ task_t<void> raw_client_server_client_t::start_task (transport_turn_t transport_
             _options.transport_poller->add (*monitor, zlink::poll_event_flag_t::pollin,
                                             _options.transport_monitor_slot);
         port = std::make_shared<detail::backend::raw_dealer_port_t> (
-          *dealer, _socket_mutex, _options.transport_poller, _options.transport_poller_slot);
+          *dealer, _socket_mutex, _options.transport_poller, _options.transport_poller_slot, &_lane,
+          _options.control_reply_parked);
     };
     if (transport_turn)
         co_await transport_turn (register_transport);
@@ -1071,8 +1072,11 @@ task_t<raw_client_server_client_t::pump_status_t>
 raw_client_server_client_t::pump_status_task () const
 {
     return _lane.run_task ([this] {
-        return pump_status_t{_ready, _liveness.next_activity_owned (),
-                             !_closed && static_cast<bool> (_dealer)};
+        auto next = _liveness.next_activity_owned ();
+        const auto request_visit = _port ? _port->next_request_deadline () : std::nullopt;
+        if (request_visit && (!next || *request_visit < *next))
+            next = request_visit;
+        return pump_status_t{_ready, next, !_closed && static_cast<bool> (_dealer)};
     });
 }
 
@@ -1233,8 +1237,14 @@ raw_client_server_client_t::pump_one (mesh::service_liveness_registry_t::clock_t
 task_t<mesh::service_liveness_tick_t> raw_client_server_client_t::tick_liveness (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
-    const auto result =
-      co_await _lane.run_task ([this, now] { return _liveness.tick_owned (now); });
+    const auto result = co_await _lane.run_task ([this, now] {
+        if (_port) {
+            const auto visit = _port->next_request_deadline ();
+            if (visit && *visit <= now)
+                (void) _port->expire_requests (now);
+        }
+        return _liveness.tick_owned (now);
+    });
     const auto port = co_await _lane.run_task ([this] { return _port; });
     if (port) {
         for (const auto &probe : result.probes) {
@@ -1644,7 +1654,7 @@ raw_client_server_client_t::request (std::string packet_name,
         co_return request_failed_before_admission (foundation::operation_terminal_t::timed_out);
     auto admitted = co_await detail::request_admission_source_t{};
     auto completion =
-      co_await port->request (std::move (wire), remaining, state.admission, admitted);
+      co_await port->request (std::move (wire), remaining, state.admission, admitted, deadline);
     trace_client_server_lazy ("client-request-complete", [&] {
         return "channel=" + channel + " correlation=" + correlation_id
                + " result=" + std::to_string (static_cast<int> (completion.terminal))

@@ -803,7 +803,11 @@ void verify_local_join_timeout_releases_membership ()
     assert (
       actor.join_spot (rid, "join-timeout-spot", generation, {}, expired, 25ms).result ().value ()
       == zlink::submit_result_t::ok);
-    assert (runtime.transport ().expire_requests (std::chrono::steady_clock::now () + 1s) == 1);
+    assert (runtime.transport ()
+              .expire_requests (std::chrono::steady_clock::now () + 1s)
+              .result ()
+              .value ()
+            == 1);
     auto first = expired.completion->task ();
     assert (!first.result ());
     assert (first.result ().error_kind ()

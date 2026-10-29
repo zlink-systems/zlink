@@ -1044,6 +1044,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_submit_result_contract PRIVATE
+    zlink_framework
     zlink::framework_provider_abstractions
     zlink::cpp
     opentelemetry-cpp::api
@@ -1225,10 +1226,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
   add_executable(test_cpp_framework_operation_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_operation_registry.cpp
-    framework/src/runtime/foundation/operation_registry.cpp)
+    tests/support/allocation_counter.cpp
+    framework/src/runtime/foundation/operation_registry.cpp
+    framework/src/runtime/execution/state_lane.cpp
+    framework/src/runtime/dispatch/offload_executor.cpp)
   target_compile_features(test_cpp_framework_operation_registry PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_operation_registry PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
   target_compile_definitions(test_cpp_framework_operation_registry PRIVATE
     ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/completion-terminal-v1.json")
   target_link_libraries(test_cpp_framework_operation_registry PRIVATE
@@ -1237,11 +1242,66 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     opentelemetry-cpp::metrics
     Threads::Threads
     nlohmann_json::nlohmann_json)
+  add_executable(bench_cpp_framework_registry_requests
+    tests/Zlink.Framework.UnitTests/bench_cpp_framework_registry_requests.cpp
+    tests/support/allocation_counter.cpp
+    framework/src/runtime/foundation/operation_registry.cpp
+    framework/src/runtime/execution/state_lane.cpp
+    framework/src/runtime/dispatch/offload_executor.cpp)
+  target_compile_features(bench_cpp_framework_registry_requests PRIVATE cxx_std_20)
+  target_include_directories(bench_cpp_framework_registry_requests PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
+  target_link_libraries(bench_cpp_framework_registry_requests PRIVATE
+    zlink::framework_provider_abstractions zlink::cpp opentelemetry-cpp::metrics Threads::Threads)
+
+  add_executable(bench_cpp_framework_dealer_requests
+    tests/Zlink.Framework.UnitTests/bench_cpp_framework_dealer_requests.cpp
+    tests/support/allocation_counter.cpp)
+  target_compile_features(bench_cpp_framework_dealer_requests PRIVATE cxx_std_20)
+  target_include_directories(bench_cpp_framework_dealer_requests PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
+  target_link_libraries(bench_cpp_framework_dealer_requests PRIVATE zlink_framework Threads::Threads)
+
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_operation_registry
     COMMAND test_cpp_framework_operation_registry
     LABELS "framework-unit;framework-foundation;operation;resource"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_registry_shutdown_cleanup_owner
+    COMMAND test_cpp_framework_operation_registry --shutdown-cleanup-owner
+    LABELS "framework-contract;operation;resource"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_registry_expiry_owner_result
+    COMMAND test_cpp_framework_operation_registry --expiry-owner-result
+    LABELS "framework-contract;operation;resource"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_registry_no_hop
+    COMMAND test_cpp_framework_operation_registry --registry-no-hop
+    LABELS "framework-contract;operation;resource"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_registry_no_global_thread
+    COMMAND test_cpp_framework_operation_registry --no-global-registry-thread
+    LABELS "framework-contract;operation;resource"
+    TIMEOUT 30)
+
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_registry_publication_failure
+    COMMAND test_cpp_framework_operation_registry --publication-failure
+    LABELS "framework-contract;operation;resource"
+    TIMEOUT 30)
+
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_request_deadline_index_contract
+    COMMAND test_cpp_framework_operation_registry --request-deadline
+    LABELS "framework-contract;operation;resource"
+    TIMEOUT 30)
+
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_completion_dispatcher_shutdown
     COMMAND test_cpp_framework_operation_registry --dispatcher-shutdown

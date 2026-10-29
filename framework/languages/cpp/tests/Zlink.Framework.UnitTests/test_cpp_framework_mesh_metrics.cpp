@@ -683,7 +683,10 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
              "timeout request was not parked at its target");
     require_metric (provider, "zlink.mesh_node.requests.inflight", "updown", "{request}",
                     {{"mesh_name", "metrics-requests"}, {"surface", "node"}}, 1);
-    require (source.expire_requests (foundation::operation_registry_t::clock_t::now () + 3s) == 1,
+    require (source.expire_requests (foundation::operation_registry_t::clock_t::now () + 3s)
+                 .result ()
+                 .value ()
+               == 1,
              "timeout request did not expire");
     require (timeout.wait_for (2s) == std::future_status::ready,
              "timeout callback was not delivered");

@@ -3,7 +3,7 @@
 #include "runtime/channels/route_channel_runtime.hpp"
 
 #include "runtime/transport/endpoint_notation.hpp"
-#include "runtime/messaging/request_deadline.hpp"
+#include "runtime/foundation/operation_registry.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -65,6 +65,8 @@ struct route_channel_runtime_t::state_t
 {
     std::string _router_channel_id;
     mutable runtime::state_lane_t _lane;
+    std::shared_ptr<runtime::foundation::operation_registry_t> readiness_operations{
+      runtime::foundation::operation_registry_t::create_scheduled (_lane)};
     std::optional<zlink::routing_id_t> _routing_id;
     std::chrono::milliseconds _default_request_timeout{
       runtime::configuration::default_request_timeout};
@@ -596,12 +598,45 @@ task_t<void> route_channel_runtime_t::await_readiness (
         return detail::current_wait_owner ();
     }();
     std::stop_callback parent_cancel (parent, [&] { lifetime.cancellation.request_stop (); });
+    struct registration_t
+    {
+        std::shared_ptr<runtime::foundation::operation_registry_t> operations;
+        runtime::call_id_t id;
+        ~registration_t () { operations->unregister (id); }
+    } registration{state->readiness_operations,
+                   {0, state->_lane.run_sync (
+                         [&] { return state->_pending_requests.next_request_seq (); })}};
     auto bounded = [&] {
         auto context = detail::capture_ambient_context ();
         context.wait_owner = lifetime.cancellation.get_token ();
         detail::serial_turn_scope_t observer_turn (nullptr);
         const auto scope = detail::enter_ambient_context (context);
-        return runtime::messaging::with_request_deadline (observer->completion.task (), *deadline);
+        auto pending = observer->completion.task ();
+        if (pending.await_ready ())
+            return pending;
+        const bool registered = state->readiness_operations->register_operation (
+          registration.id, *deadline,
+          [weak = std::weak_ptr (observer)] (runtime::foundation::operation_terminal_t terminal,
+                                             zlink::message_t) {
+              if (auto current = weak.lock ()) {
+                  if (terminal == runtime::foundation::operation_terminal_t::cancelled) {
+                      current->completion.complete (detail::result_access_t::failure<void> (
+                        detail::make_cancellation_exception ("request was cancelled")));
+                  } else {
+                      const bool expired =
+                        terminal == runtime::foundation::operation_terminal_t::timed_out;
+                      current->completion.complete (detail::boundary_failure<void> (
+                        expired ? detail::boundary_error_t::timed_out
+                                : detail::boundary_error_t::shutdown,
+                        expired ? "request deadline expired" : "route channel is closed"));
+                  }
+              }
+          },
+          {}, {}, {}, lifetime.cancellation.get_token ());
+        if (!registered)
+            observer->completion.complete (detail::boundary_failure<void> (
+              detail::boundary_error_t::shutdown, "route channel is closed"));
+        return pending;
     }();
     co_await bounded;
 }
