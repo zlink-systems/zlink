@@ -67,13 +67,18 @@ internal sealed class ZLinkMessageFlowTracer
     // Flow-correlation §4: message-flow tracing, and with it every flow ID
     // creation, validation, capture and propagation, is on only at Normal and
     // Detailed. This is the one place that decides it.
-    public bool CaptureEnabled =>
-        _options.Diagnostics.EffectiveLevel >= ZLinkDiagnosticsLevel.Normal;
+    public bool CaptureEnabled => CaptureEnabledAt(_options.Diagnostics.EffectiveLevel);
+
+    private static bool CaptureEnabledAt(ZLinkDiagnosticsLevel level) =>
+        level >= ZLinkDiagnosticsLevel.Normal;
 
     // Dispatch error, backpressure and drop records are written at every level
     // but Off (message-flow tracing §4 level table).
     internal bool DispatchErrorsEnabled =>
-        _options.Diagnostics.EffectiveLevel != ZLinkDiagnosticsLevel.Off;
+        DispatchErrorsEnabledAt(_options.Diagnostics.EffectiveLevel);
+
+    private static bool DispatchErrorsEnabledAt(ZLinkDiagnosticsLevel level) =>
+        level != ZLinkDiagnosticsLevel.Off;
 
     internal bool DetailedEnabled =>
         _options.Diagnostics.EffectiveLevel >= ZLinkDiagnosticsLevel.Detailed;
@@ -90,31 +95,33 @@ internal sealed class ZLinkMessageFlowTracer
 
     public void Trace(ZLinkMessageFlowEvent flow)
     {
-        var logEnabled = ShouldLog(flow.Outcome, flow.Result);
+        var level = _options.Diagnostics.EffectiveLevel;
+        var logEnabled = ShouldLog(level, flow.Outcome, flow.Result);
         if (!logEnabled)
             return;
 
-        flow = NormalizeFlowPair(flow);
-        if (string.IsNullOrEmpty(flow.FlowId))
+        if (CaptureEnabledAt(level))
         {
-            var current = ZLinkFlowContext.Current;
-            if (current is { } value)
-                flow = flow with { FlowId = value.FlowId, FlowOrigin = value.Origin };
+            flow = NormalizeFlowPair(flow);
+            if (string.IsNullOrEmpty(flow.FlowId))
+            {
+                var current = ZLinkFlowContext.Current;
+                if (current is { } value)
+                    flow = flow with { FlowId = value.FlowId, FlowOrigin = value.Origin };
+            }
+        }
+        else
+        {
+            flow = flow with { FlowId = string.Empty, FlowOrigin = null };
         }
 
         var diagnostics = _options.Diagnostics;
         if (
             flow.MessageSize is not null
-            && (
-                diagnostics.EffectiveLevel < ZLinkDiagnosticsLevel.Detailed
-                || !diagnostics.MessageSizesIncluded
-            )
+            && (level < ZLinkDiagnosticsLevel.Detailed || !diagnostics.MessageSizesIncluded)
         )
             flow = flow with { MessageSize = null };
-        if (
-            flow.DurationSeconds is not null
-            && diagnostics.EffectiveLevel < ZLinkDiagnosticsLevel.Detailed
-        )
+        if (flow.DurationSeconds is not null && level < ZLinkDiagnosticsLevel.Detailed)
             flow = flow with { DurationSeconds = null };
 
         // Sampling thins healthy traffic; failures, drops, and backpressure always pass through.
@@ -141,16 +148,22 @@ internal sealed class ZLinkMessageFlowTracer
 
     public void TraceDispatchError(ZLinkDispatchFailure error)
     {
-        if (!DispatchErrorsEnabled)
+        var level = _options.Diagnostics.EffectiveLevel;
+        if (!DispatchErrorsEnabledAt(level))
             return;
 
-        var flowId = error.FlowId;
-        var flowOrigin = error.FlowOrigin;
-        if (string.IsNullOrEmpty(flowId) || flowOrigin is null)
+        string? flowId = null;
+        ZLinkFlowOrigin? flowOrigin = null;
+        if (CaptureEnabledAt(level))
         {
-            var current = ZLinkFlowContext.Current;
-            flowId = current?.FlowId;
-            flowOrigin = current?.Origin;
+            flowId = error.FlowId;
+            flowOrigin = error.FlowOrigin;
+            if (string.IsNullOrEmpty(flowId) || flowOrigin is null)
+            {
+                var current = ZLinkFlowContext.Current;
+                flowId = current?.FlowId;
+                flowOrigin = current?.Origin;
+            }
         }
 
         try
@@ -173,11 +186,17 @@ internal sealed class ZLinkMessageFlowTracer
             ZLinkFrameworkDebugLog.UnhandledCallbackFailure(exception);
     }
 
-    internal bool ShouldLog(ZLinkMessageFlowOutcome outcome) =>
-        (int)_options.Diagnostics.EffectiveLevel >= (int)RequiredLevel(outcome);
+    internal bool ShouldLog(ZLinkMessageFlowOutcome outcome) => ShouldLog(outcome, null);
 
     private bool ShouldLog(ZLinkMessageFlowOutcome outcome, ZLinkMessageFlowResult? result) =>
-        (int)_options.Diagnostics.EffectiveLevel
+        ShouldLog(_options.Diagnostics.EffectiveLevel, outcome, result);
+
+    private static bool ShouldLog(
+        ZLinkDiagnosticsLevel level,
+        ZLinkMessageFlowOutcome outcome,
+        ZLinkMessageFlowResult? result
+    ) =>
+        (int)level
         >= (int)(
             result is not null and not ZLinkMessageFlowResult.Succeeded
                 ? ZLinkDiagnosticsLevel.Errors
