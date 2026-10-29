@@ -17,11 +17,11 @@ import {
   encodeStatefulReply
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
 
-test('command 48 replays a lost reply with the same operation ID inside the original deadline', async () => {
+test('command 48 returns the first binding failure without resubmitting', async () => {
   const requests: Buffer[] = [];
   const attemptTimeouts: number[] = [];
-  const deadlineMs = performance.now() + 500;
   const deadlineUnixMs = BigInt(Date.now() + 500);
+  const failure = new ZLinkBackendResultError('request', RequestResult.NotConnected);
   const raw = {
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
@@ -37,23 +37,12 @@ test('command 48 replays a lost reply with the same operation ID inside the orig
       const head = Buffer.from(parts[0]!);
       requests.push(head);
       attemptTimeouts.push(timeoutMs);
-      if (requests.length === 1) {
-        await new Promise((resolve) => setTimeout(resolve, 40));
-        throw new ZLinkBackendResultError('request', RequestResult.NotConnected);
-      }
-      const decoded = decodeStatefulHeader(head);
-      assert.equal(decoded.kind, 'userSpotClose');
-      return [
-        encodeStatefulReply(decoded.correlation, RequestResult.Ok, 0, {
-          kind: 'userSpotClose',
-          closed: true
-        })
-      ];
+      throw failure;
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'source-node', 17n);
 
-  const result = await runtime.requestUserSpotClose(
+  const result = runtime.requestUserSpotClose(
     'target-node',
     {
       sourceNodeRid: 'source-node',
@@ -71,18 +60,12 @@ test('command 48 replays a lost reply with the same operation ID inside the orig
     500
   );
 
-  assert.equal(result.terminalResult, RequestResult.Ok);
-  assert.deepEqual(result.tail, { kind: 'userSpotClose', closed: true });
-  assert.equal(requests.length, 2);
-  assert.deepEqual(requests[1], requests[0]);
+  await assert.rejects(result, (error) => error === failure);
+  assert.equal(requests.length, 1);
   const first = decodeStatefulHeader(requests[0]!);
-  const second = decodeStatefulHeader(requests[1]!);
   assert.equal(first.kind, 'userSpotClose');
-  assert.equal(second.kind, 'userSpotClose');
-  assert.deepEqual(second.operation, first.operation);
-  assert(attemptTimeouts[0]! > 400);
-  assert(attemptTimeouts[1]! > 0 && attemptTimeouts[1]! < attemptTimeouts[0]!);
-  assert(performance.now() < deadlineMs);
+  if (first.kind === 'userSpotClose') assert.equal(first.deadlineUnixMs, deadlineUnixMs);
+  assert(attemptTimeouts[0]! > 0);
   runtime.close();
 });
 
@@ -152,8 +135,9 @@ test('command 48 gives a healthy first attempt the whole remaining deadline', as
   }
 });
 
-test('command 48 exhaustion is Unavailable when no attempt was admitted', async () => {
+test('command 48 first submit failure is returned once', async () => {
   let attempts = 0;
+  const failure = new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
   const raw = {
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
@@ -163,7 +147,7 @@ test('command 48 exhaustion is Unavailable when no attempt was admitted', async 
     setServiceIngress() {},
     async requestService(): Promise<readonly Buffer[]> {
       attempts += 1;
-      throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
+      throw failure;
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'source-node', 17n);
@@ -188,18 +172,19 @@ test('command 48 exhaustion is Unavailable when no attempt was admitted', async 
           },
           80
         ),
-      (error: unknown) =>
-        error instanceof ZLinkFrameworkException &&
-        error.kind === ZLinkFrameworkErrorKind.Unavailable
+      (error: unknown) => error === failure
     );
-    assert(attempts > 0);
+    assert.equal(attempts, 1);
   } finally {
     runtime.close();
   }
 });
 
-test('command 48 exhaustion is DeadlineExceeded after an admitted reply is withheld', async () => {
+test('command 48 exhaustion is DeadlineExceeded after an admitted reply is withheld', async (t) => {
+  let now = 1000;
+  t.mock.method(performance, 'now', () => now);
   let attempts = 0;
+  let finish!: () => void;
   const raw = {
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
@@ -210,19 +195,20 @@ test('command 48 exhaustion is DeadlineExceeded after an admitted reply is withh
     async requestService(
       _targetNodeRid: string,
       _parts: readonly Uint8Array[],
-      timeoutMs: number,
-      onAdmitted: () => void
+      _timeoutMs: number,
+      _onAdmitted?: () => void
     ): Promise<readonly Buffer[]> {
       attempts += 1;
-      onAdmitted();
-      await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
       throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'source-node', 17n);
 
   try {
-    await assert.rejects(
+    const result = assert.rejects(
       () =>
         runtime.requestUserSpotClose(
           'target-node',
@@ -245,6 +231,11 @@ test('command 48 exhaustion is DeadlineExceeded after an admitted reply is withh
         error instanceof ZLinkFrameworkException &&
         error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
     );
+    await new Promise((resolve) => setImmediate(resolve));
+    now += 80;
+    assert.equal(runtime.expireOperations(now, Number.POSITIVE_INFINITY), 1);
+    await result;
+    finish();
     assert.equal(attempts, 1);
   } finally {
     runtime.close();
@@ -259,9 +250,14 @@ for (const wallJumpMs of [60_000, -60_000]) {
     t.mock.method(performance, 'now', () => elapsedMs);
     const requests: Buffer[] = [];
     const budgets: number[] = [];
+    let ready = false;
+    let changed!: (rid: string) => void;
     const raw = {
-      observePeerRoute: () => ({ generation: 1n, ready: true }),
-      observePeerRouteChanged: () => () => {},
+      observePeerRoute: () => ({ generation: 1n, ready }),
+      observePeerRouteChanged: (listener: (rid: string) => void) => {
+        changed = listener;
+        return () => {};
+      },
       observePeerConnectionIntentRemoved() {
         return () => {};
       },
@@ -269,12 +265,7 @@ for (const wallJumpMs of [60_000, -60_000]) {
       async requestService(_target: string, parts: readonly Uint8Array[], timeoutMs: number) {
         requests.push(Buffer.from(parts[0]!));
         budgets.push(timeoutMs);
-        if (requests.length === 1) {
-          elapsedMs += 40;
-          t.mock.method(Date, 'now', () => wallNow + wallJumpMs);
-          throw new ZLinkBackendResultError('request', RequestResult.NotConnected);
-        }
-        const record = decodeStatefulHeader(requests[1]!);
+        const record = decodeStatefulHeader(requests[0]!);
         assert.equal(record.kind, 'userSpotClose');
         return [
           encodeStatefulReply(record.correlation, RequestResult.Ok, 0, {
@@ -286,7 +277,7 @@ for (const wallJumpMs of [60_000, -60_000]) {
     } as unknown as RawServiceMeshRuntime;
     const runtime = new ServiceStatefulRuntime(raw, 'source-node', 17n);
     t.after(() => runtime.close());
-    const result = await runtime.requestUserSpotClose(
+    const operation = runtime.requestUserSpotClose(
       'target-node',
       {
         sourceNodeRid: 'source-node',
@@ -303,9 +294,15 @@ for (const wallJumpMs of [60_000, -60_000]) {
       },
       500
     );
+    assert.equal(requests.length, 0);
+    elapsedMs += 40;
+    t.mock.method(Date, 'now', () => wallNow + wallJumpMs);
+    ready = true;
+    changed('target-node');
+    const result = await operation;
     assert.equal(result.terminalResult, RequestResult.Ok);
-    assert.deepEqual(budgets, [500, 460]);
-    assert.deepEqual(requests[1], requests[0]);
+    assert.deepEqual(budgets, [460]);
+    assert.equal(requests.length, 1);
     const record = decodeStatefulHeader(requests[0]!);
     assert.equal(record.kind, 'userSpotClose');
     if (record.kind === 'userSpotClose') assert.equal(record.deadlineUnixMs, deadlineUnixMs);

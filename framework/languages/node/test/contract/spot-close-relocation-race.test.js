@@ -25,7 +25,7 @@ for (const { casCommits, path } of [
         events.push('execution:seal');
         return Promise.resolve({ timers: [] });
       },
-      abortRelocation() { events.push('execution:abort'); }
+      abortRelocation() { events.push('execution:abort'); return true; }
     };
     const runtime = new ZLinkHostServiceRelocationRuntime({
       locationStore: () => ({ readAuthority: async () => ({

@@ -100,8 +100,9 @@ int main ()
     // interface as well: valid and invalid route/probe inputs must differ.
     {
         using registry_t = fw::runtime::mesh::service_liveness_registry_t;
-        registry_t registry (registry_t::default_probe_interval, registry_t::default_peer_timeout,
-                             &infrastructure);
+        fw::runtime::state_lane_t registry_lane (infrastructure);
+        registry_t registry (registry_lane, registry_t::default_probe_interval,
+                             registry_t::default_peer_timeout);
         const std::vector<std::uint8_t> peer{'p'}, route{'r'}, wrong{'x'};
         const auto now = registry_t::clock_t::time_point{};
         auto connection = registry.admit (peer, route, now);

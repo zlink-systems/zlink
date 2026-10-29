@@ -1,5 +1,9 @@
 import { requestTerminalError } from '../messaging/request-deadline';
-import { OperationCancelledError, type OperationHandle } from '../foundation/operation-registry';
+import {
+  OperationCancelledError,
+  type OperationHandle,
+  type OperationObserver
+} from '../foundation/operation-registry';
 import { ZLinkBufferMessage as Message } from './runtime-message';
 import type { Message as ZLinkMessage } from '../../contracts/Common/Message';
 import type {
@@ -161,10 +165,42 @@ export class ZLinkMeshCompletionTable {
    * before the terminal callback can run, without an infrastructure pump.
    */
   submit(
+    operation: (completion?: ZLinkMeshCompletionHandler) => MeshOperationSubmission,
+    signal: AbortSignal | undefined,
+    requestOperation: OperationHandle<unknown>,
+    receiver: OperationObserver<unknown, unknown>
+  ): void;
+  submit(
     operation: () => MeshOperationSubmission,
     signal?: AbortSignal,
     requestOperation?: OperationHandle<unknown>
-  ): Promise<ZLinkMeshCompletion> {
+  ): Promise<ZLinkMeshCompletion>;
+  submit(
+    operation: (completion?: ZLinkMeshCompletionHandler) => MeshOperationSubmission,
+    signal?: AbortSignal,
+    requestOperation?: OperationHandle<unknown>,
+    receiver?: OperationObserver<unknown, unknown>
+  ): Promise<ZLinkMeshCompletion> | void {
+    if (receiver !== undefined && requestOperation?.promise !== undefined) {
+      if (requestOperation.isPending()) {
+        try {
+          operation((_terminal, materialize) => {
+            try {
+              receiver.operationCompleted(
+                requestOperation.id,
+                retainCompletion(materialize()),
+                undefined
+              );
+            } catch (error) {
+              receiver.operationFailed(requestOperation.id, error, undefined);
+            }
+          });
+        } catch (error) {
+          receiver.operationFailed(requestOperation.id, error, undefined);
+        }
+      }
+      return;
+    }
     if (requestOperation?.promise !== undefined && !requestOperation.isPending()) {
       return requestOperation.promise.then(() => {
         throw new OperationCancelledError(requestOperation.id, 'Request is already terminal.');

@@ -1,5 +1,6 @@
 import type { RequestRuntime } from '../foundation/request-runtime';
-import type { PendingOperation } from '../foundation/operation-registry';
+import type { OperationObserver, PendingOperation } from '../foundation/operation-registry';
+import { identityRequestReply } from '../messaging/request-result';
 import type { Message } from '../../contracts/Common/Message';
 import type { RoutingId } from '../../contracts';
 import type { ZLinkFrameworkRegistration } from '../configuration';
@@ -52,7 +53,7 @@ export interface ZLinkLocalSpotRouteDispatcher {
 }
 
 export interface ZLinkSpotRouteDispatchStrategyOptions {
-  readonly requests?: RequestRuntime;
+  readonly requests: RequestRuntime;
   readonly registration: ZLinkFrameworkRegistration;
   readonly sockets: ZLinkChannelSocketRegistry;
   readonly codecs: ZLinkChannelEnvelopeCodecRegistry;
@@ -182,23 +183,50 @@ export class ZLinkSpotRouteDispatchStrategy {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
     onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    destination?: OperationObserver<unknown, unknown>
   ): Promise<TReply> {
-    return runWithOutboundFlow(this.options.flowCreationEnabled?.() ?? true, () =>
-      this.routeRequestToSpotScoped<TReply>(
-        spotRouteTarget,
-        packetName,
-        request,
-        timeoutMs,
-        signal,
-        metadata,
-        onAdmitted,
-        requestOperation
-      )
-    );
+    return runWithOutboundFlow(this.options.flowCreationEnabled?.() ?? true, () => {
+      if (requestOperation !== undefined) {
+        return this.options.requests.run<TReply>(
+          requestOperation,
+          (receiver) => {
+            this.routeRequestToSpotScoped<TReply>(
+              spotRouteTarget,
+              packetName,
+              request,
+              timeoutMs,
+              signal,
+              metadata,
+              onAdmitted,
+              requestOperation,
+              receiver
+            );
+          },
+          (value) => value as TReply,
+          identityRequestReply,
+          destination
+        );
+      }
+      try {
+        return this.routeRequestToSpotScoped<TReply>(
+          spotRouteTarget,
+          packetName,
+          request,
+          timeoutMs,
+          signal,
+          metadata,
+          onAdmitted,
+          requestOperation,
+          destination
+        );
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    });
   }
 
-  private async routeRequestToSpotScoped<TReply>(
+  private routeRequestToSpotScoped<TReply>(
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     request: unknown,
@@ -206,7 +234,8 @@ export class ZLinkSpotRouteDispatchStrategy {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
     onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    receiver?: OperationObserver<unknown, unknown>
   ): Promise<TReply> {
     throwIfAborted(signal);
     const localSpotRouteNode = this.targets.localRouteNode(spotRouteTarget);
@@ -219,7 +248,8 @@ export class ZLinkSpotRouteDispatchStrategy {
         timeoutMs,
         signal,
         onAdmitted,
-        requestOperation
+        requestOperation,
+        receiver
       );
     }
     const codecs = codecsForFrameworkPacket(packetName, this.options.codecs);
@@ -243,7 +273,8 @@ export class ZLinkSpotRouteDispatchStrategy {
         timeoutMs,
         signal,
         onAdmitted,
-        requestOperation
+        requestOperation,
+        receiver
       );
       if (namedSpotNodeRequest !== undefined) return namedSpotNodeRequest;
     }
@@ -255,7 +286,8 @@ export class ZLinkSpotRouteDispatchStrategy {
         timeoutMs,
         signal,
         onAdmitted,
-        requestOperation
+        requestOperation,
+        receiver
       );
     }
     if (this.targets.hasBoundRouteRouter(spotRouteTarget.routerChannelId)) {
@@ -267,7 +299,8 @@ export class ZLinkSpotRouteDispatchStrategy {
         timeoutMs,
         signal,
         onAdmitted,
-        requestOperation
+        requestOperation,
+        receiver
       );
     }
     const spotNodeRequest = this.spotNodeTransport.request<TReply>(
@@ -277,7 +310,8 @@ export class ZLinkSpotRouteDispatchStrategy {
       timeoutMs,
       signal,
       onAdmitted,
-      requestOperation
+      requestOperation,
+      receiver
     );
     if (spotNodeRequest !== undefined) {
       return spotNodeRequest;
@@ -290,7 +324,8 @@ export class ZLinkSpotRouteDispatchStrategy {
       timeoutMs,
       signal,
       onAdmitted,
-      requestOperation
+      requestOperation,
+      receiver
     );
   }
 
@@ -302,7 +337,8 @@ export class ZLinkSpotRouteDispatchStrategy {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    destination?: OperationObserver<unknown, unknown>
   ): Promise<TReply> {
     return this.sourceSpotRouter.request<TReply>(
       sourceSpot,
@@ -312,7 +348,8 @@ export class ZLinkSpotRouteDispatchStrategy {
       timeoutMs,
       signal,
       onAdmitted,
-      requestOperation
+      requestOperation,
+      destination
     );
   }
 

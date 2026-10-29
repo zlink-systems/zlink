@@ -538,9 +538,14 @@ for (const peerOrder of ['none', 'before failure', 'after failure']) {
       },
       abortRelocation() {
         events.push('spot:abort');
+        return true;
       }
     };
     const runtime = new ZLinkHostServiceRelocationRuntime({
+      registration: { spotNodes: new Map([['mesh', {
+        spotFactoryRegistrations: { Spot: { relocation: { kind: 'recreate' } } },
+        actorFactoryRegistrations: { Actor: { relocation: { kind: 'recreate' } } }
+      }]]) },
       locationStore: () => ({
         readAuthority: async () => ({
           kind: 'snapshot',
@@ -592,13 +597,11 @@ for (const peerOrder of ['none', 'before failure', 'after failure']) {
         }
       }
     });
-    runtime.spotRegistration = () => ({ relocation: { kind: 'allowed' } });
-    runtime.actorRegistration = () => ({ relocation: { kind: 'allowed' } });
-    runtime.waitForRelocationBudgetHeadroom = async () => {};
     runtime.runCoordinator = async () => {
       events.push('target:prepare');
     };
     const states = [closed, ...(peer ? [peer] : [])].map((h) => ({
+      meshName: 'mesh',
       actorId: h.actor.context.actorId,
       actor: h.actor,
       actorType: 'Actor',
@@ -1063,6 +1066,10 @@ test('aggregate reaches coordinator with both Actors and membership but only the
   );
   let envelope;
   const runtime = new ZLinkHostServiceRelocationRuntime({
+    registration: { spotNodes: new Map([['mesh', {
+      spotFactoryRegistrations: { Unit: { relocation: { kind: 'recreate' } } },
+      actorFactoryRegistrations: { Actor: { relocation: { kind: 'recreate' } } }
+    }]]) },
     locationStore: () => ({
       readAuthority: async () => ({
         kind: 'snapshot',
@@ -1097,11 +1104,6 @@ test('aggregate reaches coordinator with both Actors and membership but only the
       }
     }
   });
-  runtime.spotRegistration = runtime.actorRegistration = () => ({
-    relocation: { kind: 'allowed' }
-  });
-  runtime.waitForRelocationBudgetHeadroom = async () => {};
-  runtime.captureApplication = async () => Buffer.alloc(0);
   runtime.runCoordinator = async (_mesh, _target, _authority, captured) => {
     envelope = captured.envelope;
     // The target-preparation boundary has been reached. Release captures
@@ -1112,9 +1114,10 @@ test('aggregate reaches coordinator with both Actors and membership but only the
     spotId: 'spot',
     serial: new ZLinkSpotSerialTurnExecutor(),
     captureRelocation: async () => ({ timers: [] }),
-    abortRelocation() {}
+    abortRelocation() { return true; }
   };
   const states = [closed, live].map((h) => ({
+    meshName: 'mesh',
     actorId: h.actor.context.actorId,
     actor: h.actor,
     actorType: 'Actor',

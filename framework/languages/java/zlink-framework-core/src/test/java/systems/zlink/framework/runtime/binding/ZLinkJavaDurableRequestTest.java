@@ -27,43 +27,77 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkJavaDurableRequestTest {
+    @Test
+    void oneThousandReadinessWaitsUseOneEntryEachAndCancellationReleasesAllObservers()
+            throws Exception {
+        var observers = new AtomicInteger();
+        var releasedAll = new CompletableFuture<Void>();
+        try (var operations =
+                new systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry(
+                        new IllegalStateException("closed"))) {
+            var requests = new java.util.ArrayList<CompletableFuture<List<byte[]>>>();
+            for (int request = 0; request < 1_000; request++) {
+                requests.add(
+                        ZLinkJavaDurableRequest.<List<byte[]>>request(
+                                        () -> List.of(new byte[] {1}),
+                                        (frames, remaining, admission, terminal) -> {
+                                            throw new AssertionError(
+                                                    "unready route cannot start binding");
+                                        },
+                                        () -> new PeerRouteObservation(1, false),
+                                        (changed, ended) -> {
+                                            observers.incrementAndGet();
+                                            changed.run();
+                                            return () -> {
+                                                if (observers.decrementAndGet() == 0)
+                                                    releasedAll.complete(null);
+                                            };
+                                        },
+                                        action -> {
+                                            action.run();
+                                            return CompletableFuture.completedStage(null);
+                                        },
+                                        Duration.ofHours(1),
+                                        operations)
+                                .toCompletableFuture());
+            }
+            assertEquals(1_000, operations.pendingCount());
+            assertEquals(1_000, observers.get());
+            for (var request : requests) assertTrue(request.cancel(false));
+            assertEquals(0, operations.pendingCount());
+            // §10.1/§11: C1 removal precedes dispatcher delivery and observer cleanup.
+            releasedAll.get(1, TimeUnit.SECONDS);
+            assertEquals(0, observers.get());
+        }
+    }
+
     @ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
-    void selectedRouteChangeCancelsPendingAttemptAndReplaysWhenReady(boolean readyAtObservation) {
+    void selectedRouteChangeDoesNotResubmitAStartedBindingRequest(boolean readyAtObservation) {
         var source = new Source();
         var pending = new CompletableFuture<List<byte[]>>();
-        var terminal = List.of(new byte[] {9});
         var attempts = new AtomicInteger();
-        var preparations = new AtomicInteger();
-        var frames = List.of(new byte[] {1});
+        var failure = new ZlinkRequestException(RequestResult.NOT_CONNECTED);
         var result =
                 source.request(
-                                () -> {
-                                    preparations.incrementAndGet();
-                                    return frames;
-                                },
+                                () -> List.of(new byte[] {1}),
                                 (wire, remaining) -> {
-                                    assertSame(frames, wire);
-                                    return attempts.incrementAndGet() == 1
-                                            ? pending
-                                            : CompletableFuture.completedFuture(terminal);
+                                    attempts.incrementAndGet();
+                                    return pending;
                                 },
                                 () -> false,
                                 Duration.ofSeconds(5))
                         .toCompletableFuture();
         source.route = new PeerRouteObservation(2, readyAtObservation);
         source.signal();
-        assertTrue(pending.isCancelled(), "the replaced route must release its request");
-        assertEquals(readyAtObservation ? 2 : 1, attempts.get());
-        if (!readyAtObservation) {
-            assertFalse(result.isDone());
-            source.route = new PeerRouteObservation(2, true);
-            source.signal();
-        }
-        assertSame(terminal, result.join());
-        assertEquals(1, preparations.get());
-        assertEquals(2, attempts.get());
-        assertNull(source.listener);
+        // §5: route replacement does not cancel or restart a started binding operation.
+        assertFalse(pending.isCancelled());
+        assertEquals(1, attempts.get());
+        pending.completeExceptionally(failure);
+        assertFailure(result, ZLinkFrameworkErrorKind.UNAVAILABLE, failure);
+        source.route = new PeerRouteObservation(2, true);
+        source.signal();
+        assertEquals(1, attempts.get());
     }
 
     @Test
@@ -91,14 +125,14 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     @Test
-    void terminalReceivedBeforeTheRouteOwnerTurnWinsOverReplay() {
+    void bindingTerminalClaimsTheEntryBeforeAQueuedRouteTurn() {
         var source = new Source();
         var turns = new java.util.ArrayDeque<Runnable>();
         var pending = new CompletableFuture<List<byte[]>>();
         var terminal = List.of(new byte[] {9});
         var attempts = new AtomicInteger();
         var result =
-                ZLinkJavaDurableRequest.request(
+                ZLinkJavaDurableRequestTest.request(
                                 () -> List.of(new byte[] {1}),
                                 (frames, remaining, admission) -> {
                                     admission.complete(null);
@@ -134,7 +168,7 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     @Test
-    void receivedTransientFailureCannotReplayAfterQueuedLifecycleRemoval() throws Exception {
+    void receivedTransientFailureClaimsTheEntryBeforeLaterLifecycleRemoval() throws Exception {
         lifecycleRemovalAfterReceivedTerminal(
                 new ZlinkRequestException(RequestResult.NOT_CONNECTED));
     }
@@ -146,7 +180,7 @@ final class ZLinkJavaDurableRequestTest {
         var terminal = List.of(new byte[] {9});
         var attempts = new AtomicInteger();
         var result =
-                ZLinkJavaDurableRequest.request(
+                ZLinkJavaDurableRequestTest.request(
                                 () -> List.of(new byte[] {1}),
                                 (frames, remaining, admission) -> {
                                     attempts.incrementAndGet();
@@ -167,11 +201,11 @@ final class ZLinkJavaDurableRequestTest {
                                 () -> 0)
                         .toCompletableFuture();
         turns.remove().run();
-        removed.get().run();
         if (failure == null) pending.complete(terminal);
         else pending.completeExceptionally(failure);
-        // The removal owner turn precedes the native settlement owner turn.
-        turns.remove().run();
+        // §10.1: binding notification claims C1 before later lifecycle removal.
+        removed.get().run();
+        while (!turns.isEmpty()) turns.remove().run();
         if (failure == null) assertSame(terminal, result.join());
         else {
             var ended = assertThrows(CompletionException.class, result::join);
@@ -180,45 +214,31 @@ final class ZLinkJavaDurableRequestTest {
                 assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, error.kind());
             } else assertSame(failure, ended.getCause());
         }
-        if (failure instanceof ZlinkRequestException) {
-            // Receive both native settlement and the existing async ready-replay post.
-            for (int i = 0; i < 2; i++) {
-                var turn = turns.poll(3, TimeUnit.SECONDS);
-                assertNotNull(turn);
-                turn.run();
-            }
-        } else while (!turns.isEmpty()) turns.remove().run();
         assertEquals(1, attempts.get(), "Lifecycle removal cannot submit another attempt");
     }
 
     @Test
-    void retiredAttemptCompletionCannotEndItsReplacement() {
+    void routeChangeKeepsTheOriginalBindingTerminal() {
         var source = new Source();
-        var retired =
-                new CompletableFuture<List<byte[]>>() {
-                    @Override
-                    public boolean cancel(boolean mayInterruptIfRunning) {
-                        return false;
-                    }
-                };
-        var replacement = new CompletableFuture<List<byte[]>>();
+        var original = new CompletableFuture<List<byte[]>>();
         var attempts = new AtomicInteger();
         var result =
                 source.request(
                                 () -> List.of(new byte[] {1}),
-                                (frames, remaining) ->
-                                        attempts.incrementAndGet() == 1 ? retired : replacement,
+                                (frames, remaining) -> {
+                                    attempts.incrementAndGet();
+                                    return original;
+                                },
                                 () -> false,
                                 Duration.ofSeconds(5))
                         .toCompletableFuture();
         source.route = new PeerRouteObservation(2, true);
         source.signal();
-        retired.completeExceptionally(new IllegalArgumentException("retired terminal"));
-        assertFalse(result.isDone());
+        assertFalse(original.isCancelled());
         var terminal = List.of(new byte[] {9});
-        replacement.complete(terminal);
+        original.complete(terminal);
         assertSame(terminal, result.join());
-        assertEquals(2, attempts.get());
+        assertEquals(1, attempts.get(), "§5 prohibits a replacement binding operation");
     }
 
     enum Operation {
@@ -228,7 +248,7 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     @Test
-    void logicalTargetRemovalEndsAdmittedReplayAsUnavailable() throws Exception {
+    void logicalTargetRemovalEndsThePendingBindingAsUnavailable() throws Exception {
         var ended = new AtomicBoolean();
         var disconnected = new ZlinkRequestException(RequestResult.NOT_CONNECTED);
         var submitted = new CompletableFuture<List<byte[]>>();
@@ -278,9 +298,9 @@ final class ZLinkJavaDurableRequestTest {
 
     @ParameterizedTest
     @EnumSource(Operation.class)
-    void neverAdmittedExhaustsAsUnavailable(Operation operation) throws Exception {
+    void bindingSubmitFailureEndsWithoutReplay(Operation operation) throws Exception {
         var failure = new ZlinkSubmitException(SubmitResult.NOT_CONNECTED);
-        AtomicInteger attempts = new AtomicInteger();
+        var attempts = new AtomicInteger();
         List<byte[]> header = encode(operation);
         var source = new Source();
         var completion =
@@ -293,10 +313,10 @@ final class ZLinkJavaDurableRequestTest {
                         },
                         () -> false,
                         Duration.ofMillis(80));
-        source.signal();
         assertFailure(
                 completion.toCompletableFuture(), ZLinkFrameworkErrorKind.UNAVAILABLE, failure);
-        assertTrue(attempts.get() > 1);
+        source.signal();
+        assertEquals(1, attempts.get(), "§5: a binding submission failure is terminal");
     }
 
     @ParameterizedTest
@@ -327,16 +347,13 @@ final class ZLinkJavaDurableRequestTest {
 
     @ParameterizedTest
     @EnumSource(Operation.class)
-    void handoverReplaysIdenticalHeaderWithWholeRemainingDeadline(Operation operation)
-            throws Exception {
-        AtomicInteger preparations = new AtomicInteger();
-        AtomicInteger attempts = new AtomicInteger();
-        AtomicInteger executions = new AtomicInteger();
+    void handoverFailureEndsTheSingleBindingSubmission(Operation operation) throws Exception {
+        var preparations = new AtomicInteger();
+        var attempts = new AtomicInteger();
         List<byte[]> header = encode(operation);
         byte[] snapshot = header.getFirst().clone();
-        List<byte[]> terminal = List.of(new byte[] {7});
-        long started = System.nanoTime();
         Duration timeout = Duration.ofSeconds(3);
+        var failure = new ZlinkRequestException(RequestResult.NOT_CONNECTED);
         var source = new Source();
         var completion =
                 source.request(
@@ -347,25 +364,19 @@ final class ZLinkJavaDurableRequestTest {
                         (frames, remaining) -> {
                             assertSame(header, frames);
                             assertArrayEquals(snapshot, frames.getFirst());
-                            long elapsed = System.nanoTime() - started;
-                            assertTrue(remaining.toNanos() >= timeout.toNanos() - elapsed);
+                            assertTrue(remaining.isPositive());
                             assertTrue(remaining.compareTo(timeout) <= 0);
-                            if (attempts.incrementAndGet() == 1) {
-                                // The target already executed; Core completed the request
-                                // stranded by handover before its reply was delivered.
-                                executions.incrementAndGet();
-                                return CompletableFuture.failedFuture(
-                                        new ZlinkRequestException(RequestResult.NOT_CONNECTED));
-                            }
-                            return CompletableFuture.completedFuture(terminal);
+                            attempts.incrementAndGet();
+                            return CompletableFuture.failedFuture(failure);
                         },
                         () -> false,
                         timeout);
+        assertFailure(
+                completion.toCompletableFuture(), ZLinkFrameworkErrorKind.UNAVAILABLE, failure);
+        source.route = new PeerRouteObservation(2, true);
         source.signal();
-        assertSame(terminal, completion.toCompletableFuture().get(1, TimeUnit.SECONDS));
         assertEquals(1, preparations.get());
-        assertEquals(2, attempts.get());
-        assertEquals(1, executions.get(), "replay retrieves the target terminal record");
+        assertEquals(1, attempts.get(), "§5 includes lifecycle requests in the no-replay rule");
     }
 
     @Test
@@ -381,46 +392,30 @@ final class ZLinkJavaDurableRequestTest {
                                 },
                                 () -> false,
                                 Duration.ofMillis(30));
-        assertFailure(completion.toCompletableFuture(), ZLinkFrameworkErrorKind.UNAVAILABLE, null);
+        assertFailure(
+                completion.toCompletableFuture(), ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, null);
         assertEquals(0, submits.get());
     }
 
     @Test
-    void admissionHistorySurvivesLaterSubmitFailures() throws Exception {
-        AtomicInteger attempts = new AtomicInteger();
-        var clock = new java.util.concurrent.atomic.AtomicLong();
-        var last = new ZlinkSubmitException(SubmitResult.NOT_CONNECTED);
-        List<byte[]> header = encode(Operation.ACTOR_CREATE);
-        // Both route observations finish before deadline registration. The fake clock then
-        // consumes the original budget in the second attempt, without waiting for a timer.
-        var source =
-                new Source(clock::get) {
-                    @Override
-                    AutoCloseable observe(Runnable signal) {
-                        var registration = super.observe(signal);
-                        route = new PeerRouteObservation(1, true);
-                        signal.run();
-                        return registration;
-                    }
-                };
+    void admittedFailureRemainsTerminalAcrossLaterSourceSignals() {
+        var attempts = new AtomicInteger();
+        var failure = new ZlinkRequestException(RequestResult.NOT_CONNECTED);
+        var source = new Source();
         var completion =
                 source.request(
-                        () -> header,
+                        () -> List.of(new byte[] {1}),
                         (frames, remaining) -> {
-                            if (attempts.incrementAndGet() == 1) {
-                                source.route = new PeerRouteObservation(1, false);
-                                return CompletableFuture.failedFuture(
-                                        new ZlinkRequestException(RequestResult.NOT_CONNECTED));
-                            }
-                            clock.addAndGet(remaining.toNanos());
-                            return CompletableFuture.failedFuture(last);
+                            attempts.incrementAndGet();
+                            return CompletableFuture.failedFuture(failure);
                         },
                         () -> false,
-                        Duration.ofMillis(80));
-        source.signal();
+                        Duration.ofSeconds(5));
         assertFailure(
-                completion.toCompletableFuture(), ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, last);
-        assertEquals(2, attempts.get());
+                completion.toCompletableFuture(), ZLinkFrameworkErrorKind.UNAVAILABLE, failure);
+        source.route = new PeerRouteObservation(2, true);
+        source.signal();
+        assertEquals(1, attempts.get());
     }
 
     @Test
@@ -514,7 +509,8 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     @Test
-    void sourceSignalsDoNotDuplicateAnInFlightAttemptAndCancellationReleasesObserver() {
+    void sourceSignalsDoNotDuplicateAnInFlightAttemptAndCancellationReleasesObserver()
+            throws Exception {
         var source = new Source();
         var attempts = new AtomicInteger();
         var pending = new CompletableFuture<List<byte[]>>();
@@ -532,16 +528,26 @@ final class ZLinkJavaDurableRequestTest {
         source.signal();
         assertEquals(1, attempts.get());
         completion.cancel(false);
-        assertTrue(pending.isCancelled());
+        var cancellation = completion.handle((reply, failure) -> failure).join();
+        assertInstanceOf(java.util.concurrent.CancellationException.class, cancellation);
+        source.observerClosed.get(1, TimeUnit.SECONDS);
         assertNull(source.listener);
+        assertFalse(pending.isDone());
+        var delivered = new AtomicInteger();
+        pending.thenAccept(reply -> delivered.incrementAndGet());
+        assertTrue(pending.complete(List.of(new byte[] {7})));
+        assertEquals(1, delivered.get());
+        assertSame(cancellation, completion.handle((reply, failure) -> failure).join());
+        source.signal();
+        assertEquals(1, attempts.get());
     }
 
     @Test
-    void ownerFailureEndsRequestAndReleasesObserver() {
+    void ownerFailureBeforeObservationDoesNotInstallAnObserver() {
         var source = new Source();
         var failure = new IllegalStateException("owner unavailable");
         var completion =
-                ZLinkJavaDurableRequest.request(
+                ZLinkJavaDurableRequestTest.request(
                         () -> List.of(new byte[] {1}),
                         (frames, remaining, admission) ->
                                 CompletableFuture.completedFuture(List.of()),
@@ -555,11 +561,13 @@ final class ZLinkJavaDurableRequestTest {
                                 CompletionException.class,
                                 () -> completion.toCompletableFuture().join())
                         .getCause());
+        // The owner rejected initialization before observe was called; no close is due.
+        assertFalse(source.observerClosed.isDone());
         assertNull(source.listener);
     }
 
     @Test
-    void missingRouteWaitsForSourceAndTargetRemovalEndsPendingRequest() {
+    void missingRouteWaitsForSourceAndTargetRemovalEndsPendingRequest() throws Exception {
         var source = new Source();
         var route = new AtomicBoolean();
         var ended = new AtomicBoolean();
@@ -582,12 +590,23 @@ final class ZLinkJavaDurableRequestTest {
         ended.set(true);
         source.signal();
         assertFailure(completion, ZLinkFrameworkErrorKind.UNAVAILABLE, null);
-        assertTrue(pending.isCancelled());
+        var targetFailure = assertThrows(CompletionException.class, completion::join).getCause();
+        source.observerClosed.get(1, TimeUnit.SECONDS);
         assertNull(source.listener);
+        assertFalse(pending.isDone());
+        var delivered = new AtomicInteger();
+        pending.thenAccept(reply -> delivered.incrementAndGet());
+        assertTrue(pending.complete(List.of(new byte[] {7})));
+        assertEquals(1, delivered.get());
+        assertSame(
+                targetFailure,
+                assertThrows(CompletionException.class, completion::join).getCause());
+        source.signal();
+        assertEquals(1, attempts.get());
     }
 
     @Test
-    void durableNotAdmittedRetainsItsTypedTerminalWithoutReplay() {
+    void durableNotAdmittedRetainsItsTypedTerminalWithoutReplay() throws Exception {
         var source = new Source();
         var terminal = new ZlinkSubmitException(SubmitResult.NOT_ADMITTED);
         var attempts = new AtomicInteger();
@@ -608,6 +627,7 @@ final class ZLinkJavaDurableRequestTest {
                         .getCause());
         source.signal();
         assertEquals(1, attempts.get());
+        source.observerClosed.get(1, TimeUnit.SECONDS);
         assertNull(source.listener);
     }
 
@@ -642,12 +662,63 @@ final class ZLinkJavaDurableRequestTest {
                 completion.toCompletableFuture(), ZLinkFrameworkErrorKind.SHUTTING_DOWN, failure);
     }
 
+    @FunctionalInterface
+    interface TestSubmit {
+        java.util.concurrent.CompletionStage<List<byte[]>> apply(
+                List<byte[]> frames, Duration remaining, CompletableFuture<Void> admission);
+    }
+
+    static java.util.concurrent.CompletionStage<List<byte[]>> request(
+            java.util.function.Supplier<List<byte[]>> prepare,
+            TestSubmit submit,
+            java.util.function.Supplier<PeerRouteObservation> route,
+            java.util.function.BiFunction<Runnable, Runnable, AutoCloseable> observe,
+            java.util.function.Function<Runnable, java.util.concurrent.CompletionStage<Void>> owner,
+            Duration timeout) {
+        return request(prepare, submit, route, observe, owner, timeout, System::nanoTime);
+    }
+
+    static java.util.concurrent.CompletionStage<List<byte[]>> request(
+            java.util.function.Supplier<List<byte[]>> prepare,
+            TestSubmit submit,
+            java.util.function.Supplier<PeerRouteObservation> route,
+            java.util.function.BiFunction<Runnable, Runnable, AutoCloseable> observe,
+            java.util.function.Function<Runnable, java.util.concurrent.CompletionStage<Void>> owner,
+            Duration timeout,
+            java.util.function.LongSupplier nanoTime) {
+        var operations =
+                new systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry(
+                        new IllegalStateException("closed"),
+                        () ->
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                        "durable request deadline elapsed"),
+                        nanoTime);
+        var result =
+                ZLinkJavaDurableRequest.<List<byte[]>>request(
+                        prepare,
+                        (frames, remaining, admission, terminal) -> {
+                            var physical = submit.apply(frames, remaining, admission);
+                            physical.whenComplete(terminal);
+                            return physical;
+                        },
+                        route,
+                        observe,
+                        owner,
+                        timeout,
+                        operations);
+        result.whenComplete((reply, failure) -> operations.closeAsync());
+        return result;
+    }
+
     private static class Source {
         volatile PeerRouteObservation route = new PeerRouteObservation(1, true);
         private final systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane =
                 new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane();
         private final java.util.function.LongSupplier nanoTime;
         private volatile Runnable listener;
+        // Each Source fixture observes one logical request; close publishes that one event.
+        private final CompletableFuture<Void> observerClosed = new CompletableFuture<>();
 
         Source() {
             this(System::nanoTime);
@@ -660,7 +731,10 @@ final class ZLinkJavaDurableRequestTest {
         AutoCloseable observe(Runnable signal) {
             listener = signal;
             signal.run();
-            return () -> listener = null;
+            return () -> {
+                listener = null;
+                observerClosed.complete(null);
+            };
         }
 
         void signal() {
@@ -677,7 +751,7 @@ final class ZLinkJavaDurableRequestTest {
                         submit,
                 java.util.function.BooleanSupplier ended,
                 Duration timeout) {
-            return ZLinkJavaDurableRequest.request(
+            return ZLinkJavaDurableRequestTest.request(
                     prepare,
                     (frames, remaining, admission) -> {
                         var pending = submit.apply(frames, remaining);

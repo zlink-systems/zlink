@@ -251,7 +251,8 @@ function createActorClient(options) {
 
 function completionTable(terminalResult, parts = []) {
   return {
-    async submit(operation) {
+    submit(operation, _signal, requestOperation, receiver) {
+      return deliverFixtureCompletion((async () => {
       const actualOperationId = operation();
       assert.deepEqual(actualOperationId, operationId);
       return {
@@ -261,6 +262,8 @@ function completionTable(terminalResult, parts = []) {
         kindData: null,
         parts
       };
+
+      })(), requestOperation, receiver);
     }
   };
 }
@@ -419,7 +422,8 @@ test('actor client selects the MeshNode and completion table from the current Ac
   ]);
   const completions = new Map([
     ['mesh-a', {
-      async submit(operation) {
+      submit(operation, _signal, requestOperation, receiver) {
+      return deliverFixtureCompletion((async () => {
         assert.deepEqual(operation(), operationId);
         selected.push('completion:mesh-a');
         return {
@@ -429,10 +433,13 @@ test('actor client selects the MeshNode and completion table from the current Ac
           kindData: null,
           parts: createReplyFrame({ mesh: 'mesh-a' })
         };
-      }
+
+      })(), requestOperation, receiver);
+    }
     }],
     ['mesh-b', {
-      async submit(operation) {
+      submit(operation, _signal, requestOperation, receiver) {
+      return deliverFixtureCompletion((async () => {
         assert.deepEqual(operation(), operationId);
         selected.push('completion:mesh-b');
         return {
@@ -442,7 +449,9 @@ test('actor client selects the MeshNode and completion table from the current Ac
           kindData: null,
           parts: createReplyFrame({ mesh: 'mesh-b' })
         };
-      }
+
+      })(), requestOperation, receiver);
+    }
     }]
   ]);
   const client = createActorClient({
@@ -821,11 +830,11 @@ test('actor client deadline ends its pending request while a Message Follow rela
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      requestToSpot() { return prepareZLinkRequestReply((async () => {
+      requestToSpot(_target, _payload, options, destination) { return forwardFixtureReply((async () => {
         const reply = new Promise(resolve => { completeRelay = resolve; });
         entered();
         return await reply;
-      })(), identityRequestReply); }
+      })(), options, destination); }
     },
     requestSource: () => ({
       meshName: route.meshName, objectGeneration: route.actorRef.objectGeneration,
@@ -1005,9 +1014,9 @@ for (const stage of ['route', 'handoff', 'native']) {
     let nativeSignal;
     const nativeTable = new (require('../../packages/framework/dist/runtime/backend').ZLinkMeshCompletionTable)();
     const nativeSubmit = nativeTable.submit.bind(nativeTable);
-    nativeTable.submit = (operation, signal) => {
+    nativeTable.submit = (operation, signal, ...forward) => {
       nativeSignal = signal;
-      const result = nativeSubmit(operation, signal);
+      const result = nativeSubmit(operation, signal, ...forward);
       started();
       return result;
     };
@@ -1125,8 +1134,8 @@ test('actor native deadline preserves one terminal and releases the lower comple
   let entered;
   const started = new Promise(resolve => { entered = resolve; });
   const submit = table.submit.bind(table);
-  table.submit = (operation, signal) => {
-    const result = submit(operation, signal);
+  table.submit = (operation, signal, ...forward) => {
+    const result = submit(operation, signal, ...forward);
     entered();
     return result;
   };
@@ -1199,9 +1208,18 @@ test('Actor route infrastructure admission cannot complete the user request admi
         async readAuthority() {
           // The real common binding consumer runs inside the stock route resolver's
           // authority-store lookup. It does not submit the user's Actor packet.
-          await bindingRequestReply({
-            result: SubmitResult.Ok, admitted: Promise.resolve(), reply: Promise.resolve([])
-          });
+          const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+          const infrastructure = new RequestRuntime();
+          const entry = infrastructure.begin(undefined);
+          try {
+            await infrastructure.run(entry, receiver => bindingRequestReply(
+              {
+                result: SubmitResult.Ok,
+                admitted: Promise.resolve(),
+                reply: Promise.resolve([])
+              }, receiver, entry
+            ), identityRequestReply, identityRequestReply);
+          } finally { infrastructure.close(); }
           await routeGate;
           return {
             kind: 'snapshot', allocation: {
@@ -1224,22 +1242,33 @@ test('Actor route infrastructure admission cannot complete the user request admi
     locationResolver: () => resolver,
     nodeProvider: () => ({
       requestToActor(_actor, _parts, options) {
-        userBinding = submitBindingRequest(
-          bindingOperation({
-            result: SubmitResult.Backpressured, admitted: userAdmission, reply: userReply
-          }),
-          [],
-          undefined,
-          undefined,
-          options.onAdmitted,
-          options.requestOperation
-        );
+        userBinding = new Promise((resolve, reject) => {
+          submitBindingRequest(
+            bindingOperation({
+              result: SubmitResult.Backpressured,
+              admitted: userAdmission,
+              reply: userReply
+            }),
+            [],
+            undefined,
+            undefined,
+            options.onAdmitted,
+            options.requestOperation,
+            {
+              operationCompleted: (_id, parts) => resolve(parts),
+              operationFailed: (_id, error) => reject(error)
+            }
+          );
+        });
         return operationId;
       }
     }),
-    completionTableProvider: () => ({ async submit(start) {
+    completionTableProvider: () => ({ submit(start, _signal, requestOperation, receiver) {
+      return deliverFixtureCompletion((async () => {
       start();
       return { terminalResult: RequestResult.Ok, failureErrno: 0, parts: await userBinding };
+
+      })(), requestOperation, receiver);
     } })
   });
   const pending = client.requestToActor('actor-1', new ActorAsk('ping')).submit();
@@ -1266,3 +1295,230 @@ test('Actor route infrastructure admission cannot complete the user request admi
     assert.equal(await pending, 'pong');
   }
 });
+
+
+test('Actor direct physical receiver uses real backend and original terminal', async () => {
+  const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+  const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+  const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+  const { ServiceMailbox } = require('../../packages/framework/dist/runtime/foundation/service-mailbox');
+  const runtime = new RequestRuntime();
+  const table = new ZLinkMeshCompletionTable();
+  const frame = createReplyFrame({ value: 'framed-pong' });
+  const bytes = Buffer.from(frame[0].data());
+  frame[0].close();
+  let submits = 0;
+  const raw = { mailbox: new ServiceMailbox(), close() { this.mailbox.close(); } };
+  const stateful = {
+    requestToActor(_actor, _payload, _timeout, _source, _session, admitted, _fence, operation, receiver) {
+      submits++;
+      admitted?.();
+      queueMicrotask(() => {
+        const reply = { terminalResult: RequestResult.Ok, failureCode: 0,
+          payload: { contentType: 'application/octet-stream', payload: bytes } };
+        if (receiver) receiver.operationCompleted(operation.id, reply, undefined);
+        else operation.reply(reply);
+      });
+      return operation;
+    }
+  };
+  const backend = new ZLinkNodeRawMeshBackend('play-mesh', 'node-a', {}, undefined, undefined, undefined, undefined, { raw, stateful });
+  backend.setCompletionHandler((terminal, materialize) => table.complete(terminal, materialize));
+  const client = createActorClient({ requests: runtime, nodeProvider: () => backend,
+    completionTableProvider: () => table, locationResolver: () => createResolver() });
+  try {
+    const reply = await client.requestToActor('actor-1', new ActorAsk('ping')).timeout(1000).submit();
+    assert.deepEqual(reply, { value: 'framed-pong' });
+    assert.equal(submits, 1);
+    assert.equal(runtime.registry.size, 0);
+    assert.equal(table.pendingCount, 0);
+  } finally { runtime.close(); table.dispose(); raw.close(); }
+});
+
+test('Actor direct physical receiver decodes late reply after original cancellation', async () => {
+  const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+  const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+  const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+  const { ServiceMailbox } = require('../../packages/framework/dist/runtime/foundation/service-mailbox');
+  const runtime = new RequestRuntime();
+  const table = new ZLinkMeshCompletionTable();
+  const frame = [Message.from(Buffer.from(framework.encodeStreamFrame({ kind: framework.ZLinkStreamMessageKind.Response, codec: framework.ZLinkStreamCodec.MessagePack, flags: framework.ZLinkStreamHeaderFlags.None, name: '', metadata: new Map() }, Buffer.from([1]))))];
+  const bytes = Buffer.from(frame[0].data());
+  frame[0].close();
+  let submits = 0; let deserializeCalls = 0; let deliver; const controller = new AbortController();
+  const raw = { mailbox: new ServiceMailbox(), close() { this.mailbox.close(); } };
+  const stateful = {
+    requestToActor(_actor, _payload, _timeout, _source, _session, admitted, _fence, operation, receiver) {
+      submits++;
+      admitted?.();
+      deliver = () => {
+        const reply = { terminalResult: RequestResult.Ok, failureCode: 0,
+          payload: { contentType: 'application/octet-stream', payload: bytes } };
+        if (receiver) receiver.operationCompleted(operation.id, reply, undefined);
+        else operation.reply(reply);
+      };
+      return operation;
+    }
+  };
+  const backend = new ZLinkNodeRawMeshBackend('play-mesh', 'node-a', {}, undefined, undefined, undefined, undefined, { raw, stateful });
+  backend.setCompletionHandler((terminal, materialize) => table.complete(terminal, materialize));
+  const client = createActorClient({ requests: runtime, messageSerializers: new Map([['application/json', { serialize(value) { return framework.ZLinkEncodedPayload.from(Buffer.from(JSON.stringify(value))); }, deserialize() { deserializeCalls++; return { value: 'framed-pong' }; } }]]), nodeProvider: () => backend,
+    completionTableProvider: () => table, locationResolver: () => createResolver() });
+  try {
+    const reply = client.requestToActor('actor-1', new ActorAsk('ping')).timeout(1000).submit(controller.signal);
+    await new Promise(setImmediate);
+    const reason = new Error('original cancellation');
+    controller.abort(reason);
+    await assert.rejects(Promise.resolve(reply), error => error === reason);
+    deliver();
+    await new Promise(setImmediate);
+    assert.equal(deserializeCalls, 1, 'late physical Actor codec still runs');
+    assert.equal(submits, 1);
+    assert.equal(runtime.registry.size, 0);
+    assert.equal(table.pendingCount, 0);
+  } finally { runtime.close(); table.dispose(); raw.close(); }
+});
+
+function deliverFixtureCompletion(work, operation, receiver) {
+  if (receiver === undefined) return work;
+  void work.then(
+    value => receiver.operationCompleted(operation.id, value, undefined),
+    error => receiver.operationFailed(operation.id, error, undefined)
+  );
+}
+
+function forwardFixtureReply(work, options, destination) {
+  if (destination !== undefined) {
+    void work.then(
+      value => destination.operationCompleted(options.requestOperation.id, value, undefined),
+      error => destination.operationFailed(options.requestOperation.id, error, undefined)
+    );
+  }
+  return prepareZLinkRequestReply(work, identityRequestReply);
+}
+
+for (const terminal of ['cancel', 'deadline', 'shutdown']) {
+  for (const codec of ['valid', 'throwing', 'malformed']) {
+test(`Actor real direct late physical/${terminal}/${codec}`, async (t) => {
+  const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+  const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+  const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+  const { ServiceMailbox } = require('../../packages/framework/dist/runtime/foundation/service-mailbox');
+  const runtime = new RequestRuntime();
+  const table = new ZLinkMeshCompletionTable();
+  const frame = [Message.from(Buffer.from(framework.encodeStreamFrame({ kind: framework.ZLinkStreamMessageKind.Response, codec: framework.ZLinkStreamCodec.MessagePack, flags: framework.ZLinkStreamHeaderFlags.None, name: '', metadata: new Map() }, Buffer.from([1]))))];
+  const bytes = codec === 'malformed' ? Buffer.from('invalid STREAM') : Buffer.from(frame[0].data());
+  frame[0].close();
+  let submits = 0; let deserializeCalls = 0; let deliver; const controller = new AbortController();
+  const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
+  const close = ZLinkBufferMessage.prototype.close;
+  let physicalCloses = 0;
+  t.mock.method(ZLinkBufferMessage.prototype, 'close', function () {
+    if (this.data().equals(bytes)) physicalCloses++;
+    return close.call(this);
+  });
+  const raw = { mailbox: new ServiceMailbox(), close() { this.mailbox.close(); } };
+  const stateful = {
+    requestToActor(_actor, _payload, _timeout, _source, _session, admitted, _fence, operation, receiver) {
+      submits++;
+      admitted?.();
+      deliver = () => {
+        const reply = { terminalResult: RequestResult.Ok, failureCode: 0,
+          payload: { contentType: 'application/octet-stream', payload: bytes } };
+        if (receiver) receiver.operationCompleted(operation.id, reply, undefined);
+        else operation.reply(reply);
+      };
+      return operation;
+    }
+  };
+  const backend = new ZLinkNodeRawMeshBackend('play-mesh', 'node-a', {}, undefined, undefined, undefined, undefined, { raw, stateful });
+  backend.setCompletionHandler((terminal, materialize) => table.complete(terminal, materialize));
+  const client = createActorClient({ requests: runtime, messageSerializers: new Map([['application/json', { serialize(value) { return framework.ZLinkEncodedPayload.from(Buffer.from(JSON.stringify(value))); }, deserialize() { deserializeCalls++; if (codec === 'throwing') throw new Error('late serializer'); return { value: 'framed-pong' }; } }]]), nodeProvider: () => backend,
+    completionTableProvider: () => table, locationResolver: () => createResolver() });
+  try {
+    const reply = client.requestToActor('actor-1', new ActorAsk('ping')).timeout(1000).submit(controller.signal);
+    await new Promise(setImmediate);
+    const reason = new Error('original cancellation');
+    if (terminal === 'cancel') controller.abort(reason);
+    else if (terminal === 'shutdown') runtime.close(reason);
+    else runtime.registry.expire(Infinity, Infinity);
+    let original;
+    await assert.rejects(Promise.resolve(reply), error => {
+      original = error;
+      return terminal === 'deadline' ? error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded : error === reason;
+    });
+    deliver();
+    await new Promise(setImmediate);
+    assert.equal(deserializeCalls, codec === 'malformed' ? 0 : 1, 'late physical Actor codec still runs');
+    assert.equal(physicalCloses, 1);
+    await assert.rejects(Promise.resolve(reply), error => error === original);
+    assert.equal(submits, 1);
+    assert.equal(runtime.registry.size, 0);
+    assert.equal(table.pendingCount, 0);
+  } finally { runtime.close(); table.dispose(); raw.close(); }
+});
+
+  }
+}
+
+
+test('legacy Actor backend no-entry supplied callback receives its owned stateful terminal', async () => {
+  const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+  const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+  const { ServiceMailbox } = require('../../packages/framework/dist/runtime/foundation/service-mailbox');
+  const runtime = new RequestRuntime();
+  const raw = { mailbox: new ServiceMailbox(), close() { this.mailbox.close(); } };
+  let ownEntry, callbacks = 0, observed;
+  const stateful = { requestToActor(_actor, _payload, timeout, _source, _session, _admitted, _fence, existing, receiver) {
+    assert.equal(existing, undefined); assert.equal(receiver, undefined);
+    ownEntry = runtime.begin(timeout);
+    queueMicrotask(() => ownEntry.reply({ terminalResult: RequestResult.Ok, failureCode: 0 }));
+    return ownEntry;
+  } };
+  const backend = new ZLinkNodeRawMeshBackend('play-mesh', 'node-a', {}, undefined, undefined, undefined, undefined, { raw, stateful });
+  try {
+    const submission = backend.requestToActor({ nodeRid: 'node-a', actorId: 'actor-1', generation: 1n }, [Buffer.from('request')], undefined,
+      (terminal, materialize) => { callbacks++; observed = { terminal, completion: materialize() }; });
+    assert.equal(submission.requestOperation, ownEntry);
+    assert.deepEqual(await ownEntry.promise, { terminalResult: RequestResult.Ok, failureCode: 0 });
+    await new Promise(setImmediate);
+    assert.equal(callbacks, 1);
+    assert.equal(observed.terminal.terminalResult, RequestResult.Ok);
+    assert.equal(observed.completion.terminalResult, RequestResult.Ok);
+    assert.equal(runtime.registry.size, 0);
+  } finally { runtime.close(); raw.close(); }
+});
+
+
+for (const kind of ['send', 'request']) {
+  test(`Actor context fence failure closes allocated packet parts/${kind}`, async (t) => {
+    const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
+    const cause = new Error('context fence read failed after packet allocation');
+    const route = actorLocation();
+    Object.defineProperty(route, 'ownerLeaseGeneration', { get() { throw cause; } });
+    const allocated = [];
+    const counts = new Map();
+    const fromOwned = ZLinkBufferMessage.fromOwned;
+    const close = ZLinkBufferMessage.prototype.close;
+    t.mock.method(ZLinkBufferMessage, 'fromOwned', function (bytes) {
+      const message = fromOwned.call(this, bytes); allocated.push(message); return message;
+    });
+    t.mock.method(ZLinkBufferMessage.prototype, 'close', function () {
+      counts.set(this, (counts.get(this) ?? 0) + 1); return close.call(this);
+    });
+    let submissions = 0;
+    const client = createActorClient({
+      nodeProvider: () => ({ requestToActor() { submissions++; }, sendToActor() { submissions++; } }),
+      completionTableProvider: () => ({ submit() { submissions++; } }),
+      locationResolver: () => createResolver(() => route),
+      handoffCapture() { submissions++; },
+      routeTransport: { requestToSpot() { submissions++; }, sendToSpot() { submissions++; } }
+    });
+    const work = kind === 'send' ? client.sendToActor('actor-1', new ActorNotify('ping')).submit()
+      : client.requestToActor('actor-1', new ActorAsk('ping')).submit();
+    await assert.rejects(Promise.resolve(work), error => error === cause);
+    assert.equal(submissions, 0);
+    assert.equal(allocated.length, 2);
+    assert.deepEqual(allocated.map(message => counts.get(message) ?? 0), [1, 1]);
+  });
+}

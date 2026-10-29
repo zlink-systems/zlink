@@ -1,4 +1,4 @@
-import type { PendingOperation } from '../foundation/operation-registry';
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import type { ZLinkRequestResult } from '../messaging/request-result';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendSpot } from '../backend/contracts';
@@ -52,7 +52,8 @@ export interface ZLinkActorRoutedJoinTransport {
       readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onAdmitted?: () => void;
-    }
+    },
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<TReply>;
   requestFromSpotToSpot?<TReply = unknown>(
     sourceSpot: ZLinkBackendSpot,
@@ -64,7 +65,8 @@ export interface ZLinkActorRoutedJoinTransport {
       readonly requestOperation?: PendingOperation<unknown>;
       readonly signal?: AbortSignal;
       readonly onAdmitted?: () => void;
-    }
+    },
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<TReply>;
   requestRawFromSpotToSpot?(
     sourceSpot: ZLinkBackendSpot,

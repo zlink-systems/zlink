@@ -244,6 +244,7 @@ test('Spot relocation seals every member Session before the Spot capture stops d
     },
     abortRelocation() {
       events.push('spot:abort');
+      return true;
     }
   };
   const stopped = new Error('test stops after the seal');

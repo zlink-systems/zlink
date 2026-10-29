@@ -58,20 +58,24 @@ export async function submitRequestOperation(
   try {
     return await operation.submit();
   } catch (error) {
-    //  Spec 32-framework-error-model:81-92 — classify the backend request
-    //  terminal rather than collapsing every failure to Unavailable.
-    if (isZLinkBackendResultError(error) && error.operation === 'request') {
-      throw new ZLinkFrameworkException(
-        requestResultToPublicErrorKind(error.result),
-        `${label} failed with result ${error.result}.`,
-        error
-      );
-    }
-    throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-      `${label} failed before a reply was received.`,
-      true,
+    throw mapRequestFailure(error, label);
+  }
+}
+
+export function mapRequestFailure(error: unknown, label: string): unknown {
+  //  Spec 32-framework-error-model:81-92 — classify the backend request
+  //  terminal rather than collapsing every failure to Unavailable.
+  if (isZLinkBackendResultError(error) && error.operation === 'request') {
+    return new ZLinkFrameworkException(
+      requestResultToPublicErrorKind(error.result),
+      `${label} failed with result ${error.result}.`,
       error
     );
   }
+  return createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+    `${label} failed before a reply was received.`,
+    true,
+    error
+  );
 }

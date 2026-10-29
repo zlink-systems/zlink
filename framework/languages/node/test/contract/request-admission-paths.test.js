@@ -41,24 +41,32 @@ for (const path of [
       RequestRuntime
     } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
     const requests = new RequestRuntime();
-    const start = (onAdmitted, requestOperation) => {
+    const start = (onAdmitted, requestOperation, decode = (value) => value) => {
       const entry = requests.begin(undefined, undefined, requestOperation);
-      const pending = submitBindingRequest(
-        {
-          message() {
-            return this;
-          },
-          submit: () => ({
-            result: zlink.SubmitResult.Backpressured,
-            admitted: admission.promise,
-            reply: reply.promise
-          })
+      const pending = requests.run(
+        entry,
+        (receiver) => {
+          submitBindingRequest(
+            {
+              message() {
+                return this;
+              },
+              submit: () => ({
+                result: zlink.SubmitResult.Backpressured,
+                admitted: admission.promise,
+                reply: reply.promise
+              })
+            },
+            [],
+            undefined,
+            undefined,
+            onAdmitted,
+            entry,
+            receiver
+          );
         },
-        [],
-        undefined,
-        undefined,
-        onAdmitted,
-        entry
+        decode,
+        (error) => error
       );
       submitted.resolve();
       return pending;
@@ -66,13 +74,13 @@ for (const path of [
     const transport = {
       async sendToSpot() {},
       request: (_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
-        prepareZLinkRequestReply(start(onAdmitted), () => 'reply'),
+        prepareZLinkRequestReply(start(onAdmitted, undefined, () => 'reply'), (value) => value),
       requestToChannel: (_mesh, _channel, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
-        prepareZLinkRequestReply(start(onAdmitted), () => 'reply'),
+        prepareZLinkRequestReply(start(onAdmitted, undefined, () => 'reply'), (value) => value),
       requestToSpot: (_target, _request, options) =>
         prepareZLinkRequestReply(
-          start(options.onAdmitted, options.requestOperation),
-          () => 'reply'
+          start(options.onAdmitted, options.requestOperation, () => 'reply'),
+          (value) => value
         ),
       requestRawToSpot: (_target, _request, options) => start(options.onAdmitted)
     };

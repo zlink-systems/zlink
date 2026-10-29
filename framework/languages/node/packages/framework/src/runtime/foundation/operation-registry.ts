@@ -27,6 +27,8 @@ export interface OperationHandle<T> {
   complete(value: T, retentionMs?: number): boolean;
   fail(reason: unknown): boolean;
   takeFailure(reason: unknown): boolean;
+  resolveCaller(value: T): boolean;
+  rejectCaller(reason: unknown): boolean;
   isPending(): boolean;
   hasObserver(): boolean;
   setFailureDispatcher(dispatcher: (reason: unknown) => void): void;
@@ -106,8 +108,32 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
   }
   mapCaller(onValue: (value: unknown) => unknown, onFailure: (error: unknown) => unknown): boolean {
     if (this.resolve === undefined || this.reject === undefined) return false;
-    this.callerValue = onValue;
-    this.callerFailure = onFailure;
+    const value = this.callerValue;
+    const failure = this.callerFailure;
+    this.callerValue =
+      value === undefined
+        ? onValue
+        : (reply) => {
+            let mapped;
+            try {
+              mapped = value(reply);
+            } catch (error) {
+              throw onFailure(error);
+            }
+            return onValue(mapped);
+          };
+    this.callerFailure =
+      failure === undefined
+        ? onFailure
+        : (error) => {
+            let mapped = error;
+            try {
+              mapped = failure(error);
+            } catch (reason) {
+              mapped = reason;
+            }
+            return onFailure(mapped);
+          };
     return true;
   }
 

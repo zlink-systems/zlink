@@ -91,7 +91,17 @@ for (const instanceIntent of [false, true]) {
         return 2n;
       }
     };
-    const completion = { async submit(submit) { submit(); return { terminalResult: 0, failureErrno: 0, parts: replyParts }; } };
+    const completion = {
+      submit(submit, _signal, requestOperation, receiver) {
+        submit();
+        const result = { terminalResult: 0, failureErrno: 0, parts: replyParts };
+        if (receiver !== undefined) {
+          receiver.operationCompleted(requestOperation.id, result, undefined);
+          return;
+        }
+        return Promise.resolve(result);
+      }
+    };
     const routed = new ZLinkRuntimeRouteTransport(() => undefined, undefined,
       () => ({ meshNode: () => node, meshCompletionTable: () => completion }));
     const address = new internal.ZLinkHostSpotAddressTransport({ resolver: () => ({ resolve: async () => target }),

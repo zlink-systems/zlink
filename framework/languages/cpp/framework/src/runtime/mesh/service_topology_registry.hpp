@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include "runtime/diagnostics/metric_provider.hpp"
 
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/mesh/service_liveness_registry.hpp"
@@ -115,9 +116,17 @@ bool route_mesh_connection_not_required (const service_node_descriptor_t &local,
 class service_topology_registry_t
 {
   public:
-    explicit service_topology_registry_t (service_node_descriptor_t local,
+    // The caller owns the lane; an injected liveness registry shares that owner.
+    explicit service_topology_registry_t (runtime::state_lane_t &lane,
+                                          service_node_descriptor_t local,
                                           std::vector<std::string> metric_channel_names = {},
-                                          service_liveness_registry_t *liveness_owner = nullptr);
+                                          service_liveness_registry_t *liveness_owner = nullptr,
+                                          metric_provider_t provider = noop_metric_provider ());
+
+    service_topology_registry_t (const service_topology_registry_t &) = delete;
+    service_topology_registry_t &operator= (const service_topology_registry_t &) = delete;
+
+    static bool valid_descriptor (const service_node_descriptor_t &descriptor);
 
     void publish_local (service_node_descriptor_t descriptor);
     std::vector<admitted_peer_t> publish_local_snapshot (service_node_descriptor_t descriptor);
@@ -163,6 +172,18 @@ class service_topology_registry_t
     void observe_channel_metrics (opentelemetry::metrics::ObserverResult result, bool closed) const;
 
   private:
+    friend class raw_mesh_node_owner_t;
+    std::tuple<service_node_descriptor_t, std::vector<admitted_peer_t>, std::function<void ()>>
+    publish_draining_on_lane ();
+    std::pair<peer_admission_result_t, std::function<void ()>>
+    admit_on_lane (service_node_descriptor_t descriptor,
+                   std::vector<std::uint8_t> connection_id,
+                   const service_node_descriptor_t *expected_descriptor,
+                   service_liveness_registry_t::clock_t::time_point now,
+                   protocol::command command);
+    std::pair<bool, std::function<void ()>>
+    disconnect_on_lane (const std::vector<std::uint8_t> &node_routing_id,
+                        const std::vector<std::uint8_t> &connection_id);
     std::function<void ()> publish_local_on_lane (service_node_descriptor_t descriptor);
     std::vector<admitted_peer_t> peers_on_lane () const;
     std::vector<service_node_descriptor_t> not_required_peers_on_lane () const;
@@ -172,7 +193,6 @@ class service_topology_registry_t
                          const std::vector<std::uint8_t> &right) const noexcept;
     };
 
-    static bool valid_descriptor (const service_node_descriptor_t &descriptor);
     static bool selectable (const service_node_descriptor_t &descriptor,
                             const std::string &channel_name);
     peer_admission_result_t admit_impl (service_node_descriptor_t descriptor,
@@ -183,8 +203,7 @@ class service_topology_registry_t
     struct topology_state_t;
     std::function<void ()> publish_topology (std::shared_ptr<topology_state_t> next);
 
-    runtime::offload_executor_t _lane_executor;
-    mutable runtime::state_lane_t _lane{_lane_executor};
+    runtime::state_lane_t &_lane;
     struct topology_state_t
     {
         service_node_descriptor_t local;
@@ -195,6 +214,7 @@ class service_topology_registry_t
 
     // The registry publishes its sole descriptor/peer state at mutation turns.
     // Readers retain the immutable publication without entering the state lane.
+    metric_provider_t _metric_provider;
     std::shared_ptr<std::shared_ptr<const topology_state_t>> _topology;
     service_liveness_registry_t *const _liveness_owner;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, byte_vector_less_t>

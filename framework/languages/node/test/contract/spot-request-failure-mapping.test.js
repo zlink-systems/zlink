@@ -5,7 +5,16 @@ const { createAbortError } = require('../../packages/framework/dist/runtime/abor
 
 function fixture(submit, codecs) {
   const table = new framework.ZLinkMeshCompletionTable();
-  const node = { entrySpot: () => ({ requestToSpot: submit }) };
+let complete;
+const node = {
+    entrySpot: () => ({
+      requestToSpot(...args) {
+        complete = args[5];
+        return submit(...args);
+      }
+    })
+  };
+
   const transport = new framework.ZLinkRuntimeRouteTransport(
     () => undefined,
     undefined,
@@ -16,7 +25,13 @@ function fixture(submit, codecs) {
     undefined,
     () => false
   );
-  return { table, transport };
+  return {
+    table,
+    transport,
+    complete(record) {
+      complete(record, () => record);
+    }
+  };
 }
 
 const target = {
@@ -202,9 +217,9 @@ for (const path of ['node synchronous', 'node asynchronous', 'channel', 'Spot'])
 for (const raw of [false, true]) {
   test(`Spot ${raw ? 'raw ' : ''}request retains remote terminal classification and physical submission`, async () => {
     const operationId = { high: 1n, low: 2n };
-    const { transport, table } = fixture(() => operationId);
+    const { transport, table, complete } = fixture(() => operationId);
     const pending = reply(transport, undefined, raw);
-    table.complete({
+    complete({
       operationId,
       terminalResult: framework.RequestResult.NotFound,
       failureErrno: 0,

@@ -1,12 +1,13 @@
 import { RequestRuntime } from '../foundation/request-runtime';
-import type { PendingOperation } from '../foundation/operation-registry';
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import { isUtf8 } from 'node:buffer';
 import { channelErrorKindFromCode } from '../channels/channel-envelope';
 import { routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
   createZLinkRequest,
-  prepareZLinkRequestReply,
+  mapZLinkRequestReply,
+  type ZLinkRequestResult,
   identityRequestReply
 } from '../messaging/request-result';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
@@ -83,7 +84,6 @@ import {
   ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
 } from './actor-packet-relay-wire';
 import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
-import { requestRoutedJsonReply } from './actor-routed-json-request';
 
 export interface ZLinkActorClientOptions {
   readonly requests?: RequestRuntime;
@@ -169,9 +169,9 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       message,
       metadata
     );
-    const messageFollow = createActorMessageFollowContext(route, parts, false);
-    const routedActor = attachActorMessageFollowContext(actor, messageFollow);
     try {
+      const messageFollow = createActorMessageFollowContext(route, parts, false);
+      const routedActor = attachActorMessageFollowContext(actor, messageFollow);
       const submissionCopies =
         (await this.options.transportDeliveryGate?.()?.waitBeforeSubmit(actorId, 'oneWay')) ?? 1;
       const handoff = this.options.handoffCapture?.(
@@ -229,7 +229,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     }
   }
 
-  private async request<TReply>(
+  private request<TReply>(
     actorId: string,
     explicitPacketName: string | undefined,
     request: unknown,
@@ -238,70 +238,64 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     signal?: AbortSignal,
     waitPolicy: 'async' | 'yield' = 'async',
     onAdmitted?: () => void
-  ): Promise<TReply> {
+  ): ZLinkRequestResult<TReply> {
     throwIfAborted(signal);
     const sourceSpotId = currentZLinkActorExecution()?.spotId ?? currentZLinkSpotSerialSourceId();
     const effectiveTimeoutMs = timeoutMs ?? this.options.defaultRequestTimeoutMs;
-    return this.requests.request(effectiveTimeoutMs, signal, async (requestOperation) => {
-      const deadlineMs = requestOperation.deadlineMs;
-      const deadlineUnixMs =
-        effectiveTimeoutMs === undefined ? undefined : Date.now() + effectiveTimeoutMs;
-      const route = await this.resolveActorRoute(actorId, signal, deadlineMs, requestOperation);
-      if (!requestOperation.isPending()) return requestOperation.promise as Promise<TReply>;
-      if (
-        waitPolicy === 'async' &&
-        sourceSpotId !== undefined &&
-        sameSpotRoute(sourceSpotId, route)
-      ) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.InvalidOperation,
-          `An Actor request cannot await Actor '${actorId}' on the current Spot while holding its execution claim.`
-        );
-      }
-      const { meshName, actorRef: actor } = route;
-      this.throwIfKnownStale(meshName, actor);
-      const operationId = createMessageFollowId();
-      const correlationId = createMessageFollowId();
-      const requestSequence = BigInt(`0x${operationId.slice(16)}`);
-      const parts = this.createPacketParts(
-        ZLinkStreamMessageKind.Request,
-        requestSequence === 0n ? 1n : requestSequence,
-        explicitPacketName,
-        request,
-        mergeActorRequestMetadata(metadata, deadlineUnixMs),
-        correlationId
-      );
-      const messageFollow = createActorMessageFollowContext(
-        route,
-        parts,
-        true,
-        deadlineUnixMs,
-        correlationId,
-        operationId
-      );
-      const routedActor = attachActorMessageFollowContext(actor, messageFollow);
-      try {
-        const delivery = this.options
-          .transportDeliveryGate?.()
-          ?.waitBeforeSubmit(actorId, 'request', signal);
-        const submissionCopies =
-          delivery === undefined
-            ? 1
-            : ((await waitActorReply(delivery, actorId, requestOperation)) ?? 1);
-        const handoff = this.options.handoffCapture?.(
-          meshName,
-          actor.actorId,
-          parts,
-          true,
-          routedActor,
-          deadlineUnixMs,
-          onAdmitted,
-          requestOperation
-        );
-        if (handoff !== undefined) {
-          const submissions = [handoff];
-          for (let copy = 1; copy < submissionCopies; copy++) {
-            const duplicate = this.options.handoffCapture?.(
+    let meshName: string | undefined;
+    return this.requests.prepare<TReply>(
+      effectiveTimeoutMs,
+      signal,
+      (requestOperation, receiver) => {
+        void (async () => {
+          const deadlineMs = requestOperation.deadlineMs;
+          const deadlineUnixMs =
+            effectiveTimeoutMs === undefined ? undefined : Date.now() + effectiveTimeoutMs;
+          const route = await this.resolveActorRoute(actorId, signal, deadlineMs, requestOperation);
+          if (!requestOperation.isPending()) return;
+          if (
+            waitPolicy === 'async' &&
+            sourceSpotId !== undefined &&
+            sameSpotRoute(sourceSpotId, route)
+          ) {
+            throw createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.InvalidOperation,
+              `An Actor request cannot await Actor '${actorId}' on the current Spot while holding its execution claim.`
+            );
+          }
+          const { actorRef: actor } = route;
+          meshName = route.meshName;
+          if (this.options.staleActorRefPredicate?.(meshName, actor) === true)
+            throw actorLocationStale(actor.actorId, undefined);
+          const operationId = createMessageFollowId();
+          const correlationId = createMessageFollowId();
+          const requestSequence = BigInt(`0x${operationId.slice(16)}`);
+          const parts = this.createPacketParts(
+            ZLinkStreamMessageKind.Request,
+            requestSequence === 0n ? 1n : requestSequence,
+            explicitPacketName,
+            request,
+            mergeActorRequestMetadata(metadata, deadlineUnixMs),
+            correlationId
+          );
+          try {
+            const messageFollow = createActorMessageFollowContext(
+              route,
+              parts,
+              true,
+              deadlineUnixMs,
+              correlationId,
+              operationId
+            );
+            const routedActor = attachActorMessageFollowContext(actor, messageFollow);
+            const delivery = this.options
+              .transportDeliveryGate?.()
+              ?.waitBeforeSubmit(actorId, 'request', signal);
+            const submissionCopies =
+              delivery === undefined
+                ? 1
+                : ((await waitActorReply(delivery, actorId, requestOperation)) ?? 1);
+            const handoff = this.options.handoffCapture?.(
               meshName,
               actor.actorId,
               parts,
@@ -311,37 +305,52 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
               onAdmitted,
               requestOperation
             );
-            if (duplicate !== undefined) submissions.push(duplicate);
+            if (handoff !== undefined) {
+              const submissions = [handoff];
+              for (let copy = 1; copy < submissionCopies; copy++) {
+                const duplicate = this.options.handoffCapture?.(
+                  meshName,
+                  actor.actorId,
+                  parts,
+                  true,
+                  routedActor,
+                  deadlineUnixMs,
+                  onAdmitted,
+                  requestOperation
+                );
+                if (duplicate !== undefined) submissions.push(duplicate);
+              }
+              const replies = await Promise.all(submissions);
+              receiver.operationCompleted(requestOperation.id, replies[0], undefined);
+              return;
+            }
+            this.submitActorRequest<TReply>(
+              meshName,
+              toBackendActorRef(actor),
+              parts,
+              remainingActorRequestTimeout(actorId, deadlineMs),
+              signal,
+              route,
+              messageFollow,
+              onAdmitted,
+              requestOperation,
+              receiver
+            );
+          } finally {
+            closeMessages(parts);
           }
-          const replies = await waitActorReply<unknown[]>(
-            Promise.all(submissions),
-            actorId,
-            requestOperation
-          );
-          return replies[0] as TReply;
-        }
-        return await this.submitActorRequest<TReply>(
-          meshName,
-          toBackendActorRef(actor),
-          parts,
-          remainingActorRequestTimeout(actorId, deadlineMs),
-          signal,
-          route,
-          messageFollow,
-          onAdmitted,
-          requestOperation
-        );
-      } catch (error) {
+        })().catch((error) => receiver.operationFailed(requestOperation.id, error, undefined));
+      },
+      (value) => value as TReply,
+      (error) => {
         if (isStaleActorError(error)) {
           this.invalidateActorRoute(actorId);
-          this.options.staleActorRefReporter?.(meshName, actor.actorId);
-          throw actorLocationStale(actor.actorId, error);
+          if (meshName !== undefined) this.options.staleActorRefReporter?.(meshName, actorId);
+          return actorLocationStale(actorId, error);
         }
-        throw error;
-      } finally {
-        closeMessages(parts);
+        return error;
       }
-    });
+    );
   }
 
   private async resolveActorRoute(
@@ -457,7 +466,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     }
   }
 
-  private async submitActorRequest<TReply>(
+  private submitActorRequest<TReply>(
     meshName: string,
     actor: ZLinkBackendActorRef,
     parts: readonly Message[],
@@ -465,9 +474,10 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     signal: AbortSignal | undefined,
     route: ZLinkResolvedActorRoute,
     messageFollowContext: ZLinkActorMessageFollowContext,
-    onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
-  ): Promise<TReply> {
+    onAdmitted: (() => void) | undefined,
+    requestOperation: PendingOperation<unknown>,
+    destination: OperationObserver<unknown, unknown>
+  ): void {
     const node = this.requireNode(meshName);
     if (
       this.options.routeTransport !== undefined &&
@@ -492,53 +502,88 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         returnResponse: true,
         messageFollowContext
       });
-      const reply = await requestRoutedJsonReply<{
-        readonly ok?: boolean;
-        readonly error?: unknown;
-        readonly errorKind?: unknown;
-        readonly response?: TReply;
-      }>(
-        this.options.routeTransport,
+      this.options.routeTransport.requestToSpot(
         remoteActorRouteTarget(route),
         relay,
-        { timeoutMs, signal, onAdmitted, requestOperation },
-        `Remote Actor request is not available for '${actor.actorId}'.`,
-        (replyParts) => JSON.parse(replyParts[0]?.getString('utf8') ?? '{}')
+        {
+          packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
+          timeoutMs,
+          signal,
+          onAdmitted,
+          requestOperation
+        },
+        {
+          operationCompleted: (id, value) => {
+            const reply = value as {
+              ok?: boolean;
+              error?: unknown;
+              errorKind?: unknown;
+              response?: TReply;
+            };
+            if (reply.ok !== true) {
+              destination.operationFailed(
+                id,
+                createInternalFrameworkException(
+                  remoteRelayErrorKind(reply.errorKind),
+                  typeof reply.error === 'string'
+                    ? reply.error
+                    : `Remote Actor request failed for '${actor.actorId}'.`
+                ),
+                undefined
+              );
+              return;
+            }
+            destination.operationCompleted(id, reply.response, undefined);
+          },
+          operationFailed: (id, error) => destination.operationFailed(id, error, undefined)
+        }
       );
-      if (reply.ok !== true) {
-        throw createInternalFrameworkException(
-          remoteRelayErrorKind(reply.errorKind),
-          typeof reply.error === 'string'
-            ? reply.error
-            : `Remote Actor request failed for '${actor.actorId}'.`
-        );
-      }
-      return reply.response as TReply;
+      return;
     }
     const completions = this.options.completionTableProvider(meshName);
     if (completions === undefined) {
       throw routeNotConnected('Actor request requires a running MeshNode completion table.');
     }
-    const completion = await completions.submit(
-      () =>
-        node.requestToActor(actor, toMessageLikeParts(parts), {
-          flags: ZLINK_BACKEND_SEND_NONE,
-          routeFence: nativeActorRouteFence(route, actor),
-          timeoutMs,
-          onAdmitted,
-          requestOperation
-        }),
-      signal,
-      requestOperation
-    );
-    if (completion.terminalResult !== RequestResult.Ok) {
-      closeMeshCompletion(completion);
-      throw mapRequestResult(completion.terminalResult, completion.failureErrno, 'Actor request');
-    }
-    return decodeActorReply<TReply>(
-      completion.parts,
-      this.options.messageSerializers,
-      decodeStreamHeader(parts[0].data()).name
+    const packetName = decodeStreamHeader(parts[0].data()).name;
+    this.requests.run(
+      requestOperation,
+      (receiver) =>
+        completions.submit(
+          (completion) =>
+            node.requestToActor(
+              actor,
+              toMessageLikeParts(parts),
+              {
+                flags: ZLINK_BACKEND_SEND_NONE,
+                routeFence: nativeActorRouteFence(route, actor),
+                timeoutMs,
+                onAdmitted,
+                requestOperation
+              },
+              completion
+            ),
+          signal,
+          requestOperation,
+          receiver
+        ),
+      (raw) => {
+        const completion = raw as import('../backend').ZLinkMeshCompletion;
+        if (completion.terminalResult !== RequestResult.Ok) {
+          closeMeshCompletion(completion);
+          throw mapRequestResult(
+            completion.terminalResult,
+            completion.failureErrno,
+            'Actor request'
+          );
+        }
+        return decodeActorReply<TReply>(
+          completion.parts,
+          this.options.messageSerializers,
+          packetName
+        );
+      },
+      identityRequestReply,
+      destination
     );
   }
 
@@ -718,13 +763,13 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
       metadata: ReadonlyMap<string, string>,
       signal?: AbortSignal,
       onAdmitted?: () => void
-    ) => Promise<TReply>,
+    ) => ZLinkRequestResult<TReply>,
     private readonly yieldSubmitter: <TReply>(
       packetName: string | undefined,
       timeoutMs: number | undefined,
       metadata: ReadonlyMap<string, string>,
       signal?: AbortSignal
-    ) => Promise<TReply>,
+    ) => ZLinkRequestResult<TReply>,
     private readonly targetActorId: string,
     private readonly request: unknown,
     private readonly defaultRequestTimeoutMs?: number
@@ -747,18 +792,13 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
 
   submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply> {
     this.rejectSelfActorRequest();
-    return createZLinkRequest((onAdmitted) =>
-      prepareZLinkRequestReply(
-        this.execute<TReply>('async', signal, onAdmitted),
-        identityRequestReply
-      )
-    );
+    return createZLinkRequest((onAdmitted) => this.execute<TReply>('async', signal, onAdmitted));
   }
 
   yield<TReply>(signal?: AbortSignal): Promise<TReply> {
     this.rejectSelfActorRequest();
     const turn = requireZLinkYieldTurn(this.turn);
-    const pending = this.execute<TReply>('yield', signal);
+    const pending = mapZLinkRequestReply(this.execute<TReply>('yield', signal));
     return turn.yieldFrameworkPromise(pending);
   }
 
@@ -766,7 +806,7 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
     waitPolicy: 'async' | 'yield',
     signal?: AbortSignal,
     onAdmitted?: () => void
-  ): Promise<TReply> {
+  ): ZLinkRequestResult<TReply> {
     ensureSingleSubmit(this.executed);
     this.executed = true;
     throwIfAborted(signal);

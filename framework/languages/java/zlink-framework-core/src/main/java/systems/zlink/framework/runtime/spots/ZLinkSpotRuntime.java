@@ -1210,15 +1210,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 });
     }
 
-    @Override
-    boolean spotCloseCommitted(DefaultSpotContext context) {
-        SpotActivation activation = spotLifecycle.spotActivationFor(context.spotId());
-        return activation != null
-                && activation.context == context
-                && activation.existingCloseCoordinator() != null
-                && activation.existingCloseCoordinator().committed();
-    }
-
     private record CloseIntent(
             String meshName,
             ZLinkInternalMeshNode source,

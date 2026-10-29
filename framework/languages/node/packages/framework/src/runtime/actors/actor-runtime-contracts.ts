@@ -109,7 +109,8 @@ export interface ZLinkActorJoinCoordinator {
     request: Message,
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
-    completionOperationId?: import('../../contracts').ZLinkActorJoinOperationId
+    completionOperationId?: import('../../contracts').ZLinkActorJoinOperationId,
+    deadlineAtMs?: number
   ): Promise<ZLinkActorJoinRuntimeResult<Message>>;
   joinEntrySpot(
     actor: ZLinkActor,
@@ -118,6 +119,7 @@ export interface ZLinkActorJoinCoordinator {
     request: Message,
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
-    completionOperationId?: import('../../contracts').ZLinkActorJoinOperationId
+    completionOperationId?: import('../../contracts').ZLinkActorJoinOperationId,
+    deadlineAtMs?: number
   ): Promise<ZLinkActorJoinRuntimeResult<Message>>;
 }

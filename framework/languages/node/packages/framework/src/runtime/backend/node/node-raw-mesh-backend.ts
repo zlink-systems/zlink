@@ -777,15 +777,37 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly onSubmitted?: (signal: AbortSignal) => Promise<void>;
     }
   ): Promise<readonly Uint8Array[]> {
-    return requestDurableService(
-      this.requireRuntime(),
+    const runtime = this.requireRuntime();
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const pending =
+      options?.requestOperation ?? runtime.beginInfrastructureRequest(timeoutMs, options?.signal);
+    if (options?.requestOperation !== undefined) {
+      return requestDurableService(
+        runtime,
+        String(targetRid),
+        frames,
+        pending,
+        'relocation control',
+        options.signal,
+        options.onSubmitted
+      );
+    }
+    const completed = (reply: readonly Buffer[]) => {
+      pending.complete(reply);
+    };
+    const failed = (error: unknown) => {
+      pending.fail(error);
+    };
+    void requestDurableService(
+      runtime,
       String(targetRid),
       frames,
-      performance.now() + (options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+      pending,
       'relocation control',
       options?.signal,
       options?.onSubmitted
-    );
+    ).then(completed, failed);
+    return pending.promise as Promise<readonly Uint8Array[]>;
   }
 
   requestToNode(
@@ -795,14 +817,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly timeoutMs?: number;
       readonly requestOperation?: PendingOperation<unknown>;
       readonly onAdmitted?: () => void;
-    }
+    },
+    completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToNode(
       String(targetRid),
       encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options?.onAdmitted,
-      this.requestObserver,
+      this.requestObserverFor(completion),
       OperationKind.NodeRequest,
       options?.requestOperation
     );
@@ -829,14 +852,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly timeoutMs?: number;
       readonly requestOperation?: PendingOperation<unknown>;
       readonly onAdmitted?: () => void;
-    }
+    },
+    completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
       encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options?.onAdmitted,
-      this.requestObserver,
+      this.requestObserverFor(completion),
       OperationKind.ChannelRequest,
       options?.requestOperation
     );
@@ -1306,19 +1330,25 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     metadata?: ReadonlyMap<string, string>,
     instanceIntent = false,
     onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId {
-    return this.observeStatefulRequest(OperationKind.InstanceSpotRequest, requestOperation, () =>
-      this.requireStateful().requestToInstanceSpot(
-        route,
-        encodeMultipart(parts),
-        timeoutMs,
-        sourceSpotId,
-        metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
-        instanceIntent,
-        onAdmitted,
-        requestOperation
-      )
+    return this.observeStatefulRequest(
+      OperationKind.InstanceSpotRequest,
+      requestOperation,
+      (receiver) =>
+        this.requireStateful().requestToInstanceSpot(
+          route,
+          encodeMultipart(parts),
+          timeoutMs,
+          sourceSpotId,
+          metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
+          instanceIntent,
+          onAdmitted,
+          requestOperation,
+          receiver
+        ),
+      completion
     );
   }
 
@@ -1472,19 +1502,25 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly requestOperation?: PendingOperation<unknown>;
       readonly onAdmitted?: () => void;
       readonly routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
-    }
+    },
+    completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId {
-    return this.observeStatefulRequest(OperationKind.ActorRequest, options?.requestOperation, () =>
-      this.requireStateful().requestToActor(
-        actor,
-        encodeMultipart(parts),
-        options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-        undefined,
-        undefined,
-        options?.onAdmitted,
-        options?.routeFence,
-        options?.requestOperation
-      )
+    return this.observeStatefulRequest(
+      OperationKind.ActorRequest,
+      options?.requestOperation,
+      (receiver) =>
+        this.requireStateful().requestToActor(
+          actor,
+          encodeMultipart(parts),
+          options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+          undefined,
+          undefined,
+          options?.onAdmitted,
+          options?.routeFence,
+          options?.requestOperation,
+          receiver
+        ),
+      completion
     );
   }
 
@@ -1593,17 +1629,23 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     parts: MessageLike | readonly MessageLike[],
     timeoutMs: number,
     onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId {
-    return this.observeStatefulRequest(OperationKind.SpotRequest, requestOperation, () =>
-      this.requireStateful().requestToSpot(
-        source.ref.spotId,
-        target,
-        encodeMultipart(parts),
-        timeoutMs,
-        onAdmitted,
-        requestOperation
-      )
+    return this.observeStatefulRequest(
+      OperationKind.SpotRequest,
+      requestOperation,
+      (receiver) =>
+        this.requireStateful().requestToSpot(
+          source.ref.spotId,
+          target,
+          encodeMultipart(parts),
+          timeoutMs,
+          onAdmitted,
+          requestOperation,
+          receiver
+        ),
+      completion
     );
   }
 
@@ -1834,6 +1876,27 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       )
   };
 
+  private requestObserverFor(
+    completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
+  ): RawServiceRequestObserver {
+    if (completion === undefined) return this.requestObserver;
+    return {
+      operationCompleted: (id, result, operationKind) =>
+        queueMicrotask(() =>
+          this.deliverCompletion({ high: 1n, low: id }, operationKind ?? 0, result, completion)
+        ),
+      operationFailed: (id, error, operationKind) =>
+        queueMicrotask(() =>
+          this.deliverCompletion(
+            { high: 1n, low: id },
+            operationKind ?? 0,
+            requestFailureResult(error),
+            completion
+          )
+        )
+    };
+  }
+
   private observedOperation(
     pending: RawServiceObservedRequest,
     operationKind: number
@@ -1851,28 +1914,42 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private observeStatefulRequest(
     kind: number,
     entry: PendingOperation<unknown> | undefined,
-    submit: () => ServiceStatefulPendingOperation
+    submit: (
+      receiver?: import('../../foundation/operation-registry').OperationObserver<unknown, unknown>
+    ) => ServiceStatefulPendingOperation,
+    completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationSubmission {
-    if (entry === undefined) return this.observeStateful(kind, submit());
+    if (entry === undefined) return this.observeStateful(kind, submit(), completion);
     const id = { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: entry.id };
-    entry.setObserver({
+    const receiver: import('../../foundation/operation-registry').OperationObserver<
+      unknown,
+      unknown
+    > = {
       operationCompleted: (_operationId, value) =>
-        queueMicrotask(() => this.deliverCompletion(id, kind, value as ServiceStatefulResult)),
+        queueMicrotask(() =>
+          this.deliverCompletion(id, kind, value as ServiceStatefulResult, completion)
+        ),
       operationFailed: (_operationId, error) =>
-        queueMicrotask(() => this.deliverCompletion(id, kind, requestFailureResult(error)))
-    });
-    submit();
+        queueMicrotask(() =>
+          this.deliverCompletion(id, kind, requestFailureResult(error), completion)
+        )
+    };
+    if (completion === undefined) {
+      entry.setObserver(receiver);
+      submit();
+    } else submit(receiver);
     return this.requestSubmission(id, entry);
   }
 
   private observeStateful(
     operationKind: number,
-    pending: ServiceStatefulPendingOperation
+    pending: ServiceStatefulPendingOperation,
+    completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationSubmission {
     const id = { high: ZLINK_NATIVE_CORRELATION_OPERATION_NAMESPACE, low: pending.id };
     void pending.promise.then(
-      (result) => this.deliverCompletion(id, operationKind, result),
-      (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error))
+      (result) => this.deliverCompletion(id, operationKind, result, completion),
+      (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error), completion)
     );
     return this.requestSubmission(id, pending);
   }
@@ -1890,10 +1967,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private deliverCompletion(
     operationId: MeshOperationId,
     operationKind: number,
-    result: RawServiceRequestResult | ServiceStatefulResult
+    result: RawServiceRequestResult | ServiceStatefulResult,
+    completion: import('../mesh-completion-table').ZLinkMeshCompletionHandler | undefined = this
+      .completionHandler
   ): void {
-    if (this.completionHandler !== undefined) {
-      this.completionHandler({ operationId, terminalResult: result.terminalResult }, () =>
+    if (completion !== undefined) {
+      completion({ operationId, terminalResult: result.terminalResult }, () =>
         completionRecord(operationId, operationKind, result)
       );
       return;
@@ -2049,7 +2128,8 @@ class RawServiceSpot implements ServiceSpot {
       readonly onAdmitted?: () => void;
       readonly routeFence?: ServiceDirectSpotRouteFence;
       readonly entrySpot?: boolean;
-    }
+    },
+    completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId {
     this.requireOpen();
     const routeFence = requireDirectSpotRouteFence(
@@ -2067,7 +2147,8 @@ class RawServiceSpot implements ServiceSpot {
       parts,
       options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       options?.onAdmitted,
-      options?.requestOperation
+      options?.requestOperation,
+      completion
     );
   }
 

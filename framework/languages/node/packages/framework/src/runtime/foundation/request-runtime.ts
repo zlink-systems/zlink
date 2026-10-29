@@ -4,6 +4,7 @@ import {
   OperationRegistry,
   OperationCancelledError,
   type OperationHandle,
+  type OperationObserver,
   type PendingOperation
 } from './operation-registry';
 import { createAbortError } from '../abort';
@@ -26,12 +27,15 @@ export class RequestRuntime {
   begin<T>(
     timeoutMs: number | undefined,
     signal?: AbortSignal,
-    existing?: PendingOperation<unknown>
+    existing?: PendingOperation<unknown>,
+    absoluteDeadlineMs?: number
   ): PendingOperation<T> {
     if (existing !== undefined) return existing as PendingOperation<T>;
     const operation = this.registry.register(
       timeoutMs ?? 0,
-      timeoutMs === undefined ? 'sender' : 'registry'
+      timeoutMs === undefined ? 'sender' : 'registry',
+      undefined,
+      absoluteDeadlineMs
     );
     operation.setSignal(signal);
     return operation as PendingOperation<T>;
@@ -39,42 +43,41 @@ export class RequestRuntime {
 
   run<T>(
     pending: PendingOperation<unknown>,
-    work: () => Promise<T> | ZLinkRequestResult<T>,
-    discardLateResult?: (value: T) => void
+    start: (receiver: OperationObserver<unknown, unknown>) => void,
+    decode: (raw: unknown) => T,
+    mapFailure: (error: unknown) => unknown,
+    destination?: OperationObserver<unknown, unknown>
   ): Promise<T> {
     if (!pending.isPending()) return pending.promise as Promise<T>;
     pending.deferCompletion();
-    try {
-      const result = work();
-      const prepared = 'pending' in result ? result : undefined;
-      const source = prepared?.pending ?? (result as Promise<T>);
-      void source.then(
-        (value) => {
-          let reply: T;
-          try {
-            reply = prepared === undefined ? (value as T) : prepared.decode(value);
-          } catch (error) {
-            pending.fail(requestTerminalError('Request', error));
-            return;
-          }
-          if (!pending.complete(reply)) discardLateResult?.(reply);
-        },
-        (error) => {
-          let failure = error;
-          if (prepared !== undefined) {
-            try {
-              failure = prepared.mapFailure(error);
-            } catch (mapped) {
-              failure = mapped;
-            }
-          }
-          pending.fail(requestTerminalError('Request', failure));
+    const receiver: OperationObserver<unknown, unknown> = {
+      operationCompleted: (_id, raw) => {
+        try {
+          const value = decode(raw);
+          if (destination !== undefined)
+            destination.operationCompleted(pending.id, value, undefined);
+          else pending.complete(value);
+        } catch (error) {
+          if (destination !== undefined) destination.operationFailed(pending.id, error, undefined);
+          else pending.fail(error);
         }
-      );
+      },
+      operationFailed: (_id, error) => {
+        let failure = error;
+        try {
+          failure = mapFailure(error);
+        } catch (mapped) {
+          failure = mapped;
+        }
+        if (destination !== undefined) destination.operationFailed(pending.id, failure, undefined);
+        else pending.fail(failure);
+      }
+    };
+    try {
+      start(receiver);
     } catch (error) {
-      pending.fail(requestTerminalError('Request', error));
+      receiver.operationFailed(pending.id, error, undefined);
     }
-
     return pending.promise as Promise<T>;
   }
 
@@ -93,17 +96,49 @@ export class RequestRuntime {
       return work(existing);
     }
     const pending = this.begin(timeoutMs, signal, existing);
-    return this.run(pending, () => work(pending), discardLateResult);
+    return this.run(
+      pending,
+      (receiver) => {
+        void work(pending).then(
+          (value) => receiver.operationCompleted(pending.id, value, undefined),
+          (error) => receiver.operationFailed(pending.id, error, undefined)
+        );
+      },
+      (value) => {
+        if (!pending.isPending()) discardLateResult?.(value as T);
+        return value as T;
+      },
+      identityRequestReply
+    );
   }
 
   prepare<T>(
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
-    build: (pending: PendingOperation<unknown>) => ZLinkRequestResult<T>
+    start: (
+      pending: PendingOperation<unknown>,
+      receiver: OperationObserver<unknown, unknown>
+    ) => void,
+    decode: (raw: unknown) => T,
+    mapFailure: (error: unknown) => unknown,
+    existing?: PendingOperation<unknown>,
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<T> {
-    if (signal?.aborted === true) return rejectZLinkRequestReply(createAbortError());
-    const operation = this.begin(timeoutMs, signal);
-    const pending = this.run(operation, () => build(operation));
+    if (signal?.aborted === true && destination === undefined)
+      return rejectZLinkRequestReply(signal.reason ?? createAbortError());
+    const operation = this.begin(timeoutMs, signal, existing);
+    if (signal?.aborted === true && destination !== undefined)
+      destination.operationFailed(operation.id, signal.reason ?? createAbortError(), undefined);
+    const pending =
+      signal?.aborted === true
+        ? operation.promise
+        : this.run(
+            operation,
+            (receiver) => start(operation, receiver),
+            decode,
+            mapFailure,
+            destination
+          );
     return {
       pending,
       decode: identityRequestReply<T>,
@@ -114,15 +149,15 @@ export class RequestRuntime {
 
   observe<T, R = T>(
     timeoutMs: number,
-    submit: (entry: OperationHandle<T>) => void,
+    submit: (entry: OperationHandle<T>, receiver: OperationObserver<T, unknown>) => void,
     onReply: (value: T) => R,
     onFailed: (error: unknown) => R
   ): Promise<R> {
     return new Promise<R>((resolve, reject) => {
-      const id = this.registry.registerObserved(timeoutMs, {
+      const observer: OperationObserver<T, unknown> = {
         operationCompleted: (_id, value) => {
           try {
-            resolve(onReply(value as T));
+            resolve(onReply(value));
           } catch (error) {
             reject(error);
           }
@@ -134,10 +169,16 @@ export class RequestRuntime {
             reject(error);
           }
         }
-      });
+      };
+      const id = this.registry.registerObserved(timeoutMs, observer);
       const entry = this.registry.handle(id) as OperationHandle<T>;
       try {
-        submit(entry);
+        submit(entry, {
+          operationCompleted: (_id, value) => {
+            if (!entry.complete(value)) observer.operationCompleted(id, value, undefined);
+          },
+          operationFailed: (_id, error) => entry.fail(error)
+        });
       } catch (error) {
         entry.fail(error);
       }

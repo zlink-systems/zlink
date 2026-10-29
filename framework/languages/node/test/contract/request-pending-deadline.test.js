@@ -146,29 +146,39 @@ for (const admittedBeforeDeadline of [false, true])
     const reply = deferred();
     let seen;
     let closed = 0;
-    const request = owner.request(60, undefined, async (pending) => {
-      seen = pending;
-      await waitRequestReply(
-        new Promise((resolve) => setTimeout(resolve, 20)),
-        'readiness',
-        pending
-      );
-      assert.equal(pending.isPending(), true, 'readiness must not complete the entry');
-      if (admittedBeforeDeadline) admitted.resolve();
-      return waitRequestReply(
-        bindingRequestReply({
-          result: SubmitResult.Backpressured,
-          admitted: admitted.promise,
-          reply: reply.promise
-        }),
-        'HWM',
-        pending,
-        undefined,
-        (parts) => {
-          for (const part of parts) part.close();
-        }
-      );
-    });
+const entry = owner.begin(60);
+const request = owner.run(
+      entry,
+      (receiver) => {
+        seen = entry;
+        void waitRequestReply(
+          new Promise((resolve) => setTimeout(resolve, 20)),
+          'readiness',
+          entry
+        ).then(
+          () => {
+            assert.equal(entry.isPending(), true, 'readiness must not complete the entry');
+            if (admittedBeforeDeadline) admitted.resolve();
+            bindingRequestReply(
+              {
+                result: SubmitResult.Backpressured,
+                admitted: admitted.promise,
+                reply: reply.promise
+              },
+              receiver,
+              entry
+            );
+          },
+          (error) => receiver.operationFailed(entry.id, error)
+        );
+      },
+      (parts) => {
+        if (!entry.isPending()) for (const part of parts) part.close();
+        return parts;
+      },
+      (error) => error
+    );
+
     await assert.rejects(
       request,
       (error) => error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
@@ -213,9 +223,24 @@ test('binding consumes the supplied entry across async admission without registe
       };
     }
   };
-  const pending = owner.request(60_000, controller.signal, (entry) =>
-    submitBindingRequest(native, Buffer.from('request'), 60_000, undefined, undefined, entry)
+const entry = owner.begin(60_000, controller.signal);
+const pending = owner.run(
+    entry,
+    (receiver) => {
+      submitBindingRequest(
+        native,
+        Buffer.from('request'),
+        60_000,
+        undefined,
+        undefined,
+        entry,
+        receiver
+      );
+    },
+    (value) => value,
+    (error) => error
   );
+
   const cancelled = assert.rejects(pending, { name: 'AbortError' });
   controller.abort();
   await cancelled;
@@ -289,8 +314,17 @@ for (const terminal of ['cancel', 'close'])
     let closes = 0;
     const caller = owner.run(
       pending,
-      () => work.promise,
-      (value) => value.close()
+      (receiver) => {
+        void work.promise.then(
+          (value) => receiver.operationCompleted(pending.id, value),
+          (error) => receiver.operationFailed(pending.id, error)
+        );
+      },
+      (value) => {
+        if (!pending.isPending()) value.close();
+        return value;
+      },
+      (error) => error
     );
     assert.equal(caller, pending.promise);
     const reason = new Error(terminal);
@@ -332,14 +366,26 @@ test('native stage notification leaves the caller entry pending until work compl
 test('caller close disposes a stage result already queued for work', async () => {
   const owner = new RequestRuntime();
   const stage = deferred();
+const deliver = deferred();
+
   let closes = 0;
   const pending = owner.begin(1000);
   const caller = owner.run(
     pending,
-    async () => await waitRequestReply(stage.promise, 'stage', pending),
+    (receiver) => {
+      void stage.promise.then(
+        async (parts) => {
+          await deliver.promise;
+          receiver.operationCompleted(pending.id, parts);
+        },
+        (error) => receiver.operationFailed(pending.id, error)
+      );
+    },
     (parts) => {
-      for (const part of parts) part.close();
-    }
+      if (!pending.isPending()) for (const part of parts) part.close();
+      return parts;
+    },
+    (error) => error
   );
   const reason = new Error('closed after stage notification');
   const failed = assert.rejects(caller, (error) => error === reason);
@@ -352,6 +398,8 @@ test('caller close disposes a stage result already queued for work', async () =>
   ]);
   await Promise.resolve();
   owner.close(reason);
+deliver.resolve();
+
   await failed;
   await new Promise(setImmediate);
   assert.equal(closes, 1);

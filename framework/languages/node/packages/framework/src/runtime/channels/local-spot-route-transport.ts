@@ -1,5 +1,5 @@
 import { RequestRuntime } from '../foundation/request-runtime';
-import type { PendingOperation } from '../foundation/operation-registry';
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import type { RoutingId } from '../../contracts';
 import { ZLinkConfigurationException } from '../configuration';
 import type { ZLinkLocalSpotRouteDispatcher } from './spot-route-dispatch-strategy';
@@ -37,7 +37,8 @@ export class ZLinkLocalSpotRouteTransport {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     onAdmitted?: () => void,
-    existing?: PendingOperation<unknown>
+    existing?: PendingOperation<unknown>,
+    destination?: OperationObserver<unknown, unknown>
   ): Promise<TReply> {
     if (this.dispatcher === undefined) {
       throw new ZLinkConfigurationException(
@@ -46,19 +47,24 @@ export class ZLinkLocalSpotRouteTransport {
     }
     const effectiveTimeoutMs = timeoutMs ?? this.defaultRequestTimeoutMs;
     const dispatcher = this.dispatcher;
-    return this.requests.request(
-      effectiveTimeoutMs,
-      signal,
-      async (requestOperation) => {
-        const pending = dispatcher.request<TReply>(spotId, packetName, request, {
+    const operation = this.requests.begin(effectiveTimeoutMs, signal, existing);
+    return this.requests.run<TReply>(
+      operation,
+      (receiver) => {
+        const work = dispatcher.request<TReply>(spotId, packetName, request, {
           channelName: routerChannelId,
           onAdmitted,
           signal,
-          requestOperation
+          requestOperation: operation
         });
-        return pending;
+        void work.then(
+          (value) => receiver.operationCompleted(operation.id, value, undefined),
+          (error) => receiver.operationFailed(operation.id, error, undefined)
+        );
       },
-      existing
+      (value) => value as TReply,
+      (error) => error,
+      destination
     );
   }
 }

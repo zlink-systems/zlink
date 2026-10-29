@@ -141,11 +141,16 @@ function fixture() {
     validateReplySource: () => true,
     routedTransport: {
       sendToSpot: (_route, payload) => deliver(payload),
-      requestToSpot: (_route, payload) =>
-        prepareZLinkRequestReply(
-          deliver(payload).then((response) => ({ ok: true, response })),
-          identityRequestReply
-        )
+      requestToSpot: (_route, payload, options, destination) => {
+        const work = deliver(payload).then((response) => ({ ok: true, response }));
+        if (destination !== undefined) {
+          void work.then(
+            value => destination.operationCompleted(options.requestOperation.id, value, undefined),
+            error => destination.operationFailed(options.requestOperation.id, error, undefined)
+          );
+        }
+        return prepareZLinkRequestReply(work, identityRequestReply);
+      }
     }
   });
   const admission = new ZLinkSpotActorAdmissionCoordinator({
@@ -243,7 +248,8 @@ function fixture() {
       invalidateActorRoute() {}
     }),
     completionTableProvider: () => ({
-      async submit(submit) {
+      submit(submit, _signal, requestOperation, receiver) {
+      return deliverFixtureCompletion((async () => {
         submit();
         const response = await terminal;
         return {
@@ -264,7 +270,9 @@ function fixture() {
             )
           ]
         };
-      }
+
+      })(), requestOperation, receiver);
+    }
     })
   });
   return {
@@ -605,4 +613,12 @@ for (const returnResponse of [false, true]) {
       parts.forEach((part) => part.close());
     }
   });
+}
+
+function deliverFixtureCompletion(work, operation, receiver) {
+  if (receiver === undefined) return work;
+  void work.then(
+    value => receiver.operationCompleted(operation.id, value, undefined),
+    error => receiver.operationFailed(operation.id, error, undefined)
+  );
 }

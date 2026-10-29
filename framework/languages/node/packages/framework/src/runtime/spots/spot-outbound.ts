@@ -1,4 +1,4 @@
-import type { PendingOperation } from '../foundation/operation-registry';
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import {
   createZLinkRequest,
   mapZLinkRequestReply,
@@ -225,13 +225,15 @@ export interface ZLinkSpotRoutedTransport {
   requestToSpot<TReply = unknown>(
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
-    options: ZLinkSpotRoutedRequestOptions
+    options: ZLinkSpotRoutedRequestOptions,
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<TReply>;
   requestFromSpotToSpot?<TReply = unknown>(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
-    options: ZLinkSpotRoutedRequestOptions
+    options: ZLinkSpotRoutedRequestOptions,
+    destination?: OperationObserver<unknown, unknown>
   ): ZLinkRequestResult<TReply>;
 }
 

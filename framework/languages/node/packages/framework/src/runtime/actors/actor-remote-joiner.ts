@@ -83,7 +83,8 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
     request: Message,
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
-    completionOperationId?: import('../../contracts').ZLinkActorJoinOperationId
+    completionOperationId?: import('../../contracts').ZLinkActorJoinOperationId,
+    deadlineAtMs?: number
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
     throwIfAborted(signal);
     const node = this.node();
@@ -105,7 +106,8 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
       request,
       timeoutMs ?? this.options.actorTransferTimeoutMs,
       signal,
-      completionOperationId
+      completionOperationId,
+      deadlineAtMs
     );
     return this.withDeferredJoinFinalizer(actor, state, target, result, completionOperationId);
   }
@@ -117,7 +119,8 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
     request: Message,
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
-    completionOperationId?: import('../../contracts').ZLinkActorJoinOperationId
+    completionOperationId?: import('../../contracts').ZLinkActorJoinOperationId,
+    deadlineAtMs?: number
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
     throwIfAborted(signal);
     const node = this.node();
@@ -152,7 +155,8 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
       request,
       timeoutMs ?? this.options.actorTransferTimeoutMs,
       signal,
-      completionOperationId
+      completionOperationId,
+      deadlineAtMs
     );
     return this.withDeferredJoinFinalizer(actor, state, target, result, completionOperationId);
   }

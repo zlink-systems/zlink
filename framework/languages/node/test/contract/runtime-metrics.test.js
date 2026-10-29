@@ -530,12 +530,12 @@ test('channel terminal metrics normalize all five outcomes including caller canc
     const caller = new AbortController();
     let parts;
     const node = { requestToChannel(_channel, requestParts) { parts = requestParts; return { high: 1n, low: 1n }; } };
-    const table = { async submit(operation) {
+    const table = { submit(operation, _signal, entry, receiver) {
       operation();
       if (outcome === 'cancelled') { caller.abort(); throw caller.signal.reason; }
       const terminalResult = outcome === 'timed_out' ? RequestResult.TimedOut : outcome === 'shutdown' ? RequestResult.Terminated : outcome === 'failed' ? RequestResult.NotFound : 0;
       const header = channelEnvelope.decodeChannelHeader(parts.map(part => ZLinkBufferMessage.from(part)));
-      return { terminalResult, failureErrno: 0, parts: terminalResult === 0 ? channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map(part => ZLinkBufferMessage.from(part)) : [] };
+      receiver.operationCompleted(entry.id, { terminalResult, failureErrno: 0, parts: terminalResult === 0 ? channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map(part => ZLinkBufferMessage.from(part)) : [] }, undefined);
     }};
     const transport = new ZLinkRuntimeRouteTransport(() => undefined, undefined,
       () => ({ meshNode: () => node, meshCompletionTable: () => table }),
@@ -696,3 +696,57 @@ test('shared Store label fixture rejects an undeclared operation', () => {
   const sink = { records: [{ name: 'zlink.location.store.errors', attributes: { operation: 'owner_lease_claim' } }] };
   assert.throws(() => assertStoreOperations(sink, ['owner_lease_claim']), assert.AssertionError);
 });
+
+for (const throwing of [false, true]) {
+  test(`#2911 production channel metric settles once/upstream-throw=${throwing}`, async () => {
+    const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+    const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
+    const { createZLinkRequest } = require('../../packages/framework/dist/runtime/messaging/request-result');
+    const runtime = new RequestRuntime();
+    const entry = runtime.begin(1000);
+    const reason = new Error('upstream mapper');
+    const { provider, records } = collector();
+    const metrics = new framework.ZLinkRuntimeMetrics(provider);
+    let receiver, physicalEntry, mapped = 0, submissions = 0;
+    entry.mapCaller(value => { mapped++; if (throwing) throw reason; return value; }, error => error);
+    const node = { requestToChannel() { submissions++; return { high: 1n, low: 1n }; } };
+    const table = { submit(operation, _signal, pending, physical) {
+      physicalEntry = pending; receiver = physical; operation();
+    } };
+    const transport = new framework.ZLinkRuntimeRouteTransport(
+      () => undefined, undefined,
+      () => ({ meshNode: () => node, meshCompletionTable: () => table }),
+      undefined, undefined, undefined, metrics, () => false, undefined, runtime
+    );
+    const parts = channelEnvelope.encodeChannelReplyParts({ channelName: 'channel', messageName: 'reply', correlationId: '0123456789abcdef0123456789abcdef' }, { answer: 42 }).map(value => ZLinkBufferMessage.from(value));
+    try {
+      let carrier;
+      const pending = createZLinkRequest(admitted => {
+        carrier = transport.requestToChannel('mesh', 'channel', 'request', {}, 1000, undefined, undefined, admitted, entry);
+        return carrier;
+      });
+      const outcomes = Promise.allSettled([pending, pending.admitted]);
+      assert.equal(pending, entry.promise);
+      assert.equal(carrier.operation, entry);
+      assert.equal(carrier.pending, entry.promise);
+      assert.equal(physicalEntry, entry);
+      receiver.operationCompleted(entry.id, { terminalResult: 0, failureErrno: 0, parts }, undefined);
+      const results = await outcomes;
+      if (throwing) {
+        assert.deepEqual(results.map(result => result.status), ['rejected', 'rejected']);
+        assert.equal(results[0].reason, reason);
+        assert.equal(results[1].reason, reason);
+      } else {
+        assert.deepEqual(results.map(result => result.status), ['fulfilled', 'fulfilled']);
+        assert.deepEqual(results[0].value, { answer: 42 });
+      }
+      assert.equal(submissions, 1);
+      assert.equal(mapped, 1);
+      assert.equal(runtime.registry.size, 0);
+      const durations = records.filter(row => row.name === 'zlink.mesh_node.request.duration');
+      assert.equal(durations.length, 1);
+      assert.equal(durations[0].attributes.outcome, throwing ? 'failed' : 'completed');
+      assert.equal(records.filter(row => row.name === 'zlink.mesh_node.request.timeouts').length, 0);
+    } finally { runtime.close(); }
+  });
+}

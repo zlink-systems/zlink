@@ -1,3 +1,4 @@
+const { OperationRegistry } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -18,18 +19,13 @@ const {
 const {
   decodeStatefulHeader, encodeStatefulReply
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
-const {
-  OperationKind
-} = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
-
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Exercise the production sender, STREAM service, backend failure mapping and
 // completion table. Transport attempts and registered completion wiring are supplied here.
-function bindFixture(request) {
+function bindFixture(request, initiallyReady = true) {
   const actor = { nodeRid: 'actor-node', actorId: 'actor-bind-replay', generation: 7n };
   const attempts = [];
-  let ready = true;
+  let ready = initiallyReady;
   const routeObservers = new Set();
   const runtime = withTestSessionOwners(new ServiceStatefulRuntime({
     observePeerRoute: () => ({ generation: 1n, ready }),
@@ -52,30 +48,22 @@ function bindFixture(request) {
   runtime.rememberActorRoute({
     actor, targetNodeGeneration: 3n, authorityOwnerGeneration: 9n, ownerLeaseGeneration: 10n
   });
-  const backend = new ZLinkNodeRawMeshBackend('play', 'session-node', {});
-  backend.stateful = runtime;
+  const backend = new ZLinkNodeRawMeshBackend('play', 'session-node', {}, undefined, undefined, undefined, undefined, { stateful: runtime });
   const diagnostics = [];
   const completions = new ZLinkMeshCompletionTable(d => diagnostics.push(d));
   backend.setCompletionHandler((terminal, materialize) => completions.complete(terminal, materialize));
   const service = backend.createStreamSessionService({});
   // Location resolution succeeds before the bind transport scenario starts.
-  service.lookupActor = () =>
-    backend.observeStateful(
-      OperationKind.ActorLookup,
-      Object.assign(
-        Object.create(
-          new (require('../../packages/framework/dist/runtime/foundation/operation-registry').OperationRegistry)().register(
-            1000
-          )
-        ),
-        {
-          promise: Promise.resolve({
-            terminalResult: RequestResult.Ok, failureCode: 0,
-            kindData: { kind: 'actorLookupCompletion', location: { actor } }
-          })
-        }
-      )
-    );
+  service.start();
+  const lookups = new OperationRegistry();
+  runtime.lookupRemoteActor = (_node, _actorId, timeoutMs) => {
+    const pending = lookups.register(timeoutMs);
+    queueMicrotask(() => pending.complete({
+      terminalResult: RequestResult.Ok, failureCode: 0,
+      kindData: { kind: 'actorLookupCompletion', location: { actor } }
+    }));
+    return pending;
+  };
   let bindCalls = 0;
   let deadline;
   const bindActor = service.bindActor.bind(service);
@@ -132,117 +120,77 @@ function successfulBind(attempt) {
 }
 
 for (const wallJumpMs of [60_000, -60_000]) {
-  test(`STREAM actor bind: each replay uses the remaining monotonic deadline across a ${wallJumpMs} ms wall jump`, async t => {
+  test(`STREAM actor bind consumes initial readiness within its monotonic deadline across a ${wallJumpMs} ms wall jump`, async t => {
     let now = 1000.25;
     const wallNow = Date.now();
     t.mock.method(performance, 'now', () => now);
     t.mock.timers.enable({ apis: ['setTimeout'] });
-    const fixture = bindFixture(() => {
-      throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
-    });
+    const fixture = bindFixture(successfulBind, false);
     try {
-      const result = assert.rejects(fixture.bind(80), error => {
-        assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
-        return true;
-      });
+      const result = fixture.bind(80);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(fixture.attempts.length, 0);
+      t.mock.method(Date, 'now', () => wallNow + wallJumpMs);
+      now += 20.25;
+      fixture.ready();
+      await result;
+      assert.deepEqual(fixture.attempts.map(a => a.timeoutMs), [60]);
+      fixture.ready();
       await new Promise(resolve => setImmediate(resolve));
       assert.equal(fixture.attempts.length, 1);
-      t.mock.method(Date, 'now', () => wallNow + wallJumpMs);
-      // Include fractional remaining budgets, then exhaust the original deadline.
-      for (const elapsed of [20.25, 20.25, 20.25, 19.25]) {
-        now += elapsed;
-        if (now < 1080.25) fixture.ready();
-        t.mock.timers.tick(elapsed);
-        await new Promise(resolve => setImmediate(resolve));
-      }
-      await result;
-      assert.deepEqual(fixture.attempts.map(a => a.timeoutMs), [80, 60, 40, 20]);
       fixture.checkAttempts();
       fixture.checkDeadlines();
-      assert.equal(fixture.runtime.allSessionBindings().length, 0);
+      assert.deepEqual(fixture.runtime.sessionBindings('session-rid').map(b => b.bindingGeneration), [11n]);
     } finally { fixture.close(); }
   });
 }
 
-test('STREAM actor bind: route absent for the whole deadline is Unavailable with no ingress', async () => {
-  let ingress = 0;
-  const fixture = bindFixture(async () => {
-    throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
+for (const started of [false, true]) {
+  test(`STREAM actor bind registry expiry is DeadlineExceeded (started=${started})`, async t => {
+    let now = 1000;
+    t.mock.method(performance, 'now', () => now);
+    let finish;
+    const fixture = bindFixture(attempt => new Promise(resolve => {
+      finish = () => resolve(successfulBind(attempt));
+    }), started);
+    try {
+      const operation = assert.rejects(fixture.bind(80), error => {
+        assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+        return true;
+      });
+      await new Promise(resolve => setImmediate(resolve));
+      now += 80;
+      assert.equal(fixture.runtime.expireOperations(now, Number.POSITIVE_INFINITY), 1);
+      await operation;
+      finish?.();
+      fixture.ready();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(fixture.attempts.length, started ? 1 : 0);
+      assert.equal(fixture.runtime.allSessionBindings().length, 0);
+      fixture.checkAttempts();
+    } finally { fixture.close(); }
   });
-  try {
-    await assert.rejects(fixture.bind(80), error => {
-      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
-      return true;
-    });
-    assert.equal(ingress, 0);
-    assert.equal(fixture.attempts.length, 1, 'route absence waits for a ready transition');
-    assert.equal(fixture.runtime.allSessionBindings().length, 0);
-    fixture.checkAttempts();
-  } finally { fixture.close(); }
-});
+}
 
-test('STREAM actor bind: admitted request with reply withheld exhausts as DeadlineExceeded', async () => {
-  let ingress = 0;
-  const fixture = bindFixture(async (attempt, _number, onAdmitted) => {
-    onAdmitted();
-    ingress++;
-    await delay(attempt.timeoutMs);
-    throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
-  });
-  try {
-    await assert.rejects(fixture.bind(80), error => {
-      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
-      return true;
+for (const phase of ['request', 'submit']) {
+  test(`STREAM actor bind returns first ${phase} NOT_CONNECTED once`, async () => {
+    const fixture = bindFixture(() => {
+      throw new ZLinkBackendResultError(phase,
+        phase === 'request' ? RequestResult.NotConnected : SubmitResult.NotConnected);
     });
-    assert.equal(ingress, 1);
-    assert.equal(fixture.attempts.length, 1);
-    assert.equal(fixture.runtime.allSessionBindings().length, 0);
-    fixture.checkAttempts();
-  } finally { fixture.close(); }
-});
-
-test('STREAM actor bind: handover NOT_CONNECTED replays stable identity within the original deadline', async () => {
-  let executions = 0;
-  let terminal;
-  const fixture = bindFixture(async (attempt, number) => {
-    if (terminal === undefined) {
-      executions++;
-      terminal = successfulBind(attempt);
-    }
-    if (number === 1) {
-      await delay(20);
-      throw new ZLinkBackendResultError('request', RequestResult.NotConnected);
-    }
-    return terminal;
+    try {
+      await assert.rejects(fixture.bind(80), error => {
+        assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+        return true;
+      });
+      fixture.ready();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(fixture.attempts.length, 1);
+      assert.equal(fixture.runtime.allSessionBindings().length, 0);
+      fixture.checkAttempts();
+    } finally { fixture.close(); }
   });
-  try {
-    const start = performance.now();
-    await fixture.bind(200);
-    assert(performance.now() - start < 200);
-    assert.equal(fixture.attempts.length, 2);
-    assert.equal(executions, 1);
-    assert.deepEqual(fixture.runtime.sessionBindings('session-rid').map(b => b.bindingGeneration), [11n]);
-    await delay(25);
-    assert.equal(fixture.attempts.length, 2, 'a received terminal stops replay');
-    fixture.checkAttempts();
-  } finally { fixture.close(); }
-});
-
-test('STREAM actor bind retains admission history after handover followed by route absence', async () => {
-  const fixture = bindFixture(async (_attempt, number) => {
-    throw number === 1
-      ? new ZLinkBackendResultError('request', RequestResult.NotConnected)
-      : new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
-  });
-  try {
-    await assert.rejects(fixture.bind(80), error => {
-      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
-      return true;
-    });
-    assert.equal(fixture.attempts.length, 2);
-    fixture.checkAttempts();
-  } finally { fixture.close(); }
-});
+}
 
 test('STREAM actor bind stops on a received failure envelope or malformed reply', async () => {
   for (const [reply, expectedKind] of [
@@ -256,7 +204,8 @@ test('STREAM actor bind stops on a received failure envelope or malformed reply'
         assert.equal(error.kind, expectedKind);
         return true;
       });
-      await delay(25);
+      fixture.ready();
+      await new Promise(resolve => setImmediate(resolve));
       assert.equal(fixture.attempts.length, 1);
       fixture.checkAttempts();
     } finally { fixture.close(); }

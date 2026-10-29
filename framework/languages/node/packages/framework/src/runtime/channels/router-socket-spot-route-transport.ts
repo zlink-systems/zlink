@@ -1,6 +1,5 @@
 import { RequestRuntime } from '../foundation/request-runtime';
-import type { PendingOperation } from '../foundation/operation-registry';
-import { waitRequestReply } from '../messaging/request-deadline';
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendSendFlags } from '../backend/contracts';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
@@ -30,7 +29,7 @@ export class ZLinkRouterSocketSpotRouteTransport {
     }
   }
 
-  async request<TReply>(
+  request<TReply>(
     target: ZLinkSpotRouteTarget,
     parts: readonly Message[],
     codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
@@ -38,40 +37,42 @@ export class ZLinkRouterSocketSpotRouteTransport {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     onAdmitted?: () => void,
-    existing?: PendingOperation<unknown>
+    existing?: PendingOperation<unknown>,
+    destination?: OperationObserver<unknown, unknown>
   ): Promise<TReply> {
-    return this.requests.request(
-      timeoutMs ?? undefined,
-      signal,
-      async (requestOperation) => {
-        const router = this.sockets.routeRouter(target.routerChannelId);
-        void flags;
-        const operation = router.requestToSpot(
-          target.targetNodeRid,
-          target.spotId,
-          parts,
-          timeoutMs,
-          onAdmitted,
-          requestOperation
-        );
-        const replyParts = await waitRequestReply(
-          operation,
-          'Spot request',
-          requestOperation,
-          undefined,
-          closeMessages
-        );
-        try {
-          return decodeChannelReply<TReply>(replyParts, codecs);
-        } finally {
-          closeMessages(replyParts);
-          closeMessages(parts);
-        }
-      },
-      existing
-    );
+    try {
+      const operation = this.requests.begin(timeoutMs, signal, existing);
+      return this.requests.run<TReply>(
+        operation,
+        (receiver) => {
+          const router = this.sockets.routeRouter(target.routerChannelId);
+          void flags;
+          router.requestToSpot(
+            target.targetNodeRid,
+            target.spotId,
+            parts,
+            timeoutMs,
+            onAdmitted,
+            operation,
+            receiver
+          );
+        },
+        (value) => {
+          const replyParts = value as readonly Message[];
+          try {
+            return decodeChannelReply<TReply>(replyParts, codecs);
+          } finally {
+            closeMessages(replyParts);
+            closeMessages(parts);
+          }
+        },
+        (error) => error,
+        destination
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
-
   async requestRaw(
     target: ZLinkSpotRouteTarget,
     request: Message,
@@ -80,29 +81,27 @@ export class ZLinkRouterSocketSpotRouteTransport {
     onAdmitted?: () => void,
     existing?: PendingOperation<unknown>
   ): Promise<readonly Message[]> {
-    return this.requests.request(
-      timeoutMs ?? undefined,
-      signal,
-      async (requestOperation) => {
+    const operation = this.requests.begin(timeoutMs, signal, existing);
+    return this.requests.run<readonly Message[]>(
+      operation,
+      (receiver) => {
         const router = this.sockets.routeRouter(target.routerChannelId);
-        const operation = router.requestToSpot(
+        router.requestToSpot(
           target.targetNodeRid,
           target.spotId,
           [request],
           timeoutMs,
           onAdmitted,
-          requestOperation
-        );
-        return await waitRequestReply(
           operation,
-          'Spot request',
-          requestOperation,
-          undefined,
-          closeMessages
+          receiver
         );
       },
-      existing,
-      closeMessages
+      (value) => {
+        const replyParts = value as readonly Message[];
+        if (!operation.isPending()) closeMessages(replyParts);
+        return replyParts;
+      },
+      (error) => error
     );
   }
 }

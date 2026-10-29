@@ -88,8 +88,14 @@ class ZLinkJavaRawMeshNodePeerProjectionTest {
         RoutingId targetRid = RoutingId.from("unobserved-target");
         try (var context = Zlink.createContext();
                 var source = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            assertEquals(0, source.readyChannelMemberCount(null));
+            assertEquals(0, source.readyChannelMemberCount(" "));
             source.setBind(endpoint + "-source");
             source.start();
+            assertThrows(
+                    IllegalArgumentException.class, () -> source.readyChannelMemberCount(null));
+            assertThrows(IllegalArgumentException.class, () -> source.readyChannelMemberCount(" "));
+
             long intent =
                     source.connectPeer(
                             endpoint,
@@ -107,6 +113,127 @@ class ZLinkJavaRawMeshNodePeerProjectionTest {
                     () -> assertEquals(targetRid, peer.routingId()),
                     () -> assertEquals(endpoint, peer.endpoint()));
         }
+    }
+
+    @Test
+    void admissionObservationsDoNotWaitForTheOccupiedTransportOwnerAndClosePublishesEmpty()
+            throws Exception {
+        var localRid = RoutingId.from("root-local");
+        var remoteRid = RoutingId.from("root-remote");
+        try (var context = Zlink.createContext()) {
+            var port = new ZLinkJavaRawServicePort(context);
+            var local = observationDescriptor(localRid);
+            var remote = observationDescriptor(remoteRid);
+            var topology =
+                    new systems.zlink.framework.runtime.internal.service
+                            .ZLinkServiceTopologyRegistry(local, port.stateLane());
+            topology.admit(
+                    remote,
+                    "7",
+                    systems.zlink.framework.runtime.protocol.ServiceWireConstants.COMMAND_ADMIT);
+            try (var node =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "mesh",
+                            port,
+                            null,
+                            local,
+                            topology,
+                            java.util.Map.of(remoteRid, 7L),
+                            Runnable::run)) {
+                var entered = new java.util.concurrent.CountDownLatch(1);
+                var release = new java.util.concurrent.CountDownLatch(1);
+                var occupied =
+                        port.stateLane()
+                                .runAsync(
+                                        () -> {
+                                            entered.countDown();
+                                            try {
+                                                assertTrue(
+                                                        release.await(
+                                                                2,
+                                                                java.util.concurrent.TimeUnit
+                                                                        .SECONDS));
+                                            } catch (InterruptedException failure) {
+                                                throw new AssertionError(failure);
+                                            }
+                                            return null;
+                                        });
+                assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+                try {
+                    assertTimeoutPreemptively(
+                            Duration.ofSeconds(1),
+                            () -> {
+                                assertEquals(1, node.status().admittedPeerCount());
+                                assertEquals(
+                                        MeshPeerState.ADMITTED, node.peers().getFirst().state());
+                                assertEquals(1, node.readyPeerCount());
+                                assertEquals(1, node.readyChannelMemberCount("orders"));
+                                assertTrue(node.isCanonicalRelocationTargetAdmitted(remoteRid, 7));
+                                assertTrue(node.observePeerRoute(remoteRid).ready());
+                                assertEquals(
+                                        List.of("orders"), node.peerChannels(remoteRid, 0).names());
+                                assertTrue(node.configuredPeerIds().contains(remoteRid));
+                            });
+                } finally {
+                    release.countDown();
+                }
+                occupied.toCompletableFuture().get(1, java.util.concurrent.TimeUnit.SECONDS);
+                node.close();
+                assertTrue(node.peers().isEmpty());
+                assertEquals(0, node.readyPeerCount());
+                assertEquals(0, node.readyChannelMemberCount("orders"));
+                assertFalse(node.observePeerRoute(remoteRid).ready());
+                assertEquals(0, node.observePeerRoute(remoteRid).selectedGeneration());
+                assertFalse(node.configuredPeerIds().contains(remoteRid));
+            }
+        }
+    }
+
+    @Test
+    void injectedDescriptorAndSelectedRouteRemainObservableWithoutTopology() {
+        var localRid = RoutingId.from("unavailable-local");
+        var remoteRid = RoutingId.from("unavailable-remote");
+        try (var context = Zlink.createContext()) {
+            var port = new ZLinkJavaRawServicePort(context);
+            var local = observationDescriptor(localRid);
+            try (var node =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "mesh",
+                            port,
+                            null,
+                            local,
+                            null,
+                            java.util.Map.of(remoteRid, 9L),
+                            Runnable::run)) {
+                assertEquals(local.lifecycleGeneration(), node.status().lifecycleGeneration());
+                assertEquals(local.descriptorRevision(), node.status().descriptorRevision());
+                assertEquals(9L, node.observePeerRoute(remoteRid).selectedGeneration());
+                assertTrue(node.isPeerTransportConnected(remoteRid));
+                assertFalse(node.observePeerRoute(remoteRid).ready());
+                assertEquals(0, node.readyChannelMemberCount(null));
+                assertEquals(0, node.readyChannelMemberCount(" "));
+            }
+        }
+    }
+
+    private static ZLinkServiceNodeDescriptor observationDescriptor(RoutingId rid) {
+        return new ZLinkServiceNodeDescriptor(
+                "mesh",
+                rid,
+                7,
+                1,
+                "inproc://" + rid,
+                List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 3)),
+                ZLinkServiceNodeDescriptor.State.SERVING,
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                1,
+                List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
+                1,
+                100,
+                10,
+                0,
+                0);
     }
 
     private static void await(BooleanSupplier condition) throws InterruptedException {

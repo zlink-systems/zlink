@@ -24,7 +24,6 @@ import {
 } from '@zlink-systems/zlink';
 import {
   translateBindingResultError,
-  bindingRequestReply,
   submitBindingAsyncSend,
   submitBindingSend
 } from './node-backend-adapter-support';
@@ -339,7 +338,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     }
     return this.requests.observe<readonly Buffer[], T>(
       timeoutMs,
-      (entry) => {
+      (entry, receiver) => {
         this.requireOpen();
         const submission = submitRawRequest(
           appendRequestParts(this.socket.request(this.preparedRoutingId(targetRid)), parts).timeout(
@@ -350,10 +349,10 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
           submission,
           0,
           (value) => {
-            entry.complete(value);
+            receiver.operationCompleted(entry.id, value, undefined);
           },
           (error) => {
-            entry.fail(error);
+            receiver.operationFailed(entry.id, error, undefined);
           },
           recordReceived,
           onAdmitted
@@ -407,7 +406,7 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
   ): Promise<readonly Buffer[]> {
     return this.requests.observe<readonly Buffer[]>(
       timeoutMs,
-      (entry) => {
+      (entry, receiver) => {
         this.requireOpen();
         const submission = submitRawRequest(
           appendRequestParts(this.socket.request(), parts).timeout(
@@ -418,10 +417,10 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
           submission,
           0,
           (value) => {
-            entry.complete(value);
+            receiver.operationCompleted(entry.id, value, undefined);
           },
           (error) => {
-            entry.fail(error);
+            receiver.operationFailed(entry.id, error, undefined);
           },
           undefined,
           onAdmitted
@@ -586,19 +585,26 @@ function requestReply<T>(
   recordReceived: (() => void) | undefined,
   onAdmitted: (() => void) | undefined
 ): Promise<T> {
+  const result = observeRequestReply(submission.reply, onReply, onFailed, recordReceived);
   if (submission.result === SubmitResult.Backpressured) {
-    return observeRequestReply(
-      bindingRequestReply(submission, recordReceived, onAdmitted),
-      onReply,
-      onFailed
+    void submission.admitted.then(
+      () => {
+        try {
+          onAdmitted?.();
+        } catch (error) {
+          onFailed(translateBindingResultError(error, 'completion'));
+        }
+      },
+      (error) => onFailed(translateBindingResultError(error, 'completion'))
     );
+  } else {
+    try {
+      onAdmitted?.();
+    } catch (error) {
+      onFailed(translateBindingResultError(error, 'completion'));
+    }
   }
-  try {
-    onAdmitted?.();
-  } catch (error) {
-    throw translateBindingResultError(error, 'completion');
-  }
-  return observeRequestReply(submission.reply, onReply, onFailed, recordReceived);
+  return result;
 }
 
 /** Consumes the binding reply and notifies its terminal in this continuation. */

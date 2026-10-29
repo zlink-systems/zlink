@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
 import {
   prepareZLinkRequestReply,
   mapZLinkRequestReply,
@@ -30,7 +31,9 @@ import {
   OperationCancelledError,
   OperationRegistry,
   OperationTimeoutError,
-  type OperationClock
+  type OperationClock,
+  type OperationHandle,
+  type OperationObserver
 } from '../../packages/framework/src/runtime/foundation/operation-registry';
 import {
   ReadyDomain,
@@ -526,12 +529,7 @@ test('Message Follow invalidates a Spot route only when every source fence still
     }),
     'infrastructure'
   );
-  const spotRoutes = (
-    runtime as unknown as {
-      readonly spotRoutes: Map<string, unknown>;
-    }
-  ).spotRoutes;
-  assert.equal(spotRoutes.size, 1);
+  assert.equal(runtime[inspectRuntime]().spotRoutes, 1);
 
   const exact = encodeMessageFollowHeader({
     source,
@@ -551,7 +549,7 @@ test('Message Follow invalidates a Spot route only when every source fence still
     }),
     'infrastructure'
   );
-  assert.equal(spotRoutes.size, 0);
+  assert.equal(runtime[inspectRuntime]().spotRoutes, 0);
   runtime.close();
 });
 
@@ -1817,18 +1815,12 @@ test('a new Instance incarnation outranks a reset authority owner generation', a
     oldIntent.storeVersion
   );
 
-  const directRoutes = (
-    runtime as unknown as {
-      readonly directSpotRoutes: Map<string, typeof newDirect>;
-    }
-  ).directSpotRoutes;
-  const intents = (
-    runtime as unknown as {
-      readonly instanceIntents: Map<string, { readonly route: ServiceInstanceRouteFence }>;
-    }
-  ).instanceIntents;
-  assert.deepEqual(directRoutes.get(newDirect.spot.spotId), newDirect);
-  assert.deepEqual(intents.get(newIntent.targetSpotId)?.route, newIntent);
+  assert.deepEqual(runtime[inspectRuntime]().directSpotRoute(newDirect.spot.spotId), newDirect);
+  assert.deepEqual(runtime[inspectRuntime]().instanceRoute(newIntent.targetSpotId), newIntent);
+  const observed = runtime[inspectRuntime]();
+  assert.ok(Object.isFrozen(observed));
+  assert.ok(Object.isFrozen(observed.instanceRoute(newIntent.targetSpotId)));
+  assert.ok(Object.isFrozen(observed.directSpotRoute(newDirect.spot.spotId)?.spot));
 
   assert.throws(
     () =>
@@ -2334,17 +2326,27 @@ async function requestThroughCachedReadyRoute(
     }
   } as unknown as ZLinkBackendMeshNode;
   const ownerCompletions = {
-    async submit(submit: () => unknown) {
-      submit();
-      await ownerIngress;
-      const reply = decodeStatefulReply(harness.replies[0]![0]!, 2n, 'instanceSpotRequest');
-      return {
-        terminalResult: reply.terminalResult,
-        failureErrno: reply.failureCode,
-        operationKind: 39,
-        kindData: null,
-        parts: []
-      };
+    async submit(
+      submit: () => unknown,
+      _signal: AbortSignal | undefined,
+      requestOperation: OperationHandle<unknown>,
+      receiver: OperationObserver<unknown, unknown>
+    ) {
+      try {
+        submit();
+        await ownerIngress;
+        const reply = decodeStatefulReply(harness.replies[0]![0]!, 2n, 'instanceSpotRequest');
+        const completion = {
+          terminalResult: reply.terminalResult,
+          failureErrno: reply.failureCode,
+          operationKind: 39,
+          kindData: null,
+          parts: []
+        };
+        receiver.operationCompleted(requestOperation.id, completion, undefined);
+      } catch (error) {
+        receiver.operationFailed(requestOperation.id, error, undefined);
+      }
     }
   };
   const coldCompletions = {
@@ -2864,13 +2866,10 @@ test('Spot Message Follow does not impose a record-count or stored-byte admissio
       'application'
     );
   }
-  const state = [
-    ...(
-      runtime as unknown as {
-        spotMessageFollow: Map<string, { queuedCount: number; queuedBytes: number }>;
-      }
-    ).spotMessageFollow.values()
-  ][0];
+  const follow = runtime[inspectRuntime]().spotMessageFollow;
+  assert.ok(Object.isFrozen(follow));
+  assert.ok(Object.isFrozen(follow[0]));
+  const state = follow[0];
   assert.equal(state?.queuedCount, 1_025);
   assert.ok((state?.queuedBytes ?? 0) > 16 * 1024 * 1024);
   runtime.close();
@@ -4313,12 +4312,7 @@ test('Promise authority resumes the retained activation envelope after Store com
   assert.deepEqual(events, ['read', 'reserve', 'commit', 'complete']);
   if (committedRoute === undefined) throw new Error('Ready route was not committed.');
   if (completedRoute === undefined) throw new Error('Terminal route was not committed.');
-  const instanceIntent = (
-    runtime as unknown as {
-      readonly instanceIntents: ReadonlyMap<string, { readonly route: ServiceInstanceRouteFence }>;
-    }
-  ).instanceIntents.get('tenant-async');
-  assert.deepEqual(instanceIntent?.route, completedRoute);
+  assert.deepEqual(runtime[inspectRuntime]().instanceRoute('tenant-async'), completedRoute);
   const followingHeader = encodeInstanceSpotHeader(
     completedRoute,
     7n,
@@ -5834,18 +5828,14 @@ test('live Instance route fences reject an older reconcile snapshot', async () =
   runtime.registerInstanceIntent('TenantWorker', routeV2, routeV1);
   runtime.rememberSpotRoute(directV2, directV1);
 
-  const intents = (
-    runtime as unknown as {
-      readonly instanceIntents: Map<string, { readonly route: ServiceInstanceRouteFence }>;
-    }
-  ).instanceIntents;
-  const directRoutes = (
-    runtime as unknown as {
-      readonly directSpotRoutes: Map<string, { readonly storeVersion: string }>;
-    }
-  ).directSpotRoutes;
-  assert.equal(intents.get(routeV1.targetSpotId)?.route.storeVersion, 'store-v2');
-  assert.equal(directRoutes.get(routeV1.targetSpotId)?.storeVersion, 'store-v2');
+  assert.equal(
+    runtime[inspectRuntime]().instanceRoute(routeV1.targetSpotId)?.storeVersion,
+    'store-v2'
+  );
+  assert.equal(
+    runtime[inspectRuntime]().directSpotRoute(routeV1.targetSpotId)?.storeVersion,
+    'store-v2'
+  );
   runtime.close();
 });
 
@@ -7623,15 +7613,25 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
       meshNode: () => node,
       meshCompletionTable: () =>
         ({
-          async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-            operation();
-            return {
-              terminalResult: 0,
-              failureErrno: 0,
-              operationKind: 39,
-              kindData: null,
-              parts: completionParts
-            };
+          submit(
+            operation: () => { readonly high: bigint; readonly low: bigint },
+            _signal: AbortSignal | undefined,
+            requestOperation: OperationHandle<unknown>,
+            receiver: OperationObserver<unknown, unknown>
+          ): void {
+            try {
+              operation();
+              const completion = {
+                terminalResult: 0,
+                failureErrno: 0,
+                operationKind: 39,
+                kindData: null,
+                parts: completionParts
+              };
+              receiver.operationCompleted(requestOperation.id, completion, undefined);
+            } catch (error) {
+              receiver.operationFailed(requestOperation.id, error, undefined);
+            }
           }
         }) as never
     })
@@ -7710,15 +7710,25 @@ test('stateful request failure codes preserve typed Instance route errors', asyn
         meshNode: () => node,
         meshCompletionTable: () =>
           ({
-            async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-              operation();
-              return {
-                terminalResult: RequestResult.Conflict,
-                failureErrno: failureCode,
-                operationKind: 39,
-                kindData: null,
-                parts: []
-              };
+            submit(
+              operation: () => { readonly high: bigint; readonly low: bigint },
+              _signal: AbortSignal | undefined,
+              requestOperation: OperationHandle<unknown>,
+              receiver: OperationObserver<unknown, unknown>
+            ): void {
+              try {
+                operation();
+                const completion = {
+                  terminalResult: RequestResult.Conflict,
+                  failureErrno: failureCode,
+                  operationKind: 39,
+                  kindData: null,
+                  parts: []
+                };
+                receiver.operationCompleted(requestOperation.id, completion, undefined);
+              } catch (error) {
+                receiver.operationFailed(requestOperation.id, error, undefined);
+              }
             }
           }) as never
       })

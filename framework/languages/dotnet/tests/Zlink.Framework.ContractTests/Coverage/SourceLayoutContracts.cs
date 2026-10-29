@@ -18,7 +18,6 @@ public sealed class SourceLayoutContracts
         "Zlink.Framework.UnitTests/Runtime/ClientServerClientAckTests.cs",
         "Zlink.Framework.UnitTests/Runtime/ClientServerLivenessLaneTests.cs",
         "Zlink.Framework.UnitTests/Runtime/DescriptorOwnerLeaseSelectionTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/DirectRequestWaitCostTests.cs",
         "Zlink.Framework.UnitTests/Runtime/DurableSenderRuntimeTests.cs",
         "Zlink.Framework.UnitTests/Runtime/EntrySpotActorDispatchTests.cs",
         "Zlink.Framework.UnitTests/Runtime/EnvelopeHeaderCacheHotPathTests.cs",

@@ -238,7 +238,9 @@ TEST (CppFrameworkMeshSelectedRoute, AdmissionRevisionIntegrity)
            {protocol::command::hello, immutable,
             mesh::peer_admission_result_t::stale_descriptor}}) {
         SCOPED_TRACE (static_cast<int> (command));
-        mesh::service_topology_registry_t topology (options ("guard-local", 101).descriptor);
+        zlink::framework::runtime::state_lane_t topology_lane;
+        mesh::service_topology_registry_t topology (topology_lane,
+                                                    options ("guard-local", 101).descriptor);
         ASSERT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (baseline, {1}));
         EXPECT_EQ (expected,
                    topology.admit (incoming, {1},
@@ -258,7 +260,9 @@ TEST (CppFrameworkMeshSelectedRoute, UpdateRequiresAdmittedLifecycle)
              {protocol::command::hello, protocol::command::admit, protocol::command::update}) {
             SCOPED_TRACE (has_current);
             SCOPED_TRACE (static_cast<int> (command));
-            mesh::service_topology_registry_t topology (options ("guard-local", 101).descriptor);
+            zlink::framework::runtime::state_lane_t topology_lane;
+            mesh::service_topology_registry_t topology (topology_lane,
+                                                        options ("guard-local", 101).descriptor);
             if (has_current)
                 ASSERT_EQ (mesh::peer_admission_result_t::admitted, topology.admit (baseline, {1}));
             EXPECT_EQ (command == protocol::command::update

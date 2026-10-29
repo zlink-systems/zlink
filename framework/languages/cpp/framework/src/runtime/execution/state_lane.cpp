@@ -1,14 +1,25 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/execution/state_lane.hpp"
-#include "runtime/execution/infrastructure_wait_guard.hpp"
-
-#include <string>
 
 namespace zlink::framework::runtime
 {
 
+namespace
+{
+void publish_close (std::shared_ptr<task_completion_source_t<void>> completion)
+{
+    if (completion)
+        completion->complete (result_t<void>::success ());
+}
+} // namespace
+
 thread_local state_lane_t *state_lane_t::_current_lane = nullptr;
+
+state_lane_t::state_lane_t () :
+    _executor_owner (infrastructure_executor ()), _executor (*_executor_owner)
+{
+}
 
 state_lane_t::state_lane_t (offload_executor_t &executor) noexcept : _executor (executor)
 {
@@ -61,15 +72,41 @@ state_lane_t *state_lane_t::current () noexcept
 
 void state_lane_t::close ()
 {
-    throw_if_reentrant ();
-    _closed.store (true, std::memory_order_release);
-    schedule_drain (true);
+    if (auto completion = begin_close ())
+        completion->task ().result ().value ();
+}
 
-    std::unique_lock lock (_mailbox_mutex);
-    infrastructure_wait_guard::condition_wait (
-      _drained, lock,
-      [this] { return _mailbox.empty () && !_scheduled.load (std::memory_order_acquire); },
-      "state-lane/close", infrastructure_wait_guard::wait_relation_t::dependent_completion);
+task_t<void> state_lane_t::close_async ()
+{
+    if (auto completion = begin_close ()) {
+        // The async owner may destroy the lane and release the last pool lease.
+        // Its continuation leaves this worker; a synchronous close needs only
+        // the result notification and does not require a completion dispatcher.
+        return detail::with_task_resume_scheduler (
+          completion->task (), [dispatcher = detail::borrow_completion_dispatcher (),
+                                completion] (std::function<void ()> continuation) {
+              detail::dispatch_completion (std::move (continuation), false, completion.get (),
+                                           dispatcher);
+          });
+    }
+    return task_t<void> (result_t<void>::success ());
+}
+
+std::shared_ptr<task_completion_source_t<void>> state_lane_t::begin_close ()
+{
+    throw_if_reentrant ();
+    std::shared_ptr<task_completion_source_t<void>> completion;
+    {
+        std::lock_guard lock (_mailbox_mutex);
+        _closed.store (true, std::memory_order_release);
+        if (_mailbox.empty () && !_scheduled.load (std::memory_order_acquire))
+            return {};
+        if (!_close_completion)
+            _close_completion = std::make_shared<task_completion_source_t<void>> ();
+        completion = _close_completion;
+    }
+    schedule_drain (true);
+    return completion;
 }
 
 bool state_lane_t::enqueue (std::function<void ()> work,
@@ -124,6 +161,8 @@ void state_lane_t::drain_loop ()
 {
     for (;;) {
         mailbox_item_t item;
+        std::shared_ptr<task_completion_source_t<void>> closed;
+        bool idle = false;
         {
             std::lock_guard lock (_mailbox_mutex);
             if (_mailbox.empty ()) {
@@ -131,12 +170,16 @@ void state_lane_t::drain_loop ()
                 // a concurrent enqueue must either join this drain or claim
                 // the next one. There is no resubmission queue between turns.
                 _scheduled.store (false, std::memory_order_release);
-                if (_closed.load (std::memory_order_acquire))
-                    _drained.notify_all ();
-                return;
+                closed = std::move (_close_completion);
+                idle = true;
+            } else {
+                item = std::move (_mailbox.front ());
+                _mailbox.pop_front ();
             }
-            item = std::move (_mailbox.front ());
-            _mailbox.pop_front ();
+        }
+        if (idle) {
+            publish_close (std::move (closed));
+            return;
         }
         try {
             const current_scope_t scope (this);
@@ -164,11 +207,13 @@ void state_lane_t::abandon_pending (std::exception_ptr error) noexcept
         }
     }
     abandoned.clear ();
+    std::shared_ptr<task_completion_source_t<void>> closed;
     {
         std::lock_guard lock (_mailbox_mutex);
         _scheduled.store (false, std::memory_order_release);
-        _drained.notify_all ();
+        closed = std::move (_close_completion);
     }
+    publish_close (std::move (closed));
 }
 
 } // namespace zlink::framework::runtime

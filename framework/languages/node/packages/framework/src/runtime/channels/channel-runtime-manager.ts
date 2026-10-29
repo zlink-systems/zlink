@@ -1,8 +1,7 @@
 import { RequestRuntime } from '../foundation/request-runtime';
-import type { PendingOperation } from '../foundation/operation-registry';
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import type { ZLinkMeshDispatchAdmission } from '../admission';
 import {
-  prepareZLinkRequestReply,
   identityRequestReply,
   rejectZLinkRequestReply,
   type ZLinkRequestResult
@@ -272,6 +271,7 @@ export class ZLinkChannelRuntimeManager {
     requestOperation?: PendingOperation<unknown>
   ): ZLinkRequestResult<TReply> {
     try {
+      const operation = this.requests.begin(timeoutMs, signal, requestOperation);
       const pending = this.outbound.request<TReply>(
         channelName,
         packetName,
@@ -280,9 +280,14 @@ export class ZLinkChannelRuntimeManager {
         signal,
         metadata,
         onAdmitted,
-        requestOperation
+        operation
       );
-      return prepareZLinkRequestReply(pending, identityRequestReply);
+      return {
+        pending,
+        decode: identityRequestReply<TReply>,
+        mapFailure: identityRequestReply,
+        operation: operation as PendingOperation<TReply>
+      };
     } catch (error) {
       return rejectZLinkRequestReply(error);
     }
@@ -319,7 +324,7 @@ export class ZLinkChannelRuntimeManager {
     return this.outbound.routeSubmit(routerChannelId, targetNodeRid, packetName, message, metadata);
   }
 
-  async routeRequest<TReply>(
+  routeRequest<TReply>(
     routerChannelId: string,
     targetNodeRid: string,
     packetName: string | undefined,
@@ -352,7 +357,7 @@ export class ZLinkChannelRuntimeManager {
     return this.spotRoutes.routeSendToSpot(spotRouteTarget, packetName, message, metadata);
   }
 
-  async routeRequestToSpot<TReply>(
+  routeRequestToSpot<TReply>(
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     request: unknown,
@@ -360,7 +365,8 @@ export class ZLinkChannelRuntimeManager {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
     onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    destination?: OperationObserver<unknown, unknown>
   ): Promise<TReply> {
     return this.spotRoutes.routeRequestToSpot<TReply>(
       spotRouteTarget,
@@ -370,11 +376,12 @@ export class ZLinkChannelRuntimeManager {
       signal,
       metadata,
       onAdmitted,
-      requestOperation
+      requestOperation,
+      destination
     );
   }
 
-  async routeRequestFromSpotToSpot<TReply>(
+  routeRequestFromSpotToSpot<TReply>(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
@@ -382,7 +389,8 @@ export class ZLinkChannelRuntimeManager {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    destination?: OperationObserver<unknown, unknown>
   ): Promise<TReply> {
     return this.spotRoutes.routeRequestFromSpotToSpot<TReply>(
       sourceSpot,
@@ -392,7 +400,8 @@ export class ZLinkChannelRuntimeManager {
       timeoutMs,
       signal,
       onAdmitted,
-      requestOperation
+      requestOperation,
+      destination
     );
   }
 

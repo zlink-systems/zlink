@@ -83,6 +83,11 @@ function requestFailure<TReply>(result: ZLinkRequestResult<TReply>, error: unkno
 
 /** Yield applies the same transport decoding without public admission. */
 export function mapZLinkRequestReply<TReply>(result: ZLinkRequestResult<TReply>): Promise<TReply> {
+  if (
+    result.operation !== undefined &&
+    result.operation.mapCaller(result.decode, (error) => requestFailure(result, error))
+  )
+    return result.operation.promise;
   return result.pending.then(
     (value) => result.decode(value),
     (error: unknown) => {

@@ -1,3 +1,4 @@
+const { OperationRegistry } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const net = require('node:net');
@@ -10,7 +11,6 @@ const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtim
 const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const { encodeMultipartApplicationPayload } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
-const { OperationKind } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 const {
   registerServiceSessionBindingIngressPort
 } = require('../../packages/framework/dist/runtime/foundation/service-session-binding-ingress-port');
@@ -72,21 +72,15 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
   };
   const service = backend.createStreamSessionService(native);
   service.start();
-  service.lookupActor = (_node, actorId) =>
-    backend.observeStateful(
-      OperationKind.ActorLookup,
-      Object.assign(
-        Object.create(
-          new (require('../../packages/framework/dist/runtime/foundation/operation-registry').OperationRegistry)().register(
-            1000
-          )
-        ),
-        {
-          promise: Promise.resolve({ terminalResult: zlink.RequestResult.Ok, failureCode: 0,
-            kindData: { kind: 'actorLookupCompletion', location: { actor: actorId === actor.actorId ? actor : nextActor } } })
-        }
-      )
-    );
+  const lookups = new OperationRegistry();
+  stateful.lookupRemoteActor = (_node, actorId, timeoutMs) => {
+    const pending = lookups.register(timeoutMs);
+    queueMicrotask(() => pending.complete({
+      terminalResult: zlink.RequestResult.Ok, failureCode: 0,
+      kindData: { kind: 'actorLookupCompletion', location: { actor: actorId === actor.actorId ? actor : nextActor } }
+    }));
+    return pending;
+  };
   let closed = 0;
   let removed = 0;
   let resolveRemoved;

@@ -123,9 +123,10 @@ test('deadline maintenance yields its live iterator and resumes through deletion
   registry.close();
 });
 
-test('shared deadline maintenance completes a native request while its handler is suspended', async () => {
+test('shared deadline maintenance completes a same-node logical request while its handler is suspended', async () => {
   const backend = require('../../packages/framework/dist/runtime/backend');
   const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+  const { ServiceWireFrameworkErrorCode } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const context = factory.createChannelAdapter().createContext();
   const suffix = `node-dispatch-deadline-${process.pid}`;
@@ -178,7 +179,8 @@ test('shared deadline maintenance completes a native request while its handler i
     );
     await started;
     const completion = await pending;
-    assert.equal(completion.terminalResult, RequestResult.TimedOut);
+    assert.equal(completion.terminalResult, RequestResult.InternalError);
+    assert.equal(completion.failureErrno, ServiceWireFrameworkErrorCode.workerTimedOut);
     backend.closeMeshCompletion(completion);
     assert.equal(table.pendingCount, 0);
     release();

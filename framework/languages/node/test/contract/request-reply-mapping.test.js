@@ -34,7 +34,14 @@ function fixture() {
     requestToNode: () => ({ high: 1n, low: 1n }),
     requestToChannel: () => ({ high: 1n, low: 1n })
   };
-  const table = { submit(operation) { operation(); return source.promise; } };
+  const table = { submit(operation, _signal, entry, receiver) {
+      operation();
+      void source.promise.then(
+        (value) => receiver.operationCompleted(entry.id, value),
+        (error) => receiver.operationFailed(entry.id, error)
+      );
+      return entry.promise;
+    } };
   const transport = new framework.ZLinkRuntimeRouteTransport(
     () => undefined, undefined,
     () => ({ meshNode: () => node, meshCompletionTable: () => table }),
@@ -169,8 +176,20 @@ for (const kind of ['client-server', 'source-spot']) {
     let transport;
     if (kind === 'client-server') {
       const { ZLinkChannelRuntimeManager } = require('../../packages/framework/dist/runtime/channels/channel-runtime-manager');
-      transport = Object.create(ZLinkChannelRuntimeManager.prototype);
-      transport.outbound = { request() { throw error; } };
+transport = new ZLinkChannelRuntimeManager(
+        framework.createFrameworkRegistration(),
+        {},
+        {},
+        undefined,
+        {
+          requests: {
+            begin() {
+              throw error;
+            }
+          }
+        }
+      );
+
     } else {
       transport = new framework.ZLinkRuntimeRouteTransport(() => { throw error; });
     }
@@ -237,3 +256,84 @@ for (const failureAt of ['handle conversion', 'transport call']) {
     assert.equal(admissionFailure, failure);
   });
 }
+
+test('channel outbound codec failure preserves both public stages without source submission', async () => {
+  const f = fixture();
+  const reason = new Error('channel encode');
+  let submissions = 0;
+  f.codec.serialize = () => { throw reason; };
+  f.node.requestToChannel = () => { submissions++; assert.fail('codec failure must prevent submission'); };
+  const pending = createZLinkRequest(admitted => f.transport.requestToChannel('mesh', 'channel', 'Probe', new Probe(), 1000, undefined, undefined, admitted));
+  const outcomes = await Promise.allSettled([pending, pending.admitted]);
+  for (const result of outcomes) { assert.equal(result.status, 'rejected'); assert.equal(result.reason, reason); }
+  assert.equal(submissions, 0);
+});
+
+for (const origin of ['upstream-value', 'source', 'own-value']) {
+  for (const throwing of [false, true]) {
+    test(`#2911 mapper composition/${origin}/failure-throw=${throwing}`, async () => {
+      const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+      const runtime = new RequestRuntime();
+      const entry = runtime.begin(1000);
+      const reason = new Error(origin);
+      const mapped = new Error('mapped failure');
+      const values = [0, 0, 0], failures = [0, 0, 0], errors = [];
+      try {
+        entry.mapCaller(value => {
+          values[0]++;
+          if (origin === 'upstream-value') throw reason;
+          return value;
+        }, error => { failures[0]++; return error; });
+        entry.mapCaller(value => {
+          values[1]++;
+          if (origin === 'own-value') throw reason;
+          return value;
+        }, error => {
+          failures[1]++; errors.push(error);
+          if (throwing) throw mapped;
+          return mapped;
+        });
+        entry.mapCaller(value => { values[2]++; return value; }, error => {
+          failures[2]++; errors.push(error); return error;
+        });
+        const caller = Promise.allSettled([entry.promise]);
+        if (origin === 'source') entry.fail(reason);
+        else entry.complete('raw');
+        const [result] = await caller;
+        assert.equal(result.status, 'rejected');
+        assert.equal(result.reason, origin === 'own-value' ? reason : mapped);
+        assert.deepEqual(values, origin === 'source' ? [0, 0, 0] : origin === 'own-value' ? [1, 1, 0] : [1, 0, 0]);
+        assert.deepEqual(failures, origin === 'source' ? [1, 1, 1] : origin === 'own-value' ? [0, 0, 1] : [0, 1, 1]);
+        assert.deepEqual(errors, origin === 'own-value' ? [reason] : [reason, mapped]);
+        assert.equal(runtime.registry.size, 0);
+      } finally { runtime.close(); }
+    });
+  }
+}
+
+test('#2911 upstream mapper error rejects public admission once on the original carrier', async () => {
+  const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+  const runtime = new RequestRuntime();
+  const entry = runtime.begin(1000);
+  const reason = new Error('upstream codec');
+  let values = 0, failures = 0, ownFailure = 0;
+  try {
+    entry.mapCaller(() => { throw reason; }, error => { ownFailure++; return error; });
+    const pending = createZLinkRequest(() => ({
+      operation: entry, pending: entry.promise,
+      decode(value) { values++; return value; },
+      mapFailure(error) { failures++; return error; }
+    }));
+    const outcomes = Promise.allSettled([pending, pending.admitted]);
+    assert.equal(pending, entry.promise);
+    entry.complete('raw');
+    const results = await outcomes;
+    assert.deepEqual(results.map(result => result.status), ['rejected', 'rejected']);
+    assert.equal(results[0].reason, reason);
+    assert.equal(results[1].reason, reason);
+    assert.equal(values, 0);
+    assert.equal(failures, 1);
+    assert.equal(ownFailure, 0);
+    assert.equal(runtime.registry.size, 0);
+  } finally { runtime.close(); }
+});

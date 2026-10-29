@@ -3106,12 +3106,8 @@ std::vector<std::uint8_t>
 encode_route_mesh_admission (command kind, const mesh::service_node_descriptor_t &descriptor)
 {
     validate_admission_kind (kind);
-    try {
-        static_cast<void> (mesh::service_topology_registry_t (descriptor));
-    }
-    catch (const std::invalid_argument &error) {
-        throw service_wire_error_t (error.what ());
-    }
+    if (!mesh::service_topology_registry_t::valid_descriptor (descriptor))
+        throw service_wire_error_t ("local service descriptor is invalid");
 
     std::vector<std::uint8_t> route;
     append_text8 (route, descriptor.mesh_name, "mesh name");
@@ -3301,12 +3297,8 @@ decode_route_mesh_admission (std::span<const std::uint8_t> bytes,
     if (required != 0x1ffu) {
         throw service_wire_error_t ("descriptor extension omits a required field");
     }
-    try {
-        static_cast<void> (mesh::service_topology_registry_t (result));
-    }
-    catch (const std::invalid_argument &error) {
-        throw service_wire_error_t (error.what ());
-    }
+    if (!mesh::service_topology_registry_t::valid_descriptor (result))
+        throw service_wire_error_t ("local service descriptor is invalid");
     return result;
 }
 

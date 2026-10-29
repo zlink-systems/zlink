@@ -466,7 +466,8 @@ export interface ServiceSpot {
       routeFence?: ServiceDirectSpotRouteFence;
       onAdmitted?: () => void;
       entrySpot?: boolean;
-    }
+    },
+    completion?: import('../backend/mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId;
   publish(
     channelName: string,

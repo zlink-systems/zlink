@@ -1,10 +1,10 @@
 namespace Zlink.Framework.Runtime.Messaging;
 
-// Actor model §sender replay: only durable lifecycle callers enter this owner.
-// The binding owns admission and HANDOVER completion; received envelopes leave
-// replay before decoding, including rejected and malformed terminal replies.
+// Lifecycle callers wait for initial readiness; the binding owns the started request.
 internal static class ZLinkDurableRequest
 {
+    private static readonly Task CancellationOnly = new TaskCompletionSource().Task;
+
     internal static async ValueTask<TReply> RequestAsync<TReply>(
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         long startTimestamp,
@@ -18,89 +18,53 @@ internal static class ZLinkDurableRequest
         CancellationToken cancellationToken,
         Func<ZLinkPeerRouteObservation> observeRoute,
         TimeProvider? timeProvider = null,
-        ZLinkRequestAdmission? requestAdmission = null
+        ZLinkRequestAdmission? requestAdmission = null,
+        Task? terminal = null
     )
     {
         timeProvider ??= TimeProvider.System;
-        var admitted = false;
-        Exception? lastFailure = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var remaining = timeout - timeProvider.GetElapsedTime(startTimestamp);
             if (remaining <= TimeSpan.Zero)
-                throw Exhausted(admitted || requestAdmission?.IsAdmitted == true, lastFailure);
+            {
+                // The entry's owner confirms expiration. A consumed stage budget
+                // prevents another submit but does not independently take terminal authority.
+                if (terminal is not null)
+                {
+                    await terminal.ConfigureAwait(false);
+                    // Only the original entry can settle the caller; stop this producer.
+                    throw new OperationCanceledException(cancellationToken);
+                }
+                else if (cancellationToken.CanBeCanceled)
+                    await CancellationOnly.WaitAsync(cancellationToken).ConfigureAwait(false);
+                throw Exhausted(requestAdmission?.IsAdmitted == true);
+            }
             var route = observeRoute();
             if (route.ReadyGeneration == 0)
             {
                 try
                 {
-                    using var readiness = new ZLinkRequestCompletion<bool>(cancellationToken);
-                    _ = ObserveReadinessAsync(
-                        route.Changed.WaitAsync(remaining, timeProvider, cancellationToken),
-                        readiness
-                    );
-                    await readiness.Task.ConfigureAwait(false);
+                    var wait = route.Changed.WaitAsync(cancellationToken);
+                    if (terminal is null)
+                        await wait.ConfigureAwait(false);
+                    else
+                    {
+                        var ready = await Task.WhenAny(wait, terminal).ConfigureAwait(false);
+                        await ready.ConfigureAwait(false);
+                        if (ReferenceEquals(ready, terminal))
+                            throw new OperationCanceledException(cancellationToken);
+                    }
                 }
-                catch (TimeoutException)
+                catch (OperationCanceledException)
                 {
-                    throw Exhausted(admitted || requestAdmission?.IsAdmitted == true, lastFailure);
+                    await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+                    throw;
                 }
                 continue;
             }
-            try
-            {
-                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken
-                );
-                var submittedGeneration = route.ReadyGeneration;
-                var reply = submit(wire, remaining, attempt.Token).AsTask();
-                while (!reply.IsCompleted)
-                {
-                    await Task.WhenAny(reply, route.Changed).ConfigureAwait(false);
-                    if (reply.IsCompleted)
-                        break;
-                    var next = observeRoute();
-                    if (next.SelectedGeneration != submittedGeneration)
-                    {
-                        await attempt.CancelAsync().ConfigureAwait(false);
-                        break;
-                    }
-                    route = next;
-                }
-                try
-                {
-                    return await reply.ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                    when (attempt.IsCancellationRequested
-                        && !cancellationToken.IsCancellationRequested
-                    )
-                {
-                    admitted |= requestAdmission?.IsAdmitted == true;
-                }
-            }
-            catch (Exception error) when (CanReplay(error, out var requestAdmitted))
-            {
-                admitted |= requestAdmitted;
-                lastFailure = error;
-            }
-        }
-    }
-
-    private static async Task ObserveReadinessAsync(
-        Task changed,
-        ZLinkRequestCompletion<bool> completion
-    )
-    {
-        try
-        {
-            await changed.ConfigureAwait(false);
-            completion.Complete(true);
-        }
-        catch (Exception error)
-        {
-            completion.Fail(error);
+            return await submit(wire, remaining, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -123,7 +87,7 @@ internal static class ZLinkDurableRequest
                 };
     }
 
-    private static ZLinkFrameworkException Exhausted(bool admitted, Exception? cause) =>
+    private static ZLinkFrameworkException Exhausted(bool admitted) =>
         new(
             admitted
                 ? ZLinkFrameworkErrorKind.DeadlineExceeded
@@ -131,13 +95,11 @@ internal static class ZLinkDurableRequest
             admitted
                 ? "Durable request reply was not received before its deadline."
                 : "Durable request was not admitted before its deadline.",
-            ZLinkRetryAdvice.RetryAfterBackoff,
-            cause
+            ZLinkRetryAdvice.RetryAfterBackoff
         );
 }
 
-// MeshNode owns the selected identity and readiness; consumers retain only the
-// generation used by their attempt and await the existing topology edge.
+// MeshNode owns the selected identity and readiness; waiting callers use its topology edge.
 internal readonly record struct ZLinkPeerRouteObservation(
     ulong SelectedGeneration,
     ulong ReadyGeneration,

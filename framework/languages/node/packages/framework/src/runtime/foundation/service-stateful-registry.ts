@@ -629,9 +629,10 @@ export class ServiceTerminalOperationRegistry<T, Context = unknown> {
   register(
     timeoutMs: number,
     timeoutOwner: 'registry' | 'sender' = 'registry',
-    context?: Context
+    context?: Context,
+    absoluteDeadlineMs?: number
   ): PendingOperation<T> {
-    return this.operations.register(timeoutMs, timeoutOwner, context);
+    return this.operations.register(timeoutMs, timeoutOwner, context, absoluteDeadlineMs);
   }
 
   setContext(id: bigint, context: Context): void {

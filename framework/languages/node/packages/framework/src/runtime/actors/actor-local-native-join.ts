@@ -27,6 +27,7 @@ import {
 } from '../framework-errors-internal';
 import type { ZLinkLocationLifecycle } from '../locations';
 import { frameworkPayloadContentType } from '../messaging/payload-codec';
+import { remainingActorRequestTimeout } from './actor-request-deadline';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type { ZLinkActorJoinRelocation } from './actor-join-relocation';
@@ -81,7 +82,8 @@ export class ZLinkLocalNativeActorJoin {
     request: Message,
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
-    completionOperationId?: ZLinkActorJoinOperationId
+    completionOperationId?: ZLinkActorJoinOperationId,
+    deadlineAtMs?: number
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
     if (signal?.aborted === true) throw createAbortError();
     const target = requireUserSpotRoute(spotRouteTarget, spotId);
@@ -100,7 +102,8 @@ export class ZLinkLocalNativeActorJoin {
         timeoutMs,
         signal,
         completionOperationId,
-        false
+        false,
+        deadlineAtMs
       );
     }
     return await this.joinLocal(
@@ -125,7 +128,8 @@ export class ZLinkLocalNativeActorJoin {
     request: Message,
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
-    completionOperationId?: ZLinkActorJoinOperationId
+    completionOperationId?: ZLinkActorJoinOperationId,
+    deadlineAtMs?: number
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
     if (signal?.aborted === true) throw createAbortError();
     const targetNodeRid = spotRouteTarget?.targetNodeRid ?? nodeRid;
@@ -147,7 +151,8 @@ export class ZLinkLocalNativeActorJoin {
         timeoutMs,
         signal,
         completionOperationId,
-        true
+        true,
+        deadlineAtMs
       );
     }
     const target = {
@@ -269,12 +274,18 @@ export class ZLinkLocalNativeActorJoin {
     submit: () => { readonly high: bigint; readonly low: bigint },
     completions: ZLinkMeshCompletionTable,
     timeoutMs: number | undefined,
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    deadlineAtMs?: number
   ): Promise<ZLinkMeshCompletion> {
     // The operation ID identifies one Core request. Once it is submitted, a
     // NotConnected completion is terminal for that request; resubmitting it
     // could execute the target lifecycle twice after a delayed reply.
-    return submitJoinWhenConnected(() => completions.submit(submit, signal), timeoutMs, signal);
+    return submitJoinWhenConnected(
+      () => completions.submit(submit, signal),
+      timeoutMs,
+      signal,
+      deadlineAtMs
+    );
   }
 
   private async relocateRemoteActorJoin(
@@ -287,9 +298,10 @@ export class ZLinkLocalNativeActorJoin {
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
     completionOperationId: ZLinkActorJoinOperationId | undefined,
-    entrySpot: boolean
+    entrySpot: boolean,
+    deadlineAtMs?: number
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
-    const deadlineAtMs = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
+    deadlineAtMs ??= timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
     const actorType = state.actorType;
     if (actorType === undefined) {
       throw createInternalFrameworkException(
@@ -325,6 +337,10 @@ export class ZLinkLocalNativeActorJoin {
     let admissionOperationId: ZLinkActorJoinOperationId | undefined;
     const admission = await this.waitForJoinCompletion(
       () => {
+        const remainingTimeoutMs = remainingActorRequestTimeout(
+          actor.context.actorId,
+          deadlineAtMs
+        );
         const legacyAdmission =
           canonicalAdmission === undefined
             ? legacyRemoteActorJoinPayload(actor, state, actorRef, target, request, relocationId)
@@ -336,7 +352,7 @@ export class ZLinkLocalNativeActorJoin {
                   actorRef,
                   toBackendRoutingId(target.targetNodeRid),
                   legacyAdmission!,
-                  timeoutMs
+                  remainingTimeoutMs
                 )
               : node.joinActorSpot(
                   actorRef,
@@ -344,7 +360,7 @@ export class ZLinkLocalNativeActorJoin {
                   toBackendRoutingId(target.spotId),
                   target.targetSpotGeneration!,
                   legacyAdmission!,
-                  timeoutMs
+                  remainingTimeoutMs
                 )
             : entrySpot
               ? node.joinActorEntrySpotCanonical!(
@@ -353,7 +369,7 @@ export class ZLinkLocalNativeActorJoin {
                   canonicalAdmission.request,
                   canonicalAdmission.actorFence,
                   canonicalAdmission.local,
-                  timeoutMs
+                  remainingTimeoutMs
                 )
               : node.joinActorSpotCanonical!(
                   actorRef,
@@ -363,14 +379,15 @@ export class ZLinkLocalNativeActorJoin {
                   canonicalAdmission.request,
                   canonicalAdmission.actorFence,
                   canonicalAdmission.local,
-                  timeoutMs
+                  remainingTimeoutMs
                 );
         admissionOperationId = operationId;
         return operationId;
       },
       completions,
       timeoutMs,
-      signal
+      signal,
+      deadlineAtMs
     );
     const control = admission.kindData;
     if (control?.kind !== 'actorJoinCompletion' || control.actor === null) {
@@ -614,11 +631,14 @@ function runtimeActorMeshName(
 async function submitJoinWhenConnected<T>(
   submit: () => T,
   timeoutMs: number | undefined,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  deadlineAtMs?: number
 ): Promise<T> {
-  const deadline =
+  const deadline = Math.min(
+    deadlineAtMs ?? Infinity,
     performance.now() +
-    Math.min(timeoutMs ?? LOCAL_JOIN_RESOLUTION_TIMEOUT_MS, LOCAL_JOIN_RESOLUTION_TIMEOUT_MS);
+      Math.min(timeoutMs ?? LOCAL_JOIN_RESOLUTION_TIMEOUT_MS, LOCAL_JOIN_RESOLUTION_TIMEOUT_MS)
+  );
   for (;;) {
     throwIfAborted(signal);
     try {

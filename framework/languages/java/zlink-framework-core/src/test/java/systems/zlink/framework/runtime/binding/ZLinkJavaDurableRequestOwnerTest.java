@@ -30,7 +30,7 @@ final class ZLinkJavaDurableRequestOwnerTest {
         var failure = new IllegalStateException("terminal failed");
         var pending = new CompletableFuture<List<byte[]>>();
         var checked =
-                ZLinkJavaDurableRequest.request(
+                ZLinkJavaDurableRequestTest.request(
                                 () -> reply,
                                 (frames, timeout, admission) -> pending,
                                 () -> new PeerRouteObservation(1, true),

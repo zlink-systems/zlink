@@ -76,7 +76,21 @@ public final class ZLinkStateLane {
     }
 
     public ZLinkStateLane(Executor executor) {
+        this(executor, null);
+    }
+
+    ZLinkStateLane(ConcurrentLinkedQueue<WorkItem> mailbox) {
+        this(DEFAULT_EXECUTOR, mailbox);
+    }
+
+    ZLinkStateLane(Executor executor, ConcurrentLinkedQueue<WorkItem> mailbox) {
         this.executor = Objects.requireNonNull(executor, "executor");
+        this.mailbox = mailbox;
+    }
+
+    int queuedTurnCountForTest() {
+        var queue = mailbox;
+        return queue == null ? 0 : queue.size();
     }
 
     public static ZLinkStateLane current() {
@@ -101,30 +115,33 @@ public final class ZLinkStateLane {
         return publishOutsideLane(submit(work, true));
     }
 
-    /** Synchronous registration boundary; its private result cannot acquire dependents. */
+    /** Synchronous registration boundary; the caller executes its own turn. */
     public <T> T awaitTurn(Supplier<T> work) {
         Objects.requireNonNull(work, "work");
         throwIfReentrant();
         if (!tryAdmit()) throw new IllegalStateException("state lane is closed");
-        ResultWork<T> result;
+        WaitingTurn turn;
         try {
-            if (tryClaimInlineTurn()) {
-                try {
-                    return callWithCurrent(this, work);
-                } catch (CompletionException failure) {
-                    // Preserve the synchronous boundary's existing failure unwrapping.
-                    return ZLinkCompletionBridge.await(CompletableFuture.failedFuture(failure));
-                } finally {
-                    releaseInlineTurn();
-                }
-            }
-            result = new ResultWork<>(work);
-            mailbox().add(result);
+            if (tryClaimInlineTurn()) return runSynchronousTurn(work);
+            turn = new WaitingTurn();
+            mailbox().add(turn);
             scheduleDrain();
         } finally {
             releaseAdmission();
         }
-        return ZLinkCompletionBridge.await(result);
+        ZLinkCompletionBridge.await(turn);
+        return runSynchronousTurn(work);
+    }
+
+    private <T> T runSynchronousTurn(Supplier<T> work) {
+        try {
+            return callWithCurrent(this, work);
+        } catch (CompletionException failure) {
+            // Preserve the synchronous boundary's existing failure unwrapping.
+            return ZLinkCompletionBridge.await(CompletableFuture.failedFuture(failure));
+        } finally {
+            releaseInlineTurn();
+        }
     }
 
     private <T> CompletableFuture<T> submit(Supplier<T> work, boolean runIdleTurnNow) {
@@ -237,6 +254,7 @@ public final class ZLinkStateLane {
         scheduled = 0;
         if (!mailboxEmpty()) {
             scheduleDrain();
+            return;
         }
         completeCloseIfDrained();
     }
@@ -331,7 +349,7 @@ public final class ZLinkStateLane {
     private void scheduleDrain() {
         if (SCHEDULED.compareAndSet(this, 0, 1)) {
             try {
-                executor.execute(this::drain);
+                dispatchNext(0);
             } catch (RuntimeException rejected) {
                 scheduled = 0;
                 throw rejected;
@@ -339,14 +357,28 @@ public final class ZLinkStateLane {
         }
     }
 
-    private void drain() {
-        runNext(0);
+    private void dispatchNext(int processed) {
+        if (grantWaitingTurn(mailbox().peek())) return;
+        executor.execute(() -> runNext(processed));
+    }
+
+    // Only the scheduled owner examines/removes the head. Completing the private grant
+    // transfers that same claim to the waiting caller; never touch it after completion.
+    private boolean grantWaitingTurn(WorkItem work) {
+        if (work instanceof WaitingTurn turn) {
+            mailbox().poll();
+            turn.complete(null);
+            return true;
+        }
+        return false;
     }
 
     private void runNext(int processed) {
         while (processed < DRAIN_BATCH_LIMIT) {
-            WorkItem work = mailbox().poll();
+            WorkItem work = mailbox().peek();
             if (work == null) break;
+            if (grantWaitingTurn(work)) return;
+            mailbox().poll();
             CompletionStage<Void> execution;
             try {
                 execution = work.run(this);
@@ -360,14 +392,12 @@ public final class ZLinkStateLane {
                 return;
             }
         }
-        scheduled = 0;
-        if (!mailboxEmpty()) scheduleDrain();
-        completeCloseIfDrained();
+        releaseInlineTurn();
     }
 
     private void resumeDrain(int processed) {
         try {
-            executor.execute(() -> runNext(processed));
+            dispatchNext(processed);
         } catch (RuntimeException rejected) {
             scheduled = 0;
             if (admission < 0) completed.completeExceptionally(rejected);
@@ -394,8 +424,16 @@ public final class ZLinkStateLane {
         }
     }
 
+    private static final class WaitingTurn extends CompletableFuture<Void> implements WorkItem {
+        // grantWaitingTurn consumes this item before the asynchronous execution path.
+        @Override
+        public CompletionStage<Void> run(ZLinkStateLane owner) {
+            return this;
+        }
+    }
+
     @FunctionalInterface
-    private interface WorkItem {
+    interface WorkItem {
         CompletionStage<Void> run(ZLinkStateLane owner);
     }
 }

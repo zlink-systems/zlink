@@ -1,3 +1,4 @@
+import type { PendingOperation } from './operation-registry';
 import { awaitWithAbort } from '../abort';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import {
@@ -19,38 +20,27 @@ export interface DurableServiceRequestPort {
     target: string,
     parts: readonly Uint8Array[],
     timeoutMs: number,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    existing?: Pick<PendingOperation<unknown>, 'id' | 'deadlineMs'>,
+    receiver?: undefined,
+    onSubmitted?: () => void
   ): Promise<readonly Buffer[]>;
 }
 
-/** Actor model §8.1: a ready edge or a typed transport failure owns replay. */
+/** Initial readiness belongs to Framework; a started request belongs to the binding. */
 export async function requestDurableService(
   port: DurableServiceRequestPort,
   target: string,
   parts: readonly Uint8Array[],
-  deadlineMs: number,
+  pending: PendingOperation<unknown>,
   operationKind: string,
   signal?: AbortSignal,
   onSubmitted?: (signal: AbortSignal) => Promise<void>
 ): Promise<readonly Buffer[]> {
-  let wasAdmitted = false;
   const stop = new AbortController();
-  const exhausted = (cause?: unknown) =>
-    createInternalFrameworkException(
-      wasAdmitted
-        ? ZLinkFrameworkInternalErrorKind.DeadlineExceeded
-        : ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-      `${operationKind} exhausted its end-to-end deadline.`,
-      true,
-      cause
-    );
-  const timer = setTimeout(
-    () => stop.abort(exhausted()),
-    Math.max(0, Math.ceil(deadlineMs - performance.now()))
-  );
   const unobserveIntent = port.observePeerConnectionIntentRemoved((rid) => {
     if (rid === target)
-      stop.abort(
+      pending.fail(
         createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RouteNotConnected,
           `${operationKind} target node lifecycle ended.`,
@@ -58,71 +48,69 @@ export async function requestDurableService(
         )
       );
   });
+  void pending.promise.then(
+    () => {
+      unobserveIntent();
+      stop.abort();
+    },
+    () => {
+      unobserveIntent();
+      stop.abort();
+    }
+  );
   const cancellation = AbortSignal.any([
     stop.signal,
     ...(signal === undefined ? [] : [signal]),
     ...(port.requestStopSignal === undefined ? [] : [port.requestStopSignal])
   ]);
+  const cancelled = () => pending.fail(cancellation.reason);
+  cancellation.addEventListener('abort', cancelled, { once: true });
   try {
-    for (;;) {
-      cancellation.throwIfAborted();
-      const remainingMs = Math.ceil(deadlineMs - performance.now());
-      if (remainingMs <= 0) throw exhausted();
+    if (cancellation.aborted) cancelled();
+    while (pending.isPending()) {
+      const remainingMs = Math.ceil(pending.deadlineMs! - performance.now());
+      if (remainingMs <= 0) break;
       let changed!: () => void;
       const transition = new Promise<void>((resolve) => {
         changed = resolve;
       });
-      let submittedGeneration: bigint | undefined;
-      const attemptStop = new AbortController();
-      const attemptSignal = AbortSignal.any([cancellation, attemptStop.signal]);
       const unobserveRoute = port.observePeerRouteChanged((rid) => {
-        if (rid !== target) return;
-        const route = port.observePeerRoute(target);
-        if (
-          submittedGeneration === undefined
-            ? route.ready
-            : route.generation !== undefined && route.generation !== submittedGeneration
-        ) {
-          changed();
-          attemptStop.abort();
-        }
+        if (rid === target && port.observePeerRoute(target).ready) changed();
       });
       try {
-        const route = port.observePeerRoute(target);
-        if (!route.ready) {
+        if (!port.observePeerRoute(target).ready) {
           await awaitWithAbort(transition, cancellation);
           continue;
         }
-        submittedGeneration = route.generation;
-        const reply = port.requestService(target, parts, remainingMs, () => {
-          wasAdmitted = true;
-        });
-        const request =
-          onSubmitted === undefined
-            ? reply
-            : Promise.race([
-                reply,
-                Promise.resolve()
-                  .then(() => onSubmitted(attemptSignal))
-                  .then(() => reply)
-              ]);
-        const result = await awaitWithAbort(
-          Promise.race([request.then((parts) => ({ parts })), transition.then(() => undefined)]),
-          cancellation
-        );
-        if (result !== undefined) return result.parts;
-      } catch (error) {
-        cancellation.throwIfAborted();
-        if (!durableRequestCanReplay(error)) throw error;
-        if (isZLinkBackendResultError(error) && error.operation === 'request') wasAdmitted = true;
       } finally {
-        attemptStop.abort();
         unobserveRoute();
       }
+      if (!pending.isPending()) break;
+      const reply = port.requestService(
+        target,
+        parts,
+        remainingMs,
+        undefined,
+        pending,
+        undefined,
+        onSubmitted === undefined
+          ? undefined
+          : () => {
+              try {
+                void onSubmitted(cancellation).catch((error) => {
+                  pending.fail(error);
+                });
+              } catch (error) {
+                pending.fail(error);
+              }
+            }
+      );
+      // Public completion stops the hook, while this physical reply still reaches its decoder.
+      return await reply;
     }
+    return (await pending.promise) as readonly Buffer[];
   } finally {
-    clearTimeout(timer);
-    unobserveIntent();
+    cancellation.removeEventListener('abort', cancelled);
   }
 }
 

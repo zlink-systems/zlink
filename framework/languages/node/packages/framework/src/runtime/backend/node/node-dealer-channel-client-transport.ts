@@ -15,7 +15,7 @@ import {
   ZLinkChannelMessageKind
 } from '../../channels/channel-envelope';
 import { throwIfAborted } from '../../abort';
-import { appendParts, submitRequestOperation } from '../../channels/channel-multipart';
+import { appendParts, mapRequestFailure } from '../../channels/channel-multipart';
 import type { ZLinkChannelClientTransport } from '../../channels/channel-transports';
 import { runWithOutboundFlow } from '../../diagnostics/flow-context';
 
@@ -94,20 +94,54 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         )
       );
       if (timeoutMs !== undefined) operation.timeout(timeoutMs);
-      const pending = submitRequestOperation(
-        {
-          submit: () => bindingRequestReply(operation.submit(), undefined, onAdmitted)
-        },
-        'channel request'
-      );
-      const observed = this.requests.run(requestOperation, () => pending, closeReply);
-      return prepareZLinkRequestReply(observed, (reply) => {
+      const decode = (raw: unknown): TReply => {
+        const reply = raw as readonly Message[];
         try {
           return decodeChannelReply<TReply>(reply);
         } finally {
-          for (const part of reply) part.close();
+          closeReply(reply);
         }
-      });
+      };
+      requestOperation.mapCaller(decode, identityRequestReply);
+      if (requestOperation.isPending()) {
+        const receiver = {
+          operationCompleted: (_id: bigint, raw: unknown) => {
+            if (requestOperation.complete(raw)) return;
+            try {
+              requestOperation.resolveCaller(decode(raw));
+            } catch (error) {
+              requestOperation.rejectCaller(error);
+            }
+          },
+          operationFailed: (_id: bigint, error: unknown) => {
+            let failure = error;
+            try {
+              failure = mapRequestFailure(error, 'channel request');
+            } catch (mapped) {
+              failure = mapped;
+            }
+            requestOperation.fail(failure);
+          }
+        };
+        try {
+          bindingRequestReply(
+            operation.submit(),
+            receiver,
+            requestOperation,
+            undefined,
+            onAdmitted
+          );
+        } catch (error) {
+          receiver.operationFailed(requestOperation.id, error);
+        }
+      }
+      return {
+        pending: requestOperation.promise,
+        decode: identityRequestReply<TReply>,
+        mapFailure: identityRequestReply,
+        operation:
+          requestOperation as import('../../foundation/operation-registry').PendingOperation<TReply>
+      };
     } catch (error) {
       requestOperation.fail(error);
       return prepareZLinkRequestReply(

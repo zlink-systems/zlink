@@ -40,8 +40,7 @@ abstract class ZLinkSpotContextHost {
     final CompletionStage<Boolean> closeSpot(DefaultSpotContext context) {
         CompletableFuture<Boolean> result = new CompletableFuture<>();
         return context.enqueueClose(
-                        () -> closeSpotOnLifecycle(context).thenAccept(result::complete),
-                        () -> spotCloseCommitted(context))
+                        () -> closeSpotOnLifecycle(context).thenAccept(result::complete))
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) result.completeExceptionally(failure);
@@ -51,10 +50,6 @@ abstract class ZLinkSpotContextHost {
 
     CompletionStage<Boolean> closeSpotOnLifecycle(DefaultSpotContext context) {
         return closeSpot(context.spotId(), context.objectGeneration());
-    }
-
-    boolean spotCloseCommitted(DefaultSpotContext context) {
-        return false;
     }
 
     abstract CompletionStage<Boolean> closeInstanceSpot(String spotId, long objectGeneration);

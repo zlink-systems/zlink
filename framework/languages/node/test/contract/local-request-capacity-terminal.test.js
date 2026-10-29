@@ -98,9 +98,9 @@ for (const kind of ['spot', 'actor']) {
           }
         }),
         completionTableProvider: () => ({
-          submit(start) {
+          submit(start, _signal, requestOperation, receiver) {
             start();
-            return operation.promise;
+            return deliverFixtureCompletion(operation.promise, requestOperation, receiver);
           }
         }),
         locationResolver: () => ({
@@ -169,9 +169,10 @@ for (const kind of ['spot', 'actor']) {
       const occupied = await f.queue.acquire(undefined, 'remote');
       try {
         const pending = f.request(kind);
-        const rejected = assert.rejects(pending.promise, {
-          name: terminal === 'deadline' ? 'OperationTimeoutError' : 'OperationCancelledError'
-        });
+        const rejected = assert.rejects(pending.promise, terminal === 'deadline'
+          ? error => error instanceof framework.ZLinkFrameworkException &&
+            error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+          : { name: 'OperationCancelledError' });
         assert.equal(f.queue.snapshot().capacityWaiters, 1n);
         if (terminal === 'deadline') {
           assert.equal(f.runtime.expireOperations(performance.now() + 1001, Infinity), 1);
@@ -228,4 +229,12 @@ for (const kind of ['spot', 'actor']) {
       f.raw.close();
     }
   });
+}
+
+function deliverFixtureCompletion(work, operation, receiver) {
+  if (receiver === undefined) return work;
+  void work.then(
+    value => receiver.operationCompleted(operation.id, value, undefined),
+    error => receiver.operationFailed(operation.id, error, undefined)
+  );
 }

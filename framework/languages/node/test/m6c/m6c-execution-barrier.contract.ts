@@ -235,12 +235,11 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
     () => serial.post(() => undefined),
     (error: unknown) => {
       assert.match((error as Error).message, /execution barrier is committed/);
-      // 07-framework-error-model.ko.md:32 (§2) defines runtime admission refusal as Rejected.
-      // 07-framework-error-model.ko.md:66 (§2.1) maps Rejected to requestRejected.
-      // 06-spot-address-messaging.ko.md:465–480 (§7) closes the old incarnation before release.
+      // Spot address messaging section 9 makes the closed incarnation NotFound.
+      // This is completed Close, distinct from an ordinary admission rejection.
       assert.equal(
         internalFrameworkErrorKind(error as never),
-        ZLinkFrameworkInternalErrorKind.RequestRejected
+        ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
       );
       return true;
     }

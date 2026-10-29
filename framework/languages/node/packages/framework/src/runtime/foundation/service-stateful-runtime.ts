@@ -1,5 +1,7 @@
+import { requestTerminalError } from '../messaging/request-deadline';
 import type { PendingOperation } from './operation-registry';
 import type { RequestRuntime } from './request-runtime';
+import { inspectRuntime } from '../internal-observation';
 import { awaitWithAbort, isAbortError } from '../abort';
 import { decodeChannelHeader } from '../channels/channel-envelope';
 import { ZLinkBufferMessage } from '../backend/runtime-message';
@@ -40,7 +42,7 @@ import {
   type ActorJoin28
 } from '../protocol/service_wire_pilot_codec.generated';
 import { canonicalActorJoinHandoffId, routingIdBytes } from './actor-join-recovery-codec';
-import { OperationRegistry } from './operation-registry';
+import { OperationCancelledError, OperationRegistry } from './operation-registry';
 import {
   MessageFollowSuppressionRegistry,
   type MessageFollowSuppressionFence
@@ -444,6 +446,28 @@ export interface ServiceUserSpotOperationHandler {
  * remain in the common mailbox, where a claimed Spot or Actor owner is serial.
  */
 export class ServiceStatefulRuntime {
+  [inspectRuntime]() {
+    return Object.freeze({
+      canonicalActorJoinHandoffs: this.canonicalActorJoinHandoffs.size,
+      spotRoutes: this.spotRoutes.size,
+      instanceRoute: (spotId: string) => {
+        const route = this.instanceIntents.get(spotId)?.route;
+        return route === undefined ? undefined : Object.freeze({ ...route });
+      },
+      directSpotRoute: (spotId: string) => {
+        const route = this.directSpotRoutes.get(directSpotKey(spotId));
+        return route === undefined
+          ? undefined
+          : Object.freeze({ ...route, spot: Object.freeze({ ...route.spot }) });
+      },
+      spotMessageFollow: Object.freeze(
+        [...this.spotMessageFollow.values()].map((state) =>
+          Object.freeze({ queuedCount: state.queuedCount, queuedBytes: state.queuedBytes })
+        )
+      )
+    });
+  }
+
   //  Captured at module load, before any application turn exists: running a
   //  callback through this snapshot detaches every AsyncLocalStorage context
   //  (Spot serial turn, execution area, flow) so local loopback ingress
@@ -524,7 +548,9 @@ export class ServiceStatefulRuntime {
   ) {
     this.operations = new ServiceTerminalOperationRegistry(
       requests?.operations<ServiceStatefulResult, bigint>() ??
-        new OperationRegistry(undefined, onPendingOperationsChanged),
+        new OperationRegistry(undefined, onPendingOperationsChanged, (reason) =>
+          requestTerminalError('Request', reason)
+        ),
       requests === undefined ? undefined : () => {}
     );
     this.registry = new ServiceStatefulRegistry(nodeRid, nodeGeneration);
@@ -1525,14 +1551,17 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    receiver?: import('./operation-registry').OperationObserver<unknown, unknown>
   ): ServiceStatefulPendingOperation {
     const pending =
       (requestOperation as PendingOperation<ServiceStatefulResult> | undefined) ??
       this.operations.register(timeoutMs);
     const target = this.acceptSpotAuthority(requested);
     if (target === undefined) {
-      pending.reply(internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale));
+      const result = internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
+      if (receiver === undefined) pending.reply(result);
+      else receiver.operationCompleted(pending.id, result, undefined);
       return pending;
     }
     const header = encodeSpotHeader('spotRequest', sourceSpotId, target, pending.id, {
@@ -1546,7 +1575,8 @@ export class ServiceStatefulRuntime {
       timeoutMs,
       'spotRequest',
       undefined,
-      onAdmitted
+      onAdmitted,
+      receiver
     );
     return pending;
   }
@@ -1584,7 +1614,8 @@ export class ServiceStatefulRuntime {
     boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint },
     onAdmitted?: () => void,
     routeFence?: ServiceActorRouteFence,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    receiver?: import('./operation-registry').OperationObserver<unknown, unknown>
   ): ServiceStatefulPendingOperation {
     const operationLow = this.nextMessageFollowOperation++;
     const pending =
@@ -1593,7 +1624,9 @@ export class ServiceStatefulRuntime {
     this.operations.setContext(pending.id, operationLow);
     const route = routeFence ?? this.tryActorFence(target);
     if (route === undefined) {
-      pending.reply(internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale));
+      const result = internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
+      if (receiver !== undefined) receiver.operationCompleted(pending.id, result, undefined);
+      else pending.reply(result);
       return pending;
     }
     const header = encodeActorHeader(
@@ -1616,7 +1649,8 @@ export class ServiceStatefulRuntime {
       timeoutMs,
       'actorRequest',
       undefined,
-      onAdmitted
+      onAdmitted,
+      receiver
     );
     return pending;
   }
@@ -1719,7 +1753,8 @@ export class ServiceStatefulRuntime {
     metadataFrame?: Uint8Array,
     instanceIntent = false,
     onAdmitted?: () => void,
-    requestOperation?: PendingOperation<unknown>
+    requestOperation?: PendingOperation<unknown>,
+    receiver?: import('./operation-registry').OperationObserver<unknown, unknown>
   ): ServiceStatefulPendingOperation {
     const pending =
       (requestOperation as PendingOperation<ServiceStatefulResult> | undefined) ??
@@ -1747,7 +1782,8 @@ export class ServiceStatefulRuntime {
       timeoutMs,
       'instanceSpotRequest',
       undefined,
-      onAdmitted
+      onAdmitted,
+      receiver
     );
     return pending;
   }
@@ -1858,10 +1894,7 @@ export class ServiceStatefulRuntime {
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
-    const pending = this.operations.register(
-      timeoutMs,
-      targetNodeRid === this.nodeRid ? 'registry' : 'sender'
-    );
+    const pending = this.operations.register(timeoutMs, 'registry', undefined, deadlineMs);
     const target = this.trySpotFence(targetNodeRid, {
       ...targetSpot,
       generation: targetSpotGeneration
@@ -1881,10 +1914,7 @@ export class ServiceStatefulRuntime {
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
-    const pending = this.operations.register(
-      timeoutMs,
-      targetNodeRid === this.nodeRid ? 'registry' : 'sender'
-    );
+    const pending = this.operations.register(timeoutMs, 'registry', undefined, deadlineMs);
     const target = this.trySpotFence(targetNodeRid, {
       ...targetSpot,
       generation: targetSpotGeneration
@@ -1904,10 +1934,7 @@ export class ServiceStatefulRuntime {
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
-    const pending = this.operations.register(
-      timeoutMs,
-      targetNodeRid === this.nodeRid ? 'registry' : 'sender'
-    );
+    const pending = this.operations.register(timeoutMs, 'registry', undefined, deadlineMs);
     this.submitActorJoin(
       pending,
       actor,
@@ -1928,10 +1955,7 @@ export class ServiceStatefulRuntime {
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
-    const pending = this.operations.register(
-      timeoutMs,
-      targetNodeRid === this.nodeRid ? 'registry' : 'sender'
-    );
+    const pending = this.operations.register(timeoutMs, 'registry', undefined, deadlineMs);
     this.submitActorJoin(
       pending,
       actor,
@@ -1984,7 +2008,7 @@ export class ServiceStatefulRuntime {
     close?: () => Promise<void>
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
-    const pending = this.operations.register(timeoutMs, 'sender');
+    const pending = this.operations.register(timeoutMs, 'registry', undefined, deadlineMs);
     const sessionOwner = this.localSessionOwner();
     if (sessionOwner === undefined) {
       pending.reply(
@@ -2101,7 +2125,7 @@ export class ServiceStatefulRuntime {
       [header],
       pending.id,
       'streamBind',
-      deadlineMs
+      pending
     ).then(
       (reply) => this.completeRemoteReply(pending, actor.nodeRid, 'streamBind', undefined, reply),
       (error) => pending.replyFailure(error)
@@ -2177,7 +2201,7 @@ export class ServiceStatefulRuntime {
       )[0]!
     );
     const reply = routingIdsEqual(binding.sessionOwnerNodeRid, this.nodeRid)
-      ? this.requestLocalInfrastructure(header, pending.id, timeoutMs)
+      ? this.requestLocalInfrastructure(header, pending.id, pending)
       : this.raw.requestService(
           binding.sessionOwnerNodeRid,
           [header],
@@ -4661,34 +4685,52 @@ export class ServiceStatefulRuntime {
     operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate',
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
-    const parts = await this.requestDurableOperation(
+    const deadlineMs = performance.now() + Math.max(1, timeoutMs);
+    const pending = this.operations.register(
+      Math.max(1, timeoutMs),
+      'registry',
+      undefined,
+      deadlineMs
+    );
+    const completed = (parts: readonly Buffer[]) => {
+      try {
+        if (parts.length < 1 || parts.length > 2) {
+          throw new ServiceWireProtocolError('Invalid creation operation reply parts.');
+        }
+        const decoded = decodeStatefulReply(
+          parts[0]!,
+          correlation,
+          operationKind,
+          parts.length >= 2
+        );
+        if (decoded.terminalResult !== RequestResult.Ok && parts.length !== 1) {
+          throw new ServiceWireProtocolError('Failed creation operation reply carries a payload.');
+        }
+        if (operationKind === 'userSpotClose' && parts.length !== 1) {
+          throw new ServiceWireProtocolError('User Spot close reply carries a payload.');
+        }
+        const value: ServiceUserSpotOperationResult = {
+          terminalResult: decoded.terminalResult,
+          failureCode: decoded.failureCode,
+          ...(decoded.tail === undefined ? {} : { tail: decoded.tail as never }),
+          ...(parts.length === 2 ? { payload: decodeApplicationPayload(parts[1]!) } : {})
+        };
+        pending.complete(value);
+      } catch (error) {
+        pending.fail(translateWireReplyDecodeError(error));
+      }
+    };
+    const failed = (error: unknown) => {
+      pending.fail(error);
+    };
+    void this.requestDurableOperation(
       targetNodeRid,
       [header],
       correlation,
       operationKind,
-      performance.now() + Math.max(1, timeoutMs)
-    );
-    // A received envelope, including a decode failure, ends sender replay.
-    try {
-      if (parts.length < 1 || parts.length > 2) {
-        throw new ServiceWireProtocolError('Invalid creation operation reply parts.');
-      }
-      const decoded = decodeStatefulReply(parts[0]!, correlation, operationKind, parts.length >= 2);
-      if (decoded.terminalResult !== RequestResult.Ok && parts.length !== 1) {
-        throw new ServiceWireProtocolError('Failed creation operation reply carries a payload.');
-      }
-      if (operationKind === 'userSpotClose' && parts.length !== 1) {
-        throw new ServiceWireProtocolError('User Spot close reply carries a payload.');
-      }
-      return {
-        terminalResult: decoded.terminalResult,
-        failureCode: decoded.failureCode,
-        ...(decoded.tail === undefined ? {} : { tail: decoded.tail as never }),
-        ...(parts.length === 2 ? { payload: decodeApplicationPayload(parts[1]!) } : {})
-      };
-    } catch (error) {
-      throw translateWireReplyDecodeError(error);
-    }
+      pending
+    ).then(completed, failed);
+    return pending.promise;
   }
 
   private async requestDurableOperation(
@@ -4696,44 +4738,31 @@ export class ServiceStatefulRuntime {
     parts: readonly Buffer[],
     correlation: bigint,
     operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind' | 'actorJoin',
-    deadlineMs: number
+    pending: PendingOperation<unknown>
   ): Promise<readonly Buffer[]> {
     this.requireOpen();
     if (targetNodeRid === this.nodeRid) {
-      return this.requestLocalInfrastructure(
-        parts[0]!,
-        correlation,
-        Math.ceil(deadlineMs - performance.now())
-      );
+      return this.requestLocalInfrastructure(parts[0]!, correlation, pending);
     }
-    return requestDurableService(this.raw, targetNodeRid, parts, deadlineMs, operationKind);
+    return requestDurableService(this.raw, targetNodeRid, parts, pending, operationKind);
   }
 
   private requestLocalInfrastructure(
     header: Buffer,
     requestSequence: bigint,
-    timeoutMs: number
+    pending: PendingOperation<unknown>
   ): Promise<readonly Buffer[]> {
     return new Promise((resolve, reject) => {
-      let settled = false;
-      const fail = (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(error);
-      };
-      const timer = setTimeout(() => {
-        fail(new Error('Local infrastructure request timed out.'));
-      }, timeoutMs);
       const finish = (parts: readonly Uint8Array[]) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
         resolve(parts.map((part) => Buffer.from(part)));
       };
       void (async () => {
         const applicationJobOwner = await this.raw.reserveLocalIngress();
         try {
+          if (!pending.isPending()) {
+            await pending.promise;
+            throw new OperationCancelledError(pending.id, 'Request is already terminal.');
+          }
           const result = await this.ingress({
             command: header[SERVICE_WIRE_COMMAND_OFFSET]!,
             flags: header[SERVICE_WIRE_FLAGS_OFFSET]!,
@@ -4744,16 +4773,14 @@ export class ServiceStatefulRuntime {
             applicationJobOwner
           });
           if (result !== 'infrastructure') {
-            fail(
-              new ServiceWireProtocolError(
-                `Local infrastructure request was rejected as '${result ?? 'unsupported'}'.`
-              )
+            throw new ServiceWireProtocolError(
+              `Local infrastructure request was rejected as '${result ?? 'unsupported'}'.`
             );
           }
         } finally {
           applicationJobOwner.close();
         }
-      })().catch(fail);
+      })().catch(reject);
     });
   }
 
@@ -4831,7 +4858,8 @@ export class ServiceStatefulRuntime {
       | 'streamUnbind'
       | 'instanceSpotRequest',
     actor?: ServiceActorRef,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    receiver?: import('./operation-registry').OperationObserver<unknown, unknown>
   ): void {
     if (targetNodeRid === this.nodeRid) {
       const deadlineUnixMs = BigInt(Date.now() + Math.max(0, timeoutMs));
@@ -4858,14 +4886,29 @@ export class ServiceStatefulRuntime {
             pending,
             operationKind,
             actor,
-            deadlineUnixMs
+            deadlineUnixMs,
+            receiver
           );
         } catch (error) {
-          pending.reply(failure(error));
+          receiver === undefined
+            ? pending.reply(failure(error))
+            : receiver.operationFailed(pending.id, error, undefined);
         } finally {
           applicationJobOwner.close();
         }
-      })().catch((error) => pending.reply(failure(error)));
+      })().catch((error) =>
+        receiver === undefined
+          ? pending.reply(failure(error))
+          : receiver.operationFailed(pending.id, error, undefined)
+      );
+      return;
+    }
+    if (receiver !== undefined) {
+      this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted, pending, {
+        operationCompleted: (_id, reply) =>
+          this.completeRemoteReply(pending, targetNodeRid, operationKind, actor, reply, receiver),
+        operationFailed: (_id, error) => receiver.operationFailed(pending.id, error, undefined)
+      });
       return;
     }
     void this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted, pending).then(
@@ -4942,13 +4985,7 @@ export class ServiceStatefulRuntime {
       );
       return;
     }
-    void this.requestDurableOperation(
-      targetNodeRid,
-      parts,
-      pending.id,
-      'actorJoin',
-      deadlineMs
-    ).then(
+    void this.requestDurableOperation(targetNodeRid, parts, pending.id, 'actorJoin', pending).then(
       (reply) => this.completeRemoteReply(pending, targetNodeRid, 'actorJoin', actor, reply),
       (error) => {
         this.canonicalActorJoinHandoffs.delete(pending.id);
@@ -4970,7 +5007,8 @@ export class ServiceStatefulRuntime {
       | 'streamUnbind'
       | 'instanceSpotRequest',
     actor?: ServiceActorRef,
-    deadlineUnixMs?: bigint
+    deadlineUnixMs?: bigint,
+    receiver?: import('./operation-registry').OperationObserver<unknown, unknown>
   ): Promise<void> {
     const canonicalActorJoin =
       operationKind === 'actorJoin' ? decodeActorJoin28(ingress.parts) : undefined;
@@ -5015,10 +5053,19 @@ export class ServiceStatefulRuntime {
       failureCode,
       replyPayload,
       tail
-    ) =>
-      pending.reply(
-        this.resultFromReply(terminalResult, failureCode, replyPayload, tail, this.nodeRid, actor)
+    ) => {
+      const result = this.resultFromReply(
+        terminalResult,
+        failureCode,
+        replyPayload,
+        tail,
+        this.nodeRid,
+        actor
       );
+      if (receiver === undefined) return pending.reply(result);
+      receiver.operationCompleted(pending.id, result, undefined);
+      return true;
+    };
     if (decoded.kind === 'spotRequest') {
       this.validateDirectSpotFence(decoded.target);
       this.enqueueApplicationFrame(ingress, `spot:${decoded.target.spot.spotId}`, payloadFrame!, {
@@ -5211,7 +5258,8 @@ export class ServiceStatefulRuntime {
       | 'boundSessionClose'
       | 'instanceSpotRequest',
     actor: ServiceActorRef | undefined,
-    reply: readonly Buffer[]
+    reply: readonly Buffer[],
+    receiver?: import('./operation-registry').OperationObserver<unknown, unknown>
   ): void {
     const canonicalActorJoinHandoffId =
       operationKind === 'actorJoin' ? this.canonicalActorJoinHandoffs.get(pending.id) : undefined;
@@ -5220,22 +5268,23 @@ export class ServiceStatefulRuntime {
         throw new ServiceWireProtocolError('Invalid M6B reply parts.');
       const decoded = decodeStatefulReply(reply[0]!, pending.id, operationKind, reply.length >= 2);
       const payload = reply.length < 2 ? undefined : decodeApplicationPayload(reply[1]);
-      pending.reply(
-        this.resultFromReply(
-          decoded.terminalResult,
-          decoded.failureCode,
-          payload,
-          decoded.tail,
-          targetNodeRid,
-          actor,
-          canonicalActorJoinHandoffId
-        )
+      const result = this.resultFromReply(
+        decoded.terminalResult,
+        decoded.failureCode,
+        payload,
+        decoded.tail,
+        targetNodeRid,
+        actor,
+        canonicalActorJoinHandoffId
       );
+      if (receiver === undefined) pending.reply(result);
+      else receiver.operationCompleted(pending.id, result, undefined);
     } catch (error) {
       //  Spec 32-framework-error-model:58-60, 91-92 — an unprocessable remote
       //  reply (decode/shape failure) fails the awaiting operation with a
       //  Framework ProtocolError instead of leaking the codec's plain Error.
-      pending.replyFailure(translateWireReplyDecodeError(error));
+      if (receiver === undefined) pending.replyFailure(translateWireReplyDecodeError(error));
+      else receiver.operationFailed(pending.id, translateWireReplyDecodeError(error), undefined);
     } finally {
       if (operationKind === 'actorJoin') {
         this.canonicalActorJoinHandoffs.delete(pending.id);

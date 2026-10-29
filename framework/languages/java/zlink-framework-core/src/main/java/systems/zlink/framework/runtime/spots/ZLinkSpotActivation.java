@@ -39,6 +39,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
             DefaultSpotContext context) {
         super(host, spotHandlerInvoker, spot, backendSpot, context);
         this.spot = spot;
+        context.bindCloseAdmission(this::hasCommittedClose);
     }
 
     ZLinkSpot<?> spot() {

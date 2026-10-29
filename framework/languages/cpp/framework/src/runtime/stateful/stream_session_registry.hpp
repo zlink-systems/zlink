@@ -239,7 +239,7 @@ class stream_session_registry_t
 
     authority_resolver_t _resolver;
     const std::function<void ()> _activity_handler;
-    offload_executor_t _lane_executor;
+
     mutable state_lane_t _lane;
     std::mutex _changed_mutex;
     std::condition_variable _changed;

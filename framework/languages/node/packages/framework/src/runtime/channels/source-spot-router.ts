@@ -1,6 +1,5 @@
 import { RequestRuntime } from '../foundation/request-runtime';
-import type { PendingOperation } from '../foundation/operation-registry';
-import { waitRequestReply } from '../messaging/request-deadline';
+import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
@@ -14,7 +13,7 @@ export class ZLinkSourceSpotRouter {
     private readonly requests = new RequestRuntime()
   ) {}
 
-  async request<TReply>(
+  request<TReply>(
     sourceSpot: ZLinkBackendSpot,
     target: ZLinkSpotRouteTarget,
     packetName: string | undefined,
@@ -22,14 +21,20 @@ export class ZLinkSourceSpotRouter {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     onAdmitted?: () => void,
-    existing?: PendingOperation<unknown>
+    existing?: PendingOperation<unknown>,
+    destination?: OperationObserver<unknown, unknown>
   ): Promise<TReply> {
-    return this.requests.request(
+    let parts: readonly Message[];
+    const operation = this.requests.begin(
       timeoutMs ?? this.defaultRequestTimeoutMs,
       signal,
-      async (requestOperation) => {
+      existing
+    );
+    return this.requests.run<TReply>(
+      operation,
+      (receiver) => {
         throwIfAborted(signal);
-        const parts = [
+        parts = [
           encodeSpotDirectEnvelope(
             ZLinkChannelMessageKind.Request,
             target.routerChannelId,
@@ -37,21 +42,18 @@ export class ZLinkSourceSpotRouter {
             request
           )
         ] as readonly Message[];
-        const operation = sourceSpot.requestToSpot(
+        sourceSpot.requestToSpot(
           target.targetNodeRid,
           target.spotId,
           parts,
           timeoutMs ?? this.defaultRequestTimeoutMs,
           onAdmitted,
-          requestOperation
-        );
-        const replyParts = await waitRequestReply(
           operation,
-          'Spot request',
-          requestOperation,
-          undefined,
-          closeMessages
+          receiver
         );
+      },
+      (value) => {
+        const replyParts = value as readonly Message[];
         try {
           return decodeSpotDirectReply<TReply>(replyParts);
         } finally {
@@ -59,10 +61,10 @@ export class ZLinkSourceSpotRouter {
           closeMessages(parts);
         }
       },
-      existing
+      (error) => error,
+      destination
     );
   }
-
   async send(
     sourceSpot: ZLinkBackendSpot,
     target: ZLinkSpotRouteTarget,
@@ -95,29 +97,31 @@ export class ZLinkSourceSpotRouter {
     onAdmitted?: () => void,
     existing?: PendingOperation<unknown>
   ): Promise<readonly Message[]> {
-    return this.requests.request(
+    const operation = this.requests.begin(
       timeoutMs ?? this.defaultRequestTimeoutMs,
       signal,
-      async (requestOperation) => {
+      existing
+    );
+    return this.requests.run<readonly Message[]>(
+      operation,
+      (receiver) => {
         throwIfAborted(signal);
-        const operation = sourceSpot.requestToSpot(
+        sourceSpot.requestToSpot(
           target.targetNodeRid,
           target.spotId,
           request,
           timeoutMs ?? this.defaultRequestTimeoutMs,
           onAdmitted,
-          requestOperation
-        );
-        return await waitRequestReply(
           operation,
-          'Spot request',
-          requestOperation,
-          undefined,
-          closeMessages
+          receiver
         );
       },
-      existing,
-      closeMessages
+      (value) => {
+        const replyParts = value as readonly Message[];
+        if (!operation.isPending()) closeMessages(replyParts);
+        return replyParts;
+      },
+      (error) => error
     );
   }
 }

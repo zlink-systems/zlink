@@ -1,5 +1,6 @@
 import { awaitWithAbort } from '../abort';
 import type { PendingOperation } from '../foundation/operation-registry';
+import { inspectRuntime } from '../internal-observation';
 import { listAllMeshNodeDescriptors } from './location-store-pages';
 import type { ActorRef, RoutingId, SpotId } from '../../contracts/Common';
 import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts/Errors';
@@ -179,6 +180,14 @@ export interface ZLinkSpotRouteInvalidationFence {
 export class ZLinkStoreLocationResolvers
   implements ZLinkPeerLocationResolver, ZLinkSpotHandleResolver, ZLinkActorSpotHandleResolver
 {
+  [inspectRuntime]() {
+    return Object.freeze({
+      spotRouteKeys: Object.freeze([...this.spotRoutes.keys()]),
+      actorRouteKeys: Object.freeze([...this.actorRoutes.keys()]),
+      directActorRouteKeys: Object.freeze([...this.directActorRoutes.keys()])
+    });
+  }
+
   private readonly lane = new ZLinkStateLane();
   private readonly liveRows: ZLinkLiveRowFilter;
   private readonly monotonicNowMs: () => number;

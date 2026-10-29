@@ -1617,7 +1617,7 @@ test('route raw SPOT requests await independent binding request promises', async
   const calls = [];
   const releases = [];
   const fakeSpot = {
-    requestToSpot(targetNodeRid, targetSpot, request) {
+    requestToSpot: physicalRequest(function (targetNodeRid, targetSpot, request) {
       active += 1;
       maxActive = Math.max(maxActive, active);
       calls.push({
@@ -1626,11 +1626,13 @@ test('route raw SPOT requests await independent binding request promises', async
         request: request.data().toString()
       });
       const sequence = calls.length;
-      return new Promise((resolve) => releases.push(() => {
-        active -= 1;
-        resolve([zlink.Message.from(Buffer.from(`reply-${sequence}`))]);
-      }));
-    }
+      return new Promise((resolve) =>
+        releases.push(() => {
+          active -= 1;
+          resolve([zlink.Message.from(Buffer.from(`reply-${sequence}`))]);
+        })
+      );
+    })
   };
   const registration = framework.createFrameworkRegistration({
     routeChannels: [{ routerChannelId: 'room.route' }],
@@ -1690,10 +1692,10 @@ test('aborted raw SPOT request closes its late binding reply', async () => {
   const calls = [];
   const releases = [];
   const fakeSpot = {
-    requestToSpot(_targetNodeRid, _targetSpot, request) {
+    requestToSpot: physicalRequest(function (_targetNodeRid, _targetSpot, request) {
       calls.push(request.data().toString());
       return new Promise((resolve) => releases.push(resolve));
-    }
+    })
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({
@@ -1744,10 +1746,10 @@ test('raw SPOT request timeout is delegated to the binding request promise', asy
   const calls = [];
   const releases = [];
   const fakeSpot = {
-    requestToSpot(_targetNodeRid, _targetSpot, request) {
+    requestToSpot: physicalRequest(function (_targetNodeRid, _targetSpot, request) {
       calls.push(request.data().toString());
       return new Promise((resolve) => releases.push(resolve));
-    }
+    })
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({
@@ -1804,10 +1806,10 @@ test('SpotNode router is not classified as packet route channel', () => {
 test('route raw SPOT request awaits the binding request once', async () => {
   let attempts = 0;
   const fakeSpot = {
-    async requestToSpot() {
+    requestToSpot: physicalRequest(async function () {
       attempts += 1;
       return [zlink.Message.from(Buffer.from('ready-reply'))];
-    }
+    })
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({
@@ -1849,10 +1851,10 @@ test('route raw SPOT request awaits the binding request once', async () => {
 test('route raw SPOT request from a user spot awaits the binding request once', async () => {
   let attempts = 0;
   const sourceSpot = {
-    async requestToSpot() {
+    requestToSpot: physicalRequest(async function () {
       attempts += 1;
       return [zlink.Message.from(Buffer.from('replacement-ready'))];
-    }
+    })
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({ requestTimeoutMs: 1000 }),
@@ -1893,10 +1895,10 @@ test('route raw SPOT request aborts its wait without resubmitting', async () => 
   manager.setSpotNodes(new Map([['play', {
     entrySpot() {
       return {
-        requestToSpot() {
-          attempts += 1;
-          return new Promise(() => undefined);
-        }
+        requestToSpot: physicalRequest(function () {
+                attempts += 1;
+                return new Promise(() => undefined);
+              })
       };
     }
   }]]));
@@ -1921,9 +1923,11 @@ test('route raw SPOT request aborts its wait without resubmitting', async () => 
 test('source Spot raw request aborts after native submission and closes a late reply', async () => {
   let complete;
   const sourceSpot = {
-    requestToSpot() {
-      return new Promise((resolve) => { complete = resolve; });
-    }
+    requestToSpot: physicalRequest(function () {
+      return new Promise((resolve) => {
+        complete = resolve;
+      });
+    })
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration(),
@@ -2077,9 +2081,9 @@ test('route channel with SPOT acceptance starts one route receive loop for share
     },
     entrySpot() {
       return {
-        requestToSpot() {
+        requestToSpot: physicalRequest(function () {
           throw new Error('spot request not used');
-        }
+        })
       };
     }
   };
@@ -2109,9 +2113,9 @@ test('route bridge raw request awaits its binding Promise reply', async () => {
         timeout() {
           return this;
         },
-        async submit() {
+        submit: physicalRequest(async function () {
           return [zlink.Message.from(Buffer.from(JSON.stringify({ ok: true, response: { value: 'reply' } })))];
-        }
+        })
       };
     },
     handleRouterReceived() {
@@ -2141,9 +2145,9 @@ test('route bridge raw request awaits its binding Promise reply', async () => {
     },
     entrySpot() {
       return {
-        requestToSpot() {
-          throw new Error('spot request not used');
-        }
+        requestToSpot: physicalRequest(function () {
+                throw new Error('spot request not used');
+              })
       };
     }
   }]]));
@@ -2193,7 +2197,9 @@ test('channel runtime disposal does not add a Framework request owner around the
   );
   manager.setSpotNodes(new Map([['play', {
     createRouteBridge() { return bridge; },
-    entrySpot() { return { requestToSpot() { return false; } }; }
+    entrySpot() { return { requestToSpot: physicalRequest(function () {
+                return false;
+              }) }; }
   }]]));
   manager.start({
     errorSink: { reportRuntimeTaskException() {} },
@@ -2260,9 +2266,9 @@ test('route bridge sends await each binding Promise directly', async () => {
     },
     entrySpot() {
       return {
-        requestToSpot() {
-          throw new Error('spot request not used');
-        }
+        requestToSpot: physicalRequest(function () {
+                throw new Error('spot request not used');
+              })
       };
     }
   }]]));
@@ -2311,10 +2317,10 @@ test('route raw SPOT request uses route bridge before SpotNode router fallback',
           call.timeoutMs = timeoutMs;
           return this;
         },
-        async submit() {
+        submit: physicalRequest(async function () {
           call.submitted = true;
           return [zlink.Message.from(Buffer.from('bridge-reply'))];
-        }
+        })
       };
     },
     handleRouterReceived() {
@@ -2345,10 +2351,10 @@ test('route raw SPOT request uses route bridge before SpotNode router fallback',
     },
     entrySpot() {
       return {
-        requestToSpot() {
+        requestToSpot: physicalRequest(function () {
           spotNodeRouterUsed = true;
           throw new Error('SpotNode router fallback must not be used when bridge is available');
-        }
+        })
       };
     }
   };
@@ -2419,10 +2425,10 @@ test('route raw SPOT request prefers the named Spot mesh when route and Spot mes
     },
     entrySpot() {
       return {
-        async requestToSpot() {
-          spotRequests += 1;
-          return [zlink.Message.from(Buffer.from('spot-reply'))];
-        }
+        requestToSpot: physicalRequest(async function () {
+                spotRequests += 1;
+                return [zlink.Message.from(Buffer.from('spot-reply'))];
+              })
       };
     }
   }]]));
@@ -4891,7 +4897,7 @@ test('self-RID RouteMesh waits on the shared application job queue without local
   const secondDispatch = scheduled.shift()();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(handled, 1);
-  assert.equal(host.applicationJobQueue.snapshot().capacityWaiters, 1n);
+  assert.equal(host.status.capacity.applicationJobQueue.capacityWaiters, 1n);
   releaseFirstHandler();
   await Promise.all([firstDispatch, secondDispatch]);
   assert.equal(scheduled.length, 1);
@@ -4903,7 +4909,7 @@ test('self-RID RouteMesh waits on the shared application job queue without local
   assert.equal(scheduled.length, 1);
   await scheduled.shift()();
   assert.equal(handled, 4);
-  assert.equal(host.applicationJobQueue.snapshot().permitsInUse, 0n);
+  assert.equal(host.status.capacity.applicationJobQueue.permitsInUse, 0n);
 });
 
 test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors to the logger provider', async () => {
@@ -5762,6 +5768,9 @@ async function waitUntil(predicate, timeoutMs = 1000) {
 }
 
 function fakeChannelAdapter({ dealer, router }) {
+if (dealer?.request) dealer.request = physicalRequest(dealer.request);
+if (router?.request) router.request = physicalRequest(router.request);
+
   return {
     createDealerSocket() {
       return dealer;
@@ -5878,3 +5887,17 @@ function fakeMessagePart(part) {
     close() {}
   };
 }
+function physicalRequest(work) {
+  return function (...args) {
+    const receiver = args.at(-1);
+    const result = work.apply(this, args);
+    if (typeof receiver?.operationCompleted !== 'function') return result;
+    const entry = args.at(-2);
+    void Promise.resolve(result).then(
+      (value) => receiver.operationCompleted(entry.id, value, undefined),
+      (error) => receiver.operationFailed(entry.id, error, undefined)
+    );
+    return entry.promise;
+  };
+}
+

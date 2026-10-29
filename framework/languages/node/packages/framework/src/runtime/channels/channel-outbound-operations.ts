@@ -145,7 +145,7 @@ export class ZLinkChannelOutboundOperations {
     );
   }
 
-  private async requestScoped<TReply>(
+  private requestScoped<TReply>(
     channelName: string,
     packetName: string | undefined,
     request: unknown,
@@ -170,96 +170,106 @@ export class ZLinkChannelOutboundOperations {
       });
     };
     try {
-      return await this.requests.request(
-        timeoutMs,
-        signal,
-        async (requestOperation) => {
-          const deadlineMs = requestOperation.deadlineMs;
-          const deadlineUnixMs = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
-          throwIfAborted(signal);
-          const readyWait = new AbortController();
-          const readySignal =
-            signal === undefined ? readyWait.signal : AbortSignal.any([signal, readyWait.signal]);
-          const dealer = await waitRequestReply(
-            this.sockets.awaitClientDealerForOutbound(channelName, readySignal),
-            `Channel request '${channelName}'`,
-            requestOperation,
-            () => readyWait.abort()
+      signal?.throwIfAborted();
+      const operation = this.requests.begin(timeoutMs, signal, existing);
+      const reply = this.requests.run<TReply>(
+        operation,
+        (receiver) => {
+          this.measureRequest(channelName, operation);
+          operation.mapCaller(
+            (value) => {
+              traceTerminal('succeeded');
+              return value;
+            },
+            (error) => {
+              if (!isRemoteChannelErrorReply(error))
+                traceTerminal(requestTerminalResult(error, signal));
+              throw error;
+            }
           );
-          if (dealer === undefined) {
-            throw createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-              `Channel '${channelName}' has no ready ClientServer server before its admission deadline.`
+
+          void (async () => {
+            const requestOperation = operation;
+            const deadlineMs = requestOperation.deadlineMs;
+            const deadlineUnixMs = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
+            const readyWait = new AbortController();
+            const readySignal =
+              signal === undefined ? readyWait.signal : AbortSignal.any([signal, readyWait.signal]);
+            const dealer = await waitRequestReply(
+              this.sockets.awaitClientDealerForOutbound(channelName, readySignal),
+              `Channel request '${channelName}'`,
+              requestOperation,
+              () => readyWait.abort()
+            );
+            if (dealer === undefined) {
+              throw createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+                `Channel '${channelName}' has no ready ClientServer server before its admission deadline.`
+              );
+            }
+            const serverRid = this.sockets.selectedClientServerRid(channelName, dealer);
+            selectedServerRid = serverRid;
+            correlationId = newChannelCorrelationId();
+            const parts = encodeChannelEnvelopePartsAtDeadline(
+              ZLinkChannelMessageKind.Request,
+              channelName,
+              packetName,
+              request,
+              deadlineUnixMs,
+              undefined,
+              this.codecs,
+              correlationId,
+              this.dispatchServices.flowCreationEnabled(),
+              metadata
+            ) as readonly Message[];
+            this.dispatchServices.beginOutbound(ZLinkMessageFlowOutcome.Sent)?.trace({
+              surface: ZLinkDispatchErrorSurface.Channel,
+              messageKind: ZLinkDispatchMessageKind.Request,
+              channelName,
+              channelRouteKind: 'client_server',
+              serverRid,
+              packetName,
+              correlationId
+            });
+            dealer.request(
+              parts,
+              remainingRequestTimeout(`Channel request '${channelName}'`, deadlineMs),
+              onAdmitted,
+              requestOperation,
+              receiver
+            );
+          })().catch((error) => receiver.operationFailed(operation.id, error, undefined));
+        },
+        (raw) => {
+          const replyParts = raw as readonly Message[];
+          try {
+            return decodeChannelReply<TReply>(replyParts, this.codecs);
+          } finally {
+            closeMessages(replyParts);
+          }
+        },
+        (error) => {
+          if (
+            signal?.aborted !== true &&
+            isZLinkBackendResultError(error) &&
+            error.operation === 'request'
+          ) {
+            return new ZLinkFrameworkException(
+              requestResultToPublicErrorKind(error.result),
+              `Channel '${channelName}' request failed with result ${error.result}.`,
+              error
             );
           }
-          const serverRid = this.sockets.selectedClientServerRid(channelName, dealer);
-          selectedServerRid = serverRid;
-          correlationId = newChannelCorrelationId();
-          const parts = encodeChannelEnvelopePartsAtDeadline(
-            ZLinkChannelMessageKind.Request,
-            channelName,
-            packetName,
-            request,
-            deadlineUnixMs,
-            undefined,
-            this.codecs,
-            correlationId,
-            this.dispatchServices.flowCreationEnabled(),
-            metadata
-          ) as readonly Message[];
-          this.dispatchServices.beginOutbound(ZLinkMessageFlowOutcome.Sent)?.trace({
-            surface: ZLinkDispatchErrorSurface.Channel,
-            messageKind: ZLinkDispatchMessageKind.Request,
-            channelName,
-            channelRouteKind: 'client_server',
-            serverRid,
-            packetName,
-            correlationId
-          });
-          const reply = await this.measureRequest(channelName, async () => {
-            let replyParts: readonly Message[] = [];
-            try {
-              try {
-                replyParts = await waitRequestReply(
-                  dealer.request(
-                    parts,
-                    remainingRequestTimeout(`Channel request '${channelName}'`, deadlineMs),
-                    onAdmitted,
-                    requestOperation
-                  ),
-                  'Channel request',
-                  requestOperation
-                );
-              } catch (error) {
-                if (signal?.aborted === true) throw error;
-                //  Spec 32-framework-error-model:81-92 — classify the backend request
-                //  terminal (deadline -> DeadlineExceeded, lost route -> Unavailable,
-                //  etc.) instead of collapsing every failure to Unavailable.
-                if (isZLinkBackendResultError(error) && error.operation === 'request') {
-                  throw new ZLinkFrameworkException(
-                    requestResultToPublicErrorKind(error.result),
-                    `Channel '${channelName}' request failed with result ${error.result}.`,
-                    error
-                  );
-                }
-                throw error;
-              }
-              return decodeChannelReply<TReply>(replyParts, this.codecs);
-            } finally {
-              closeMessages(replyParts);
-            }
-          });
-          traceTerminal('succeeded');
-          return reply;
-        },
-        existing
+          return error;
+        }
       );
+      return reply;
     } catch (error) {
       // A framework peer has already made the terminal dispatch error record
       // before it sends an Error reply.  Do not turn that same remote dispatch
       // failure into a second local `reply_received` terminal at Errors level.
       if (!isRemoteChannelErrorReply(error)) traceTerminal(requestTerminalResult(error, signal));
-      throw error;
+      return Promise.reject(error);
     }
   }
 
@@ -430,7 +440,7 @@ export class ZLinkChannelOutboundOperations {
     );
   }
 
-  private async routeRequestScoped<TReply>(
+  private routeRequestScoped<TReply>(
     routerChannelId: string,
     targetNodeRid: string,
     packetName: string | undefined,
@@ -441,32 +451,40 @@ export class ZLinkChannelOutboundOperations {
     onAdmitted?: () => void,
     existing?: PendingOperation<unknown>
   ): Promise<TReply> {
-    return this.requests.request(
-      timeoutMs,
-      signal,
-      async (requestOperation) => {
-        let correlationId: string | undefined;
-        let router: ReturnType<ZLinkChannelSocketRegistry['routeRouter']> | undefined;
-        let terminalRecorded = false;
-        const traceTerminal = (result: ZLinkRuntimeMessageFlowResult): void => {
-          if (terminalRecorded) return;
-          terminalRecorded = true;
-          this.dispatchServices
-            .beginOutbound(ZLinkMessageFlowOutcome.ReplyReceived, result)
-            ?.trace({
-              surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
-              messageKind: ZLinkDispatchMessageKind.Request,
-              channelName: routerChannelId,
-              channelRouteKind: 'route_mesh',
-              packetName,
-              correlationId,
-              targetRid: targetNodeRid,
-              result
-            });
-        };
-        try {
-          throwIfAborted(signal);
-          router = this.sockets.routeRouter(routerChannelId);
+    let correlationId: string | undefined;
+    const traceTerminal = (result: ZLinkRuntimeMessageFlowResult): void => {
+      this.dispatchServices.beginOutbound(ZLinkMessageFlowOutcome.ReplyReceived, result)?.trace({
+        surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
+        messageKind: ZLinkDispatchMessageKind.Request,
+        channelName: routerChannelId,
+        channelRouteKind: 'route_mesh',
+        packetName,
+        correlationId,
+        targetRid: targetNodeRid,
+        result
+      });
+    };
+    try {
+      signal?.throwIfAborted();
+      const operation = this.requests.begin(timeoutMs, signal, existing);
+      const reply = this.requests.run<TReply>(
+        operation,
+        (receiver) => {
+          this.measureRequest(routerChannelId, operation);
+          operation.mapCaller(
+            (value) => {
+              traceTerminal('succeeded');
+              return value;
+            },
+            (error) => {
+              if (!isRemoteChannelErrorReply(error))
+                traceTerminal(requestTerminalResult(error, signal));
+              throw error;
+            }
+          );
+
+          const requestOperation = operation;
+          const router = this.sockets.routeRouter(routerChannelId);
           if (this.sockets.routeMemberStatus(routerChannelId, targetNodeRid) === 'missing') {
             throw createInternalFrameworkException(
               ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
@@ -495,53 +513,55 @@ export class ZLinkChannelOutboundOperations {
             correlationId,
             targetRid: targetNodeRid
           });
-          const reply = await this.measureRequest(routerChannelId, async () => {
-            const replyParts = await waitRequestReply(
-              router!.request(targetNodeRid, parts, timeoutMs, onAdmitted, requestOperation),
-              'Route request',
-              requestOperation
-            );
-            try {
-              return decodeChannelReply<TReply>(replyParts, this.codecs);
-            } finally {
-              closeMessages(replyParts);
-            }
-          });
-          traceTerminal('succeeded');
-          return reply;
-        } catch (error) {
-          // See the ClientServer request path: the remote dispatch error owns this
-          // terminal record when the reply itself is an Error envelope.
-          if (!isRemoteChannelErrorReply(error)) {
-            traceTerminal(requestTerminalResult(error, signal));
+          router.request(targetNodeRid, parts, timeoutMs, onAdmitted, requestOperation, receiver);
+        },
+        (raw) => {
+          const replyParts = raw as readonly Message[];
+          try {
+            return decodeChannelReply<TReply>(replyParts, this.codecs);
+          } finally {
+            closeMessages(replyParts);
           }
+        },
+        (error) => {
           if (
             this.sockets.routeMemberStatus(routerChannelId, targetNodeRid) === 'disconnected' &&
             (isSubmitDeadline(error) || error instanceof ZLinkRouteDisconnectedError)
           ) {
-            throw createInternalFrameworkException(
+            return createInternalFrameworkException(
               ZLinkFrameworkInternalErrorKind.RouteNotConnected,
               `Route channel '${routerChannelId}' member '${targetNodeRid}' is not connected.`,
               true,
               error
             );
           }
-          throw error;
+          return error;
         }
-      },
-      existing
-    );
+      );
+      return reply;
+    } catch (error) {
+      if (!isRemoteChannelErrorReply(error)) traceTerminal(requestTerminalResult(error, signal));
+      return Promise.reject(error);
+    }
   }
 
-  private async measureRequest<T>(channel: string, operation: () => Promise<T>): Promise<T> {
+  private measureRequest(channel: string, operation: PendingOperation<unknown>): void {
     this.pendingRequests.set(channel, this.pendingRequestCount(channel) + 1);
-    try {
-      return await operation();
-    } finally {
+    const complete = (): void => {
       const remaining = this.pendingRequestCount(channel) - 1;
       if (remaining === 0) this.pendingRequests.delete(channel);
       else this.pendingRequests.set(channel, remaining);
-    }
+    };
+    operation.mapCaller(
+      (value) => {
+        complete();
+        return value;
+      },
+      (error) => {
+        complete();
+        throw error;
+      }
+    );
   }
 }
 
