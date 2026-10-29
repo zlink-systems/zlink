@@ -503,6 +503,9 @@ public final class ZLinkRuntimeMetrics {
         return RELOCATION_UNIT_TAGS.get(objectKind);
     }
 
+    private static final Map<String, String> MESSAGE_FLOW_OVERFLOW_TAGS =
+            Map.of(Tag.SOURCE.wire(), "message_flow");
+
     private static final Sink NOOP = new Sink() {};
     private static volatile Sink sink = NOOP;
     private static final AtomicReference<Supplier<ZLinkHostCapacityStatus>> HOST_CAPACITY_SOURCE =
@@ -714,6 +717,14 @@ public final class ZLinkRuntimeMetrics {
         } catch (RuntimeException failure) {
             reportObservationFailure(failure);
         }
+    }
+
+    /** The process telemetry owner supplies the failure policy for this existing instrument. */
+    public static void emitMessageFlowOverflow(long delta) {
+        sink.add(
+                Metric.OBSERVABILITY_EVENTS_OVERFLOW.metricName(),
+                delta,
+                MESSAGE_FLOW_OVERFLOW_TAGS);
     }
 
     public static void record(String name, Duration duration, Map<String, String> tags) {
