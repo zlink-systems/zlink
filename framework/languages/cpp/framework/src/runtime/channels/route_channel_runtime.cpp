@@ -347,9 +347,7 @@ route_channel_runtime_t::request_reply_parts (const zlink::routing_id_t &target_
                                               std::chrono::milliseconds timeout)
 {
     using reply_t = result_t<runtime::messaging::message_parts_t>;
-    if (auto ready =
-          _state->_lane.run_sync ([&] { return ensure_ready (_state, target_node_rid); });
-        !ready) {
+    if (auto ready = _state->_lane.run_sync ([&] { return ensure_ready (_state); }); !ready) {
         return result_t<reply_t>::success (
           detail::propagate_failure<runtime::messaging::message_parts_t> (
             ready, "route channel peer is not ready"));
@@ -373,6 +371,12 @@ route_channel_runtime_t::request_backend_parts (const std::shared_ptr<state_t> &
     request_backend_t backend;
     auto prepared = _state->_lane.run_sync (
       [&] () -> result_t<request_task_t<runtime::messaging::message_parts_t>> {
+          const auto timeout = remaining_request_timeout (deadline);
+          if (timeout <= std::chrono::milliseconds::zero ()) {
+              return detail::boundary_failure<request_task_t<runtime::messaging::message_parts_t>> (
+                detail::boundary_error_t::timed_out,
+                "route request deadline expired before binding submission");
+          }
           if (auto connected = ensure_ready (_state); !connected) {
               return detail::propagate_failure<
                 request_task_t<runtime::messaging::message_parts_t>> (
@@ -389,12 +393,6 @@ route_channel_runtime_t::request_backend_parts (const std::shared_ptr<state_t> &
           packet->request_seq = _state->_pending_requests.next_request_seq ();
           append_outbound_unlocked (_state, packet->target_node_rid, packet->target_spot_id,
                                     packet->parts, packet->request_seq);
-          const auto timeout = remaining_request_timeout (deadline);
-          if (timeout <= std::chrono::milliseconds::zero ()) {
-              return detail::boundary_failure<request_task_t<runtime::messaging::message_parts_t>> (
-                detail::boundary_error_t::timed_out,
-                "route request deadline expired before binding submission");
-          }
           return result_t<request_task_t<runtime::messaging::message_parts_t>>::success (
             backend (packet->target_node_rid, packet->target_spot_id, packet->parts, timeout));
       });
@@ -448,7 +446,6 @@ route_channel_runtime_t::request_reply_spot_parts_owned (
   runtime::messaging::message_parts_t parts,
   std::chrono::steady_clock::time_point deadline)
 {
-    co_await wait_until_ready (state, target_node_rid, deadline);
     auto pending = request_backend_parts (state, target_node_rid, std::move (target_spot_id),
                                           std::move (parts), deadline);
     co_return co_await detail::request_submission (std::move (pending));
@@ -639,19 +636,6 @@ task_t<void> route_channel_runtime_t::await_readiness (
         return pending;
     }();
     co_await bounded;
-}
-
-task_t<void>
-route_channel_runtime_t::wait_until_ready (std::shared_ptr<state_t> state,
-                                           std::optional<zlink::routing_id_t> target,
-                                           std::chrono::steady_clock::time_point deadline)
-{
-    if (remaining_request_timeout (deadline) <= std::chrono::milliseconds::zero ())
-        return task_t<void> (
-          detail::boundary_failure<void> (detail::boundary_error_t::timed_out,
-                                          "route request deadline expired during preparation"));
-    return state_t::prepare (
-      state, [state, target] (const auto &) { return ready_unlocked (*state, target); }, deadline);
 }
 
 } // namespace zlink::framework::detail
