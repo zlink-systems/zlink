@@ -25,9 +25,7 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
         )
             return;
 
-        var ready = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var source = ZLinkProcessExecutionPool.CreateApplicationSource(
             _ =>
             {
@@ -38,11 +36,13 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
         );
         try
         {
-            await new MeshWorkerWaitCostTests(output)
-                .ProcessPoolReservesReceiverWhenAllApplicationSlotsAreOccupiedAndJoinsEveryWorker();
-            await new ServiceRuntimeFoundationTests()
-                .Managed_mesh_pump_defers_application_dispatch_while_shared_capacity_is_saturated();
-            await new MeshReceiveWakeTests(output).RawIngressAddsNoAllocationToTheReceivedContainer();
+            await new MeshWorkerWaitCostTests(
+                output
+            ).ProcessPoolReservesReceiverWhenAllApplicationSlotsAreOccupiedAndJoinsEveryWorker();
+            await new ServiceRuntimeFoundationTests().Managed_mesh_pump_defers_application_dispatch_while_shared_capacity_is_saturated();
+            await new MeshReceiveWakeTests(
+                output
+            ).RawIngressAddsNoAllocationToTheReceivedContainer();
         }
         finally
         {
@@ -198,7 +198,9 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
         if (
             await IsolatedTestProcess.RunIsolatedAsync(
                 typeof(MeshWorkerWaitCostTests),
-                nameof(ProcessPoolReservesReceiverWhenAllApplicationSlotsAreOccupiedAndJoinsEveryWorker)
+                nameof(
+                    ProcessPoolReservesReceiverWhenAllApplicationSlotsAreOccupiedAndJoinsEveryWorker
+                )
             )
         )
             return;
