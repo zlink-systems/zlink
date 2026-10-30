@@ -40,11 +40,29 @@ function descriptor(rid, overrides = {}) {
 
 test('node-direct role and readiness read topology ownership without snapshots', () => {
   const reply = Promise.resolve([]);
-  const { runtime } = rawMeshFixture({ descriptor: descriptor('source') }, { request: () => reply });
+  const { runtime } = rawMeshFixture(
+    { descriptor: descriptor('source') },
+    { request: () => reply }
+  );
   const topology = runtime.topology;
-  assert.equal(topology.admit(descriptor('target'), 'route', undefined, undefined, constants.ServiceWireCommand.admit), 'admitted');
   assert.equal(
-    topology.admit(descriptor('client', { objectRole: 'client' }), 'client-route', undefined, undefined, constants.ServiceWireCommand.admit),
+    topology.admit(
+      descriptor('target'),
+      'route',
+      undefined,
+      undefined,
+      constants.ServiceWireCommand.admit
+    ),
+    'admitted'
+  );
+  assert.equal(
+    topology.admit(
+      descriptor('client', { objectRole: 'client' }),
+      'client-route',
+      undefined,
+      undefined,
+      constants.ServiceWireCommand.admit
+    ),
     'admitted'
   );
   topology.knownDescriptor = () => {
@@ -94,7 +112,14 @@ test('multipart ingress materializes one final part array and retains borrowed p
     }
   };
   const backend = new ZLinkNodeRawMeshBackend(
-    'mesh', 'target', {}, undefined, undefined, undefined, undefined, { raw }
+    'mesh',
+    'target',
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { raw }
   );
   const ready = backend.createReadyBatch(1);
   backend.drainReady(ReadyDomain.Application, ready);
@@ -128,7 +153,7 @@ test('completion transfers an already managed part array without rebuilding it',
   const table = new ZLinkMeshCompletionTable();
   const id = { high: 1n, low: 7n };
   const parts = [ZLinkBufferMessage.fromOwned(Buffer.from('reply'))];
-  const pending = table.submit(() => id).pending;
+  const pending = table.submit(() => id);
   table.complete({
     operationId: id,
     terminalResult: 0,

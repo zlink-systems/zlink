@@ -133,7 +133,14 @@ for (const boundary of ['direct', 'socket', 'ClientServer']) {
             },
             runtime
           );
-          const encoded = encodeChannelReplyParts({ channelName: 'channel', messageName: 'reply', correlationId: '0123456789abcdef0123456789abcdef' }, { answer: 42 });
+          const encoded = encodeChannelReplyParts(
+            {
+              channelName: 'channel',
+              messageName: 'reply',
+              correlationId: '0123456789abcdef0123456789abcdef'
+            },
+            { answer: 42 }
+          );
           const header = JSON.parse(encoded[0].toString('utf8'));
           header.contentType = CONTENT_TYPE;
           const messages = [
@@ -150,102 +157,105 @@ for (const boundary of ['direct', 'socket', 'ClientServer']) {
             };
           });
           try {
-          const onAdmitted = () => {
-            if (terminal === 'onAdmitted-failure') throw cause;
-          };
-          let pending;
-          if (boundary === 'ClientServer') {
-            pending = outbound.request(
-              'channel',
-              'request',
-              { request: true },
-              50,
-              controller.signal,
-              undefined,
-              onAdmitted
-            );
-          } else {
-            const operation = runtime.begin(50, controller.signal);
-            pending = runtime.run(
-              operation,
-              (receiver) => {
-                if (boundary === 'direct')
-                  submitBindingRequest(
-                    builder,
-                    Buffer.from('request'),
-                    50,
-                    undefined,
-                    onAdmitted,
-                    operation,
-                    receiver
-                  );
-                else socket.request(Buffer.from('request'), 50, onAdmitted, operation, receiver);
-              },
-              (raw) => {
-                try {
-                  return decodeChannelReply(raw, registry);
-                } finally {
-                  closeMessages(raw);
-                }
-              },
-              (error) => error
-            );
-            assert.equal(pending, operation.promise);
-          }
-          const caller = observe(pending);
-          void caller.then(() => {
-            settlements++;
-          });
-          await submitted.promise;
-          if (terminal === 'admission-failure') admission.reject(cause);
-          else admission.resolve();
-          if (terminal === 'queued-cancel') reply.resolve(messages);
-          if (terminal === 'cancel' || terminal === 'queued-cancel') controller.abort(cause);
-          if (terminal === 'shutdown') runtime.close();
-          if (terminal === 'shutdown-custom') runtime.close(cause);
-          if (terminal === 'deadline') {
-            now += 50;
-            t.mock.timers.tick(50);
-          }
-          const early = !['normal', 'physical-first'].includes(terminal);
-          let before;
-          if (early) {
-            before = await caller;
+            const onAdmitted = () => {
+              if (terminal === 'onAdmitted-failure') throw cause;
+            };
+            let pending;
+            if (boundary === 'ClientServer') {
+              pending = outbound.request(
+                'channel',
+                'request',
+                { request: true },
+                50,
+                controller.signal,
+                undefined,
+                onAdmitted
+              );
+            } else {
+              const operation = runtime.begin(50, controller.signal);
+              pending = runtime.run(
+                operation,
+                (receiver) => {
+                  if (boundary === 'direct')
+                    submitBindingRequest(
+                      builder,
+                      Buffer.from('request'),
+                      50,
+                      undefined,
+                      onAdmitted,
+                      operation,
+                      receiver
+                    );
+                  else socket.request(Buffer.from('request'), 50, onAdmitted, operation, receiver);
+                },
+                (raw) => {
+                  try {
+                    return decodeChannelReply(raw, registry);
+                  } finally {
+                    closeMessages(raw);
+                  }
+                },
+                (error) => error
+              );
+              assert.equal(pending, operation.promise);
+            }
+            const caller = observe(pending);
+            void caller.then(() => {
+              settlements++;
+            });
+            await submitted.promise;
+            if (terminal === 'admission-failure') admission.reject(cause);
+            else admission.resolve();
+            if (terminal === 'queued-cancel') reply.resolve(messages);
+            if (terminal === 'cancel' || terminal === 'queued-cancel') controller.abort(cause);
+            if (terminal === 'shutdown') runtime.close();
+            if (terminal === 'shutdown-custom') runtime.close(cause);
+            if (terminal === 'deadline') {
+              now += 50;
+              t.mock.timers.tick(50);
+            }
+            const early = !['normal', 'physical-first'].includes(terminal);
+            let before;
+            if (early) {
+              before = await caller;
+              assert.equal(runtime.registry.size, 0);
+            }
+            if (terminal !== 'queued-cancel') reply.resolve(messages);
+            const result = await caller;
+            if (terminal === 'physical-first') controller.abort(cause);
+            await barrier();
+            const observedCloses = [...closes];
+            const observedCodecs = codecCalls;
+            const terminalTraceCount = events.filter(
+              (event) => event.outcome === ZLinkRuntimeMessageFlowOutcome.ReplyReceived
+            ).length;
+            assert.equal(submissions, 1);
+            assert.equal(settlements, 1);
             assert.equal(runtime.registry.size, 0);
-          }
-          if (terminal !== 'queued-cancel') reply.resolve(messages);
-          const result = await caller;
-          if (terminal === 'physical-first') controller.abort(cause);
-          await barrier();
-          const observedCloses = [...closes];
-          const observedCodecs = codecCalls;
-          const terminalTraceCount = events.filter(
-            (event) => event.outcome === ZLinkRuntimeMessageFlowOutcome.ReplyReceived
-          ).length;
-          assert.equal(submissions, 1);
-          assert.equal(settlements, 1);
-          assert.equal(runtime.registry.size, 0);
-          assert.deepEqual(observedCloses, [1, 1]);
-          assert.equal(observedCodecs, codec === 'malformed' ? 0 : 1);
-          assert.equal(fixtureCleanup, 0);
-          if (early) {
-            assert.equal(result, before);
-            if (terminal === 'deadline')
-              assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
-            else if (terminal === 'shutdown')
-              assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
-            else assert.equal(result.error, cause);
-          } else if (codec === 'valid') assert.deepEqual(result.value, { answer: 42 });
-          else if (codec === 'throwing') assert.equal(result.error, codecFailure);
-          else assert.ok(result.error);
-          if (boundary === 'ClientServer') {
-            assert.equal(outbound.pendingRequestCount('channel'), 0);
-            assert.equal(terminalTraceCount, 1);
-          }
+            assert.deepEqual(observedCloses, [1, 1]);
+            assert.equal(observedCodecs, codec === 'malformed' ? 0 : 1);
+            assert.equal(fixtureCleanup, 0);
+            if (early) {
+              assert.equal(result, before);
+              if (terminal === 'deadline')
+                assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+              else if (terminal === 'shutdown')
+                assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
+              else assert.equal(result.error, cause);
+            } else if (codec === 'valid') assert.deepEqual(result.value, { answer: 42 });
+            else if (codec === 'throwing') assert.equal(result.error, codecFailure);
+            else assert.ok(result.error);
+            if (boundary === 'ClientServer') {
+              assert.equal(outbound.pendingRequestCount('channel'), 0);
+              assert.equal(terminalTraceCount, 1);
+            }
           } finally {
             messages.forEach((message, index) => {
               message.close = originals[index];
-              if (closes[index] === 0) { fixtureCleanup++; cleanup[index](); }
+              if (closes[index] === 0) {
+                fixtureCleanup++;
+                cleanup[index]();
+              }
             });
             runtime.close();
             socket.close();
@@ -436,7 +446,14 @@ for (const raw of [false, true]) {
       );
       const target = { routerChannelId: 'mesh', targetNodeRid: 'peer', spotId: 'spot' };
       const request = zlink.Message.from('request');
-      const encoded = encodeChannelReplyParts({ channelName: 'channel', messageName: 'reply', correlationId: '0123456789abcdef0123456789abcdef' }, { answer: 42 });
+      const encoded = encodeChannelReplyParts(
+        {
+          channelName: 'channel',
+          messageName: 'reply',
+          correlationId: '0123456789abcdef0123456789abcdef'
+        },
+        { answer: 42 }
+      );
       const messages = encoded.map((part) => zlink.Message.from(part));
       const closes = messages.map(() => 0);
       const originals = messages.map((message) => message.close);
@@ -448,26 +465,26 @@ for (const raw of [false, true]) {
         };
       });
       try {
-      const caller = observe(
-        raw
-          ? transport.requestRaw(target, request, 1000, controller.signal)
-          : transport.request(target, [request], undefined, 1000, controller.signal)
-      );
-      const reason = new Error('cancel');
-      if (cancelled) {
-        controller.abort(reason);
-        assert.equal((await caller).error, reason);
-      }
-      physical.resolve(messages);
-      const result = await caller;
-      await barrier();
-      if (raw && !cancelled) {
-        assert.deepEqual(closes, [0, 0]);
-        closeMessages(result.value);
-      }
-      assert.deepEqual(closes, [1, 1]);
-      if (cancelled) assert.equal(result.error, reason);
-      else if (!raw) assert.deepEqual(result.value, { answer: 42 });
+        const caller = observe(
+          raw
+            ? transport.requestRaw(target, request, 1000, controller.signal)
+            : transport.request(target, [request], undefined, 1000, controller.signal)
+        );
+        const reason = new Error('cancel');
+        if (cancelled) {
+          controller.abort(reason);
+          assert.equal((await caller).error, reason);
+        }
+        physical.resolve(messages);
+        const result = await caller;
+        await barrier();
+        if (raw && !cancelled) {
+          assert.deepEqual(closes, [0, 0]);
+          closeMessages(result.value);
+        }
+        assert.deepEqual(closes, [1, 1]);
+        if (cancelled) assert.equal(result.error, reason);
+        else if (!raw) assert.deepEqual(result.value, { answer: 42 });
       } finally {
         messages.forEach((message, index) => {
           message.close = originals[index];
@@ -557,19 +574,34 @@ for (const mapper of ['return', 'throw']) {
       const entry = runtime.begin(1000, controller.signal);
       const cause = new Error(terminal);
       const mapped = new Error('mapped');
-      let receiver, mappings = 0, settlements = 0, codecs = 0;
-      const caller = observe(runtime.run(entry, (value) => { receiver = value; }, () => {
-        codecs++;
-        if (terminal === 'decode') throw cause;
-        return 'late';
-      }, (error) => {
-        mappings++;
-        if (terminal === 'deadline') assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
-        else assert.equal(error, cause);
-        if (mapper === 'throw') throw mapped;
-        return mapped;
-      }));
-      void caller.then(() => { settlements++; });
+      let receiver,
+        mappings = 0,
+        settlements = 0,
+        codecs = 0;
+      const caller = observe(
+        runtime.run(
+          entry,
+          (value) => {
+            receiver = value;
+          },
+          () => {
+            codecs++;
+            if (terminal === 'decode') throw cause;
+            return 'late';
+          },
+          (error) => {
+            mappings++;
+            if (terminal === 'deadline')
+              assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+            else assert.equal(error, cause);
+            if (mapper === 'throw') throw mapped;
+            return mapped;
+          }
+        )
+      );
+      void caller.then(() => {
+        settlements++;
+      });
       try {
         if (terminal === 'physical') receiver.operationFailed(entry.id, cause, undefined);
         if (terminal === 'cancel') controller.abort(cause);
@@ -578,7 +610,8 @@ for (const mapper of ['return', 'throw']) {
         if (terminal === 'decode') receiver.operationCompleted(entry.id, 'raw', undefined);
         const result = await caller;
         if (terminal === 'physical') assert.equal(result.error, mapped);
-        else if (terminal === 'deadline') assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+        else if (terminal === 'deadline')
+          assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
         else assert.equal(result.error, cause);
         assert.equal(mappings, terminal === 'physical' ? 1 : 0);
         receiver.operationCompleted(entry.id, 'late', undefined);
@@ -587,7 +620,9 @@ for (const mapper of ['return', 'throw']) {
         assert.equal(settlements, 1);
         assert.equal(codecs, terminal === 'decode' ? 2 : 1);
         assert.equal(runtime.registry.size, 0);
-      } finally { runtime.close(); }
+      } finally {
+        runtime.close();
+      }
     });
   }
 }
@@ -595,24 +630,58 @@ for (const mapper of ['return', 'throw']) {
 test('ClientServer rejected caller is not reinjected into physical receiver', async (t) => {
   const runtime = new RequestRuntime();
   const originalRun = runtime.run.bind(runtime);
-  let mappings = 0, failures = 0, traces = 0;
-  t.mock.method(runtime, 'run', (entry, start, decode, mapFailure) => originalRun(entry, (receiver) => {
-    start({
-      operationCompleted: (...args) => receiver.operationCompleted(...args),
-      operationFailed: (...args) => { failures++; receiver.operationFailed(...args); }
-    });
-  }, decode, (error) => { mappings++; return mapFailure(error); }));
+  let mappings = 0,
+    failures = 0,
+    traces = 0;
+  t.mock.method(runtime, 'run', (entry, start, decode, mapFailure) =>
+    originalRun(
+      entry,
+      (receiver) => {
+        start({
+          operationCompleted: (...args) => receiver.operationCompleted(...args),
+          operationFailed: (...args) => {
+            failures++;
+            receiver.operationFailed(...args);
+          }
+        });
+      },
+      decode,
+      (error) => {
+        mappings++;
+        return mapFailure(error);
+      }
+    )
+  );
   const cause = new Error('physical');
-  const socket = { request(_parts, _timeout, _admitted, entry, receiver) {
-    receiver.operationFailed(entry.id, cause, undefined);
-  }};
-  const outbound = new ZLinkChannelOutboundOperations({
-    async awaitClientDealerForOutbound() { return socket; },
-    selectedClientServerRid() { return 'server'; }
-  }, undefined, {
-    flowCreationEnabled() { return false; },
-    beginOutbound(outcome) { return { trace() { if (outcome === ZLinkRuntimeMessageFlowOutcome.ReplyReceived) traces++; } }; }
-  }, runtime);
+  const socket = {
+    request(_parts, _timeout, _admitted, entry, receiver) {
+      receiver.operationFailed(entry.id, cause, undefined);
+    }
+  };
+  const outbound = new ZLinkChannelOutboundOperations(
+    {
+      async awaitClientDealerForOutbound() {
+        return socket;
+      },
+      selectedClientServerRid() {
+        return 'server';
+      }
+    },
+    undefined,
+    {
+      flowCreationEnabled() {
+        return false;
+      },
+      beginOutbound(outcome) {
+        return {
+          trace() {
+            if (outcome === ZLinkRuntimeMessageFlowOutcome.ReplyReceived) traces++;
+          }
+        };
+      }
+    },
+    runtime
+  );
   try {
     assert.equal((await observe(outbound.request('channel', 'request', {}, 1000))).error, cause);
     await barrier();
@@ -620,35 +689,62 @@ test('ClientServer rejected caller is not reinjected into physical receiver', as
     assert.equal(mappings, 1);
     assert.equal(traces, 1);
     assert.equal(outbound.pendingRequestCount('channel'), 0);
-  } finally { runtime.close(); }
+  } finally {
+    runtime.close();
+  }
 });
 
 for (const terminal of ['value', 'failure', 'already-terminal']) {
   test(`mapZLinkRequestReply keeps explicit mapping with operation/${terminal}`, async () => {
-    const { mapZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+    const {
+      mapZLinkRequestReply
+    } = require('../../packages/framework/dist/runtime/messaging/request-result');
     const runtime = new RequestRuntime();
     const entry = runtime.begin(1000);
-    let decoded = 0, mapped = 0;
+    let decoded = 0,
+      mapped = 0;
     const cause = new Error('physical');
     const failure = new Error('mapped');
     try {
       if (terminal === 'already-terminal') entry.complete('raw');
-      const caller = observe(mapZLinkRequestReply({
-        operation: entry, pending: entry.promise,
-        decode(value) { decoded++; assert.equal(value, 'raw'); return 'typed'; },
-        mapFailure(error) { mapped++; assert.equal(error, cause); return failure; }
-      }));
+      const caller = observe(
+        mapZLinkRequestReply({
+          operation: entry,
+          pending: entry.promise,
+          decode(value) {
+            decoded++;
+            assert.equal(value, 'raw');
+            return 'typed';
+          },
+          mapFailure(error) {
+            mapped++;
+            assert.equal(error, cause);
+            return failure;
+          }
+        })
+      );
       if (terminal === 'value') entry.complete('raw');
       if (terminal === 'failure') entry.fail(cause);
       const result = await caller;
-      if (terminal === 'failure') { assert.equal(result.error, failure); assert.equal(mapped, 1); assert.equal(decoded, 0); }
-      else { assert.equal(result.value, 'typed'); assert.equal(decoded, 1); assert.equal(mapped, 0); }
-    } finally { runtime.close(); }
+      if (terminal === 'failure') {
+        assert.equal(result.error, failure);
+        assert.equal(mapped, 1);
+        assert.equal(decoded, 0);
+      } else {
+        assert.equal(result.value, 'typed');
+        assert.equal(decoded, 1);
+        assert.equal(mapped, 0);
+      }
+    } finally {
+      runtime.close();
+    }
   });
 }
 
 test('bindingRequestReply metadata failure preserves physical codec, close and operation id', async () => {
-  const { bindingRequestReply } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
+  const {
+    bindingRequestReply
+  } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-support');
   const runtime = new RequestRuntime();
   // Use the second actual entry so a constant sentinel cannot satisfy the identity assertion.
   runtime.begin(1000).complete(undefined);
@@ -658,16 +754,54 @@ test('bindingRequestReply metadata failure preserves physical codec, close and o
   const original = messages[0].close;
   const unhandled = [];
   const onUnhandled = (error) => unhandled.push(error);
-  let codecs = 0, closes = 0, failures = 0;
-  messages[0].close = function () { closes++; original.call(this); };
+  let codecs = 0,
+    closes = 0,
+    failures = 0;
+  messages[0].close = function () {
+    closes++;
+    original.call(this);
+  };
   process.on('unhandledRejection', onUnhandled);
   try {
-    const caller = observe(runtime.run(entry, (receiver) => {
-      bindingRequestReply({ result: zlink.SubmitResult.Ok, admitted: Promise.resolve(), reply: Promise.resolve(messages) }, {
-        operationCompleted(id, value, context) { assert.equal(id, entry.id); assert.equal(context, undefined); receiver.operationCompleted(id, value, context); },
-        operationFailed(id, error, context) { failures++; assert.equal(id, entry.id); receiver.operationFailed(id, error, context); }
-      }, entry, () => { throw reason; });
-    }, (parts) => { try { codecs++; return parts[0].data().toString(); } finally { closeMessages(parts); } }, (error) => error));
+    const caller = observe(
+      runtime.run(
+        entry,
+        (receiver) => {
+          bindingRequestReply(
+            {
+              result: zlink.SubmitResult.Ok,
+              admitted: Promise.resolve(),
+              reply: Promise.resolve(messages)
+            },
+            {
+              operationCompleted(id, value, context) {
+                assert.equal(id, entry.id);
+                assert.equal(context, undefined);
+                receiver.operationCompleted(id, value, context);
+              },
+              operationFailed(id, error, context) {
+                failures++;
+                assert.equal(id, entry.id);
+                receiver.operationFailed(id, error, context);
+              }
+            },
+            entry,
+            () => {
+              throw reason;
+            }
+          );
+        },
+        (parts) => {
+          try {
+            codecs++;
+            return parts[0].data().toString();
+          } finally {
+            closeMessages(parts);
+          }
+        },
+        (error) => error
+      )
+    );
     assert.equal((await caller).error, reason);
     await barrier();
     assert.equal(failures, 1);
@@ -686,95 +820,190 @@ for (const boundary of ['source', 'router', 'bridge']) {
   for (const raw of [false, true]) {
     for (const terminal of ['normal', 'cancel', 'deadline']) {
       test(`Spot constructor/${boundary}/${raw ? 'raw' : 'typed'}/${terminal}`, async (t) => {
-        const { ZLinkSourceSpotRouter } = require('../../packages/framework/dist/runtime/channels/source-spot-router');
-        const { ZLinkRouterSocketSpotRouteTransport } = require('../../packages/framework/dist/runtime/channels/router-socket-spot-route-transport');
-        const { ZLinkSpotRouteBridgeTransport } = require('../../packages/framework/dist/runtime/channels/spot-route-bridge-transport');
-        const { SPOT_DIRECT_ENVELOPE } = require('../../packages/framework/dist/runtime/channels/spot-direct-envelope');
+        const {
+          ZLinkSourceSpotRouter
+        } = require('../../packages/framework/dist/runtime/channels/source-spot-router');
+        const {
+          ZLinkRouterSocketSpotRouteTransport
+        } = require('../../packages/framework/dist/runtime/channels/router-socket-spot-route-transport');
+        const {
+          ZLinkSpotRouteBridgeTransport
+        } = require('../../packages/framework/dist/runtime/channels/spot-route-bridge-transport');
+        const {
+          SPOT_DIRECT_ENVELOPE
+        } = require('../../packages/framework/dist/runtime/channels/spot-direct-envelope');
         let now = 0;
         t.mock.method(performance, 'now', () => now);
         t.mock.timers.enable({ apis: ['setTimeout'] });
         const runtime = new RequestRuntime();
         const controller = new AbortController();
         const physical = deferred();
-        let codecs = 0, submissions = 0, bridgeCaller;
-        const socket = wrapSocket({ requestToSpot() { return {
-          message() { return this; }, timeout() { return this; }, submit() {
-            submissions++;
-            return { result: zlink.SubmitResult.Ok, admitted: Promise.resolve(), reply: physical.promise };
-          }
-        }; }, close() {} });
+        let codecs = 0,
+          submissions = 0,
+          bridgeCaller;
+        const socket = wrapSocket({
+          requestToSpot() {
+            return {
+              message() {
+                return this;
+              },
+              timeout() {
+                return this;
+              },
+              submit() {
+                submissions++;
+                return {
+                  result: zlink.SubmitResult.Ok,
+                  admitted: Promise.resolve(),
+                  reply: physical.promise
+                };
+              }
+            };
+          },
+          close() {}
+        });
         // No Node production bridge exists. This cooperative builder consumes the receiver
         // and deliberately returns the caller Promise, which must never be observed as physical.
-        const bridge = { request() { const parts = []; return {
-          message(part) { parts.push(part); return this; }, timeout() { return this; },
-          submit(admitted, entry, receiver) {
-            assert.ok(receiver);
-            socket.requestToSpot('peer', 'spot', parts, 50, admitted, entry, receiver);
-            bridgeCaller = entry.promise;
-            return bridgeCaller;
+        const bridge = {
+          request() {
+            const parts = [];
+            return {
+              message(part) {
+                parts.push(part);
+                return this;
+              },
+              timeout() {
+                return this;
+              },
+              submit(admitted, entry, receiver) {
+                assert.ok(receiver);
+                socket.requestToSpot('peer', 'spot', parts, 50, admitted, entry, receiver);
+                bridgeCaller = entry.promise;
+                return bridgeCaller;
+              }
+            };
           }
-        }; } };
+        };
         const target = { routerChannelId: 'channel', targetNodeRid: 'peer', spotId: 'spot' };
         const request = zlink.Message.from('request');
-        const codecRegistry = { serializers: new Map([[CONTENT_TYPE, {
-          deserialize() { codecs++; return { answer: 42 }; }
-        }]]) };
+        const codecRegistry = {
+          serializers: new Map([
+            [
+              CONTENT_TYPE,
+              {
+                deserialize() {
+                  codecs++;
+                  return { answer: 42 };
+                }
+              }
+            ]
+          ])
+        };
         let parts;
-        if (boundary === 'source' && !raw) parts = [Buffer.from(JSON.stringify({ marker: SPOT_DIRECT_ENVELOPE, ok: true, response: { answer: 42 } }))];
+        if (boundary === 'source' && !raw)
+          parts = [
+            Buffer.from(
+              JSON.stringify({ marker: SPOT_DIRECT_ENVELOPE, ok: true, response: { answer: 42 } })
+            )
+          ];
         else {
-          parts = encodeChannelReplyParts({ channelName: 'channel', messageName: 'reply', correlationId: '0123456789abcdef0123456789abcdef' }, { answer: 42 });
-          const header = JSON.parse(parts[0].toString()); header.contentType = CONTENT_TYPE; parts[0] = Buffer.from(JSON.stringify(header));
+          parts = encodeChannelReplyParts(
+            {
+              channelName: 'channel',
+              messageName: 'reply',
+              correlationId: '0123456789abcdef0123456789abcdef'
+            },
+            { answer: 42 }
+          );
+          const header = JSON.parse(parts[0].toString());
+          header.contentType = CONTENT_TYPE;
+          parts[0] = Buffer.from(JSON.stringify(header));
         }
         const messages = parts.map((part) => zlink.Message.from(part));
         const originals = messages.map((message) => ({ close: message.close, data: message.data }));
         const closes = messages.map(() => 0);
         messages.forEach((message, index) => {
-          message.close = function () { closes[index]++; originals[index].close.call(this); };
-          if (boundary === 'source' && !raw) message.data = function () { codecs++; return originals[index].data.call(this); };
+          message.close = function () {
+            closes[index]++;
+            originals[index].close.call(this);
+          };
+          if (boundary === 'source' && !raw)
+            message.data = function () {
+              codecs++;
+              return originals[index].data.call(this);
+            };
         });
         const reason = new Error('cancel');
         try {
           let pending;
           if (boundary === 'source') {
             const transport = new ZLinkSourceSpotRouter(50, runtime);
-            pending = raw ? transport.requestRaw(socket, target, request, 50, controller.signal)
+            pending = raw
+              ? transport.requestRaw(socket, target, request, 50, controller.signal)
               : transport.request(socket, target, 'request', {}, 50, controller.signal);
           } else if (boundary === 'router') {
-            const transport = new ZLinkRouterSocketSpotRouteTransport({ routeRouter() { return socket; } }, runtime);
-            pending = raw ? transport.requestRaw(target, request, 50, controller.signal)
+            const transport = new ZLinkRouterSocketSpotRouteTransport(
+              {
+                routeRouter() {
+                  return socket;
+                }
+              },
+              runtime
+            );
+            pending = raw
+              ? transport.requestRaw(target, request, 50, controller.signal)
               : transport.request(target, [request], codecRegistry, 0, 50, controller.signal);
           } else {
-            const transport = new ZLinkSpotRouteBridgeTransport(new Map([['channel', bridge]]), 50, runtime);
-            pending = raw ? transport.requestRaw(target, request, 50, controller.signal)
+            const transport = new ZLinkSpotRouteBridgeTransport(
+              new Map([['channel', bridge]]),
+              50,
+              runtime
+            );
+            pending = raw
+              ? transport.requestRaw(target, request, 50, controller.signal)
               : transport.request(target, [request], codecRegistry, 50, controller.signal);
             assert.ok(bridgeCaller);
           }
           const caller = observe(pending);
           if (terminal === 'cancel') controller.abort(reason);
-          if (terminal === 'deadline') { now += 50; t.mock.timers.tick(50); }
+          if (terminal === 'deadline') {
+            now += 50;
+            t.mock.timers.tick(50);
+          }
           if (terminal !== 'normal') {
             const result = await caller;
             if (terminal === 'cancel') assert.equal(result.error, reason);
-            else assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+            else
+              assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
           }
           physical.resolve(messages);
           const result = await caller;
           await barrier();
           if (terminal === 'normal') {
-            if (raw) { assert.deepEqual(closes, messages.map(() => 0)); closeMessages(result.value); }
-            else assert.deepEqual(result.value, { answer: 42 });
+            if (raw) {
+              assert.deepEqual(
+                closes,
+                messages.map(() => 0)
+              );
+              closeMessages(result.value);
+            } else assert.deepEqual(result.value, { answer: 42 });
           }
           assert.equal(submissions, 1);
           assert.equal(codecs, raw ? 0 : 1);
-          assert.deepEqual(closes, messages.map(() => 1));
+          assert.deepEqual(
+            closes,
+            messages.map(() => 1)
+          );
           assert.equal(runtime.registry.size, 0);
         } finally {
           messages.forEach((message, index) => {
-            message.close = originals[index].close; message.data = originals[index].data;
+            message.close = originals[index].close;
+            message.data = originals[index].data;
             if (closes[index] === 0) message.close();
           });
           if (raw || boundary === 'source') request.close();
-          runtime.close(); socket.close();
+          runtime.close();
+          socket.close();
         }
       });
     }
@@ -782,14 +1011,25 @@ for (const boundary of ['source', 'router', 'bridge']) {
 }
 
 test('SourceSpot #2911 begins typed requests before payload serialization', async (t) => {
-  const { ZLinkSourceSpotRouter } = require('../../packages/framework/dist/runtime/channels/source-spot-router');
-  const { SPOT_DIRECT_ENVELOPE } = require('../../packages/framework/dist/runtime/channels/spot-direct-envelope');
+  const {
+    ZLinkSourceSpotRouter
+  } = require('../../packages/framework/dist/runtime/channels/source-spot-router');
+  const {
+    SPOT_DIRECT_ENVELOPE
+  } = require('../../packages/framework/dist/runtime/channels/spot-direct-envelope');
   let now = 0;
   const clock = t.mock.method(performance, 'now', () => now);
-  const target = { routerChannelId: 'channel', targetNodeRid: Buffer.from('node'), spotId: Buffer.from('spot') };
+  const target = {
+    routerChannelId: 'channel',
+    targetNodeRid: Buffer.from('node'),
+    spotId: Buffer.from('spot')
+  };
   const rows = [];
 
-  async function runCase(name, { existing = false, terminal = false, aborted = false, throwing = false, advance = 20 } = {}) {
+  async function runCase(
+    name,
+    { existing = false, terminal = false, aborted = false, throwing = false, advance = 20 } = {}
+  ) {
     now = 0;
     const runtime = new RequestRuntime();
     const transport = new ZLinkSourceSpotRouter(50, runtime);
@@ -799,21 +1039,41 @@ test('SourceSpot #2911 begins typed requests before payload serialization', asyn
     const existingEntry = existing ? runtime.begin(50) : undefined;
     if (terminal) existingEntry.fail(customReason);
     if (aborted) controller.abort(customReason);
-    let getterCalls = 0, sourceCalls = 0, submits = 0, nativeTimeout;
+    let getterCalls = 0,
+      sourceCalls = 0,
+      submits = 0,
+      nativeTimeout;
     let seenEntry, registryAtSource;
-    let replyDataCalls = 0, replyCloseCalls = 0, replyMessage;
+    let replyDataCalls = 0,
+      replyCloseCalls = 0,
+      replyMessage;
     const physical = deferred();
     const adapterPromises = [];
     const builder = {
-      message(part) { requestPartsSeen.push(Buffer.isBuffer(part)); return this; },
-      timeout(ms) { nativeTimeout = ms; return this; },
+      message(part) {
+        requestPartsSeen.push(Buffer.isBuffer(part));
+        return this;
+      },
+      timeout(ms) {
+        nativeTimeout = ms;
+        return this;
+      },
       submit() {
         submits++;
-        return { result: zlink.SubmitResult.Ok, admitted: Promise.resolve(), reply: physical.promise };
+        return {
+          result: zlink.SubmitResult.Ok,
+          admitted: Promise.resolve(),
+          reply: physical.promise
+        };
       }
     };
     const requestPartsSeen = [];
-    const native = { requestToSpot() { return builder; }, close() {} };
+    const native = {
+      requestToSpot() {
+        return builder;
+      },
+      close() {}
+    };
     const adapter = wrapSocket(native);
     const backend = {
       requestToSpot(...args) {
@@ -837,22 +1097,28 @@ test('SourceSpot #2911 begins typed requests before payload serialization', asyn
     let outcome, entryOutcome, sizeBeforeCleanup, replyValue;
     let originalReplyData, originalReplyClose;
     try {
-      const pending = observe(transport.request(
-        backend,
-        target,
-        'packet',
-        payload,
-        50,
-        aborted ? controller.signal : undefined,
-        undefined,
-        existingEntry
-      ));
+      const pending = observe(
+        transport.request(
+          backend,
+          target,
+          'packet',
+          payload,
+          50,
+          aborted ? controller.signal : undefined,
+          undefined,
+          existingEntry
+        )
+      );
       if (submits > 0) {
-        replyMessage = zlink.Message.from(Buffer.from(JSON.stringify({
-          marker: SPOT_DIRECT_ENVELOPE,
-          ok: true,
-          response: { answer: 42 }
-        })));
+        replyMessage = zlink.Message.from(
+          Buffer.from(
+            JSON.stringify({
+              marker: SPOT_DIRECT_ENVELOPE,
+              ok: true,
+              response: { answer: 42 }
+            })
+          )
+        );
         originalReplyData = replyMessage.data;
         originalReplyClose = replyMessage.close;
         replyMessage.data = function (...dataArgs) {
@@ -883,7 +1149,8 @@ test('SourceSpot #2911 begins typed requests before payload serialization', asyn
       if (error === undefined) return undefined;
       if (error === customReason) return 'customReason';
       if (error === encodingError) return 'encodingError';
-      if (error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded) return 'DeadlineExceeded';
+      if (error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded)
+        return 'DeadlineExceeded';
       return error.constructor?.name ?? String(error);
     };
     rows.push({
@@ -917,20 +1184,199 @@ test('SourceSpot #2911 begins typed requests before payload serialization', asyn
     await runCase('active-throwing', { throwing: true });
     await runCase('deadline-50', { advance: 50 });
     await runCase('deadline-60', { advance: 60 });
-    t.diagnostic(JSON.stringify(rows, (_key, value) => typeof value === 'bigint' ? value.toString() : value));
-    const select = ({ name, getterCalls, now, sourceCalls, submits, nativeTimeout, deadlineMs, seenEntryId, existingEntryId, reusedExisting, registryAtSource, registryBeforeCleanup, error, value, existingError, replyDataCalls, replyCloseCalls }) => ({
-      name, getterCalls, now, sourceCalls, submits, nativeTimeout, deadlineMs, seenEntryId, existingEntryId,
-      reusedExisting, registryAtSource, registryBeforeCleanup, error, value, existingError, replyDataCalls, replyCloseCalls
+    t.diagnostic(
+      JSON.stringify(rows, (_key, value) => (typeof value === 'bigint' ? value.toString() : value))
+    );
+    const select = ({
+      name,
+      getterCalls,
+      now,
+      sourceCalls,
+      submits,
+      nativeTimeout,
+      deadlineMs,
+      seenEntryId,
+      existingEntryId,
+      reusedExisting,
+      registryAtSource,
+      registryBeforeCleanup,
+      error,
+      value,
+      existingError,
+      replyDataCalls,
+      replyCloseCalls
+    }) => ({
+      name,
+      getterCalls,
+      now,
+      sourceCalls,
+      submits,
+      nativeTimeout,
+      deadlineMs,
+      seenEntryId,
+      existingEntryId,
+      reusedExisting,
+      registryAtSource,
+      registryBeforeCleanup,
+      error,
+      value,
+      existingError,
+      replyDataCalls,
+      replyCloseCalls
     });
     assert.deepEqual(rows.map(select), [
-      { name: 'new', getterCalls: 1, now: 20, sourceCalls: 1, submits: 1, nativeTimeout: 30, deadlineMs: 50, seenEntryId: rows[0].seenEntryId, existingEntryId: undefined, reusedExisting: false, registryAtSource: 1, registryBeforeCleanup: 0, error: undefined, value: { answer: 42 }, existingError: undefined, replyDataCalls: 1, replyCloseCalls: 1 },
-      { name: 'existing', getterCalls: 1, now: 20, sourceCalls: 1, submits: 1, nativeTimeout: 30, deadlineMs: 50, seenEntryId: rows[1].existingEntryId, existingEntryId: rows[1].existingEntryId, reusedExisting: true, registryAtSource: 1, registryBeforeCleanup: 0, error: undefined, value: { answer: 42 }, existingError: undefined, replyDataCalls: 1, replyCloseCalls: 1 },
-      { name: 'pre-abort-normal', getterCalls: 0, now: 0, sourceCalls: 0, submits: 0, nativeTimeout: undefined, deadlineMs: undefined, seenEntryId: undefined, existingEntryId: undefined, reusedExisting: false, registryAtSource: undefined, registryBeforeCleanup: 0, error: 'customReason', value: undefined, existingError: undefined, replyDataCalls: 0, replyCloseCalls: 0 },
-      { name: 'pre-abort-throwing', getterCalls: 0, now: 0, sourceCalls: 0, submits: 0, nativeTimeout: undefined, deadlineMs: undefined, seenEntryId: undefined, existingEntryId: undefined, reusedExisting: false, registryAtSource: undefined, registryBeforeCleanup: 0, error: 'customReason', value: undefined, existingError: undefined, replyDataCalls: 0, replyCloseCalls: 0 },
-      { name: 'existing-terminal', getterCalls: 0, now: 0, sourceCalls: 0, submits: 0, nativeTimeout: undefined, deadlineMs: 50, seenEntryId: undefined, existingEntryId: rows[4].existingEntryId, reusedExisting: false, registryAtSource: undefined, registryBeforeCleanup: 0, error: 'customReason', value: undefined, existingError: 'customReason', replyDataCalls: 0, replyCloseCalls: 0 },
-      { name: 'active-throwing', getterCalls: 1, now: 20, sourceCalls: 0, submits: 0, nativeTimeout: undefined, deadlineMs: undefined, seenEntryId: undefined, existingEntryId: undefined, reusedExisting: false, registryAtSource: undefined, registryBeforeCleanup: 0, error: 'encodingError', value: undefined, existingError: undefined, replyDataCalls: 0, replyCloseCalls: 0 },
-      { name: 'deadline-50', getterCalls: 1, now: 50, sourceCalls: 1, submits: 0, nativeTimeout: undefined, deadlineMs: 50, seenEntryId: rows[6].seenEntryId, existingEntryId: undefined, reusedExisting: false, registryAtSource: 1, registryBeforeCleanup: 0, error: 'DeadlineExceeded', value: undefined, existingError: undefined, replyDataCalls: 0, replyCloseCalls: 0 },
-      { name: 'deadline-60', getterCalls: 1, now: 60, sourceCalls: 1, submits: 0, nativeTimeout: undefined, deadlineMs: 50, seenEntryId: rows[7].seenEntryId, existingEntryId: undefined, reusedExisting: false, registryAtSource: 1, registryBeforeCleanup: 0, error: 'DeadlineExceeded', value: undefined, existingError: undefined, replyDataCalls: 0, replyCloseCalls: 0 }
+      {
+        name: 'new',
+        getterCalls: 1,
+        now: 20,
+        sourceCalls: 1,
+        submits: 1,
+        nativeTimeout: 30,
+        deadlineMs: 50,
+        seenEntryId: rows[0].seenEntryId,
+        existingEntryId: undefined,
+        reusedExisting: false,
+        registryAtSource: 1,
+        registryBeforeCleanup: 0,
+        error: undefined,
+        value: { answer: 42 },
+        existingError: undefined,
+        replyDataCalls: 1,
+        replyCloseCalls: 1
+      },
+      {
+        name: 'existing',
+        getterCalls: 1,
+        now: 20,
+        sourceCalls: 1,
+        submits: 1,
+        nativeTimeout: 30,
+        deadlineMs: 50,
+        seenEntryId: rows[1].existingEntryId,
+        existingEntryId: rows[1].existingEntryId,
+        reusedExisting: true,
+        registryAtSource: 1,
+        registryBeforeCleanup: 0,
+        error: undefined,
+        value: { answer: 42 },
+        existingError: undefined,
+        replyDataCalls: 1,
+        replyCloseCalls: 1
+      },
+      {
+        name: 'pre-abort-normal',
+        getterCalls: 0,
+        now: 0,
+        sourceCalls: 0,
+        submits: 0,
+        nativeTimeout: undefined,
+        deadlineMs: undefined,
+        seenEntryId: undefined,
+        existingEntryId: undefined,
+        reusedExisting: false,
+        registryAtSource: undefined,
+        registryBeforeCleanup: 0,
+        error: 'customReason',
+        value: undefined,
+        existingError: undefined,
+        replyDataCalls: 0,
+        replyCloseCalls: 0
+      },
+      {
+        name: 'pre-abort-throwing',
+        getterCalls: 0,
+        now: 0,
+        sourceCalls: 0,
+        submits: 0,
+        nativeTimeout: undefined,
+        deadlineMs: undefined,
+        seenEntryId: undefined,
+        existingEntryId: undefined,
+        reusedExisting: false,
+        registryAtSource: undefined,
+        registryBeforeCleanup: 0,
+        error: 'customReason',
+        value: undefined,
+        existingError: undefined,
+        replyDataCalls: 0,
+        replyCloseCalls: 0
+      },
+      {
+        name: 'existing-terminal',
+        getterCalls: 0,
+        now: 0,
+        sourceCalls: 0,
+        submits: 0,
+        nativeTimeout: undefined,
+        deadlineMs: 50,
+        seenEntryId: undefined,
+        existingEntryId: rows[4].existingEntryId,
+        reusedExisting: false,
+        registryAtSource: undefined,
+        registryBeforeCleanup: 0,
+        error: 'customReason',
+        value: undefined,
+        existingError: 'customReason',
+        replyDataCalls: 0,
+        replyCloseCalls: 0
+      },
+      {
+        name: 'active-throwing',
+        getterCalls: 1,
+        now: 20,
+        sourceCalls: 0,
+        submits: 0,
+        nativeTimeout: undefined,
+        deadlineMs: undefined,
+        seenEntryId: undefined,
+        existingEntryId: undefined,
+        reusedExisting: false,
+        registryAtSource: undefined,
+        registryBeforeCleanup: 0,
+        error: 'encodingError',
+        value: undefined,
+        existingError: undefined,
+        replyDataCalls: 0,
+        replyCloseCalls: 0
+      },
+      {
+        name: 'deadline-50',
+        getterCalls: 1,
+        now: 50,
+        sourceCalls: 1,
+        submits: 0,
+        nativeTimeout: undefined,
+        deadlineMs: 50,
+        seenEntryId: rows[6].seenEntryId,
+        existingEntryId: undefined,
+        reusedExisting: false,
+        registryAtSource: 1,
+        registryBeforeCleanup: 0,
+        error: 'DeadlineExceeded',
+        value: undefined,
+        existingError: undefined,
+        replyDataCalls: 0,
+        replyCloseCalls: 0
+      },
+      {
+        name: 'deadline-60',
+        getterCalls: 1,
+        now: 60,
+        sourceCalls: 1,
+        submits: 0,
+        nativeTimeout: undefined,
+        deadlineMs: 50,
+        seenEntryId: rows[7].seenEntryId,
+        existingEntryId: undefined,
+        reusedExisting: false,
+        registryAtSource: 1,
+        registryBeforeCleanup: 0,
+        error: 'DeadlineExceeded',
+        value: undefined,
+        existingError: undefined,
+        replyDataCalls: 0,
+        replyCloseCalls: 0
+      }
     ]);
     assert.deepEqual(rows[0].requestPartsSeen, [true]);
   } finally {
@@ -939,102 +1385,219 @@ test('SourceSpot #2911 begins typed requests before payload serialization', asyn
 });
 
 test('throwing failure mapper retains Request terminal classification', async () => {
-  const { OperationTimeoutError } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+  const {
+    OperationTimeoutError
+  } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
   const runtime = new RequestRuntime();
   const entry = runtime.begin(1000);
   let receiver;
-  const caller = observe(runtime.run(entry, value => { receiver = value; }, value => value, () => { throw new OperationTimeoutError(entry.id); }));
+  const caller = observe(
+    runtime.run(
+      entry,
+      (value) => {
+        receiver = value;
+      },
+      (value) => value,
+      () => {
+        throw new OperationTimeoutError(entry.id);
+      }
+    )
+  );
   try {
     receiver.operationFailed(entry.id, new Error('physical'), undefined);
     assert.equal((await caller).error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
-  } finally { runtime.close(); }
+  } finally {
+    runtime.close();
+  }
 });
 
 for (const publicResult of ['submit', 'yield']) {
   for (const backpressured of [false, true]) {
-  for (const terminal of ['normal', 'cancel', 'deadline', 'shutdown', 'shutdown-custom', 'codec', 'physical', 'submit-failure', 'malformed', 'after-abort', 'admission-failure', 'cancel-codec', 'deadline-codec', 'shutdown-codec', 'shutdown-custom-codec', 'admission-failure-codec', 'cancel-malformed']) {
-    if (!backpressured && terminal.startsWith('admission-failure')) continue;
-    test(`actual Dealer public/${publicResult}/${backpressured ? 'Backpressured' : 'Ok'}/${terminal}/preserves error owner and late cleanup`, async (t) => {
-      const { ZLinkDealerChannelClientTransport } = require('../../packages/framework/dist/runtime/backend/node/node-dealer-channel-client-transport');
-      const { createZLinkRequest, mapZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
-      const runtime = new RequestRuntime();
-      const controller = new AbortController();
-      const terminalMode = terminal.replace(/-(codec|malformed)$/, '');
-      const nativeReply = deferred();
-      const admission = deferred();
-      const reason = new Error(terminal);
-      const codecFailure = new Error('late codec');
-      let admitted = 0, codecs = 0, bodyCalls = 0, settlements = 0;
-      const builder = {
-        message() { return this; },
-        timeout() { return this; },
-        submit() {
-          if (terminal === 'submit-failure') throw reason;
-          return { result: backpressured ? zlink.SubmitResult.Backpressured : zlink.SubmitResult.Ok, admitted: admission.promise, reply: nativeReply.promise };
+    for (const terminal of [
+      'normal',
+      'cancel',
+      'deadline',
+      'shutdown',
+      'shutdown-custom',
+      'codec',
+      'physical',
+      'submit-failure',
+      'malformed',
+      'after-abort',
+      'admission-failure',
+      'cancel-codec',
+      'deadline-codec',
+      'shutdown-codec',
+      'shutdown-custom-codec',
+      'admission-failure-codec',
+      'cancel-malformed'
+    ]) {
+      if (!backpressured && terminal.startsWith('admission-failure')) continue;
+      test(`actual Dealer public/${publicResult}/${backpressured ? 'Backpressured' : 'Ok'}/${terminal}/preserves error owner and late cleanup`, async (t) => {
+        const {
+          ZLinkDealerChannelClientTransport
+        } = require('../../packages/framework/dist/runtime/backend/node/node-dealer-channel-client-transport');
+        const {
+          createZLinkRequest,
+          mapZLinkRequestReply
+        } = require('../../packages/framework/dist/runtime/messaging/request-result');
+        const runtime = new RequestRuntime();
+        const controller = new AbortController();
+        const terminalMode = terminal.replace(/-(codec|malformed)$/, '');
+        const nativeReply = deferred();
+        const admission = deferred();
+        const reason = new Error(terminal);
+        const codecFailure = new Error('late codec');
+        let admitted = 0,
+          codecs = 0,
+          bodyCalls = 0,
+          settlements = 0;
+        const builder = {
+          message() {
+            return this;
+          },
+          timeout() {
+            return this;
+          },
+          submit() {
+            if (terminal === 'submit-failure') throw reason;
+            return {
+              result: backpressured ? zlink.SubmitResult.Backpressured : zlink.SubmitResult.Ok,
+              admitted: admission.promise,
+              reply: nativeReply.promise
+            };
+          }
+        };
+        const transport = new ZLinkDealerChannelClientTransport(
+          {
+            request() {
+              return builder;
+            }
+          },
+          undefined,
+          runtime
+        );
+        const request = zlink.Message.from('{}');
+        const parts = encodeChannelReplyParts(
+          {
+            channelName: 'channel',
+            messageName: 'reply',
+            correlationId: '0123456789abcdef0123456789abcdef'
+          },
+          { answer: 42 }
+        ).map((value) => zlink.Message.from(value));
+        const closes = parts.map(() => 0);
+        const originalClose = parts.map((part) => part.close);
+        const originalData = parts[0].data;
+        const originalBodyData = parts[1].data;
+        const close = parts.map((part) => part.close.bind(part));
+        const data = parts[0].data.bind(parts[0]);
+        parts[0].data = () => {
+          codecs++;
+          if (terminal === 'codec') throw reason;
+          if (terminal.endsWith('-codec')) throw codecFailure;
+          return terminal === 'malformed' || terminal.endsWith('-malformed')
+            ? Buffer.from('{')
+            : data();
+        };
+        parts[1].data = function () {
+          bodyCalls++;
+          return originalBodyData.call(this);
+        };
+        parts.forEach((part, index) => {
+          part.close = () => {
+            closes[index]++;
+            close[index]();
+          };
+        });
+        const start = (onAdmitted) =>
+          transport.request(
+            'channel',
+            'request',
+            request,
+            1000,
+            controller.signal,
+            undefined,
+            () => {
+              admitted++;
+              onAdmitted?.();
+            }
+          );
+        try {
+          const pending =
+            publicResult === 'submit' ? createZLinkRequest(start) : mapZLinkRequestReply(start());
+          const caller = observe(pending).then((result) => {
+            settlements++;
+            return result;
+          });
+          if (terminalMode === 'admission-failure') admission.reject(reason);
+          else admission.resolve();
+          if (!['submit-failure', 'admission-failure'].includes(terminalMode)) {
+            if (publicResult === 'submit') await pending.admitted;
+            else await barrier();
+            assert.equal(admitted, 1);
+          }
+          if (terminalMode === 'cancel') controller.abort(reason);
+          if (terminalMode === 'deadline')
+            runtime.registry.expire(performance.now() + 2000, Infinity);
+          if (terminalMode === 'shutdown') runtime.close();
+          if (terminalMode === 'shutdown-custom') runtime.close(reason);
+          if (terminal === 'physical') nativeReply.reject(reason);
+          if (['normal', 'codec', 'malformed', 'after-abort'].includes(terminalMode))
+            nativeReply.resolve(parts);
+          const result = await caller;
+          if (terminal === 'after-abort') controller.abort(reason);
+          if (terminal === 'normal' || terminal === 'after-abort') {
+            assert.ifError(result.error);
+            assert.deepEqual(result.value, { answer: 42 });
+          } else if (['cancel', 'shutdown-custom', 'codec'].includes(terminalMode))
+            assert.equal(result.error, reason);
+          else if (terminal === 'malformed') assert.ok(result.error instanceof SyntaxError);
+          else if (terminalMode === 'deadline')
+            assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+          else if (terminalMode === 'shutdown')
+            assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
+          else {
+            assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+            assert.equal(result.error.cause, reason);
+          }
+          if (
+            !['normal', 'codec', 'malformed', 'after-abort', 'physical', 'submit-failure'].includes(
+              terminalMode
+            )
+          )
+            nativeReply.resolve(parts);
+          await barrier();
+          if (!['physical', 'submit-failure'].includes(terminalMode)) {
+            assert.equal(codecs, 1);
+            assert.equal(
+              bodyCalls,
+              terminal === 'codec' ||
+                terminal === 'malformed' ||
+                /-(codec|malformed)$/.test(terminal)
+                ? 0
+                : 1
+            );
+            assert.deepEqual(closes, [1, 1]);
+          }
+          assert.equal(runtime.registry.size, 0);
+          assert.equal(await caller, result);
+          assert.equal(settlements, 1);
+          if (['submit-failure', 'admission-failure'].includes(terminalMode))
+            assert.equal(admitted, 0);
+        } finally {
+          runtime.close();
+          request.close();
+          parts[0].data = originalData;
+          parts[1].data = originalBodyData;
+          parts.forEach((part, index) => {
+            part.close = originalClose[index];
+            if (closes[index] === 0) close[index]();
+          });
         }
-      };
-      const transport = new ZLinkDealerChannelClientTransport({ request() { return builder; } }, undefined, runtime);
-      const request = zlink.Message.from('{}');
-      const parts = encodeChannelReplyParts({ channelName: 'channel', messageName: 'reply', correlationId: '0123456789abcdef0123456789abcdef' }, { answer: 42 }).map(value => zlink.Message.from(value));
-      const closes = parts.map(() => 0);
-      const originalClose = parts.map(part => part.close);
-      const originalData = parts[0].data;
-      const originalBodyData = parts[1].data;
-      const close = parts.map(part => part.close.bind(part));
-      const data = parts[0].data.bind(parts[0]);
-      parts[0].data = () => {
-        codecs++;
-        if (terminal === 'codec') throw reason;
-        if (terminal.endsWith('-codec')) throw codecFailure;
-        return terminal === 'malformed' || terminal.endsWith('-malformed') ? Buffer.from('{') : data();
-      };
-      parts[1].data = function () { bodyCalls++; return originalBodyData.call(this); };
-      parts.forEach((part, index) => { part.close = () => { closes[index]++; close[index](); }; });
-      const start = onAdmitted => transport.request('channel', 'request', request, 1000, controller.signal, undefined, () => { admitted++; onAdmitted?.(); });
-      try {
-        const pending = publicResult === 'submit' ? createZLinkRequest(start) : mapZLinkRequestReply(start());
-        const caller = observe(pending).then(result => { settlements++; return result; });
-        if (terminalMode === 'admission-failure') admission.reject(reason);
-        else admission.resolve();
-        if (!['submit-failure', 'admission-failure'].includes(terminalMode)) {
-          if (publicResult === 'submit') await pending.admitted;
-          else await barrier();
-          assert.equal(admitted, 1);
-        }
-        if (terminalMode === 'cancel') controller.abort(reason);
-        if (terminalMode === 'deadline') runtime.registry.expire(performance.now() + 2000, Infinity);
-        if (terminalMode === 'shutdown') runtime.close();
-        if (terminalMode === 'shutdown-custom') runtime.close(reason);
-        if (terminal === 'physical') nativeReply.reject(reason);
-        if (['normal', 'codec', 'malformed', 'after-abort'].includes(terminalMode)) nativeReply.resolve(parts);
-        const result = await caller;
-        if (terminal === 'after-abort') controller.abort(reason);
-        if (terminal === 'normal' || terminal === 'after-abort') { assert.ifError(result.error); assert.deepEqual(result.value, { answer: 42 }); }
-        else if (['cancel', 'shutdown-custom', 'codec'].includes(terminalMode)) assert.equal(result.error, reason);
-        else if (terminal === 'malformed') assert.ok(result.error instanceof SyntaxError);
-        else if (terminalMode === 'deadline') assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
-        else if (terminalMode === 'shutdown') assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
-        else { assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.Unavailable); assert.equal(result.error.cause, reason); }
-        if (!['normal', 'codec', 'malformed', 'after-abort', 'physical', 'submit-failure'].includes(terminalMode)) nativeReply.resolve(parts);
-        await barrier();
-        if (!['physical', 'submit-failure'].includes(terminalMode)) {
-          assert.equal(codecs, 1);
-          assert.equal(bodyCalls, terminal === 'codec' || terminal === 'malformed' || /-(codec|malformed)$/.test(terminal) ? 0 : 1);
-          assert.deepEqual(closes, [1, 1]);
-        }
-        assert.equal(runtime.registry.size, 0);
-        assert.equal(await caller, result);
-        assert.equal(settlements, 1);
-        if (['submit-failure', 'admission-failure'].includes(terminalMode)) assert.equal(admitted, 0);
-      } finally {
-        runtime.close(); request.close();
-        parts[0].data = originalData;
-        parts[1].data = originalBodyData;
-        parts.forEach((part, index) => { part.close = originalClose[index]; if (closes[index] === 0) close[index](); });
-      }
-    });
+      });
+    }
   }
-}
 }
 
 for (const mapper of ['return', 'throw']) {
@@ -1045,89 +1608,179 @@ for (const mapper of ['return', 'throw']) {
     const mapped = new Error('mapped submit');
     let calls = 0;
     try {
-      const result = await observe(runtime.run(entry, () => { throw original; }, value => value, error => {
-        calls++; assert.equal(error, original);
-        if (mapper === 'throw') throw mapped;
-        return mapped;
-      }));
+      const result = await observe(
+        runtime.run(
+          entry,
+          () => {
+            throw original;
+          },
+          (value) => value,
+          (error) => {
+            calls++;
+            assert.equal(error, original);
+            if (mapper === 'throw') throw mapped;
+            return mapped;
+          }
+        )
+      );
       assert.equal(result.error, mapped);
       assert.equal(calls, 1);
       assert.equal(runtime.registry.size, 0);
-    } finally { runtime.close(); }
+    } finally {
+      runtime.close();
+    }
   });
 }
 
 for (const publicResult of ['create', 'map']) {
   for (const backpressured of [false, true]) {
-  test(`#2911 Dealer codec abort keeps reply winner/${publicResult}/${backpressured ? 'Backpressured' : 'Ok'}`, async () => {
-    const { ZLinkDealerChannelClientTransport } = require('../../packages/framework/dist/runtime/backend/node/node-dealer-channel-client-transport');
-    const { createZLinkRequest, mapZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
-    const runtime = new RequestRuntime();
-    const controller = new AbortController();
-    const physical = deferred();
-    const admission = deferred();
-    const reason = new Error('abort inside binding Message.data');
-    const request = zlink.Message.from('{}');
-    const parts = encodeChannelReplyParts({ channelName: 'channel', messageName: 'reply', correlationId: '0123456789abcdef0123456789abcdef' }, { answer: 42 }).map(value => zlink.Message.from(value));
-    const data = parts[1].data;
-    const close = parts.map(part => part.close);
-    const closes = parts.map(() => 0);
-    let codecs = 0, entry, pendingDuringCodec, sizeDuringCodec, admitted = 0, settlements = 0;
-    parts[1].data = function () {
-      codecs++;
-      pendingDuringCodec = entry.isPending();
-      sizeDuringCodec = runtime.registry.size;
-      controller.abort(reason);
-      return data.call(this);
-    };
-    parts.forEach((part, index) => {
-      part.close = function () { closes[index]++; close[index].call(this); };
+    test(`#2911 Dealer codec abort keeps reply winner/${publicResult}/${backpressured ? 'Backpressured' : 'Ok'}`, async () => {
+      const {
+        ZLinkDealerChannelClientTransport
+      } = require('../../packages/framework/dist/runtime/backend/node/node-dealer-channel-client-transport');
+      const {
+        createZLinkRequest,
+        mapZLinkRequestReply
+      } = require('../../packages/framework/dist/runtime/messaging/request-result');
+      const runtime = new RequestRuntime();
+      const controller = new AbortController();
+      const physical = deferred();
+      const admission = deferred();
+      const reason = new Error('abort inside binding Message.data');
+      const request = zlink.Message.from('{}');
+      const parts = encodeChannelReplyParts(
+        {
+          channelName: 'channel',
+          messageName: 'reply',
+          correlationId: '0123456789abcdef0123456789abcdef'
+        },
+        { answer: 42 }
+      ).map((value) => zlink.Message.from(value));
+      const data = parts[1].data;
+      const close = parts.map((part) => part.close);
+      const closes = parts.map(() => 0);
+      let codecs = 0,
+        entry,
+        pendingDuringCodec,
+        sizeDuringCodec,
+        admitted = 0,
+        settlements = 0;
+      parts[1].data = function () {
+        codecs++;
+        pendingDuringCodec = entry.isPending();
+        sizeDuringCodec = runtime.registry.size;
+        controller.abort(reason);
+        return data.call(this);
+      };
+      parts.forEach((part, index) => {
+        part.close = function () {
+          closes[index]++;
+          close[index].call(this);
+        };
+      });
+      const builder = {
+        message() {
+          return this;
+        },
+        timeout() {
+          return this;
+        },
+        submit() {
+          return {
+            result: backpressured ? zlink.SubmitResult.Backpressured : zlink.SubmitResult.Ok,
+            admitted: admission.promise,
+            reply: physical.promise
+          };
+        }
+      };
+      const transport = new ZLinkDealerChannelClientTransport(
+        {
+          request() {
+            return builder;
+          }
+        },
+        undefined,
+        runtime
+      );
+      let carrier;
+      const start = (onAdmitted) => {
+        carrier = transport.request(
+          'channel',
+          'request',
+          request,
+          1000,
+          controller.signal,
+          undefined,
+          () => {
+            admitted++;
+            onAdmitted?.();
+          }
+        );
+        entry = carrier.operation;
+        return carrier;
+      };
+      try {
+        const pending =
+          publicResult === 'create' ? createZLinkRequest(start) : mapZLinkRequestReply(start());
+        const caller = observe(pending).then((result) => {
+          settlements++;
+          return result;
+        });
+        assert.equal(carrier.pending, entry.promise);
+        assert.equal(pending, entry.promise);
+        admission.resolve();
+        physical.resolve(parts);
+        const result = await caller;
+        await barrier();
+        assert.ifError(result.error);
+        assert.deepEqual(result.value, { answer: 42 });
+        assert.equal(pendingDuringCodec, false);
+        assert.equal(sizeDuringCodec, 0);
+        assert.equal(codecs, 1);
+        assert.deepEqual(closes, [1, 1]);
+        assert.equal(admitted, 1);
+        assert.equal(settlements, 1);
+        assert.equal(runtime.registry.size, 0);
+      } finally {
+        runtime.close();
+        request.close();
+        parts[1].data = data;
+        parts.forEach((part, index) => {
+          part.close = close[index];
+          if (closes[index] === 0) close[index].call(part);
+        });
+      }
     });
-    const builder = { message() { return this; }, timeout() { return this; }, submit() {
-      return { result: backpressured ? zlink.SubmitResult.Backpressured : zlink.SubmitResult.Ok, admitted: admission.promise, reply: physical.promise };
-    } };
-    const transport = new ZLinkDealerChannelClientTransport({ request() { return builder; } }, undefined, runtime);
-    let carrier;
-    const start = onAdmitted => {
-      carrier = transport.request('channel', 'request', request, 1000, controller.signal, undefined, () => { admitted++; onAdmitted?.(); });
-      entry = carrier.operation;
-      return carrier;
-    };
-    try {
-      const pending = publicResult === 'create' ? createZLinkRequest(start) : mapZLinkRequestReply(start());
-      const caller = observe(pending).then(result => { settlements++; return result; });
-      assert.equal(carrier.pending, entry.promise);
-      assert.equal(pending, entry.promise);
-      admission.resolve();
-      physical.resolve(parts);
-      const result = await caller;
-      await barrier();
-      assert.ifError(result.error);
-      assert.deepEqual(result.value, { answer: 42 });
-      assert.equal(pendingDuringCodec, false);
-      assert.equal(sizeDuringCodec, 0);
-      assert.equal(codecs, 1);
-      assert.deepEqual(closes, [1, 1]);
-      assert.equal(admitted, 1);
-      assert.equal(settlements, 1);
-      assert.equal(runtime.registry.size, 0);
-    } finally {
-      runtime.close(); request.close();
-      parts[1].data = data;
-      parts.forEach((part, index) => { part.close = close[index]; if (closes[index] === 0) close[index].call(part); });
-    }
-  });
-}
+  }
 }
 
 test('#2911 observe codec throw rejects directly without failure fallback', async () => {
   const runtime = new RequestRuntime();
   const codecError = new Error('observe codec');
-  let entry, receiver, failed = 0, codecs = 0, pendingDuringCodec;
+  let entry,
+    receiver,
+    failed = 0,
+    codecs = 0,
+    pendingDuringCodec;
   try {
-    const caller = observe(runtime.observe(1000, (value, physical) => { entry = value; receiver = physical; }, () => {
-      codecs++; pendingDuringCodec = entry.isPending(); throw codecError;
-    }, () => { failed++; return 'incorrect fallback'; }));
+    const caller = observe(
+      runtime.observe(
+        1000,
+        (value, physical) => {
+          entry = value;
+          receiver = physical;
+        },
+        () => {
+          codecs++;
+          pendingDuringCodec = entry.isPending();
+          throw codecError;
+        },
+        () => {
+          failed++;
+          return 'incorrect fallback';
+        }
+      )
+    );
     receiver.operationCompleted(entry.id, 'raw', undefined);
     const result = await caller;
     assert.equal(result.error, codecError);
@@ -1135,26 +1788,54 @@ test('#2911 observe codec throw rejects directly without failure fallback', asyn
     assert.equal(codecs, 1);
     assert.equal(pendingDuringCodec, false);
     assert.equal(runtime.registry.size, 0);
-  } finally { runtime.close(); }
+  } finally {
+    runtime.close();
+  }
 });
 
-for (const terminal of ['normal', 'codec-abort', 'cancel', 'deadline', 'shutdown', 'shutdown-custom']) {
+for (const terminal of [
+  'normal',
+  'codec-abort',
+  'cancel',
+  'deadline',
+  'shutdown',
+  'shutdown-custom'
+]) {
   for (const throwing of [false, true]) {
     test(`#2911 observe retained codec/${terminal}/throw=${throwing}`, async () => {
       const runtime = new RequestRuntime();
       const controller = new AbortController();
       const reason = new Error(terminal);
       const codecError = new Error('late codec');
-      let entry, receiver, codecs = 0, failed = 0, pendingDuringCodec, failure;
+      let entry,
+        receiver,
+        codecs = 0,
+        failed = 0,
+        pendingDuringCodec,
+        failure;
       try {
-        const caller = observe(runtime.observe(1000, (value, physical) => {
-          entry = value; receiver = physical; entry.setSignal(controller.signal);
-        }, value => {
-          codecs++; pendingDuringCodec = entry.isPending();
-          if (terminal === 'codec-abort') controller.abort(reason);
-          if (throwing) throw codecError;
-          return value + 1;
-        }, error => { failed++; failure = error; throw error; }));
+        const caller = observe(
+          runtime.observe(
+            1000,
+            (value, physical) => {
+              entry = value;
+              receiver = physical;
+              entry.setSignal(controller.signal);
+            },
+            (value) => {
+              codecs++;
+              pendingDuringCodec = entry.isPending();
+              if (terminal === 'codec-abort') controller.abort(reason);
+              if (throwing) throw codecError;
+              return value + 1;
+            },
+            (error) => {
+              failed++;
+              failure = error;
+              throw error;
+            }
+          )
+        );
         if (terminal === 'cancel') controller.abort(reason);
         if (terminal === 'deadline') runtime.registry.expire(performance.now() + 2000, Infinity);
         if (terminal === 'shutdown') runtime.close();
@@ -1167,9 +1848,12 @@ for (const terminal of ['normal', 'codec-abort', 'cancel', 'deadline', 'shutdown
           assert.equal(result, before);
           assert.equal(failed, 1);
           assert.equal(result.error, failure);
-          if (terminal === 'cancel' || terminal === 'shutdown-custom') assert.equal(result.error, reason);
-          if (terminal === 'deadline') assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
-          if (terminal === 'shutdown') assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
+          if (terminal === 'cancel' || terminal === 'shutdown-custom')
+            assert.equal(result.error, reason);
+          if (terminal === 'deadline')
+            assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+          if (terminal === 'shutdown')
+            assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
         } else {
           assert.equal(failed, 0);
           if (throwing) assert.equal(result.error, codecError);
@@ -1178,7 +1862,9 @@ for (const terminal of ['normal', 'codec-abort', 'cancel', 'deadline', 'shutdown
         assert.equal(pendingDuringCodec, false);
         assert.equal(codecs, 1);
         assert.equal(runtime.registry.size, 0);
-      } finally { runtime.close(); }
+      } finally {
+        runtime.close();
+      }
     });
   }
 }
@@ -1189,16 +1875,32 @@ for (const throwing of [false, true]) {
       const runtime = new RequestRuntime();
       const reason = new Error('source');
       const mapped = new Error('onFailed');
-      let receiver, entry, calls = 0, failure, codecs = 0;
+      let receiver,
+        entry,
+        calls = 0,
+        failure,
+        codecs = 0;
       try {
-        const caller = observe(runtime.observe(1000, (value, physical) => {
-          entry = value; receiver = physical;
-          if (source === 'submit') throw reason;
-        }, value => { codecs++; return value; }, error => {
-          calls++; failure = error;
-          if (throwing) throw mapped;
-          return 'fallback';
-        }));
+        const caller = observe(
+          runtime.observe(
+            1000,
+            (value, physical) => {
+              entry = value;
+              receiver = physical;
+              if (source === 'submit') throw reason;
+            },
+            (value) => {
+              codecs++;
+              return value;
+            },
+            (error) => {
+              calls++;
+              failure = error;
+              if (throwing) throw mapped;
+              return 'fallback';
+            }
+          )
+        );
         if (source === 'receiver') receiver.operationFailed(entry.id, reason, undefined);
         const result = await caller;
         assert.equal(failure, reason);
@@ -1207,15 +1909,21 @@ for (const throwing of [false, true]) {
         if (throwing) assert.equal(result.error, mapped);
         else assert.deepEqual(result, { value: 'fallback' });
         assert.equal(runtime.registry.size, 0);
-      } finally { runtime.close(); }
+      } finally {
+        runtime.close();
+      }
     });
   }
 }
 
 for (const terminal of ['cancel', 'shutdown', 'build-throw']) {
   test(`#2911 Dealer terminal during builder blocks submit/${terminal}`, async () => {
-    const { ZLinkDealerChannelClientTransport } = require('../../packages/framework/dist/runtime/backend/node/node-dealer-channel-client-transport');
-    const { createZLinkRequest } = require('../../packages/framework/dist/runtime/messaging/request-result');
+    const {
+      ZLinkDealerChannelClientTransport
+    } = require('../../packages/framework/dist/runtime/backend/node/node-dealer-channel-client-transport');
+    const {
+      createZLinkRequest
+    } = require('../../packages/framework/dist/runtime/messaging/request-result');
     const runtime = new RequestRuntime();
     const controller = new AbortController();
     const reason = new Error(terminal);
@@ -1228,56 +1936,137 @@ for (const terminal of ['cancel', 'shutdown', 'build-throw']) {
         if (terminal === 'shutdown') runtime.close(reason);
         return this;
       },
-      timeout() { return this; },
-      submit() { submissions++; throw new Error('unexpected submit'); }
+      timeout() {
+        return this;
+      },
+      submit() {
+        submissions++;
+        throw new Error('unexpected submit');
+      }
     };
-    const transport = new ZLinkDealerChannelClientTransport({ request() { return builder; } }, undefined, runtime);
+    const transport = new ZLinkDealerChannelClientTransport(
+      {
+        request() {
+          return builder;
+        }
+      },
+      undefined,
+      runtime
+    );
     try {
-      const pending = createZLinkRequest(admitted => transport.request('channel', 'request', request, 1000, controller.signal, undefined, admitted));
+      const pending = createZLinkRequest((admitted) =>
+        transport.request(
+          'channel',
+          'request',
+          request,
+          1000,
+          controller.signal,
+          undefined,
+          admitted
+        )
+      );
       const outcomes = await Promise.allSettled([pending, pending.admitted]);
-      assert.deepEqual(outcomes.map(value => value.status), ['rejected', 'rejected']);
+      assert.deepEqual(
+        outcomes.map((value) => value.status),
+        ['rejected', 'rejected']
+      );
       assert.equal(outcomes[0].reason, reason);
       assert.equal(outcomes[1].reason, reason);
       assert.equal(submissions, 0);
       assert.equal(runtime.registry.size, 0);
-    } finally { runtime.close(); request.close(); }
+    } finally {
+      runtime.close();
+      request.close();
+    }
   });
 }
 
 for (const boundary of ['source', 'codec']) {
   for (const throwing of [false, true]) {
     test(`#2911 actual Dealer failure mapper/${boundary}/throw=${throwing}`, async (t) => {
-      const { ZLinkDealerChannelClientTransport } = require('../../packages/framework/dist/runtime/backend/node/node-dealer-channel-client-transport');
-      const { createZLinkRequest } = require('../../packages/framework/dist/runtime/messaging/request-result');
+      const {
+        ZLinkDealerChannelClientTransport
+      } = require('../../packages/framework/dist/runtime/backend/node/node-dealer-channel-client-transport');
+      const {
+        createZLinkRequest
+      } = require('../../packages/framework/dist/runtime/messaging/request-result');
       const multipart = require('../../packages/framework/dist/runtime/channels/channel-multipart');
       const runtime = new RequestRuntime();
-      const physical = deferred(), admission = deferred();
-      const reason = new Error(boundary), mapped = new Error('source mapped');
+      const physical = deferred(),
+        admission = deferred();
+      const reason = new Error(boundary),
+        mapped = new Error('source mapped');
       const request = zlink.Message.from('{}');
-      const parts = encodeChannelReplyParts({ channelName: 'channel', messageName: 'reply', correlationId: '0123456789abcdef0123456789abcdef' }, { answer: 42 }).map(value => zlink.Message.from(value));
+      const parts = encodeChannelReplyParts(
+        {
+          channelName: 'channel',
+          messageName: 'reply',
+          correlationId: '0123456789abcdef0123456789abcdef'
+        },
+        { answer: 42 }
+      ).map((value) => zlink.Message.from(value));
       const data = parts[1].data;
-      const close = parts.map(part => part.close), closes = [0, 0];
-      let calls = 0, sourceError, sourceLabel, codecs = 0;
+      const close = parts.map((part) => part.close),
+        closes = [0, 0];
+      let calls = 0,
+        sourceError,
+        sourceLabel,
+        codecs = 0;
       t.mock.method(multipart, 'mapRequestFailure', (error, label) => {
-        calls++; sourceError = error; sourceLabel = label;
+        calls++;
+        sourceError = error;
+        sourceLabel = label;
         if (throwing) throw mapped;
         return mapped;
       });
-      parts[1].data = function () { codecs++; throw reason; };
-      parts.forEach((part, index) => { part.close = function () { closes[index]++; close[index].call(this); }; });
-      const builder = { message() { return this; }, timeout() { return this; }, submit() {
-        return { result: zlink.SubmitResult.Backpressured, admitted: admission.promise, reply: physical.promise };
-      } };
-      const transport = new ZLinkDealerChannelClientTransport({ request() { return builder; } }, undefined, runtime);
+      parts[1].data = function () {
+        codecs++;
+        throw reason;
+      };
+      parts.forEach((part, index) => {
+        part.close = function () {
+          closes[index]++;
+          close[index].call(this);
+        };
+      });
+      const builder = {
+        message() {
+          return this;
+        },
+        timeout() {
+          return this;
+        },
+        submit() {
+          return {
+            result: zlink.SubmitResult.Backpressured,
+            admitted: admission.promise,
+            reply: physical.promise
+          };
+        }
+      };
+      const transport = new ZLinkDealerChannelClientTransport(
+        {
+          request() {
+            return builder;
+          }
+        },
+        undefined,
+        runtime
+      );
       try {
-        const pending = createZLinkRequest(admitted => transport.request('channel', 'request', request, 1000, undefined, undefined, admitted));
+        const pending = createZLinkRequest((admitted) =>
+          transport.request('channel', 'request', request, 1000, undefined, undefined, admitted)
+        );
         const outcomes = Promise.allSettled([pending, pending.admitted]);
         if (boundary === 'source') physical.reject(reason);
         else physical.resolve(parts);
         const results = await outcomes;
         admission.resolve();
         await barrier();
-        assert.deepEqual(results.map(result => result.status), ['rejected', 'rejected']);
+        assert.deepEqual(
+          results.map((result) => result.status),
+          ['rejected', 'rejected']
+        );
         assert.equal(results[0].reason, boundary === 'source' ? mapped : reason);
         assert.equal(results[1].reason, results[0].reason);
         assert.equal(calls, boundary === 'source' ? 1 : 0);
@@ -1289,9 +2078,14 @@ for (const boundary of ['source', 'codec']) {
         }
         assert.equal(runtime.registry.size, 0);
       } finally {
-        t.mock.restoreAll(); runtime.close(); request.close();
+        t.mock.restoreAll();
+        runtime.close();
+        request.close();
         parts[1].data = data;
-        parts.forEach((part, index) => { part.close = close[index]; if (closes[index] === 0) close[index].call(part); });
+        parts.forEach((part, index) => {
+          part.close = close[index];
+          if (closes[index] === 0) close[index].call(part);
+        });
       }
     });
   }
@@ -1306,25 +2100,86 @@ for (const throwing of [false, true]) {
     const submitted = deferred();
     const events = [];
     let mapped = 0;
-    entry.mapCaller(value => { mapped++; if (throwing) throw reason; return value; }, error => error);
-    const socket = wrapSocket({ request() { return {
-      message() { return this; }, timeout() { return this; }, submit() {
-        submitted.resolve();
-        return { result: zlink.SubmitResult.Ok, admitted: Promise.resolve(), reply: physical.promise };
-      }
-    }; }, close() {} });
-    const outbound = new ZLinkChannelOutboundOperations({
-      async awaitClientDealerForOutbound() { return socket; },
-      selectedClientServerRid() { return 'server'; }
-    }, undefined, {
-      flowCreationEnabled() { return false; },
-      beginOutbound(outcome, result) { return { trace() { events.push({ outcome, result }); } }; }
-    }, runtime);
-    const parts = encodeChannelReplyParts({ channelName: 'channel', messageName: 'reply', correlationId: '0123456789abcdef0123456789abcdef' }, { answer: 42 }).map(value => zlink.Message.from(value));
-    const close = parts.map(part => part.close), closes = [0, 0];
-    parts.forEach((part, index) => { part.close = function () { closes[index]++; close[index].call(this); }; });
+    entry.mapCaller(
+      (value) => {
+        mapped++;
+        if (throwing) throw reason;
+        return value;
+      },
+      (error) => error
+    );
+    const socket = wrapSocket({
+      request() {
+        return {
+          message() {
+            return this;
+          },
+          timeout() {
+            return this;
+          },
+          submit() {
+            submitted.resolve();
+            return {
+              result: zlink.SubmitResult.Ok,
+              admitted: Promise.resolve(),
+              reply: physical.promise
+            };
+          }
+        };
+      },
+      close() {}
+    });
+    const outbound = new ZLinkChannelOutboundOperations(
+      {
+        async awaitClientDealerForOutbound() {
+          return socket;
+        },
+        selectedClientServerRid() {
+          return 'server';
+        }
+      },
+      undefined,
+      {
+        flowCreationEnabled() {
+          return false;
+        },
+        beginOutbound(outcome, result) {
+          return {
+            trace() {
+              events.push({ outcome, result });
+            }
+          };
+        }
+      },
+      runtime
+    );
+    const parts = encodeChannelReplyParts(
+      {
+        channelName: 'channel',
+        messageName: 'reply',
+        correlationId: '0123456789abcdef0123456789abcdef'
+      },
+      { answer: 42 }
+    ).map((value) => zlink.Message.from(value));
+    const close = parts.map((part) => part.close),
+      closes = [0, 0];
+    parts.forEach((part, index) => {
+      part.close = function () {
+        closes[index]++;
+        close[index].call(this);
+      };
+    });
     try {
-      const pending = outbound.request('channel', 'request', {}, 1000, undefined, undefined, undefined, entry);
+      const pending = outbound.request(
+        'channel',
+        'request',
+        {},
+        1000,
+        undefined,
+        undefined,
+        undefined,
+        entry
+      );
       const caller = observe(pending);
       assert.equal(pending, entry.promise);
       assert.equal(outbound.pendingRequestCount('channel'), 1);
@@ -1338,12 +2193,17 @@ for (const throwing of [false, true]) {
       assert.equal(outbound.pendingRequestCount('channel'), 0);
       assert.equal(runtime.registry.size, 0);
       assert.deepEqual(closes, [1, 1]);
-      const terminals = events.filter(event => event.outcome === ZLinkRuntimeMessageFlowOutcome.ReplyReceived);
+      const terminals = events.filter(
+        (event) => event.outcome === ZLinkRuntimeMessageFlowOutcome.ReplyReceived
+      );
       assert.equal(terminals.length, 1);
       assert.equal(terminals[0].result, throwing ? 'failed' : 'succeeded');
     } finally {
       runtime.close();
-      parts.forEach((part, index) => { part.close = close[index]; if (closes[index] === 0) close[index].call(part); });
+      parts.forEach((part, index) => {
+        part.close = close[index];
+        if (closes[index] === 0) close[index].call(part);
+      });
       await socket.dispose();
     }
   });
@@ -2120,65 +2980,116 @@ for (const shared of [false, true]) {
   for (const kind of ['userSpotCreate', 'userSpotClose', 'actorCreate']) {
     for (const terminal of ['cancel', 'deadline', 'shutdown', 'lifecycle']) {
       for (const codec of ['valid', 'malformed', 'throwing']) {
-        test(`durable physical receiver/${shared ? 'shared' : 'standalone'}/${kind}/${terminal}/${codec}`, async t => {
-          const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+        test(`durable physical receiver/${shared ? 'shared' : 'standalone'}/${kind}/${terminal}/${codec}`, async (t) => {
+          const {
+            ServiceStatefulRuntime
+          } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
           const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
-          const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+          const {
+            RequestResult
+          } = require('../../packages/framework/dist/runtime/backend/runtime-values');
           let now = 1000;
           t.mock.method(performance, 'now', () => now);
           t.mock.timers.enable({ apis: ['setTimeout'] });
           const requests = shared ? new RequestRuntime() : undefined;
           const physical = deferred();
-          let submitted, correlation, intentRemoved, codecCalls = 0, submissions = 0;
+          let submitted,
+            correlation,
+            intentRemoved,
+            codecCalls = 0,
+            submissions = 0;
           const decode = wire.decodeStatefulReply;
           t.mock.method(wire, 'decodeStatefulReply', (...args) => {
             codecCalls++;
             if (codec === 'throwing') throw new Error('late codec failure');
             return decode(...args);
           });
-          const runtime = new ServiceStatefulRuntime({
-            setServiceIngress() {},
-            observePeerRoute: () => ({ ready: true }),
-            observePeerRouteChanged: () => () => {},
-            observePeerConnectionIntentRemoved(listener) {
-              intentRemoved = listener;
-              return () => {};
+          const runtime = new ServiceStatefulRuntime(
+            {
+              setServiceIngress() {},
+              observePeerRoute: () => ({ ready: true }),
+              observePeerRouteChanged: () => () => {},
+              observePeerConnectionIntentRemoved(listener) {
+                intentRemoved = listener;
+                return () => {};
+              },
+              requestService(_rid, _parts, timeoutMs, _admitted, pending) {
+                submissions++;
+                submitted = pending;
+                correlation = wire.decodeStatefulHeader(_parts[0]).correlation;
+                assert.equal(timeoutMs, 50);
+                assert.equal(pending.deadlineMs, 1050);
+                return physical.promise;
+              }
             },
-            requestService(_rid, _parts, timeoutMs, _admitted, pending) {
-              submissions++;
-              submitted = pending;
-              correlation = wire.decodeStatefulHeader(_parts[0]).correlation;
-              assert.equal(timeoutMs, 50);
-              assert.equal(pending.deadlineMs, 1050);
-              return physical.promise;
-            }
-          }, 'source', 7n, undefined, requests);
+            'source',
+            7n,
+            undefined,
+            requests
+          );
           try {
-            const common = { sourceNodeRid: 'source', sourceNodeGeneration: 7n,
-              deadlineUnixMs: BigInt(Date.now() + 50) };
-            const reservation = {
-              reservationId: 'reservation', expectedStoreVersion: 'version', objectGeneration: 3n,
-              authorityOwnerGeneration: 5n, targetNodeRid: 'target', targetNodeGeneration: 7n,
-              targetOwnerId: 'target-owner', targetOwnerLeaseGeneration: 7n, pendingCapacityDelta: 1
+            const common = {
+              sourceNodeRid: 'source',
+              sourceNodeGeneration: 7n,
+              deadlineUnixMs: BigInt(Date.now() + 50)
             };
-            const caller = observe(kind === 'userSpotCreate'
-              ? runtime.requestUserSpotCreate('target',
-                  { ...common, spotId: 'spot', stableType: 'Room', reservation }, 50)
-              : kind === 'actorCreate'
-                ? runtime.requestActorCreate('target', { ...common,
-                    operation: require('../../packages/framework/dist/runtime/locations/creation-operation-id').randomOperationId(),
-                    actorId: 'actor', stableType: 'Player', reservation }, 50)
-                : runtime.requestUserSpotClose('target', { ...common,
-                    target: { spotId: 'spot', objectGeneration: 3n, targetNodeRid: 'target',
-                      targetNodeGeneration: 7n, authorityOwnerGeneration: 5n, expectedStoreVersion: 'version' }
-                  }, 50));
+            const reservation = {
+              reservationId: 'reservation',
+              expectedStoreVersion: 'version',
+              objectGeneration: 3n,
+              authorityOwnerGeneration: 5n,
+              targetNodeRid: 'target',
+              targetNodeGeneration: 7n,
+              targetOwnerId: 'target-owner',
+              targetOwnerLeaseGeneration: 7n,
+              pendingCapacityDelta: 1
+            };
+            const caller = observe(
+              kind === 'userSpotCreate'
+                ? runtime.requestUserSpotCreate(
+                    'target',
+                    { ...common, spotId: 'spot', stableType: 'Room', reservation },
+                    50
+                  )
+                : kind === 'actorCreate'
+                  ? runtime.requestActorCreate(
+                      'target',
+                      {
+                        ...common,
+                        operation:
+                          require('../../packages/framework/dist/runtime/locations/creation-operation-id').randomOperationId(),
+                        actorId: 'actor',
+                        stableType: 'Player',
+                        reservation
+                      },
+                      50
+                    )
+                  : runtime.requestUserSpotClose(
+                      'target',
+                      {
+                        ...common,
+                        target: {
+                          spotId: 'spot',
+                          objectGeneration: 3n,
+                          targetNodeRid: 'target',
+                          targetNodeGeneration: 7n,
+                          authorityOwnerGeneration: 5n,
+                          expectedStoreVersion: 'version'
+                        }
+                      },
+                      50
+                    )
+            );
             await barrier();
             assert.equal(submissions, 1);
             assert(submitted.isPending());
             if (shared) assert.equal(requests.registry.size, 1);
             const cause = new Error('early public terminal');
             if (terminal === 'cancel') runtime.cancelPendingOperations(cause);
-            if (terminal === 'shutdown') { runtime.close(); requests?.close(); }
+            if (terminal === 'shutdown') {
+              runtime.close();
+              requests?.close();
+            }
             if (terminal === 'lifecycle') intentRemoved('target');
             if (terminal === 'deadline') {
               now += 50;
@@ -2192,12 +3103,18 @@ for (const shared of [false, true]) {
             assert.equal(codecCalls, 0);
             assert.equal(submitted.isPending(), false);
             if (shared) assert.equal(requests.registry.size, 0);
-            physical.resolve(codec === 'malformed' ? [Buffer.from('malformed')] : [
-              wire.encodeStatefulReply(correlation, RequestResult.Rejected, 15)
-            ]);
+            physical.resolve(
+              codec === 'malformed'
+                ? [Buffer.from('malformed')]
+                : [wire.encodeStatefulReply(correlation, RequestResult.Rejected, 15)]
+            );
             await barrier();
             assert.equal(codecCalls, 1, 'late physical reply reaches its original codec once');
-            assert.equal(await caller, early, 'late codec success or failure cannot change public terminal');
+            assert.equal(
+              await caller,
+              early,
+              'late codec success or failure cannot change public terminal'
+            );
             assert.equal(submissions, 1);
           } finally {
             runtime.close();
@@ -2281,7 +3198,15 @@ for (const terminal of ['normal', 'hook-failure', 'cancel', 'deadline', 'shutdow
               intentObservers.add(listener);
               return () => intentObservers.delete(listener);
             },
-            requestService(_target, _frames, remainingMs, _admitted, pending, receiver, onSubmitted) {
+            requestService(
+              _target,
+              _frames,
+              remainingMs,
+              _admitted,
+              pending,
+              receiver,
+              onSubmitted
+            ) {
               events.push('binding');
               assert.equal(
                 routeObservers.size,
@@ -2405,8 +3330,10 @@ for (const terminal of ['normal', 'hook-failure', 'cancel', 'deadline', 'shutdow
         locationStore: () => ({
           readAuthority: async () => (targetCommitted ? targetAuthority : sourceAuthority),
           readOwnerLease: async () => ({
-            kind: 'found', token: { ownerId: 'source-owner', leaseGeneration: 3n },
-            leaseExpiresAt: new Date(Date.now() + 60_000), storeNow: new Date()
+            kind: 'found',
+            token: { ownerId: 'source-owner', leaseGeneration: 3n },
+            leaseExpiresAt: new Date(Date.now() + 60_000),
+            storeNow: new Date()
           }),
           compareExchangeAuthority: async (_key, expected, mutation) => {
             assert.equal(expected, sourceAuthority.storeVersion);
@@ -2499,7 +3426,11 @@ for (const terminal of ['normal', 'hook-failure', 'cancel', 'deadline', 'shutdow
         physical.resolve(
           codec === 'malformed'
             ? [Buffer.from('malformed')]
-            : [control.encodeServiceRelocationControlResponse(codec === 'failed' ? { ...ready, kind: 'failed', failureCode: 17 } : ready)]
+            : [
+                control.encodeServiceRelocationControlResponse(
+                  codec === 'failed' ? { ...ready, kind: 'failed', failureCode: 17 } : ready
+                )
+              ]
         );
         if (!early && ['malformed', 'throwing'].includes(codec)) {
           await barrier();
@@ -2527,7 +3458,11 @@ for (const terminal of ['normal', 'hook-failure', 'cancel', 'deadline', 'shutdow
           await result.value.sourceCleanup();
         } else if (codec === 'throwing') assert.equal(result.error, codecFailure);
         else assert(result.error);
-        assert.equal(preserves, early || ['malformed', 'throwing'].includes(codec) ? 1 : 0, 'late decoding cannot authorize a second source restoration');
+        assert.equal(
+          preserves,
+          early || ['malformed', 'throwing'].includes(codec) ? 1 : 0,
+          'late decoding cannot authorize a second source restoration'
+        );
         assert.equal(hookSignal.aborted, true, 'reply terminal stops a stalled hook');
         hook.reject(new Error('hook rejected after fixed public outcome'));
         await barrier();
@@ -2551,53 +3486,80 @@ for (const shared of [false, true]) {
   for (const kind of ['userSpotCreate', 'boundSessionClose']) {
     for (const queued of [false, true]) {
       for (const malformed of [false, true]) {
-        test(`local physical receiver/${shared ? 'shared' : 'standalone'}/${kind}/queued=${queued}/malformed=${malformed}`, async t => {
-          const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+        test(`local physical receiver/${shared ? 'shared' : 'standalone'}/${kind}/queued=${queued}/malformed=${malformed}`, async (t) => {
+          const {
+            ServiceStatefulRuntime
+          } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
           const { withTestSessionOwners } = require('./fixtures/session-owner-descriptors');
           const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
-          const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+          const {
+            RequestResult
+          } = require('../../packages/framework/dist/runtime/backend/runtime-values');
           let now = 1000;
           t.mock.method(performance, 'now', () => now);
           t.mock.timers.enable({ apis: ['setTimeout'] });
           let timers = 0;
           const setTimer = globalThis.setTimeout;
-          t.mock.method(globalThis, 'setTimeout', (...args) => { timers++; return setTimer(...args); });
+          t.mock.method(globalThis, 'setTimeout', (...args) => {
+            timers++;
+            return setTimer(...args);
+          });
           const requests = shared ? new RequestRuntime() : undefined;
           const permit = deferred();
-          let closes = 0, handlers = 0, codecCalls = 0, finish, correlation;
+          let closes = 0,
+            handlers = 0,
+            codecCalls = 0,
+            finish,
+            correlation;
           const raw = {
             setServiceIngress() {},
             reserveLocalIngress: () => permit.promise
           };
-          const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'source', 7n,
-            undefined, requests));
+          const runtime = withTestSessionOwners(
+            new ServiceStatefulRuntime(raw, 'source', 7n, undefined, requests)
+          );
           const actor = runtime.createActor('local-actor').ref;
           if (kind === 'boundSessionClose')
             await runtime.bindSession('session', actor, 50, async () => true).promise;
           const decode = wire.decodeStatefulReply;
           t.mock.method(wire, 'decodeStatefulReply', (...args) => {
-            codecCalls++; return decode(...args);
+            codecCalls++;
+            return decode(...args);
           });
-          t.mock.method(runtime, 'ingress', async record => {
+          t.mock.method(runtime, 'ingress', async (record) => {
             handlers++;
             finish = record.reply;
             correlation = record.requestSequence;
             return 'infrastructure';
           });
           try {
-            const operation = kind === 'boundSessionClose'
-              ? runtime.closeBoundSession(actor, 1n, 50).promise
-              : runtime.requestUserSpotOperation('source', Buffer.alloc(8), 77n, 'userSpotCreate', 50);
+            const operation =
+              kind === 'boundSessionClose'
+                ? runtime.closeBoundSession(actor, 1n, 50).promise
+                : runtime.requestUserSpotOperation(
+                    'source',
+                    Buffer.alloc(8),
+                    77n,
+                    'userSpotCreate',
+                    50
+                  );
             const caller = observe(operation);
             await barrier();
             assert.equal(handlers, 0);
             if (!queued) {
-              permit.resolve({ close() { closes++; } });
+              permit.resolve({
+                close() {
+                  closes++;
+                }
+              });
               await barrier();
               assert.equal(handlers, 1);
             }
-            assert.equal(timers, shared ? 1 : 0,
-              'only the existing shared registry scheduler may create a timer');
+            assert.equal(
+              timers,
+              shared ? 1 : 0,
+              'only the existing shared registry scheduler may create a timer'
+            );
             now += 50;
             if (shared) t.mock.timers.tick(50);
             else assert.equal(runtime.expireOperations(now, Number.POSITIVE_INFINITY), 1);
@@ -2607,21 +3569,32 @@ for (const shared of [false, true]) {
             assert.equal(runtime.pendingOperationCount, 0);
             assert.equal(codecCalls, 0);
             if (queued) {
-              permit.resolve({ close() { closes++; } });
+              permit.resolve({
+                close() {
+                  closes++;
+                }
+              });
               await barrier();
               assert.equal(handlers, 0, 'expired queued operation cannot start local ingress');
               assert.equal(codecCalls, 0, 'no physical reply is synthesized before ingress');
             } else {
-              finish(malformed ? [Buffer.from('malformed')] : [
-                wire.encodeStatefulReply(correlation, RequestResult.Rejected, 15)
-              ]);
+              finish(
+                malformed
+                  ? [Buffer.from('malformed')]
+                  : [wire.encodeStatefulReply(correlation, RequestResult.Rejected, 15)]
+              );
               await barrier();
-              assert.equal(codecCalls, 1, 'started local ingress retains its typed physical decoder');
+              assert.equal(
+                codecCalls,
+                1,
+                'started local ingress retains its typed physical decoder'
+              );
             }
             assert.equal(closes, 1, 'acquired application owner is released exactly once');
             assert.equal(await caller, early);
           } finally {
-            runtime.close(); requests?.close();
+            runtime.close();
+            requests?.close();
           }
         });
       }
@@ -2629,23 +3602,44 @@ for (const shared of [false, true]) {
   }
 }
 
-
 for (const destinationMode of [false, true]) {
   test(`typed Channel real mesh late physical codec1 close1/destination=${destinationMode}`, async (t) => {
-    const { ZLinkRuntimeRouteTransport } = require('../../packages/framework/dist/runtime/channels/channel-transports');
-    const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
-    const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
-    const { ServiceMailbox } = require('../../packages/framework/dist/runtime/foundation/service-mailbox');
-    const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
-    const { SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
+    const {
+      ZLinkRuntimeRouteTransport
+    } = require('../../packages/framework/dist/runtime/channels/channel-transports');
+    const {
+      ZLinkMeshCompletionTable
+    } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+    const {
+      ZLinkNodeRawMeshBackend
+    } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+    const {
+      ServiceMailbox
+    } = require('../../packages/framework/dist/runtime/foundation/service-mailbox');
+    const {
+      ZLinkBufferMessage
+    } = require('../../packages/framework/dist/runtime/backend/runtime-message');
+    const {
+      SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+    } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
     const runtime = new RequestRuntime();
     const controller = new AbortController();
     const entry = runtime.begin(1000, controller.signal);
     const table = new ZLinkMeshCompletionTable();
-    let deliver, submissions = 0, codecs = 0, forwarded = 0;
-    const raw = { mailbox: new ServiceMailbox(), close() { this.mailbox.close(); } };
+    let deliver,
+      submissions = 0,
+      codecs = 0,
+      forwarded = 0;
+    const raw = {
+      mailbox: new ServiceMailbox(),
+      close() {
+        this.mailbox.close();
+      }
+    };
     const stateful = {
-      entrySpot() { return { ref: { spotId: 'source', generation: 1n } }; },
+      entrySpot() {
+        return { ref: { spotId: 'source', generation: 1n } };
+      },
       requestToSpot(_source, _target, _payload, _timeout, admitted, pending, receiver) {
         submissions++;
         admitted?.();
@@ -2653,48 +3647,129 @@ for (const destinationMode of [false, true]) {
         return pending;
       }
     };
-    const backend = new ZLinkNodeRawMeshBackend('mesh', 'source', {}, undefined, undefined, undefined, undefined, { raw, stateful });
-    const transport = new ZLinkRuntimeRouteTransport(() => undefined, undefined,
+    const backend = new ZLinkNodeRawMeshBackend(
+      'mesh',
+      'source',
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { raw, stateful }
+    );
+    const transport = new ZLinkRuntimeRouteTransport(
+      () => undefined,
+      undefined,
       () => ({ meshNode: () => backend, meshCompletionTable: () => table }),
-      { serializers: new Map([[CONTENT_TYPE, { serialize(value) { return framework.ZLinkEncodedPayload.from(Buffer.from(JSON.stringify(value))); }, deserialize() { codecs++; return { answer: 42 }; } }]]) },
-      undefined, undefined, undefined, () => false, undefined, runtime);
-    const parts = encodeChannelReplyParts({ channelName: 'mesh', messageName: 'reply', correlationId: '0123456789abcdef0123456789abcdef' }, { answer: 42 });
-    const header = JSON.parse(parts[0].toString()); header.contentType = CONTENT_TYPE;
+      {
+        serializers: new Map([
+          [
+            CONTENT_TYPE,
+            {
+              serialize(value) {
+                return framework.ZLinkEncodedPayload.from(Buffer.from(JSON.stringify(value)));
+              },
+              deserialize() {
+                codecs++;
+                return { answer: 42 };
+              }
+            }
+          ]
+        ])
+      },
+      undefined,
+      undefined,
+      undefined,
+      () => false,
+      undefined,
+      runtime
+    );
+    const parts = encodeChannelReplyParts(
+      {
+        channelName: 'mesh',
+        messageName: 'reply',
+        correlationId: '0123456789abcdef0123456789abcdef'
+      },
+      { answer: 42 }
+    ).map((part) => (typeof part === 'string' ? Buffer.from(part) : part));
+    const header = JSON.parse(parts[0].toString());
+    header.contentType = CONTENT_TYPE;
     parts[0] = Buffer.from(JSON.stringify(header));
     const payload = Buffer.alloc(4 + parts.reduce((size, part) => size + 4 + part.length, 0));
     payload.writeUInt32BE(parts.length, 0);
     let offset = 4;
-    for (const part of parts) { payload.writeUInt32BE(part.length, offset); offset += 4; payload.set(part, offset); offset += part.length; }
+    for (const part of parts) {
+      payload.writeUInt32BE(part.length, offset);
+      offset += 4;
+      payload.set(part, offset);
+      offset += part.length;
+    }
     const closes = parts.map(() => 0);
     const close = ZLinkBufferMessage.prototype.close;
     t.mock.method(ZLinkBufferMessage.prototype, 'close', function () {
-      const index = parts.findIndex(part => part.equals(this.data()));
+      const index = parts.findIndex((part) => part.equals(this.data()));
       if (index !== -1) closes[index]++;
       return close.call(this);
     });
-    const destination = destinationMode ? {
-      operationCompleted(_id, value) { forwarded++; entry.complete(value); },
-      operationFailed(_id, error) { entry.fail(error); }
-    } : undefined;
+    const destination = destinationMode
+      ? {
+          operationCompleted(_id, value) {
+            forwarded++;
+            entry.complete(value);
+          },
+          operationFailed(_id, error) {
+            entry.fail(error);
+          }
+        }
+      : undefined;
     try {
-      const result = transport.requestToSpot({ routerChannelId: 'mesh', targetNodeRid: 'peer', spotId: 'spot',
-        spotKind: framework.ZLinkSpotKind.User, targetSpotGeneration: 1n, targetNodeGeneration: 1n,
-        authorityOwnerGeneration: 1n, targetOwnerId: 'owner', ownerLeaseGeneration: 1n, authorityStoreVersion: 'v1'
-      }, {}, { packetName: 'Probe', timeoutMs: 1000, signal: controller.signal, requestOperation: entry }, destination);
+      const result = transport.requestToSpot(
+        {
+          routerChannelId: 'mesh',
+          targetNodeRid: 'peer',
+          spotId: 'spot',
+          spotKind: framework.ZLinkSpotKind.User,
+          targetSpotGeneration: 1n,
+          targetNodeGeneration: 1n,
+          authorityOwnerGeneration: 1n,
+          targetOwnerId: 'owner',
+          ownerLeaseGeneration: 1n,
+          authorityStoreVersion: 'v1'
+        },
+        {},
+        {
+          packetName: 'Probe',
+          timeoutMs: 1000,
+          signal: controller.signal,
+          requestOperation: entry
+        },
+        destination
+      );
       const caller = observe(result.pending);
       const reason = new Error('original terminal before normal physical reply');
       controller.abort(reason);
       assert.equal((await caller).error, reason);
-      deliver({ terminalResult: 0, failureCode: 0, payload: { contentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE, payload } });
+      deliver({
+        terminalResult: 0,
+        failureCode: 0,
+        payload: { contentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE, payload }
+      });
       await barrier();
       assert.equal(submissions, 1);
       assert.equal(codecs, 1);
-      assert.deepEqual(closes, parts.map(() => 1));
+      assert.deepEqual(
+        closes,
+        parts.map(() => 1)
+      );
       assert.equal(forwarded, destinationMode ? 1 : 0);
       assert.equal((await caller).error, reason);
       assert.equal(runtime.registry.size, 0);
       assert.equal(table.pendingCount, 0);
-    } finally { runtime.close(); table.dispose(); raw.close(); }
+    } finally {
+      runtime.close();
+      table.dispose();
+      raw.close();
+    }
   });
 }
 
@@ -2790,10 +3865,26 @@ for (const boundary of ['router', 'bound-router', 'named', 'bridge', 'local']) {
         );
       if (boundary === 'local') strategy.setSpotNodes(new Map([['route', { routingId: 'peer' }]]));
       let delivered = 0;
-      const pending = strategy.routeRequestToSpot(target, 'Probe', {}, undefined, undefined, undefined, undefined, undefined, {
-        operationCompleted(id, value) { delivered++; runtime.registry.handle(id).complete({ answer: value.answer + 1 }); },
-        operationFailed(id, error) { delivered++; runtime.registry.handle(id).fail(error); }
-      });
+      const pending = strategy.routeRequestToSpot(
+        target,
+        'Probe',
+        {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          operationCompleted(id, value) {
+            delivered++;
+            runtime.registry.handle(id).complete({ answer: value.answer + 1 });
+          },
+          operationFailed(id, error) {
+            delivered++;
+            runtime.registry.handle(id).fail(error);
+          }
+        }
+      );
       const outcome = observe(pending);
       try {
         assert.equal(sourceCalls, 1);
@@ -2838,37 +3929,71 @@ for (const boundary of ['router', 'bound-router', 'named', 'bridge', 'local']) {
   }
 }
 
-
 for (const cancelled of [false, true]) {
   test(`SourceSpot typed destination keeps physical decoder and original alias/cancel=${cancelled}`, async (t) => {
-    const { ZLinkSourceSpotRouter } = require('../../packages/framework/dist/runtime/channels/source-spot-router');
-    const { SPOT_DIRECT_ENVELOPE } = require('../../packages/framework/dist/runtime/channels/spot-direct-envelope');
-    const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
+    const {
+      ZLinkSourceSpotRouter
+    } = require('../../packages/framework/dist/runtime/channels/source-spot-router');
+    const {
+      SPOT_DIRECT_ENVELOPE
+    } = require('../../packages/framework/dist/runtime/channels/spot-direct-envelope');
+    const {
+      ZLinkBufferMessage
+    } = require('../../packages/framework/dist/runtime/backend/runtime-message');
     const runtime = new RequestRuntime();
     const controller = new AbortController();
     const entry = runtime.begin(1000, controller.signal);
     const caller = observe(entry.promise);
     const router = new ZLinkSourceSpotRouter(1000, runtime);
-    let physical, deliveries = 0;
-    const source = { requestToSpot(_node, _spot, _parts, _timeout, _admitted, operation, receiver) {
-      assert.equal(operation, entry); physical = receiver;
-    } };
-    const reply = ZLinkBufferMessage.from(JSON.stringify({ marker: SPOT_DIRECT_ENVELOPE, ok: true, response: { answer: 42 } }));
+    let physical,
+      deliveries = 0;
+    const source = {
+      requestToSpot(_node, _spot, _parts, _timeout, _admitted, operation, receiver) {
+        assert.equal(operation, entry);
+        physical = receiver;
+      }
+    };
+    const reply = ZLinkBufferMessage.from(
+      JSON.stringify({ marker: SPOT_DIRECT_ENVELOPE, ok: true, response: { answer: 42 } })
+    );
     const closed = t.mock.method(reply, 'close');
-    const result = router.request(source, { routerChannelId: 'route', targetNodeRid: 'peer', spotId: 'spot' }, 'Probe', {}, 1000, controller.signal, undefined, entry, {
-      operationCompleted(id, value) { deliveries++; assert.equal(id, entry.id); entry.complete(value); },
-      operationFailed(_id, error) { entry.fail(error); }
-    });
+    const result = router.request(
+      source,
+      { routerChannelId: 'route', targetNodeRid: 'peer', spotId: 'spot' },
+      'Probe',
+      {},
+      1000,
+      controller.signal,
+      undefined,
+      entry,
+      {
+        operationCompleted(id, value) {
+          deliveries++;
+          assert.equal(id, entry.id);
+          entry.complete(value);
+        },
+        operationFailed(_id, error) {
+          entry.fail(error);
+        }
+      }
+    );
     const reason = new Error('SourceSpot original cancellation');
     try {
       assert.equal(result, entry.promise);
-      if (cancelled) { controller.abort(reason); assert.equal((await caller).error, reason); }
+      if (cancelled) {
+        controller.abort(reason);
+        assert.equal((await caller).error, reason);
+      }
       physical.operationCompleted(entry.id, [reply], undefined);
       const actual = await caller;
-      assert.equal(deliveries, 1); assert.equal(closed.mock.callCount(), 1);
-      if (cancelled) assert.equal(actual.error, reason); else assert.deepEqual(actual.value, { answer: 42 });
+      assert.equal(deliveries, 1);
+      assert.equal(closed.mock.callCount(), 1);
+      if (cancelled) assert.equal(actual.error, reason);
+      else assert.deepEqual(actual.value, { answer: 42 });
       assert.equal(runtime.registry.size, 0);
-    } finally { runtime.close(); }
+    } finally {
+      runtime.close();
+    }
   });
 }
 
@@ -2878,35 +4003,72 @@ for (const existing of [false, true]) {
     const reason = new Error('already aborted destination');
     const signal = AbortSignal.abort(reason);
     const entry = existing ? runtime.begin(1000, signal) : undefined;
-    let starts = 0, failures = 0;
-    const result = runtime.prepare(1000, signal, () => { starts++; }, value => value, error => error, entry, {
-      operationCompleted() { assert.fail('no physical reply before submit'); },
-      operationFailed(_id, error) { failures++; assert.equal(error, reason); }
-    });
+    let starts = 0,
+      failures = 0;
+    const result = runtime.prepare(
+      1000,
+      signal,
+      () => {
+        starts++;
+      },
+      (value) => value,
+      (error) => error,
+      entry,
+      {
+        operationCompleted() {
+          assert.fail('no physical reply before submit');
+        },
+        operationFailed(_id, error) {
+          failures++;
+          assert.equal(error, reason);
+        }
+      }
+    );
     try {
       assert.equal((await observe(result.pending)).error, reason);
       assert.equal(result.pending, result.operation.promise);
       if (existing) assert.equal(result.operation, entry);
-      assert.equal(starts, 0); assert.equal(failures, 1); assert.equal(runtime.registry.size, 0);
-    } finally { runtime.close(); }
+      assert.equal(starts, 0);
+      assert.equal(failures, 1);
+      assert.equal(runtime.registry.size, 0);
+    } finally {
+      runtime.close();
+    }
   });
 }
-
 
 test('prepared pre-aborted destination does not submit while existing workflow failure is queued', async () => {
   const runtime = new RequestRuntime();
   const entry = runtime.begin(1000);
   const reason = new Error('pre-aborted workflow');
-  let starts = 0, failures = 0;
-  const result = runtime.prepare(1000, AbortSignal.abort(reason), () => { starts++; }, value => value, error => error, entry, {
-    operationCompleted() { assert.fail('no submitted physical result'); },
-    operationFailed(_id, error) { failures++; queueMicrotask(() => entry.fail(error)); }
-  });
+  let starts = 0,
+    failures = 0;
+  const result = runtime.prepare(
+    1000,
+    AbortSignal.abort(reason),
+    () => {
+      starts++;
+    },
+    (value) => value,
+    (error) => error,
+    entry,
+    {
+      operationCompleted() {
+        assert.fail('no submitted physical result');
+      },
+      operationFailed(_id, error) {
+        failures++;
+        queueMicrotask(() => entry.fail(error));
+      }
+    }
+  );
   try {
     assert.equal(starts, 0);
     assert.equal(failures, 1);
     assert.equal(result.pending, entry.promise);
     assert.equal((await observe(result.pending)).error, reason);
     assert.equal(runtime.registry.size, 0);
-  } finally { runtime.close(); }
+  } finally {
+    runtime.close();
+  }
 });

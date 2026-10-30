@@ -10,7 +10,7 @@ const OWNERS = [
   '/runtime/backend/node/node-raw-binding-port.js',
   '/runtime/messaging/request-result.js'
 ];
-test('typed remote requests use two Framework completion Promises per reply', async (t) => {
+test('typed remote requests use one Framework binding-observation Promise per reply', async (t) => {
   const pair = await frameworkPair();
   const count = 100;
   let active = false;
@@ -52,7 +52,11 @@ test('typed remote requests use two Framework completion Promises per reply', as
     t.diagnostic(JSON.stringify({ framework, binding, count, sites: [...sites] }));
     // This positive control catches a disabled sampler or an invalid path filter.
     assert.ok(binding >= 4 * count, 'binding completion allocation control');
-    assert.equal(framework, 2 * count, 'one binding observation and one public reply per request');
+    assert.equal(
+      framework,
+      count,
+      'one binding observation per request; public reply reuses the registry Promise'
+    );
   } finally {
     active = false;
     hook.disable();
