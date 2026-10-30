@@ -900,28 +900,6 @@ TEST (RoutePayloadOwnership, TypedSendRetainsPayloadWhenSerializerDestroysTheCal
     EXPECT_FALSE (delivered);
 }
 
-// Size of the one allocation that `make` performs: a task's shared state.
-template <typename TMake> std::size_t single_allocation_size (TMake make)
-{
-    std::array<tests::allocation_event_t, 8> events{};
-    tests::allocation_event_log_t log{events.data (), events.size ()};
-    tests::allocation_event_log = &log;
-    const auto count = tests::count_allocations (make);
-    tests::allocation_event_log = nullptr;
-    EXPECT_EQ (1u, count);
-    return count == 1 ? events[0].size : 0;
-}
-
-template <typename TTask> std::size_t public_task_state_allocation_size ()
-{
-    using promise_t = typename TTask::promise_type;
-    if constexpr (requires { typename promise_t::completion_state_t; }) {
-        using state_t = typename promise_t::completion_state_t;
-        return single_allocation_size ([] { (void) std::make_shared<state_t> (); });
-    } else
-        return single_allocation_size ([] { TTask ready (result_t<void>::success ()); });
-}
-
 struct route_send_fixture_t
 {
     serializer_registry_t serializers;
@@ -948,20 +926,25 @@ struct route_send_fixture_t
 // The transport boundary is the only coroutine between the call and the transport task.
 TEST (RoutePayloadOwnership, NodeSendCreatesOneTaskAboveTheTransport)
 {
-    const auto public_state = public_task_state_allocation_size<task_t<void>> ();
-    const auto transport_state = single_allocation_size ([] {
-        task_t<result_t<void>> ready (
-          result_t<result_t<void>>::success (result_t<void>::success ()));
-    });
-    ASSERT_NE (0u, public_state);
-    ASSERT_NE (0u, transport_state);
-    ASSERT_NE (public_state, transport_state);
     int delivered = 0;
+    std::size_t before_transport = 0;
+    std::size_t codec_buffers = 0;
+    std::size_t transport_states = 0;
     route_send_fixture_t fixture (
-      [&] (const zlink::routing_id_t &, runtime::messaging::message_parts_t) {
+      [&] (const zlink::routing_id_t &, runtime::messaging::message_parts_t parts) {
           ++delivered;
-          return task_t<result_t<void>> (
-            result_t<result_t<void>>::success (result_t<void>::success ()));
+          const auto before = tests::tracked_allocation_count;
+          if (tests::tracking_allocations) {
+              before_transport = before;
+              const auto &log = *tests::allocation_event_log;
+              for (std::size_t index = 0; index < log.count; ++index)
+                  codec_buffers += log.events[index].memory == parts.items ().data () ? 1 : 0;
+          }
+          auto ready =
+            task_t<result_t<void>> (result_t<result_t<void>>::success (result_t<void>::success ()));
+          if (tests::tracking_allocations)
+              transport_states = tests::tracked_allocation_count - before;
+          return ready;
       });
     for (int warmup = 0; warmup < 4; ++warmup) {
         auto call = fixture.send ();
@@ -974,14 +957,15 @@ TEST (RoutePayloadOwnership, NodeSendCreatesOneTaskAboveTheTransport)
     const auto total = tests::count_allocations ([&] { call.async ().result ().value (); });
     tests::allocation_event_log = nullptr;
     ASSERT_FALSE (log.overflow);
-    std::size_t public_states = 0;
-    std::size_t transport_states = 0;
+    // A coroutine allocates its frame before constructing its promise. Before
+    // transport entry, the remaining allocations are the public state and the
+    // codec vector, identified by its buffer address rather than allocation size.
+    ASSERT_EQ (1u, codec_buffers);
+    ASSERT_GE (before_transport, 1u + codec_buffers);
+    const auto public_states = before_transport - 1 - codec_buffers;
     std::ostringstream sizes;
-    for (std::size_t index = 0; index < log.count; ++index) {
+    for (std::size_t index = 0; index < log.count; ++index)
         sizes << events[index].size << ' ';
-        public_states += events[index].size == public_state ? 1 : 0;
-        transport_states += events[index].size == transport_state ? 1 : 0;
-    }
     std::cout << "route-send allocations=" << total << " public-task-states=" << public_states
               << " result-task-states=" << transport_states << " sizes=" << sizes.str () << '\n';
     EXPECT_EQ (5, delivered);
@@ -989,6 +973,7 @@ TEST (RoutePayloadOwnership, NodeSendCreatesOneTaskAboveTheTransport)
     // between them adds a task state and a frame for every message.
     EXPECT_EQ (1u, public_states);
     EXPECT_EQ (1u, transport_states);
+    EXPECT_EQ (4u, total);
 }
 
 // Hot path E4: a deferred transport exception becomes internal_failure at the transport
@@ -1145,32 +1130,45 @@ TEST (RouteHandlerBoundary, DispatcherOwnsPermitCallbackForSuspension)
 
 TEST (RouteHandlerBoundary, DispatcherResolvesHandlerOnce)
 {
-    service_collection_t services;
-    services.add_singleton<route_boundary_handler_t> ();
-    auto provider = services.build_provider ();
-    serializer_registry_t serializers;
-    detail::route_handler_registry_t handlers;
-    const std::string packet (4096, 'p');
-    handlers.on_send<route_boundary_handler_t, int> ("mesh", packet,
-                                                     &route_boundary_handler_t::send);
-    detail::no_route_internal_packet_dispatcher_t internal;
-    detail::route_packet_dispatcher_t dispatcher ("mesh", provider, serializers, handlers,
-                                                  internal);
-    runtime::messaging::envelope_header_t header;
-    header.kind = runtime::messaging::message_kind_t::command;
-    header.channel_name = "mesh";
-    header.message_name = packet;
-    header.content_type = "application/json";
-    auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
-      header, zlink::message_t::from (std::string ("42")));
-    detail::route_received_packet_t received{zlink::routing_id_t::from ("source"), std::nullopt,
-                                             std::move (encoded)};
-    ASSERT_TRUE (dispatcher.dispatch (received, header).result ());
-    // Only the header and context copy the packet name; lookup borrows both key strings.
-    const auto copies = tests::count_allocations (
-      [&] { EXPECT_TRUE (dispatcher.dispatch (received, header).result ()); }, packet.size () + 1);
-    EXPECT_EQ (2u, copies);
-    EXPECT_EQ (2, provider.get_required<route_boundary_handler_t> ().calls);
+    const auto measure_dispatch = [] (std::size_t packet_length) {
+        service_collection_t services;
+        services.add_singleton<route_boundary_handler_t> ();
+        auto provider = services.build_provider ();
+        serializer_registry_t serializers;
+        detail::route_handler_registry_t handlers;
+        const std::string packet (packet_length, 'p');
+        handlers.on_send<route_boundary_handler_t, int> ("mesh", packet,
+                                                         &route_boundary_handler_t::send);
+        detail::no_route_internal_packet_dispatcher_t internal;
+        detail::route_packet_dispatcher_t dispatcher ("mesh", provider, serializers, handlers,
+                                                      internal);
+        runtime::messaging::envelope_header_t header;
+        header.kind = runtime::messaging::message_kind_t::command;
+        header.channel_name = "mesh";
+        header.message_name = packet;
+        header.content_type = "application/json";
+        auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+          header, zlink::message_t::from (std::string ("42")));
+        detail::route_received_packet_t received{zlink::routing_id_t::from ("source"), std::nullopt,
+                                                 std::move (encoded)};
+        EXPECT_TRUE (dispatcher.dispatch (received, header).result ());
+        const auto measured = tests::measure_allocations (
+          [&] { EXPECT_TRUE (dispatcher.dispatch (received, header).result ()); });
+        EXPECT_EQ (2, provider.get_required<route_boundary_handler_t> ().calls);
+        return measured;
+    };
+    constexpr std::size_t packet_length = 4096;
+    constexpr std::size_t longer_packet_length = 8192;
+    const auto original = measure_dispatch (packet_length);
+    const auto longer = measure_dispatch (longer_packet_length);
+    // Only the header and context copy the packet name; lookup borrows both key
+    // strings. Their byte growth distinguishes copies from fixed-size allocations.
+    EXPECT_EQ (original.count, longer.count);
+    ASSERT_GE (longer.bytes, original.bytes);
+    const auto extra_bytes = longer.bytes - original.bytes;
+    const auto length_growth = longer_packet_length - packet_length;
+    EXPECT_EQ (0u, extra_bytes % length_growth);
+    EXPECT_EQ (2u, extra_bytes / length_growth);
 }
 
 TEST (RouteHandlerBoundary, DecodeFailureDoesNotReleasePermitForHandlerStart)

@@ -2857,7 +2857,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
     target_link_options(test_cpp_framework_idle_receive_cost PRIVATE
       "-Wl,--wrap=_ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_16receive_record_tESt6vectorINS_9message_tESaISD_EEEEbS3_IFbvEE"
-      "-Wl,--wrap=_ZN5zlink9framework6detail35dispatch_completion_receive_handoffERKSt8functionIFbvEERKPNS1_23completion_dispatcher_tE"
+      "-Wl,--wrap=_ZN5zlink9framework6detail35dispatch_completion_receive_handoffERKSt8functionIFbvEERKSt10shared_ptrINS1_23completion_dispatcher_tEE"
       "-Wl,--wrap=_ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE"
     )
   endif()

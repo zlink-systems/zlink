@@ -3439,7 +3439,7 @@ void mesh_node_host_service_t::stop () noexcept
         node->signal_dispatch_activity ();
     if (_application_dispatch)
         _runtime_failures->capture ([&] { _application_dispatch->drain (); });
-    _completion_dispatcher = nullptr;
+    _completion_dispatcher.reset ();
     for (auto &node : _nodes)
         _runtime_failures->capture ([&] { node->bind_descriptor_publisher ({}); });
     const auto owner = current_location_owner ();

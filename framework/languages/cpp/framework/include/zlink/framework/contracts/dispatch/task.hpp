@@ -56,7 +56,7 @@ inline constexpr char registered_execution_context_shutting_down_message[] =
 // binding operations own no executor lifetime; invocation and post admission
 // are serialized with host shutdown.
 class completion_dispatcher_t;
-using completion_dispatcher_borrow_t = completion_dispatcher_t *;
+using completion_dispatcher_borrow_t = std::shared_ptr<completion_dispatcher_t>;
 task_scheduler_t capture_runtime_native_continuation_scheduler (
   completion_dispatcher_borrow_t *dispatcher = nullptr);
 task_scheduler_t capture_runtime_scope_exit_scheduler ();
@@ -76,10 +76,17 @@ inline bool dispatch_shutdown_fallback (std::function<void ()> &work,
                                         bool inline_allowed,
                                         completion_dispatcher_borrow_t dispatcher = {})
 {
-    if (wait_owner.stop_possible ())
+    if (wait_owner.stop_possible () || !work)
         return false;
-    dispatch_completion (std::move (work), inline_allowed, nullptr, std::move (dispatcher));
-    return true;
+    try {
+        dispatch_completion (std::move (work), inline_allowed, nullptr, std::move (dispatcher));
+        return true;
+    }
+    catch (const framework_exception_t &error) {
+        if (error.kind () != framework_error_kind_t::shutting_down)
+            throw;
+        return false;
+    }
 }
 void ensure_blocking_submit_allowed ();
 std::stop_token current_wait_owner ();
@@ -471,6 +478,8 @@ class task_wait_registration_t
              * registration stays owned until that callback settles it. */
             if (!dispatch_shutdown_fallback (resume, _ambient.wait_owner, inline_allowed,
                                              _completion_dispatcher)) {
+                if (!_ambient.wait_owner.stop_possible ())
+                    return cancel ();
                 std::lock_guard lock (owner_mutex);
                 if (pending ()) {
                     _scheduler = std::move (scheduler);
