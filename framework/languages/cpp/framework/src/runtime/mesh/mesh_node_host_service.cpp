@@ -1611,8 +1611,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
         }
         co_return candidates;
     };
-    auto candidates = co_await read_candidates ();
-    const auto choose_target = [&] {
+    const auto choose_target = [&] (const std::vector<mesh_node_descriptor_t> &candidates) {
         const auto total_weight = std::accumulate (
           candidates.begin (), candidates.end (), std::uint64_t{0},
           [] (std::uint64_t total, const auto &candidate) {
@@ -1630,7 +1629,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
         }
         return selected;
     };
-    auto target = candidates.empty () ? mesh_node_descriptor_t{} : choose_target ();
+    mesh_node_descriptor_t target;
     std::vector<std::byte> application_bytes;
     if (request) {
         const auto raw = detail::message_to_raw (*request, *_serializers);
@@ -1679,92 +1678,82 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
             : policy->second.kind;
     }
     object_reserve_result_t reserved;
+    live_location_reader_t authority_reader (*_location_store);
     while (true) {
-        if (candidates.empty ()) {
-            reserved = object_reserve_conflict_t{
-              co_await _location_store->read_authority (spot_authority_key (*spot_id))};
-        } else {
-            reserve_request.target = {selected_mesh,
-                                      node_rid_t::from_string (target.rid.to_string ()),
-                                      target.lifecycle_generation,
-                                      {target.owner_id, target.lease_generation}};
-            reserved = co_await _location_store->reserve (reserve_request);
-        }
-        auto *existing = std::get_if<object_already_exists_t> (&reserved);
-        auto *conflict = std::get_if<object_reserve_conflict_t> (&reserved);
-        auto *observed = existing   ? &existing->current
-                         : conflict ? std::get_if<authority_snapshot_t> (&conflict->current)
-                                    : nullptr;
-        if (exclusive && observed)
-            co_return result_t<spot_create_result_t>::failure (
-              framework_error_kind_t::already_exists,
-              "Framework-generated User SpotId already has an authority claim");
-        if (observed) {
-            auto current = std::move (*observed);
-            while (true) {
-                if (current.allocation.object_kind != placement_object_kind_t::user_spot
-                    || current.allocation.stable_type != stable_type)
-                    co_return result_t<spot_create_result_t>::failure (
-                      framework_error_kind_t::type_mismatch,
-                      "User Spot stable type does not match");
-                stateful::authority_relocation_payload_codec_t::project_application_payload (
-                  current);
-                const auto authority = decode_direct_user_spot_authority_payload (current.payload);
-                if (current.allocation.state == placement_allocation_state_t::active && authority
-                    && authority->state == user_spot_authority_state_t::ready)
-                    co_return result_t<spot_create_result_t>::success (
-                      {spot_ref_t{*spot_id, current.object_generation,
-                                  current.allocation.target.mesh_name,
-                                  current.allocation.target.node_rid},
-                       spot_create_state_t::existing, std::nullopt});
-                if (!(current.allocation.state == placement_allocation_state_t::reserved
-                      && current.pending_creation)
-                    && !(current.allocation.state == placement_allocation_state_t::active
-                         && authority && authority->state == user_spot_authority_state_t::closing))
-                    co_return result_t<spot_create_result_t>::failure (
-                      framework_error_kind_t::unavailable, "User Spot creation authority changed");
-                if (std::chrono::steady_clock::now () >= deadline)
-                    co_return result_t<spot_create_result_t>::failure (
-                      framework_error_kind_t::deadline_exceeded,
-                      "Timed out waiting for User Spot authority");
-                co_await detail::delay (
-                  _services->get_required<detail::delay_owner_t> (),
-                  std::min (creation_authority_poll_interval,
-                            std::chrono::duration_cast<std::chrono::milliseconds> (
-                              deadline - std::chrono::steady_clock::now ())));
-                auto read =
-                  co_await _location_store->read_authority (spot_authority_key (*spot_id));
-                auto *snapshot = std::get_if<authority_snapshot_t> (&read);
-                if (!snapshot)
-                    break;
-                current = std::move (*snapshot);
-            }
-            candidates = co_await read_candidates ();
-            if (!candidates.empty ())
-                target = choose_target ();
-            continue;
-        }
-        if (candidates.empty ())
-            co_return result_t<spot_create_result_t>::failure (
-              framework_error_kind_t::unavailable, "No eligible User Spot target is ready");
-        const bool target_unavailable =
-          conflict && std::holds_alternative<authority_missing_t> (conflict->current);
-        if (!std::holds_alternative<object_placement_capacity_exhausted_t> (reserved)
-            && !target_unavailable)
-            break;
-        candidates.erase (std::remove_if (candidates.begin (), candidates.end (),
-                                          [&] (const auto &candidate) {
-                                              return candidate.mesh_name == target.mesh_name
-                                                     && candidate.rid == target.rid
-                                                     && candidate.lifecycle_generation
-                                                          == target.lifecycle_generation;
-                                          }),
-                          candidates.end ());
         if (std::chrono::steady_clock::now () >= deadline)
             co_return result_t<spot_create_result_t>::failure (
-              framework_error_kind_t::unavailable, "User Spot placement candidates were exhausted");
-        if (!candidates.empty ())
-            target = choose_target ();
+              framework_error_kind_t::deadline_exceeded,
+              "Timed out waiting for User Spot authority");
+        auto read = co_await _location_store->read_authority (spot_authority_key (*spot_id));
+        if (auto *current = std::get_if<authority_snapshot_t> (&read)) {
+            if (exclusive)
+                co_return result_t<spot_create_result_t>::failure (
+                  framework_error_kind_t::already_exists,
+                  "Framework-generated User SpotId already has an authority claim");
+            if (current->allocation.object_kind != placement_object_kind_t::user_spot
+                || current->allocation.stable_type != stable_type)
+                co_return result_t<spot_create_result_t>::failure (
+                  framework_error_kind_t::type_mismatch, "User Spot stable type does not match");
+            if ((current->allocation.state == placement_allocation_state_t::reserved
+                 && current->pending_creation)
+                || !(co_await authority_reader.owner_available (current->owner))) {
+                const auto released = co_await _location_store->release_ended_reservation (
+                  spot_authority_key (*spot_id), current->store_version, {}, reserve_request);
+                if (released)
+                    continue;
+                auto after_release =
+                  co_await _location_store->read_authority (spot_authority_key (*spot_id));
+                const auto *same = std::get_if<authority_snapshot_t> (&after_release);
+                if (!same || same->store_version != current->store_version)
+                    continue;
+                if (!(co_await authority_reader.owner_available (same->owner)))
+                    co_return result_t<spot_create_result_t>::failure (
+                      framework_error_kind_t::unavailable,
+                      "User Spot authority cannot be released after its owner ended");
+            }
+            stateful::authority_relocation_payload_codec_t::project_application_payload (*current);
+            const auto authority = decode_direct_user_spot_authority_payload (current->payload);
+            if (current->allocation.state == placement_allocation_state_t::active && authority
+                && authority->state == user_spot_authority_state_t::ready)
+                co_return result_t<spot_create_result_t>::success (
+                  {spot_ref_t{*spot_id, current->object_generation,
+                              current->allocation.target.mesh_name,
+                              current->allocation.target.node_rid},
+                   spot_create_state_t::existing, std::nullopt});
+            if (!(current->allocation.state == placement_allocation_state_t::reserved
+                  && current->pending_creation)
+                && !(current->allocation.state == placement_allocation_state_t::active && authority
+                     && authority->state == user_spot_authority_state_t::closing))
+                co_return result_t<spot_create_result_t>::failure (
+                  framework_error_kind_t::unavailable, "User Spot creation authority changed");
+            co_await detail::delay (
+              _services->get_required<detail::delay_owner_t> (),
+              std::min (creation_authority_poll_interval,
+                        std::chrono::duration_cast<std::chrono::milliseconds> (
+                          deadline - std::chrono::steady_clock::now ())));
+            continue;
+        }
+        const auto candidates = co_await read_candidates ();
+        if (candidates.empty ()) {
+            // A winner may have committed between the Missing observation and
+            // placement lookup. Only the outer observation classifies it.
+            auto raced = co_await _location_store->read_authority (spot_authority_key (*spot_id));
+            if (!std::holds_alternative<authority_missing_t> (raced))
+                continue;
+            co_return result_t<spot_create_result_t>::failure (
+              framework_error_kind_t::unavailable, "No eligible User Spot target is ready");
+        }
+        target = choose_target (candidates);
+        reserve_request.target = {selected_mesh,
+                                  node_rid_t::from_string (target.rid.to_string ()),
+                                  target.lifecycle_generation,
+                                  {target.owner_id, target.lease_generation}};
+        reserved = co_await _location_store->reserve (reserve_request);
+        if (std::holds_alternative<object_already_exists_t> (reserved)
+            || std::holds_alternative<object_reserve_conflict_t> (reserved)
+            || std::holds_alternative<object_placement_capacity_exhausted_t> (reserved))
+            continue;
+        break;
     }
     if (const auto *mismatch = std::get_if<object_type_mismatch_t> (&reserved)) {
         if (exclusive && mismatch->current.allocation.state == placement_allocation_state_t::active)
@@ -1774,9 +1763,6 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
         co_return result_t<spot_create_result_t>::failure (framework_error_kind_t::type_mismatch,
                                                            "User Spot stable type does not match");
     }
-    if (std::holds_alternative<object_placement_capacity_exhausted_t> (reserved))
-        co_return result_t<spot_create_result_t>::failure (
-          framework_error_kind_t::unavailable, "User Spot placement capacity is exhausted");
     if (const auto *created = std::get_if<object_reserved_t> (&reserved)) {
         fence = created->fence;
     } else {

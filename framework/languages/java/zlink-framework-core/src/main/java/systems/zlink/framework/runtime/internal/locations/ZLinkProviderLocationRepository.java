@@ -70,7 +70,33 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     public CompletionStage<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> listMeshNodes(
             String meshName, ZLinkPageRequest page) {
         return observeStore(
-                LocationOperation.READ, () -> descriptors.listMeshNodes(meshName, page));
+                LocationOperation.READ,
+                () ->
+                        descriptors
+                                .listMeshNodes(meshName, page)
+                                .thenCompose(
+                                        stored -> {
+                                            var projected =
+                                                    stored.items().stream()
+                                                            .map(authority::projectCapacity)
+                                                            .map(
+                                                                    CompletionStage
+                                                                            ::toCompletableFuture)
+                                                            .toList();
+                                            return CompletableFuture.allOf(
+                                                            projected.toArray(
+                                                                    CompletableFuture[]::new))
+                                                    .thenApply(
+                                                            ignored ->
+                                                                    new ZLinkLocationPage<>(
+                                                                            projected.stream()
+                                                                                    .map(
+                                                                                            CompletableFuture
+                                                                                                    ::join)
+                                                                                    .toList(),
+                                                                            stored
+                                                                                    .continuationToken()));
+                                        }));
     }
 
     @Override

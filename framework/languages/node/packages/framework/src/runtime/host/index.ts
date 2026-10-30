@@ -2418,11 +2418,45 @@ export class ZLinkFrameworkRuntimeHost
         };
       }
     });
+    const selectUserSpotMesh = (requestedMeshName: string | undefined): string => {
+      const clientMeshes = [...this.options.registration.spotNodes]
+        .filter(([, node]) => hasObjectClientCapability(node.objectRole))
+        .map(([meshName]) => meshName);
+      const meshes = requestedMeshName === undefined ? clientMeshes : [requestedMeshName];
+      if (meshes.length === 0) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.ObjectClientNotConfigured,
+          'No object-client RouteMesh is configured.'
+        );
+      }
+      if (requestedMeshName === undefined && meshes.length > 1) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.MeshSelectionRequired,
+          'Multiple object-client RouteMeshes are configured; call inMesh(...).'
+        );
+      }
+      const meshName = meshes[0]!;
+      if (!this.options.registration.spotNodes.has(meshName)) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.MeshNotFound,
+          `RouteMesh '${meshName}' is not configured.`
+        );
+      }
+      if (!clientMeshes.includes(meshName)) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.ObjectClientNotConfigured,
+          `RouteMesh '${meshName}' has no object-client role.`
+        );
+      }
+      return meshName;
+    };
     const coordinator = (this.userSpotCoordinator = new ZLinkUserSpotCreationCoordinator({
       store: locationStore,
-      relocationPolicy: (meshName, stableType) =>
-        this.options.registration.spotNodes.get(meshName)?.spotFactoryRegistrations?.[stableType]
-          ?.relocation.kind,
+      leaseTracker: this.locationOwner.currentLeaseTracker!,
+      relocationPolicy: (meshName, stableType) => {
+        const node = this.options.registration.spotNodes.get(selectUserSpotMesh(meshName));
+        return node?.spotFactoryRegistrations?.[stableType]?.relocation.kind;
+      },
       publishReadyRoute: (meshName, route) => {
         this.cachedLocationSpotRouteResolver?.invalidate?.(route.spot.spotId);
         this.spotNodeRuntime?.meshNode(meshName)?.rememberSpotRoute?.(route);
@@ -2455,35 +2489,7 @@ export class ZLinkFrameworkRuntimeHost
         }
       },
       target: async (request, signal, excludedNodeRids) => {
-        const clientMeshes = [...this.options.registration.spotNodes]
-          .filter(([, node]) => hasObjectClientCapability(node.objectRole))
-          .map(([meshName]) => meshName);
-        const meshes = request.meshName === undefined ? clientMeshes : [request.meshName];
-        if (meshes.length === 0) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.ObjectClientNotConfigured,
-            'No object-client RouteMesh is configured.'
-          );
-        }
-        if (request.meshName === undefined && meshes.length > 1) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.MeshSelectionRequired,
-            'Multiple object-client RouteMeshes are configured; call inMesh(...).'
-          );
-        }
-        const meshName = meshes[0]!;
-        if (!this.options.registration.spotNodes.has(meshName)) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.MeshNotFound,
-            `RouteMesh '${meshName}' is not configured.`
-          );
-        }
-        if (!clientMeshes.includes(meshName)) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.ObjectClientNotConfigured,
-            `RouteMesh '${meshName}' has no object-client role.`
-          );
-        }
+        const meshName = selectUserSpotMesh(request.meshName);
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
         const descriptors = await listAllMeshNodeDescriptors(locationStore, meshName, signal);
         const selected = await selectReadyLocationPlacementDescriptor(
