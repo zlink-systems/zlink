@@ -2,9 +2,7 @@ const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const framework = require('@zlink-systems/framework');
 const nestjs = require('@zlink-systems/nestjs');
-const {
-  ZLinkRedisLocationStore
-} = require('@zlink-systems/framework-locations-redis');
+const { ZLinkRedisLocationStore } = require('@zlink-systems/framework-locations-redis');
 
 const role = requireText(process.env.ZLINK_TEST_ROLE, 'ZLINK_TEST_ROLE');
 const meshName = requireText(process.env.ZLINK_TEST_MESH, 'ZLINK_TEST_MESH');
@@ -28,10 +26,7 @@ class RemoteRoomSpot {
 
   async onClosing() {
     closeExecutions++;
-    if (
-      process.env.ZLINK_TEST_PAUSE_FIRST_CLOSE === '1'
-      && closeExecutions === 1
-    ) {
+    if (process.env.ZLINK_TEST_PAUSE_FIRST_CLOSE === '1' && closeExecutions === 1) {
       send({ type: 'close-entered', executions: closeExecutions });
       await new Promise((resolve) => {
         releaseFirstClose = resolve;
@@ -64,21 +59,19 @@ async function start() {
     keyPrefix
   });
   const builder = nestjs.zlinkFramework().addLocationStore(store);
-  builder.configureLocations()
+  builder
+    .configureLocations()
     .pollingIntervalMs(20)
     .ownerLeaseRenewIntervalMs(100)
     .ownerLeaseTtlMs(5_000)
     .ownerLeaseFencingMarginMs(500)
     .ownerLeaseRenewTimeoutMs(500);
-  const mesh = builder.addRouteMesh(meshName)
-    .listen(endpoint)
-    .routingId(routingId);
+  const mesh = builder.addRouteMesh(meshName).listen(endpoint).routingId(routingId);
   if (role === 'target') {
-    mesh.objects().server().addSpotFactory(
-      'RemoteRoom',
-      RemoteRoomSpot,
-      (factory) => factory.disableRelocation()
-    );
+    mesh
+      .objects()
+      .server()
+      .addSpotFactory('RemoteRoom', RemoteRoomSpot, (factory) => factory.disableRelocation());
   } else if (role === 'source') {
     mesh.objects().client();
     const targetEndpoint = process.env.ZLINK_TEST_TARGET_ENDPOINT;
@@ -121,8 +114,8 @@ async function waitForPublishedNode() {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     const page = await locationQuery.listMeshNodeDescriptors(meshName);
-    const descriptor = page.items.find((candidate) =>
-      String(candidate.rid) === routingId && candidate.state === 1
+    const descriptor = page.items.find(
+      (candidate) => String(candidate.rid) === routingId && candidate.state === 1
     );
     if (descriptor !== undefined) {
       return descriptor;
@@ -133,12 +126,25 @@ async function waitForPublishedNode() {
 }
 
 async function waitForRouteReady() {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    if (routeMeshRuntime.isReady(meshName)) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+  const signal = AbortSignal.timeout(10_000);
+  let lastStatus;
+  for await (const observed of routeMeshRuntime.observe(meshName, 64, signal)) {
+    lastStatus = observed.status;
+    // Local readiness can precede discovery of the target. Creation requires
+    // that target's service handshake, not only the source's local readiness.
+    if (
+      lastStatus.isReady &&
+      lastStatus.peers.some(
+        (peer) =>
+          String(peer.nodeRid) === targetRoutingId && peer.state === framework.ZLinkPeerState.Ready
+      )
+    )
+      return;
   }
-  throw new Error(`RouteMesh '${meshName}' did not become ready.`);
+  throw new Error(
+    `RouteMesh '${meshName}' target '${targetRoutingId}' did not become ready: ${JSON.stringify({ isReady: lastStatus?.isReady, peers: lastStatus?.peers })}`,
+    { cause: signal.reason }
+  );
 }
 
 async function onMessage(message) {
