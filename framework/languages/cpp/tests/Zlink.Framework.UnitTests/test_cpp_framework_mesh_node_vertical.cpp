@@ -429,9 +429,17 @@ void configure_vertical_route_fences (zlink::framework::detail::mesh_node_runtim
     // application Location Store. Supply the same non-zero owner fence that
     // the target objects receive from the minimal stateful runtime.
     node.configure_spot_route_fence_resolver (
-      [] (zlink::routing_id_t, std::string, std::uint64_t)
+      [&node] (zlink::routing_id_t target, std::string, std::uint64_t)
         -> zlink::framework::task_t<std::optional<zlink::framework::runtime::host::route_fence_t>> {
-          co_return zlink::framework::runtime::host::route_fence_t{1, 1};
+          const auto local = node.status ();
+          if (target == local.routing_id ())
+              co_return zlink::framework::runtime::host::route_fence_t{
+                1, 1, local.lifecycle_generation ()};
+          const auto peer = node.native_node ().transport ().topology ().peer (target.to_bytes ());
+          if (!peer)
+              co_return std::nullopt;
+          co_return zlink::framework::runtime::host::route_fence_t{
+            1, 1, peer->descriptor.lifecycle_generation};
       });
 }
 
