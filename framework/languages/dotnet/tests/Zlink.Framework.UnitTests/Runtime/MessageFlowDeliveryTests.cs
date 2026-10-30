@@ -11,6 +11,200 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task NoProviderDetailedSkipsCaptureAndBuildersWithoutAllocating()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MessageFlowDeliveryTests),
+                nameof(NoProviderDetailedSkipsCaptureAndBuildersWithoutAllocating)
+            )
+        )
+            return;
+
+        var options = Options();
+        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
+        AssertNoProviderAllocation(new ZLinkMessageFlowTracer(options));
+    }
+
+    [Fact]
+    public async Task FrameworkRegisteredBeforeEmptyAddLoggingSkipsCaptureAndBuildersWithoutAllocating()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MessageFlowDeliveryTests),
+                nameof(
+                    FrameworkRegisteredBeforeEmptyAddLoggingSkipsCaptureAndBuildersWithoutAllocating
+                )
+            )
+        )
+            return;
+
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options => options.DisableImplicitHandlerAutoRegistration());
+        services.AddLogging();
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        runtime.Registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
+        Assert.False(runtime.Flow.CaptureEnabled);
+        AssertNoProviderAllocation(runtime.Flow);
+    }
+
+    [Fact]
+    public async Task RegisteredLoggerProviderDeliversAndProviderCheckDoesNotAllocate()
+    {
+        WaitForDelivery();
+        var logger = new RecordingLogger();
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options => options.DisableImplicitHandlerAutoRegistration());
+        services.AddLogging(builder => builder.AddProvider(new RecordingProvider(logger)));
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        runtime.Registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        var configuredLogger = ZLinkMessageFlowTracer.GetLogger(provider);
+        Assert.Same(configuredLogger, ZLinkMessageFlowTracer.GetLogger(provider));
+        for (var i = 0; i < 10_000; ++i)
+            Assert.True(ZLinkMessageFlowDelivery.HasProvider(configuredLogger));
+        var present = 0;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 10_000; ++i)
+            if (ZLinkMessageFlowDelivery.HasProvider(configuredLogger))
+                ++present;
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine("provider-present allocated={0} checks={1}", allocated, present);
+        Assert.Equal(10_000, present);
+        Assert.Equal(0, allocated);
+
+        var tracer = runtime.Flow;
+        Assert.True(tracer.Enabled(ZLinkMessageFlowOutcome.Received));
+        tracer.Trace(Event("registered-provider"));
+        WaitForDelivery();
+        Assert.Single(logger.Records);
+        Assert.Contains(
+            logger.Records[0].Fields,
+            field => field.Key == "packet" && Equals(field.Value, "registered-provider")
+        );
+    }
+
+    [Fact]
+    public async Task LoggerFactoryCreateInstanceWithInternalProviderDeliversMessageFlow()
+    {
+        WaitForDelivery();
+        var logger = new RecordingLogger();
+        using var loggerFactory = LoggerFactory.Create(builder =>
+            builder.AddProvider(new RecordingProvider(logger))
+        );
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options => options.DisableImplicitHandlerAutoRegistration());
+        services.AddLogging();
+        services.AddSingleton<ILoggerFactory>(loggerFactory);
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        runtime.Registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+
+        runtime.Flow.Trace(Event("factory-instance-provider"));
+        WaitForDelivery();
+
+        Assert.Contains(
+            Assert.Single(logger.Records).Fields,
+            field => field.Key == "packet" && Equals(field.Value, "factory-instance-provider")
+        );
+    }
+
+    [Fact]
+    public async Task ConcreteLoggerFactoryInstanceWithInternalProviderDeliversMessageFlow()
+    {
+        WaitForDelivery();
+        var logger = new RecordingLogger();
+        using var loggerFactory = new LoggerFactory([new RecordingProvider(logger)]);
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options => options.DisableImplicitHandlerAutoRegistration());
+        services.AddLogging();
+        services.AddSingleton<ILoggerFactory>(loggerFactory);
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        runtime.Registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+
+        runtime.Flow.Trace(Event("concrete-factory-instance-provider"));
+        WaitForDelivery();
+
+        Assert.Contains(
+            Assert.Single(logger.Records).Fields,
+            field =>
+                field.Key == "packet" && Equals(field.Value, "concrete-factory-instance-provider")
+        );
+    }
+
+    [Fact]
+    public async Task LastLoggerFactoryDescriptorControlsProviderDetection()
+    {
+        WaitForDelivery();
+        var ignoredLogger = new RecordingLogger();
+        using var earlierFactory = new LoggerFactory([new RecordingProvider(ignoredLogger)]);
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options => options.DisableImplicitHandlerAutoRegistration());
+        services.AddSingleton<ILoggerFactory>(earlierFactory);
+        services.AddLogging();
+        services.AddSingleton<ILoggerFactory, LoggerFactory>();
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        runtime.Registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        var tracer = runtime.Flow;
+
+        Assert.False(tracer.CaptureEnabled);
+        Assert.False(tracer.Enabled(ZLinkMessageFlowOutcome.Received));
+        tracer.Trace(Event("shadowed-factory-instance"));
+        WaitForDelivery();
+
+        Assert.Empty(ignoredLogger.Records);
+    }
+
+    private void AssertNoProviderAllocation(ZLinkMessageFlowTracer tracer)
+    {
+        Assert.False(ZLinkTelemetry.ActivitySource.HasListeners());
+        var captures = 0;
+        var builders = 0;
+        for (var i = 0; i < 10_000; ++i)
+            Produce();
+        captures = 0;
+        builders = 0;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 10_000; ++i)
+            Produce();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine("allocated={0} captures={1} builders={2}", allocated, captures, builders);
+
+        Assert.Equal(0, allocated);
+        Assert.Equal(0, captures);
+        Assert.Equal(0, builders);
+
+        void Produce()
+        {
+            if (tracer.CaptureEnabled)
+            {
+                ++captures;
+                using var scope = ZLinkFlowContext.EnterCurrentOrCreate(
+                    ZLinkFlowOrigin.Application,
+                    tracer.CaptureEnabled
+                );
+            }
+            if (tracer.Enabled(ZLinkMessageFlowOutcome.Sent))
+            {
+                ++builders;
+                tracer.Trace(Event("no-provider"));
+            }
+            if (tracer.Enabled(ZLinkMessageFlowOutcome.Dropped, ZLinkMessageFlowResult.Failed))
+            {
+                ++builders;
+                tracer.Trace(Event("no-provider-error"));
+            }
+            if (tracer.DispatchErrorsEnabled)
+                ++builders;
+            if (tracer.DetailedEnabled)
+                ++builders;
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -661,6 +855,13 @@ public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelpe
             )
         );
 
+    private sealed class RecordingProvider(ILogger logger) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => logger;
+
+        public void Dispose() { }
+    }
+
     private sealed class RecordingLogger : ILogger
     {
         internal readonly List<(int Thread, KeyValuePair<string, object?>[] Fields)> Records = [];
@@ -790,6 +991,7 @@ public sealed class MessageFlowDeliveryAbsenceTests(Xunit.Abstractions.ITestOutp
         var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
         provider.GetRequiredService<IZLinkDiagnosticsRuntime>().Level =
             ZLinkDiagnosticsLevel.Normal;
+        Assert.False(runtime.Flow.CaptureEnabled);
         Assert.Equal(
             ZLinkDiagnosticsLevel.Normal,
             provider.GetRequiredService<IZLinkDiagnosticsRuntime>().Level
