@@ -154,28 +154,59 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
             0UL,
             null,
             awaited,
-            null,
+            TimeSpan.FromSeconds(5),
             null,
             null,
             null,
         ];
+        var target = RoutingId.From("peer");
+        var peers =
+            (Dictionary<RoutingId, ZLinkMeshPeer>)
+                nodeType.GetField("_peersByRid", flags)!.GetValue(node)!;
+        peers.Add(
+            target,
+            new ZLinkMeshPeer(1)
+            {
+                RoutingId = target,
+                PhysicalRoutingId = target,
+                RouteGeneration = 1,
+                Admitted = true,
+                State = MeshPeerState.Admitted,
+            }
+        );
+        (
+            (ZLinkMeshSelectedRoutes)nodeType.GetField("_selectedRoutes", flags)!.GetValue(node)!
+        ).Apply([new RouterRoute(target, 1)]);
+        (
+            (ZLinkMeshChannelSelection)
+                nodeType.GetField("_channelSelection", flags)!.GetValue(node)!
+        ).PrepareRouterTargets(peers);
         // Capture the original caller task before the dispatcher clears its receiver.
         var callerTask = (Task?)create.Invoke(node, arguments);
-        var pending = arguments[3]!;
+        var pending = (ZLinkManagedMeshNode.PendingOperation)arguments[3]!;
         try
         {
             await (Task)
                 nodeType
-                    .GetMethod("CompleteNativeApplicationRequestAsync", flags)!
+                    .GetMethod("CompleteNativeDurableRequestAsync", flags)!
                     .Invoke(
                         node,
                         [
-                            RoutingId.From("peer"),
+                            target,
+                            0UL,
                             pending,
                             new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
-                            TimeSpan.FromSeconds(5),
+                            (Action<
+                                ZLinkManagedMeshNode.PendingOperation,
+                                RequestResult,
+                                IReadOnlyList<Message>
+                            >)(
+                                (_, _, _) =>
+                                    throw new Xunit.Sdk.XunitException(
+                                        "Rejected submission completed as a reply."
+                                    )
+                            ),
                             default(CancellationToken),
-                            null,
                             null,
                             null,
                         ]
