@@ -1190,7 +1190,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
         private void isolatePeer(RoutingId routingId, Throwable failure) {
             boolean messageTooLarge = failure instanceof ZLinkStreamMessageTooLargeException;
-            int nativeCode = messageTooLarge ? ZLinkStreamMessageTooLargeException.EMSGSIZE : 0;
             String reason = messageTooLarge ? "EMSGSIZE" : "malformed STREAM frame";
             SessionState session = removeSessionState(streamNode, routingId);
             try {
@@ -1221,13 +1220,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             if (session != null) {
                 recordSessionClosed(session, "protocol_error");
                 try {
-                    session.serials()
-                            .executeInfrastructure(
-                                    () ->
-                                            executeHandler(
-                                                    () ->
-                                                            transportErrorDisconnectSessionStage(
-                                                                    session, nativeCode, reason)));
+                    disconnectSession(
+                            session, () -> transportErrorDisconnectSessionStage(session, reason));
                 } catch (RuntimeException enqueueFailure) {
                     LOGGER.log(
                             Level.FINE,
@@ -1486,18 +1480,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         recordSessionClosed(state, nativeCode == 0 ? "transport_error" : "protocol_error");
         if (nativeCode == 0 && event == MonitorEventType.DISCONNECTED) {
-            state.serials()
-                    .executeInfrastructure(
-                            () -> executeHandler(() -> disconnectSessionStage(state)));
+            disconnectSession(state, () -> disconnectSessionStage(state));
             return;
         }
-        state.serials()
-                .executeInfrastructure(
-                        () ->
-                                executeHandler(
-                                        () ->
-                                                transportErrorDisconnectSessionStage(
-                                                        state, nativeCode, message)));
+        disconnectSession(state, () -> transportErrorDisconnectSessionStage(state, message));
     }
 
     /** Constructs outside the state lane and publishes one Session per peer in one lane turn. */
@@ -1679,20 +1665,34 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     public CompletionStage<Void> closeAsync() {
         List<SessionState> activeSessions = inStateLane(() -> List.copyOf(sessions.values()));
-        sessionContexts.forEach(ZLinkStreamSessionContextState::closeReplyRetries);
+        Map<ZLinkStreamSessionContextState, CompletionStage<Void>> cleanups = new HashMap<>();
+        for (ZLinkStreamSessionContextState session : List.copyOf(sessionContexts)) {
+            cleanups.put(session, disconnectInfrastructure(session));
+        }
+        List<CompletableFuture<Void>> callbacks = new ArrayList<>();
+        for (SessionState state : activeSessions) {
+            CompletionStage<Void> cleanup =
+                    cleanups.computeIfAbsent(state.context(), this::disconnectInfrastructure);
+            callbacks.add(
+                    cleanup.thenCompose(
+                                    ignored ->
+                                            state.serials()
+                                                    .executeFinal(
+                                                            () ->
+                                                                    executeHandler(
+                                                                            () ->
+                                                                                    disconnectSessionStage(
+                                                                                            state))))
+                            .toCompletableFuture());
+        }
+        CompletableFuture<Void> infrastructure =
+                CompletableFuture.allOf(
+                        cleanups.values().stream()
+                                .map(CompletionStage::toCompletableFuture)
+                                .toArray(CompletableFuture[]::new));
         return CompletableFuture.allOf(
-                        activeSessions.stream()
-                                .map(
-                                        state ->
-                                                state.serials()
-                                                        .executeFinal(
-                                                                () ->
-                                                                        executeHandler(
-                                                                                () ->
-                                                                                        disconnectSessionStage(
-                                                                                                state)))
-                                                        .toCompletableFuture())
-                                .toArray(CompletableFuture[]::new))
+                        infrastructure,
+                        CompletableFuture.allOf(callbacks.toArray(CompletableFuture[]::new)))
                 .handle(
                         (ignored, failure) -> {
                             finishClose(activeSessions);
@@ -1861,9 +1861,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     reason == ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT
                             ? "heartbeat_timeout"
                             : "idle_timeout");
-            state.serials()
-                    .executeInfrastructure(
-                            () -> executeHandler(() -> disconnectSessionStage(state)));
+            disconnectSession(state, () -> disconnectSessionStage(state));
         }
     }
 
@@ -1945,19 +1943,28 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return entered.thenCompose(Function.identity());
     }
 
-    private CompletionStage<Void> disconnectSessionStage(SessionState state) {
-        state.context().closeReplyRetries();
-        return notifyBoundActorsDisconnectedBestEffort(state)
+    private CompletionStage<Void> disconnectSession(
+            SessionState state, Supplier<CompletionStage<Void>> callback) {
+        return disconnectInfrastructure(state.context())
                 .thenCompose(
                         ignored ->
-                                ZLinkHandlerStages.fromStageSupplier(
-                                        state.session()::onDisconnected))
+                                state.serials()
+                                        .executeInfrastructure(() -> executeHandler(callback)));
+    }
+
+    private CompletionStage<Void> disconnectInfrastructure(ZLinkStreamSessionContextState session) {
+        session.closeReplyRetries();
+        return session.notifyBoundActorsDisconnected(PHYSICAL_DISCONNECT_TIMEOUT)
+                .handle((ignored, error) -> (Void) null);
+    }
+
+    private CompletionStage<Void> disconnectSessionStage(SessionState state) {
+        return ZLinkHandlerStages.fromStageSupplier(state.session()::onDisconnected)
                 .whenComplete((ignored, failure) -> sessionContexts.remove(state.context()));
     }
 
     private CompletionStage<Void> transportErrorDisconnectSessionStage(
-            SessionState state, int nativeCode, String message) {
-        state.context().closeReplyRetries();
+            SessionState state, String message) {
         return ZLinkHandlerStages.fromStageSupplier(
                         () ->
                                 state.session()
@@ -1965,18 +1972,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                                 new ZLinkStreamError(
                                                         ZLinkStreamSessionError.TRANSPORT_ERROR,
                                                         message)))
-                .thenCompose(ignored -> notifyBoundActorsDisconnectedBestEffort(state))
                 .thenCompose(
                         ignored ->
                                 ZLinkHandlerStages.fromStageSupplier(
                                         state.session()::onDisconnected))
                 .whenComplete((ignored, failure) -> sessionContexts.remove(state.context()));
-    }
-
-    private CompletionStage<Void> notifyBoundActorsDisconnectedBestEffort(SessionState state) {
-        return state.context()
-                .notifyBoundActorsDisconnected(PHYSICAL_DISCONNECT_TIMEOUT)
-                .handle((ignored, error) -> (Void) null);
     }
 
     private static final class SessionState {
