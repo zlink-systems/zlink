@@ -404,7 +404,7 @@ local_admission_host (const std::shared_ptr<queue_t> &queue)
       .object_stable_types = {"framework.spot", "player"}});
     native->configure_spot_route_fence_resolver (
       [] (auto, auto, auto) -> zlink::framework::task_t<std::optional<host::route_fence_t>> {
-          co_return host::route_fence_t{1, 1};
+          co_return host::route_fence_t{1, 1, 1};
       });
     native->start ();
     return native;
