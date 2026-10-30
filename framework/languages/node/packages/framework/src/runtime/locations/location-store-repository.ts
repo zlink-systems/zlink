@@ -1347,160 +1347,181 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
     signal?: AbortSignal,
-    request?: ZLinkEndedOwnerReleaseIntent
+    request?: ZLinkEndedOwnerReleaseIntent,
+    deadlineUnixMs?: bigint
   ): Promise<'notReclaimable' | 'conflict' | 'reclaimed'> {
-    const rowKey = authorityKey(key.value);
-    const current = await this.provider.read(rowKey, signal);
-    if (current.kind === 'missing' || current.value.version.value !== expectedStoreVersion)
-      return 'conflict';
-    const record = decodeAuthorityRecord(current.value.bytes);
-    const snapshot = record.snapshot;
-    if (
-      snapshot.allocation.state === 'active'
-        ? request === undefined
-        : snapshot.pendingCreation === undefined
-    )
-      return 'notReclaimable';
-    const leaseKey = ownerKey(snapshot.ownerId);
-    const descriptorKey = meshKey(
-      snapshot.allocation.descriptor.meshName,
-      snapshot.allocation.descriptor.rid
-    );
-    const capacityRowKey = capacityKey(
-      snapshot.allocation.descriptor.meshName,
-      String(snapshot.allocation.descriptor.rid)
-    );
-    const [lease, descriptor, capacity] = await Promise.all([
-      this.provider.read(leaseKey, signal),
-      this.provider.read(descriptorKey, signal),
-      this.provider.read(capacityRowKey, signal)
-    ]);
-    const ownerLive = sameLiveOwner(lease, snapshot);
-    let members: EndedSpotMember[] = [];
-    if (snapshot.allocation.state === 'active') {
-      if (ownerLive) return 'notReclaimable';
-      let unavailable = record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload);
-      if (snapshot.allocation.objectKind !== 'actor') {
-        const spot = decodeServiceReadySpotAuthority(snapshot.payload);
-        unavailable ||=
-          spot === undefined ||
-          spot.kind !== request?.key.kind ||
-          spot.stableType !== request.intent.stableType ||
-          spot.spotId !== request.key.globalId ||
-          spot.activationRecovery !== undefined;
-        if (
-          spot?.kind === 'user_spot' &&
-          !unavailable &&
-          request?.actorRelocationPolicy === 'disabled'
-        )
-          members = await this.readEndedSpotMembers(spot.spotId, snapshot.objectGeneration, signal);
-      }
-      if (unavailable || request?.actorRelocationPolicy !== 'disabled')
-        throw new ZLinkFrameworkException(
-          ZLinkFrameworkErrorKind.Unavailable,
-          'Object owner lease is unavailable.'
-        );
-    } else if (
-      ownerLive &&
-      descriptor.kind === 'found' &&
-      reviveMeshDescriptor(
-        decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(descriptor.value.bytes).descriptor
-      ).lifecycleGeneration === snapshot.allocation.descriptorLifecycleGeneration
-    )
-      return 'notReclaimable';
-    if (
-      snapshot.allocation.state !== 'active' &&
-      (record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload))
-    )
-      return 'notReclaimable';
-    // Location runtime §6.1: the authority and every ended-owner member are released in
-    // one conditional batch. Each member is fenced by its row version and the observed
-    // (invalid) state of its own owner lease; member capacity is returned like the Spot's.
-    const conditions: ZLinkStoreCondition[] = [
-      { kind: 'version', key: rowKey, expected: current.value.version },
-      conditionFor(descriptorKey, descriptor)
-    ];
-    const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
-      { kind: 'delete', key: rowKey }
-    ];
-    const owners = new Map<string, ZLinkStoreReadResult>([[snapshot.ownerId, lease]]);
-    for (const member of members) {
-      let memberLease = owners.get(member.ownerId);
-      if (memberLease === undefined) {
-        memberLease = await this.provider.read(ownerKey(member.ownerId), signal);
-        owners.set(member.ownerId, memberLease);
-      }
+    for (;;) {
+      throwIfOperationExpired(signal, deadlineUnixMs);
+      const rowKey = authorityKey(key.value);
+      const current = await this.provider.read(rowKey, signal);
+      if (current.kind === 'missing') return 'conflict';
+      const record = decodeAuthorityRecord(current.value.bytes);
       if (
-        memberLease.kind === 'found' &&
-        matchesLiveOwnerLease(memberLease, member.ownerId, member.leaseGeneration)
+        current.value.version.value !== expectedStoreVersion &&
+        record.visibleStoreVersion !== expectedStoreVersion
       )
-        throw new ZLinkFrameworkException(
-          ZLinkFrameworkErrorKind.Unavailable,
-          'User Spot still has a member with a live owner lease.'
-        );
-      conditions.push({ kind: 'version', key: member.key, expected: member.version });
-      mutations.push({ kind: 'delete', key: member.key });
-    }
-    for (const [ownerId, read] of owners) conditions.push(conditionFor(ownerKey(ownerId), read));
-    const capacities = new Map<string, { read: ZLinkStoreReadResult; next?: CapacityRecord }>([
-      [capacityRowKey.value, { read: capacity }]
-    ]);
-    const releases: { allocation: StoredAuthoritySnapshot['allocation'] }[] = [
-      { allocation: snapshot.allocation },
-      ...members.map((member) => ({ allocation: member.allocation }))
-    ];
-    try {
-      for (const { allocation } of releases) {
-        const key = capacityKey(allocation.descriptor.meshName, String(allocation.descriptor.rid));
-        let entry = capacities.get(key.value);
-        if (entry === undefined) {
-          entry = { read: await this.provider.read(key, signal) };
-          capacities.set(key.value, entry);
-        }
-        if (entry.read.kind !== 'found') continue;
-        const stored = entry.next ?? decodeJson<CapacityRecord>(entry.read.value.bytes);
-        entry.next = {
-          active:
-            allocation.state === 'active'
-              ? subtractCapacity(stored.active, allocation.capacity)
-              : stored.active,
-          pending:
-            allocation.state === 'reserved'
-              ? subtractCapacity(stored.pending, allocation.capacity)
-              : stored.pending
-        };
-      }
-    } catch (error) {
+        return 'conflict';
+      const snapshot = record.snapshot;
       if (
-        !(error instanceof ZLinkFrameworkException) ||
-        error.kind !== ZLinkFrameworkErrorKind.DataLost
+        snapshot.allocation.state === 'active'
+          ? request === undefined
+          : snapshot.pendingCreation === undefined
       )
-        throw error;
-      for (const authority of [{ key: rowKey, version: current.value.version }, ...members]) {
-        const observed = await this.provider.read(authority.key, signal);
-        if (observed.kind === 'missing' || observed.value.version.value !== authority.version.value)
-          return 'conflict';
-      }
-      throw error;
-    }
-    for (const [key, entry] of capacities) {
-      conditions.push(conditionFor(storeKey(key), entry.read));
-      if (entry.next !== undefined)
-        mutations.push({
-          kind: 'put',
-          key: storeKey(key),
-          bytes: encodeJson(entry.next satisfies CapacityRecord)
-        });
-    }
-    // Every mutated key is also a condition key, so the condition count is the batch's
-    // unique key count. A release beyond the provider bound changes nothing.
-    if (conditions.length > ZLINK_PROVIDER_MAX_WRITE_KEYS)
-      throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.Unavailable,
-        'User Spot member release exceeds one Location Store batch.'
+        return 'notReclaimable';
+      const leaseKey = ownerKey(snapshot.ownerId);
+      const descriptorKey = meshKey(
+        snapshot.allocation.descriptor.meshName,
+        snapshot.allocation.descriptor.rid
       );
-    const result = await this.provider.write({ conditions, mutations }, signal);
-    return result.kind === 'applied' ? 'reclaimed' : 'conflict';
+      const capacityRowKey = capacityKey(
+        snapshot.allocation.descriptor.meshName,
+        String(snapshot.allocation.descriptor.rid)
+      );
+      const [lease, descriptor, capacity] = await Promise.all([
+        this.provider.read(leaseKey, signal),
+        this.provider.read(descriptorKey, signal),
+        this.provider.read(capacityRowKey, signal)
+      ]);
+      const ownerLive = sameLiveOwner(lease, snapshot);
+      let members: EndedSpotMember[] = [];
+      if (snapshot.allocation.state === 'active') {
+        if (ownerLive) return 'notReclaimable';
+        let unavailable =
+          record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload);
+        if (snapshot.allocation.objectKind !== 'actor') {
+          const spot = decodeServiceReadySpotAuthority(snapshot.payload);
+          unavailable ||=
+            spot === undefined ||
+            spot.kind !== request?.key.kind ||
+            spot.stableType !== request.intent.stableType ||
+            spot.spotId !== request.key.globalId ||
+            spot.activationRecovery !== undefined;
+          if (
+            spot?.kind === 'user_spot' &&
+            !unavailable &&
+            request?.actorRelocationPolicy === 'disabled'
+          )
+            members = await this.readEndedSpotMembers(
+              spot.spotId,
+              snapshot.objectGeneration,
+              signal
+            );
+        }
+        if (unavailable || request?.actorRelocationPolicy !== 'disabled')
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            'Object owner lease is unavailable.'
+          );
+      } else if (
+        ownerLive &&
+        descriptor.kind === 'found' &&
+        reviveMeshDescriptor(
+          decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(descriptor.value.bytes)
+            .descriptor
+        ).lifecycleGeneration === snapshot.allocation.descriptorLifecycleGeneration
+      )
+        return 'notReclaimable';
+      if (
+        snapshot.allocation.state !== 'active' &&
+        (record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload))
+      )
+        return 'notReclaimable';
+      // Location runtime §6.1: the authority and every ended-owner member are released in
+      // one conditional batch. Each member is fenced by its row version and the observed
+      // (invalid) state of its own owner lease; member capacity is returned like the Spot's.
+      const conditions: ZLinkStoreCondition[] = [
+        { kind: 'version', key: rowKey, expected: current.value.version },
+        conditionFor(descriptorKey, descriptor)
+      ];
+      const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
+        { kind: 'delete', key: rowKey }
+      ];
+      const owners = new Map<string, ZLinkStoreReadResult>([[snapshot.ownerId, lease]]);
+      for (const member of members) {
+        let memberLease = owners.get(member.ownerId);
+        if (memberLease === undefined) {
+          memberLease = await this.provider.read(ownerKey(member.ownerId), signal);
+          owners.set(member.ownerId, memberLease);
+        }
+        if (
+          memberLease.kind === 'found' &&
+          matchesLiveOwnerLease(memberLease, member.ownerId, member.leaseGeneration)
+        )
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            'User Spot still has a member with a live owner lease.'
+          );
+        conditions.push({ kind: 'version', key: member.key, expected: member.version });
+        mutations.push({ kind: 'delete', key: member.key });
+      }
+      for (const [ownerId, read] of owners) conditions.push(conditionFor(ownerKey(ownerId), read));
+      const capacities = new Map<string, { read: ZLinkStoreReadResult; next?: CapacityRecord }>([
+        [capacityRowKey.value, { read: capacity }]
+      ]);
+      const releases: { allocation: StoredAuthoritySnapshot['allocation'] }[] = [
+        { allocation: snapshot.allocation },
+        ...members.map((member) => ({ allocation: member.allocation }))
+      ];
+      try {
+        for (const { allocation } of releases) {
+          const key = capacityKey(
+            allocation.descriptor.meshName,
+            String(allocation.descriptor.rid)
+          );
+          let entry = capacities.get(key.value);
+          if (entry === undefined) {
+            entry = { read: await this.provider.read(key, signal) };
+            capacities.set(key.value, entry);
+          }
+          if (entry.read.kind !== 'found') continue;
+          const stored = entry.next ?? decodeJson<CapacityRecord>(entry.read.value.bytes);
+          entry.next = {
+            active:
+              allocation.state === 'active'
+                ? subtractCapacity(stored.active, allocation.capacity)
+                : stored.active,
+            pending:
+              allocation.state === 'reserved'
+                ? subtractCapacity(stored.pending, allocation.capacity)
+                : stored.pending
+          };
+        }
+      } catch (error) {
+        if (
+          !(error instanceof ZLinkFrameworkException) ||
+          error.kind !== ZLinkFrameworkErrorKind.DataLost
+        )
+          throw error;
+        for (const authority of [{ key: rowKey, version: current.value.version }, ...members]) {
+          const observed = await this.provider.read(authority.key, signal);
+          if (
+            observed.kind === 'missing' ||
+            observed.value.version.value !== authority.version.value
+          )
+            return 'conflict';
+        }
+        throw error;
+      }
+      for (const [key, entry] of capacities) {
+        conditions.push(conditionFor(storeKey(key), entry.read));
+        if (entry.next !== undefined)
+          mutations.push({
+            kind: 'put',
+            key: storeKey(key),
+            bytes: encodeJson(entry.next satisfies CapacityRecord)
+          });
+      }
+      // Every mutated key is also a condition key, so the condition count is the batch's
+      // unique key count. A release beyond the provider bound changes nothing.
+      if (conditions.length > ZLINK_PROVIDER_MAX_WRITE_KEYS)
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.Unavailable,
+          'User Spot member release exceeds one Location Store batch.'
+        );
+      const result = await this.provider.write({ conditions, mutations }, signal);
+      if (result.kind === 'applied') return 'reclaimed';
+      await macrotaskBoundary();
+    }
   }
 
   /**
@@ -1608,7 +1629,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           encodedAuthorityKey,
           current.value.version.value,
           signal,
-          request
+          request,
+          deadlineUnixMs
         );
         if (reclaim === 'notReclaimable')
           return snapshot.allocation.state === 'active'
