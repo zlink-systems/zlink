@@ -674,8 +674,7 @@ export class ZLinkStreamSessionRuntime {
     void Promise.all([
       bindingsCleanup,
       this.serial.executeFinal(async () => this.complete(undefined, true, bindingsCleanup))
-    ])
-      .catch((error) => this.options.onError?.(error));
+    ]).catch((error) => this.options.onError?.(error));
   }
 
   private stopLivenessChecks(): void {
