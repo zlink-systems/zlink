@@ -286,16 +286,11 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
 
         // Preserve registry enumeration order for equal keys, including generations.
         var expected = fixture
-            .Ready.Keys.Cast<object>()
-            .OrderBy(entry =>
-                fixture.KeyValue<MeshReadyDomains>(entry, "Domain")
-                == MeshReadyDomains.Infrastructure
-                    ? 0
-                    : 1
-            )
-            .ThenBy(entry => fixture.KeyValue<MeshOwnerKind>(entry, "OwnerKind"))
-            .ThenBy(entry => fixture.KeyValue<string>(entry, "Identity"), StringComparer.Ordinal)
-            .Select(entry => fixture.KeyValue<string>(entry, "SpotId"))
+            .Ready.Keys.Cast<MeshMailboxKey>()
+            .OrderBy(entry => entry.Domain == MeshReadyDomains.Infrastructure ? 0 : 1)
+            .ThenBy(entry => entry.OwnerKind)
+            .ThenBy(entry => entry.Identity, StringComparer.Ordinal)
+            .Select(entry => entry.SpotId)
             .ToArray();
         using var batch = new MeshReadyBatch();
         Assert.False(fixture.Node.DrainReady(MeshReadyDomains.All, batch));
@@ -335,7 +330,7 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
         using var batch = new MeshReadyBatch { MaximumRecords = 1 };
         Assert.False(fixture.Node.DrainReady(MeshReadyDomains.All, batch));
         Assert.Equal(1, batch.Count);
-        Assert.Equal(fixture.KeyValue<string>(next, "SpotId"), batch[0].SpotId);
+        Assert.Equal(next.SpotId, batch[0].SpotId);
         Assert.False((bool)fixture.Ready[stale]!);
         Assert.Null(fixture.BeforeLookup);
     }
@@ -354,8 +349,8 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
         Assert.False(fixture.Node.DrainReady(MeshReadyDomains.All, batch));
         Assert.Equal(2, batch.Count);
         Assert.Same(original, batch.TakeClaim(0));
-        Assert.Equal(fixture.KeyValue<string>(first, "SpotId"), batch[0].SpotId);
-        Assert.Equal(fixture.KeyValue<string>(next, "SpotId"), batch[1].SpotId);
+        Assert.Equal(first.SpotId, batch[0].SpotId);
+        Assert.Equal(next.SpotId, batch[1].SpotId);
         batch.Reset();
         Assert.False(fixture.Node.DrainReady(MeshReadyDomains.All, batch));
         Assert.Equal(0, batch.Count);
@@ -379,14 +374,7 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
         // allocating claims or involving mailbox release. Warm the reused batch
         // first, as the real pump does when it retains its output batch.
         using var batch = new MeshReadyBatch { MaximumRecords = 0 };
-        var enumerate = (Action)
-            typeof(MeshMailboxReadinessTests)
-                .GetMethod(
-                    nameof(CreateRegistryEnumerator),
-                    BindingFlags.Static | BindingFlags.NonPublic
-                )!
-                .MakeGenericMethod(fixture.Ready.GetType().GenericTypeArguments[0])
-                .Invoke(null, [fixture.Ready])!;
+        var enumerate = CreateRegistryEnumerator<MeshMailboxKey>(fixture.Ready);
         for (var index = 0; index < iterations; index++)
         {
             enumerate();
@@ -430,7 +418,6 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
     private sealed class ReadyRegistryFixture : IDisposable
     {
         private const BindingFlags Fields = BindingFlags.Instance | BindingFlags.NonPublic;
-        private readonly Type _keyType;
         private readonly IDictionary _owned;
         private readonly ILookupHook _hook;
         internal ZLinkManagedMeshNode Node { get; }
@@ -447,45 +434,33 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
                 RuntimeHelpers.GetUninitializedObject(typeof(ZLinkManagedMeshNode));
             var readyField = typeof(ZLinkManagedMeshNode).GetField("_readyMailboxes", Fields)!;
             var ownedField = typeof(ZLinkManagedMeshNode).GetField("_ownedMailboxes", Fields)!;
-            _keyType = readyField.FieldType.GenericTypeArguments[0];
-            var comparer = Activator.CreateInstance(
-                typeof(LookupHook<>).MakeGenericType(_keyType)
-            )!;
+            var comparer = new LookupHook<MeshMailboxKey>();
             _hook = (ILookupHook)comparer;
-            Ready = (IDictionary)Activator.CreateInstance(readyField.FieldType, comparer)!;
-            _owned = (IDictionary)Activator.CreateInstance(ownedField.FieldType)!;
+            Ready = new ConcurrentDictionary<MeshMailboxKey, bool>(comparer);
+            _owned = new ConcurrentDictionary<MeshMailboxKey, ZLinkMeshNodeOwnedMailbox>();
             readyField.SetValue(Node, Ready);
             ownedField.SetValue(Node, _owned);
         }
 
-        internal object Add(
+        internal MeshMailboxKey Add(
             MeshOwnerKind kind,
             string identity,
             MeshReadyDomains domain,
             ulong generation = 0
         )
         {
-            var key = Activator.CreateInstance(
-                _keyType,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                [
-                    kind,
-                    identity,
-                    generation,
-                    domain,
-                    $"{domain}:{kind}:{identity}:{generation}",
-                    default(ActorRef),
-                ],
-                null
-            )!;
+            var key = new MeshMailboxKey(
+                kind,
+                identity,
+                generation,
+                domain,
+                $"{domain}:{kind}:{identity}:{generation}",
+                default
+            );
             Ready.Add(key, true);
             _owned.Add(key, new ZLinkMeshNodeOwnedMailbox(_ => { }, _ => { }));
             return key;
         }
-
-        internal T KeyValue<T>(object key, string name) =>
-            (T)_keyType.GetProperty(name)!.GetValue(key)!;
 
         public void Dispose()
         {
