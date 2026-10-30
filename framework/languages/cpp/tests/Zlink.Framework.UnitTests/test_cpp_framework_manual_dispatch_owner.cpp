@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <future>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -144,7 +145,8 @@ TEST (ManualDispatchOwner, PendingTerminalRetainsDrainWithoutOccupyingWorker)
         auto started = entered->get_future ();
         auto terminal_observed = std::make_shared<std::atomic_bool> (false);
         worker.submit ([&worker, terminal, entered, terminal_observed] {
-            auto retained = worker.retain_internal_work ();
+            auto retained = std::make_shared<fw::runtime::offload_executor_t::retained_work_t> (
+              worker.retain_internal_work ());
             auto pending = terminal->task ();
             fw::detail::observe_task_terminal (
               pending, [retained = std::move (retained), terminal_observed] (const auto &) mutable {

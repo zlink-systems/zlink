@@ -749,9 +749,13 @@ TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
                           : runtime::messaging::message_kind_t::command;
     header.channel_name = "X";
 
-    auto result = dispatcher.dispatch (
-      {zlink::routing_id_t::from ("flow-source"), received.correlation, std::move (encoded), {}},
-      std::move (header));
+    auto result = dispatcher
+                    .dispatch ({zlink::routing_id_t::from ("flow-source"),
+                                received.correlation,
+                                std::move (encoded),
+                                {}},
+                               std::move (header))
+                    .result ();
     ASSERT_TRUE (result);
     test::acknowledge_delivery ();
     const auto events = observations->snapshot ();

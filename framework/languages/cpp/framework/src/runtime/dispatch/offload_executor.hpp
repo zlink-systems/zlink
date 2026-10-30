@@ -57,7 +57,24 @@ class offload_executor_t
     virtual bool try_submit_internal (std::function<void ()> work);
     // Retains already-started asynchronous work in the existing drain count
     // without retaining a worker. The caller releases it at physical terminal.
-    std::shared_ptr<void> retain_internal_work ();
+    class retained_work_t
+    {
+      public:
+        retained_work_t () noexcept = default;
+        retained_work_t (retained_work_t &&other) noexcept;
+        retained_work_t &operator= (retained_work_t &&other) noexcept;
+        retained_work_t (const retained_work_t &) = delete;
+        retained_work_t &operator= (const retained_work_t &) = delete;
+        ~retained_work_t () noexcept;
+        void reset () noexcept;
+        explicit operator bool () const noexcept { return _executor != nullptr; }
+
+      private:
+        friend class offload_executor_t;
+        explicit retained_work_t (offload_executor_t &executor) noexcept;
+        offload_executor_t *_executor = nullptr;
+    };
+    retained_work_t retain_internal_work () noexcept;
     // Initial placement uses the workers already created by the constructor.
     bool start_role (std::shared_ptr<role_t> role);
     // Only the current holder calls this, at a receive rotation boundary.

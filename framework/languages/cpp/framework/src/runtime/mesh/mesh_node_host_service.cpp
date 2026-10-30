@@ -202,9 +202,12 @@ application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
   application_dispatch_terminal_owner_t &&other) noexcept :
     _settled (other._settled.exchange (true, std::memory_order_acq_rel)),
     _node (std::move (other._node)),
+    _physical_work (std::move (other._physical_work)),
     _complete_stateful_dispatch (std::move (other._complete_stateful_dispatch)),
     _release_mailbox_reservation (std::move (other._release_mailbox_reservation))
 {
+    other._complete_stateful_dispatch = {};
+    other._release_mailbox_reservation = {};
 }
 
 application_dispatch_terminal_owner_t::~application_dispatch_terminal_owner_t () noexcept
@@ -219,12 +222,24 @@ void application_dispatch_terminal_owner_t::settle () noexcept
 
     invoke (_complete_stateful_dispatch);
     invoke (_release_mailbox_reservation);
-    const auto node = _node.lock ();
+    auto node = std::move (_node);
     _complete_stateful_dispatch = {};
     _release_mailbox_reservation = {};
     if (node)
         node->application_work_finished ();
-    _node.reset ();
+    node.reset ();
+    _physical_work.reset ();
+}
+
+std::function<void ()> application_dispatch_terminal_owner_t::take_mailbox_reservation () noexcept
+{
+    return std::exchange (_release_mailbox_reservation, {});
+}
+
+void application_dispatch_terminal_owner_t::retain_physical_work (
+  offload_executor_t::retained_work_t work) noexcept
+{
+    _physical_work = std::move (work);
 }
 
 void application_dispatch_terminal_owner_t::invoke (const std::function<void ()> &callback) noexcept
@@ -1947,18 +1962,17 @@ auto mesh_node_host_service_t::make_application_owner_work (
   std::shared_ptr<detail::mesh_node_builder_state_t> registration,
   std::string owner)
 {
-    return
-      [node = std::move (node), registration = std::move (registration), owner = std::move (owner),
-       services = _services, serializers = _serializers, filters = _filters,
-       failures = _runtime_failures, options = _dispatch_options] (bool reject_only) {
-          detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
-          auto pending = std::make_shared<task_t<void>> (drain_application_owner (
-            node, registration, owner, reject_only, services, serializers, filters, options));
-          detail::observe_task_completion (*pending,
-                                           [pending, failures] (const result_t<void> &result) {
-                                               failures->capture ([&] { result.value (); });
-                                           });
-      };
+    return [node = std::move (node), registration = std::move (registration),
+            owner = std::move (owner), services = _services, serializers = _serializers,
+            filters = _filters, failures = _runtime_failures, options = _dispatch_options,
+            executor = _application_dispatch.get ()] (bool reject_only) {
+        detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
+        auto pending = drain_application_owner (node, registration, owner, reject_only, services,
+                                                serializers, filters, options, executor);
+        detail::observe_task_terminal (pending, [failures] (const result_t<void> &result) {
+            failures->capture ([&] { result.value (); });
+        });
+    };
 }
 
 struct mesh_node_host_service_t::node_receive_role_t final
@@ -2148,9 +2162,10 @@ struct mesh_node_host_service_t::node_receive_role_t final
                       }
                       detail::mesh_record_dispatcher_t dispatcher (
                         *host._services, *host._serializers, registration->handlers, *host._filters,
-                        host._dispatch_options);
-                      (void) dispatcher.dispatch (record, std::move (parts),
-                                                  std::move (*decoded_header.value ()));
+                        host._dispatch_options, {}, registration);
+                      auto pending = dispatcher.dispatch (record, std::move (parts),
+                                                          std::move (*decoded_header.value ()), {},
+                                                          host._application_dispatch.get ());
                   });
               },
               accept_application_receive, next_application_receive))
@@ -2920,16 +2935,17 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     .prepare_spot_dispatch (std::move (key), std::move (route));
               },
               [weak = std::weak_ptr (node), registration, services = _services,
-               serializers = _serializers, filters = _filters, options = _dispatch_options] (
-                const host::ready_record_t &owner, const host::receive_record_t &record,
-                std::vector<zlink::message_t> parts) {
+               serializers = _serializers, filters = _filters, options = _dispatch_options,
+               executor = _application_dispatch.get ()] (const host::ready_record_t &owner,
+                                                         const host::receive_record_t &record,
+                                                         std::vector<zlink::message_t> parts) {
                   const auto node = weak.lock ();
                   if (!node)
                       return;
                   node->application_work_enqueued ();
                   node->application_work_started ();
                   dispatch_application (node, registration, owner, record, std::move (parts), false,
-                                        services, serializers, filters, options);
+                                        services, serializers, filters, options, {}, executor);
               });
             if (_listener_statuses) {
                 const auto status = node->status ();
@@ -3471,7 +3487,8 @@ void mesh_node_host_service_t::dispatch_application (
   serializer_registry_t *serializers,
   const handler_registry_t *filters,
   const dispatch_options_t &dispatch_options,
-  serial_execution_queue_t::async_completion_t application_completed)
+  serial_execution_queue_t::async_completion_t application_completed,
+  offload_executor_t *executor)
 {
     if (record.retain_mailbox_reservation)
         record.retain_mailbox_reservation ();
@@ -3499,7 +3516,8 @@ void mesh_node_host_service_t::dispatch_application (
           record, parts, detail::message_flow_tracer_t (dispatch_options).flow_tracing (),
           dispatch_options);
         if (!decoded_header) {
-            deferred_terminal->settle ();
+            if (deferred_terminal)
+                deferred_terminal->settle ();
             if (application_completed)
                 application_completed ([] {});
             return;
@@ -3513,16 +3531,25 @@ void mesh_node_host_service_t::dispatch_application (
         if (!handled && decoded_header.value ()
             && (owner.owner_kind == host::owner_kind_t::node
                 || owner.owner_kind == host::owner_kind_t::channel)) {
+            // Callers always pass an empty application_completed for node and channel owners.
+            // The native claim still owns settlement. Transfer its existing release
+            // callback to the bounded pipeline handoff, leaving physical work retained.
+            terminal_callback_guard_t prefix (deferred_terminal->take_mailbox_reservation ());
             detail::mesh_record_dispatcher_t dispatcher (
               *services, *serializers, registration->handlers, *filters, dispatch_options,
-              record.before_application_handler);
-            const auto dispatched =
-              dispatcher.dispatch (record, std::move (parts), std::move (*decoded_header.value ()));
+              record.before_application_handler, registration);
+            auto invocation_terminal = std::move (*deferred_terminal);
+            deferred_terminal.reset ();
+            terminal_deferred = true;
+            auto pending =
+              dispatcher.dispatch (record, std::move (parts), std::move (*decoded_header.value ()),
+                                   std::move (invocation_terminal), executor);
             trace_mesh_application ("route-dispatch", record, 0,
-                                    dispatched ? "success" : "failure");
+                                    pending.await_ready () ? "ready" : "pending");
         }
         if (!terminal_deferred) {
-            deferred_terminal->settle ();
+            if (deferred_terminal)
+                deferred_terminal->settle ();
             if (application_completed)
                 application_completed ([] {});
         }
@@ -3555,9 +3582,14 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
   service_provider_t *services,
   serializer_registry_t *serializers,
   const handler_registry_t *filters,
-  dispatch_options_t dispatch_options)
+  dispatch_options_t dispatch_options,
+  offload_executor_t *executor)
 {
-    auto &mailbox = node->native_node ().transport ().mailbox ();
+    offload_executor_t::retained_work_t physical_work;
+    // Move parameter dependencies into locals so they are destroyed before credit.
+    auto owned_node = std::move (node);
+    auto owned_registration = std::move (registration);
+    auto &mailbox = owned_node->native_node ().transport ().mailbox ();
     if (!mailbox.begin_application_drain (owner))
         co_return;
     const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
@@ -3566,13 +3598,23 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
                                   std::vector<zlink::message_t>)>
           dispatch = [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
                           std::vector<zlink::message_t> parts) {
-              dispatch_application (node, registration, ready, record, std::move (parts),
-                                    reject_only, services, serializers, filters, dispatch_options);
+              dispatch_application (owned_node, owned_registration, ready, record,
+                                    std::move (parts), reject_only, services, serializers, filters,
+                                    dispatch_options, {}, executor);
           };
-        const std::function<void ()> started = [&node] { node->application_work_started (); };
-        const std::function<void ()> rejected = [&node] { node->application_work_finished (); };
-        while (co_await node->native_node ().dispatch_application_owner (owner, dispatch, started,
-                                                                         rejected)) {
+        const std::function<void ()> started = [&owned_node] {
+            owned_node->application_work_started ();
+        };
+        const std::function<void ()> rejected = [&owned_node] {
+            owned_node->application_work_finished ();
+        };
+        while (true) {
+            auto pending = owned_node->native_node ().dispatch_application_owner (
+              owner, dispatch, started, rejected);
+            if (!pending.await_ready () && !physical_work && executor)
+                physical_work = executor->retain_internal_work ();
+            if (!(co_await pending))
+                break;
             if (!reject_only && std::chrono::steady_clock::now () >= deadline)
                 break;
         }

@@ -415,16 +415,13 @@ class channel_host_service_t::server_loop_t
                             : std::optional<zlink::routing_id_t> (
                                 zlink::routing_id_t::from (record.source_routing_id));
         auto reply_token = std::move (record.reply_token);
-        auto shared_parts = std::make_shared<messaging::message_parts_t> (std::move (record.parts));
+        auto parts = messaging::message_parts_t (std::move (record.parts));
         try {
-            auto scope =
-              std::make_shared<detail::service_scope_t> (detail::service_scope_t::create (
-                *_services, detail::service_scope_kind_t::handler_invocation));
-            auto pending = _dispatcher.dispatch_server_message_in_handler (
-              _channel_name, *shared_parts, scope->provider (), *_serializers, *_handlers,
-              std::move (record.before_application_handler));
-            auto finish = [this, routing_id = std::move (routing_id), reply_token, shared_parts,
-                           scope] (const result_t<messaging::message_parts_t> &result) {
+            auto scope = detail::service_scope_t::create (
+              *_services, detail::service_scope_kind_t::handler_invocation);
+            auto finish = [this, routing_id = std::move (routing_id),
+                           reply_token] (const result_t<messaging::message_parts_t> &result,
+                                         const messaging::message_parts_t &parts) {
                 std::exception_ptr failure;
                 try {
                     if (result) {
@@ -437,23 +434,16 @@ class channel_host_service_t::server_loop_t
                 catch (...) {
                     failure = std::current_exception ();
                 }
-                scope->close ();
                 if (!result || failure)
-                    report_dispatch_failure (shared_parts, failure);
+                    report_dispatch_failure (parts, failure);
             };
-            // The dispatch coroutine owns its task state until physical terminal.
-            // Retain only the existing executor drain count while it is suspended.
-            auto retained = pending.await_ready () ? std::shared_ptr<void>{}
-                                                   : _handler_executor->retain_internal_work ();
-            detail::observe_task_terminal (
-              pending, [retained = std::move (retained), finish = std::move (finish)] (
-                         const result_t<messaging::message_parts_t> &result) mutable {
-                  finish (result);
-                  retained.reset ();
-              });
+            auto pending = _dispatcher.dispatch_server_message_in_handler (
+              _channel_name, std::move (parts), *_services, *_serializers, *_handlers,
+              std::move (record.before_application_handler), std::move (scope),
+              _handler_executor.get (), std::move (finish));
         }
         catch (...) {
-            report_dispatch_failure (shared_parts, std::current_exception ());
+            report_dispatch_failure (parts, std::current_exception ());
         }
     }
 
@@ -486,12 +476,12 @@ class channel_host_service_t::server_loop_t
         });
     }
 
-    void report_dispatch_failure (const std::shared_ptr<messaging::message_parts_t> &shared_parts,
+    void report_dispatch_failure (const messaging::message_parts_t &parts,
                                   std::exception_ptr failure)
     {
         detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
             auto decoded = messaging::envelope_codec_t{}.decode_header (
-              *shared_parts,
+              parts,
               detail::message_flow_tracer_t (_runtime.dispatch_options_ref ()).flow_tracing ());
             message_dispatch_error_event_t event{
               dispatch_error_surface_t::channel,
@@ -785,8 +775,8 @@ class channel_host_service_t::subscriber_loop_t
                 auto scope = detail::service_scope_t::create (
                   *_services, detail::service_scope_kind_t::handler_invocation);
                 (void) dispatcher.dispatch_server_message (
-                  _channel_name, *shared_parts, scope.provider (), *_serializers, *_handlers,
-                  [application_job] { application_job->release_for_handler_entry (); });
+                  _channel_name, std::move (*shared_parts), scope.provider (), *_serializers,
+                  *_handlers, [application_job] { application_job->release_for_handler_entry (); });
             }
             catch (...) {
             }

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/mesh/application_dispatch_terminal_owner.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
@@ -37,33 +38,6 @@ decode_mesh_record_header (const host::receive_record_t &record,
                            bool capture_flow,
                            const dispatch_options_t &dispatch_options = {});
 
-// Owns every resource charged to one admitted application dispatch until its
-// synchronous or deferred terminal settles. This internal value is separate
-// from the host object so a late terminal never needs to retain or dereference
-// the host service itself.
-class application_dispatch_terminal_owner_t final
-{
-  public:
-    application_dispatch_terminal_owner_t (std::shared_ptr<detail::mesh_node_runtime_t> node,
-                                           std::function<void ()> complete_stateful_dispatch,
-                                           std::function<void ()> release_mailbox_reservation);
-    ~application_dispatch_terminal_owner_t () noexcept;
-    application_dispatch_terminal_owner_t (application_dispatch_terminal_owner_t &&other) noexcept;
-
-    application_dispatch_terminal_owner_t (const application_dispatch_terminal_owner_t &) = delete;
-    application_dispatch_terminal_owner_t &
-    operator= (const application_dispatch_terminal_owner_t &) = delete;
-
-    void settle () noexcept;
-
-  private:
-    static void invoke (const std::function<void ()> &callback) noexcept;
-
-    std::atomic_bool _settled{false};
-    std::weak_ptr<detail::mesh_node_runtime_t> _node;
-    std::function<void ()> _complete_stateful_dispatch;
-    std::function<void ()> _release_mailbox_reservation;
-};
 
 class mesh_node_host_service_t final : public hosted_service_t, public hosted_service_lifecycle_t
 {
@@ -168,7 +142,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                           serializer_registry_t *serializers,
                           const handler_registry_t *filters,
                           const dispatch_options_t &dispatch_options,
-                          serial_execution_queue_t::async_completion_t application_completed = {});
+                          serial_execution_queue_t::async_completion_t application_completed = {},
+                          offload_executor_t *executor = nullptr);
     static task_t<void>
     drain_application_owner (std::shared_ptr<detail::mesh_node_runtime_t> node,
                              std::shared_ptr<detail::mesh_node_builder_state_t> registration,
@@ -177,7 +152,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                              service_provider_t *services,
                              serializer_registry_t *serializers,
                              const handler_registry_t *filters,
-                             dispatch_options_t dispatch_options);
+                             dispatch_options_t dispatch_options,
+                             offload_executor_t *executor);
 
     std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> _registrations;
     serializer_registry_t *_serializers;

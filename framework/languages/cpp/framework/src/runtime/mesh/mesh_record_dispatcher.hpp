@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include "runtime/mesh/application_dispatch_terminal_owner.hpp"
 
 #include "runtime/channels/route_handler_registry.hpp"
+#include "runtime/channels/route_packet.hpp"
 #include "runtime/channels/route_internal_packet_dispatcher.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 
@@ -10,6 +12,7 @@
 
 #include <functional>
 #include <vector>
+#include <memory>
 
 namespace zlink::framework::detail
 {
@@ -22,11 +25,15 @@ class mesh_record_dispatcher_t
                               const route_handler_registry_t &handlers,
                               const handler_registry_t &filters,
                               dispatch_options_t dispatch_options = {},
-                              std::function<void ()> before_application_handler = {});
+                              std::function<void ()> before_application_handler = {},
+                              std::shared_ptr<void> registration = {});
 
-    result_t<void> dispatch (const runtime::host::receive_record_t &record,
-                             std::vector<zlink::message_t> parts,
-                             runtime::messaging::envelope_header_t header) const;
+    task_t<std::optional<route_dispatch_reply_t>>
+    dispatch (const runtime::host::receive_record_t &record,
+              std::vector<zlink::message_t> parts,
+              runtime::messaging::envelope_header_t header,
+              runtime::application_dispatch_terminal_owner_t terminal = {},
+              runtime::offload_executor_t *executor = nullptr) const;
 
   private:
     service_provider_t *_services;
@@ -36,6 +43,7 @@ class mesh_record_dispatcher_t
     dispatch_options_t _dispatch_options;
     no_route_internal_packet_dispatcher_t _no_internal_packets;
     std::function<void ()> _before_application_handler;
+    std::shared_ptr<void> _registration;
 };
 
 } // namespace zlink::framework::detail

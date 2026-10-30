@@ -33,6 +33,9 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
   control runtime for scheduled reconnect work (#2899, #2901).
 - Remove the unsupported Windows AF_UNIX datagram signaler attempt while
   retaining the stream pair and conditional TCP fallback (#3053, #3158).
+- Join private inproc reconnect work before socket close, so `zlink_close` no
+  longer fails with `EBUSY` when no user call is running on the socket
+  (#3197, #3199).
 
 ## [1.20.0]
 
