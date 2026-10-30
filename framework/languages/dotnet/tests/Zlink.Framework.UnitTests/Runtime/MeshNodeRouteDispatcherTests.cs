@@ -109,6 +109,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     replyHeader.CorrelationId
                 );
             }
+            global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
             var errors = logger
                 .Messages.Where(line =>
                     line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
