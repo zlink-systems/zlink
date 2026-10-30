@@ -9010,7 +9010,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                     .count ())};
     std::optional<protocol::user_spot_close_reply_t> expired_close_reply;
     assert (source
-              ->close_user_spot_remote (target->status ().routing_id (), expired_close, 5s,
+              ->close_user_spot_remote (target->status ().routing_id (), expired_close,
+                                        std::chrono::steady_clock::now () + 5s,
                                         [&] (foundation::operation_terminal_t terminal,
                                              protocol::user_spot_close_reply_t reply) {
                                             assert (terminal
@@ -9053,7 +9054,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
           std::optional<protocol::user_spot_close_reply_t> reply;
           assert (source
                     ->close_user_spot_remote (
-                      target->status ().routing_id (), rejected, 5s,
+                      target->status ().routing_id (), rejected,
+                      std::chrono::steady_clock::now () + 5s,
                       [&] (foundation::operation_terminal_t terminal,
                            protocol::user_spot_close_reply_t value) {
                           assert (terminal == foundation::operation_terminal_t::completed);
@@ -9105,7 +9107,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                     .count ());
     std::optional<protocol::user_spot_close_reply_t> close_reply;
     assert (source
-              ->close_user_spot_remote (target->status ().routing_id (), close, 5s,
+              ->close_user_spot_remote (target->status ().routing_id (), close,
+                                        std::chrono::steady_clock::now () + 5s,
                                         [&] (foundation::operation_terminal_t terminal,
                                              protocol::user_spot_close_reply_t reply) {
                                             assert (terminal
