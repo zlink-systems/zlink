@@ -17,7 +17,6 @@ public sealed class SourceLayoutContracts
         "Zlink.Framework.UnitTests/Configuration/Registration/Monitoring.cs",
         "Zlink.Framework.UnitTests/Runtime/ClientServerClientAckTests.cs",
         "Zlink.Framework.UnitTests/Runtime/ClientServerLivenessLaneTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/DescriptorOwnerLeaseSelectionTests.cs",
         "Zlink.Framework.UnitTests/Runtime/DurableSenderRuntimeTests.cs",
         "Zlink.Framework.UnitTests/Runtime/EntrySpotActorDispatchTests.cs",
         "Zlink.Framework.UnitTests/Runtime/EnvelopeHeaderCacheHotPathTests.cs",
@@ -42,7 +41,6 @@ public sealed class SourceLayoutContracts
         "Zlink.Framework.UnitTests/Runtime/ServiceWireSessionRelocationCodecTests.cs",
         "Zlink.Framework.UnitTests/Runtime/SessionActorCoordinatorTests.cs",
         "Zlink.Framework.UnitTests/Runtime/SessionFailureClassificationTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/StatefulServiceRuntimeTests.cs",
         "Zlink.Framework.UnitTests/Runtime/SubmitAdmissionRuntimeTests.cs",
     ];
 

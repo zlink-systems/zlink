@@ -112,17 +112,16 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
     )
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var node = new ZLinkManagedMeshNode(context, "typed-completion");
         var expected = new ZlinkSubmitException(code);
         var socket = new RefusedRequestSocket(expected);
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "typed-completion",
+            directRequestSocket: socket
+        );
         const System.Reflection.BindingFlags flags =
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
         var nodeType = typeof(ZLinkManagedMeshNode);
-        var socketField = nodeType.GetField("_socket", flags)!;
-        socketField.SetValue(node, socket);
-        nodeType
-            .GetField("_activeSocketGeneration", flags)!
-            .SetValue(node, nodeType.GetField("_lifecycleGeneration", flags)!.GetValue(node));
         MeshReceiveRecord? terminal = null;
         node.SetCompletionHandlerCore(
             (record, parts) =>
@@ -162,60 +161,53 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
         // Capture the original caller task before the dispatcher clears its receiver.
         var callerTask = (Task?)create.Invoke(node, arguments);
         var pending = arguments[3]!;
-        try
+        await (Task)
+            nodeType
+                .GetMethod("CompleteNativeApplicationRequestAsync", flags)!
+                .Invoke(
+                    node,
+                    [
+                        RoutingId.From("peer"),
+                        pending,
+                        new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
+                        TimeSpan.FromSeconds(5),
+                        default(CancellationToken),
+                        null,
+                        null,
+                        null,
+                    ]
+                )!;
+        if (awaited)
         {
+            var task = callerTask!;
+            var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => task);
+            Assert.Same(expected, failure);
+            Assert.Null(terminal);
+            var callbacks = 0;
             await (Task)
                 nodeType
-                    .GetMethod("CompleteNativeApplicationRequestAsync", flags)!
+                    .GetMethod("DeliverRequestCompletionAsync", flags)!
                     .Invoke(
                         node,
                         [
-                            RoutingId.From("peer"),
-                            pending,
-                            new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
-                            TimeSpan.FromSeconds(5),
-                            default(CancellationToken),
-                            null,
-                            null,
-                            null,
+                            task,
+                            (ZLinkBackendRequestCallback)(
+                                (_, parts) =>
+                                {
+                                    callbacks++;
+                                    Assert.Empty(parts);
+                                }
+                            ),
                         ]
                     )!;
-            if (awaited)
-            {
-                var task = callerTask!;
-                var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => task);
-                Assert.Same(expected, failure);
-                Assert.Null(terminal);
-                var callbacks = 0;
-                await (Task)
-                    nodeType
-                        .GetMethod("DeliverRequestCompletionAsync", flags)!
-                        .Invoke(
-                            node,
-                            [
-                                task,
-                                (ZLinkBackendRequestCallback)(
-                                    (_, parts) =>
-                                    {
-                                        callbacks++;
-                                        Assert.Empty(parts);
-                                    }
-                                ),
-                            ]
-                        )!;
-                Assert.Equal(1, callbacks);
-            }
-            else
-            {
-                Assert.True(terminal.HasValue);
-                Assert.Same(expected, terminal.Value.SubmitFailure);
-            }
-            Assert.Equal(1, socket.Submissions);
+            Assert.Equal(1, callbacks);
         }
-        finally
+        else
         {
-            socketField.SetValue(node, null);
+            Assert.True(terminal.HasValue);
+            Assert.Same(expected, terminal.Value.SubmitFailure);
         }
+        Assert.Equal(1, socket.Submissions);
     }
 
     [Theory]
@@ -229,64 +221,56 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
     )
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var node = new ZLinkManagedMeshNode(context, "typed-admission");
         var expected = new ZlinkSubmitException(code);
         var socket = new RefusedRequestSocket(expected);
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "typed-admission",
+            directRequestSocket: socket
+        );
         // Access only Framework state. The socket double implements the public
         // binding contracts and never accesses binding implementation details.
         const System.Reflection.BindingFlags flags =
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
         var nodeType = typeof(ZLinkManagedMeshNode);
-        var socketField = nodeType.GetField("_socket", flags)!;
-        socketField.SetValue(node, socket);
-        nodeType
-            .GetField("_activeSocketGeneration", flags)!
-            .SetValue(node, nodeType.GetField("_lifecycleGeneration", flags)!.GetValue(node));
         using var payload = Message.From("request");
-        try
-        {
-            var method = nodeType.GetMethod(
-                "RequestDirectWireAsync",
-                flags,
-                [
-                    typeof(RoutingId),
-                    encodedWire
-                        ? typeof(IReadOnlyList<ReadOnlyMemory<byte>>)
-                        : typeof(IReadOnlyList<Message>),
-                    typeof(TimeSpan),
-                    typeof(CancellationToken),
-                    typeof(ZLinkServiceLiveness),
-                    typeof(ZLinkRequestAdmission),
-                    typeof(TimeSpan?),
-                    typeof(MeshOperationId),
-                ]
-            )!;
-            var request =
-                (ValueTask<IReadOnlyList<Message>>)
-                    method.Invoke(
-                        node,
-                        [
-                            RoutingId.From("peer"),
-                            encodedWire
-                                ? new ReadOnlyMemory<byte>[] { "request"u8.ToArray() }
-                                : new[] { payload },
-                            TimeSpan.FromSeconds(5),
-                            default(CancellationToken),
-                            null,
-                            null,
-                            null,
-                            default(MeshOperationId),
-                        ]
-                    )!;
-            var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => request.AsTask());
-            Assert.Same(expected, failure);
-            Assert.Equal(1, socket.Submissions);
-            Assert.Throws<ObjectDisposedException>(() => _ = socket.Payload!.Size);
-        }
-        finally
-        {
-            socketField.SetValue(node, null);
-        }
+        var method = nodeType.GetMethod(
+            "RequestDirectWireAsync",
+            flags,
+            [
+                typeof(RoutingId),
+                encodedWire
+                    ? typeof(IReadOnlyList<ReadOnlyMemory<byte>>)
+                    : typeof(IReadOnlyList<Message>),
+                typeof(TimeSpan),
+                typeof(CancellationToken),
+                typeof(ZLinkServiceLiveness),
+                typeof(ZLinkRequestAdmission),
+                typeof(TimeSpan?),
+                typeof(MeshOperationId),
+            ]
+        )!;
+        var request =
+            (ValueTask<IReadOnlyList<Message>>)
+                method.Invoke(
+                    node,
+                    [
+                        RoutingId.From("peer"),
+                        encodedWire
+                            ? new ReadOnlyMemory<byte>[] { "request"u8.ToArray() }
+                            : new[] { payload },
+                        TimeSpan.FromSeconds(5),
+                        default(CancellationToken),
+                        null,
+                        null,
+                        null,
+                        default(MeshOperationId),
+                    ]
+                )!;
+        var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => request.AsTask());
+        Assert.Same(expected, failure);
+        Assert.Equal(1, socket.Submissions);
+        Assert.Throws<ObjectDisposedException>(() => _ = socket.Payload!.Size);
     }
 
     private sealed class RefusedRequestSocket(ZlinkSubmitException failure)
@@ -338,6 +322,9 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
             throw new NotSupportedException();
 
         public IReadOnlyList<RouterRoute> RoutesSnapshot() => throw new NotSupportedException();
+
+        public IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot() =>
+            throw new NotSupportedException();
 
         public bool Recv(Received result, RecvFlags flags = RecvFlags.None) =>
             throw new NotSupportedException();

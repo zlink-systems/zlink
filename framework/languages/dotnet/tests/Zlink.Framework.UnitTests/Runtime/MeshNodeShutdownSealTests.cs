@@ -36,10 +36,6 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
             );
         var expire = typeof(ZLinkManagedMeshNode).GetMethod("ExpireOperations", flags)!;
-        var operations = typeof(ZLinkManagedMeshNode)
-            .GetField("_operations", flags)!
-            .GetValue(node)!;
-        var count = operations.GetType().GetProperty("Count")!;
         Assert.True(
             (bool)
                 begin.Invoke(
@@ -70,18 +66,18 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             TimeSpan.FromMilliseconds(1) + TimeSpan.FromTicks(1),
             expire.Invoke(node, null)
         );
-        Assert.Equal(2, count.GetValue(operations));
+        Assert.Equal(2, node.PendingOperationCount);
         clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
         Assert.Equal(TimeSpan.FromTicks(1), expire.Invoke(node, null));
-        Assert.Equal(2, count.GetValue(operations));
+        Assert.Equal(2, node.PendingOperationCount);
         clock.Timestamp = 11 * TimeSpan.TicksPerMillisecond;
         Assert.Equal(TimeSpan.FromMilliseconds(9), expire.Invoke(node, null));
-        Assert.Equal(1, count.GetValue(operations));
+        Assert.Equal(1, node.PendingOperationCount);
         clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
         Assert.Equal(Timeout.InfiniteTimeSpan, expire.Invoke(node, null));
-        Assert.Equal(0, count.GetValue(operations));
+        Assert.Equal(0, node.PendingOperationCount);
         Assert.Equal(Timeout.InfiniteTimeSpan, expire.Invoke(node, null));
-        Assert.Equal(0, count.GetValue(operations));
+        Assert.Equal(0, node.PendingOperationCount);
     }
 
     [Fact]
@@ -598,8 +594,8 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.True(entries.Sum(entry => entry.LinkReads) <= 2 * entries.Length);
         // Control input: traversing the old entries for each registration must exceed the linear bound.
         for (var i = 0; i < entries.Length; i++)
-            for (var at = 0; at < i; at++)
-                _ = entries[at].DeadlineNext;
+        for (var at = 0; at < i; at++)
+            _ = entries[at].DeadlineNext;
         Assert.True(entries.Sum(entry => entry.LinkReads) > 2 * entries.Length);
         output.WriteLine(
             "concurrent_pending=1000 registration_index_traversals=0 traversal_control_rejected=true"
@@ -771,18 +767,15 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 && method.GetParameters()[0].ParameterType == typeof(ulong)
             );
         private readonly ZLinkManagedMeshNode _node;
-        private readonly object _operations;
 
         private OperationDeadlineAccess(ZLinkManagedMeshNode node)
         {
             _node = node;
-            _operations = NodeType.GetField("_operations", Flags)!.GetValue(node)!;
         }
 
         internal static OperationDeadlineAccess For(ZLinkManagedMeshNode node) => new(node);
 
-        internal int Count =>
-            (int)_operations.GetType().GetProperty("Count")!.GetValue(_operations)!;
+        internal int Count => _node.PendingOperationCount;
 
         internal object Begin(TimeSpan timeout)
         {
@@ -824,8 +817,6 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
             );
         var expire = type.GetMethod("ExpireOperations", flags)!;
-        var operations = type.GetField("_operations", flags)!.GetValue(node)!;
-        var count = operations.GetType().GetProperty("Count")!;
         object?[] longRegistration =
         [
             MeshOperationKind.NodeRequest,
@@ -838,11 +829,11 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         {
             clock.Timestamp = tick * TimeSpan.TicksPerMillisecond;
             expire.Invoke(node, null);
-            Assert.Equal(1, count.GetValue(operations));
+            Assert.Equal(1, node.PendingOperationCount);
         }
         clock.Timestamp = 513 * TimeSpan.TicksPerMillisecond;
         expire.Invoke(node, null);
-        Assert.Equal(0, count.GetValue(operations));
+        Assert.Equal(0, node.PendingOperationCount);
         object?[] firstRegistration =
         [
             MeshOperationKind.NodeRequest,
@@ -869,9 +860,9 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             );
         clock.Timestamp = 514 * TimeSpan.TicksPerMillisecond;
         expire.Invoke(node, null);
-        Assert.Equal(2, count.GetValue(operations));
+        Assert.Equal(2, node.PendingOperationCount);
         expire.Invoke(node, null);
-        Assert.Equal(0, count.GetValue(operations));
+        Assert.Equal(0, node.PendingOperationCount);
     }
 
     [Fact]
@@ -892,8 +883,6 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
             );
         var expire = type.GetMethod("ExpireOperations", flags)!;
-        var operations = type.GetField("_operations", flags)!.GetValue(node)!;
-        var count = operations.GetType().GetProperty("Count")!;
         for (var index = 0; index < 8; index++)
             Assert.True(
                 (bool)
@@ -914,18 +903,18 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         clock.Timestamp = TimeSpan.TicksPerMillisecond;
         clock.Step = TimeSpan.TicksPerMillisecond / 4;
         expire.Invoke(node, null);
-        Assert.Equal(9, count.GetValue(operations));
+        Assert.Equal(9, node.PendingOperationCount);
         var turns = 1;
-        while ((int)count.GetValue(operations)! == 9)
+        while (node.PendingOperationCount == 9)
         {
             Assert.True(++turns < 9);
             expire.Invoke(node, null);
         }
-        Assert.Equal(8, count.GetValue(operations));
+        Assert.Equal(8, node.PendingOperationCount);
         clock.Step = 0;
         clock.Timestamp = 257 * TimeSpan.TicksPerMillisecond;
         expire.Invoke(node, null);
-        Assert.Equal(0, count.GetValue(operations));
+        Assert.Equal(0, node.PendingOperationCount);
     }
 
     [Fact]
@@ -1569,7 +1558,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         internal void ReceiveChunks()
         {
             using var chunk = Received.Create();
-            for (var ordinal = 0; ordinal < _payload.ChunkCount;)
+            for (var ordinal = 0; ordinal < _payload.ChunkCount; )
             {
                 Assert.True(_server.Recv(chunk));
                 if (
@@ -1721,9 +1710,9 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     ) : IPoller
     {
         private IZlinkSocket Native(IZlinkSocket socket) =>
-            mapSocket is not null
-                ? mapSocket(socket)
-                : socket is CanonicalRequestContext.CountingRouter router ? router.Native : socket;
+            mapSocket is not null ? mapSocket(socket)
+            : socket is CanonicalRequestContext.CountingRouter router ? router.Native
+            : socket;
 
         public int Size => inner.Size;
 
@@ -2057,7 +2046,10 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             peer.Bind(EphemeralTcpEndpoint);
             var endpoint = peer.Options.LastEndpoint;
             intent = node.ConnectPeer(endpoint, rid);
-            Assert.Equal(ServiceWireConstants.Command.Hello, await ReceiveAdmissionCommandAsync(peer));
+            Assert.Equal(
+                ServiceWireConstants.Command.Hello,
+                await ReceiveAdmissionCommandAsync(peer)
+            );
             await SendAsync(
                 peer,
                 ZLinkServiceWireCodec.EncodeRouteAdmission(
