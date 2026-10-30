@@ -15,7 +15,7 @@ int main ()
 {
     {
         zlink::framework::completion_owner_t owner;
-        auto *dispatcher = detail::borrow_completion_dispatcher ();
+        auto dispatcher = detail::borrow_completion_dispatcher ();
         const auto observed = detail::observe_completion_dispatcher ();
         std::latch entered (1), release (1);
         std::atomic_bool completed{false};
@@ -88,7 +88,7 @@ int main ()
     for (unsigned round = 0; round < rounds; ++round) {
         std::atomic_uint delivered{0};
         zlink::framework::completion_owner_t owner;
-        auto *dispatcher = detail::borrow_completion_dispatcher ();
+        auto dispatcher = detail::borrow_completion_dispatcher ();
         for (unsigned index = 0; index < callbacks_per_round; ++index)
             detail::dispatch_completion (
               [&] { delivered.fetch_add (1, std::memory_order_relaxed); }, false, nullptr,
