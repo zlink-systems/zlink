@@ -275,6 +275,18 @@ returned when the same `T` is copy-constructible. Another `T`, or a type whose
 retained value cannot be returned again, ends with `protocol_error`. If the
 first call failed, its stored exception is delivered again.
 
+`decode<T>()` and the argument-free `to_raw()` on a received `message_t`
+refer to the serializer registry of the app that produced the value, so call
+them only before that app is destroyed. If the value is needed after the app is
+destroyed, keep the result of `decode<T>()` taken before destruction. When a
+caller passes a registry it owns by reference to an API such as
+`zlink_builder_t::route_client`, the caller keeps the registry alive until that
+client and its in-flight requests have finished. For an app-owned registry,
+`app_t::run` guarantees this order: before it returns, it stops hosted
+services, which ends in-flight requests with a reply or terminal, and drains
+and joins the handler coroutine executor and the completion dispatcher. Destroy
+`app_t` only after `run` returns.
+
 ### 4.1 Completion Owner
 
 ```cpp

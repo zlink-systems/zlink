@@ -281,8 +281,14 @@ for (const kind of ['deadline', 'rejected', 'shutdown']) {
         },
         close() {}
       };
+      let ingress;
       const runtime = new ServiceStatefulRuntime(
-        { setServiceIngress() {}, reserveLocalIngress: async () => owner },
+        {
+          setServiceIngress(handler) {
+            ingress = handler;
+          },
+          reserveLocalIngress: async () => owner
+        },
         'target',
         7n
       );
@@ -292,7 +298,7 @@ for (const kind of ['deadline', 'rejected', 'shutdown']) {
             {
               setServiceIngress() {},
               async sendService(_target, parts) {
-                await runtime.ingress({
+                await ingress({
                   sourceRoutingId: 'source',
                   sourceNodeGeneration: 1n,
                   parts,

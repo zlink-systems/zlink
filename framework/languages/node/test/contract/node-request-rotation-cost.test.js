@@ -15,7 +15,20 @@ test('one request receive round evaluates permit pressure no more than the pre-r
   const queue = new ApplicationJobQueue(
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 256n }, () => 1n)
   );
+  let received = false;
+  const router = {
+    setRoutingId() {},
+    setReceiveFlowState() {},
+    bind() {},
+    localEndpoint: () => 'tcp://127.0.0.1:1',
+    receive() {
+      if (received) return undefined;
+      received = true;
+      return { sourceRid: 'source', parts: [Buffer.alloc(0)], close() {} };
+    }
+  };
   const runtime = new RawServiceMeshRuntime({
+    bindingPort: { createHost: () => ({ createRouter: () => router, close() {} }) },
     applicationJobQueue: queue,
     descriptor: {
       meshName: 'mesh',
@@ -36,14 +49,7 @@ test('one request receive round evaluates permit pressure no more than the pre-r
       pendingCapacityUsed: 0
     }
   });
-  let received = false;
-  runtime.router = {
-    receive() {
-      if (received) return undefined;
-      received = true;
-      return { sourceRid: 'source', parts: [Buffer.alloc(0)], close() {} };
-    }
-  };
+  runtime.start();
   runtime.processReceived = (_record, _now, owner) => {
     const job = owner.takeInitial('application');
     job.releaseBeforeHandler();
@@ -66,7 +72,7 @@ test('one request receive round evaluates permit pressure no more than the pre-r
     pressureEvaluations <= 4,
     `pressure evaluations per request: ${pressureEvaluations} > 4`
   );
-  runtime.mailbox.close();
+  runtime.close();
 });
 
 test('unused rotation reservations return capacity to FIFO waiters and preserve retained storage', async () => {

@@ -248,6 +248,15 @@ public:
 저장한 값을 다시 반환할 수 없는 type이면 `protocol_error`로 끝난다. 첫 호출이 실패했다면 저장한
 exception을 다시 전달한다.
 
+받은 `message_t`의 `decode<T>()`와 인자 없는 `to_raw()`는 그 값을 만든 app의 serializer
+registry를 참조한다. 그러므로 app이 소멸하기 전에만 호출한다. App 소멸 뒤에도 값이 필요하면
+소멸 전에 `decode<T>()`한 값을 보관한다. `zlink_builder_t::route_client`처럼 registry를 참조로
+받는 API에 호출자가 소유한 registry를 넘겼다면, 호출자는 그 client와 진행 중인 request가 끝날
+때까지 registry를 유지한다. App이 소유한 registry는 이 순서를 `app_t::run`이 보장한다. `run`은
+반환하기 전에 hosted service를 정지해 진행 중인 request를 reply 또는 terminal로 끝내고, handler
+coroutine executor와 completion dispatcher를 drain·join한다. `app_t`는 `run`이 반환된 뒤에
+소멸한다.
+
 ### 4.1 Completion owner
 
 ```cpp

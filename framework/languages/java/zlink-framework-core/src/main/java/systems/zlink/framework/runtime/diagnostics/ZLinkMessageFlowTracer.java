@@ -1,5 +1,9 @@
 package systems.zlink.framework.runtime.diagnostics;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
+
 import systems.zlink.framework.configuration.ZLinkLogLevel;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -19,8 +23,6 @@ import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDisp
 
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /** Internal Spec 26 message-flow tracer. */
 public final class ZLinkMessageFlowTracer {
@@ -123,7 +125,7 @@ public final class ZLinkMessageFlowTracer {
     private static final int UTF8_CONTINUATION_PAYLOAD_BITS = 6;
     private static final int UTF8_CONTINUATION_PAYLOAD_MASK =
             (1 << UTF8_CONTINUATION_PAYLOAD_BITS) - 1;
-    private static final Logger LOGGER = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+    private static final Logger LOGGER = LoggerFactory.getLogger(ZLinkMessageFlowTracer.class);
     private static final AtomicLong NEXT_SOURCE_GENERATION = new AtomicLong();
 
     private final ZLinkDispatchOptionsRegistration options;
@@ -153,18 +155,19 @@ public final class ZLinkMessageFlowTracer {
     /** Compatibility query. Processing points should use begin so mode is read once. */
     public boolean enabled(ZLinkMessageFlowOutcome phase) {
         ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
-        return accepts(mode, defaultResult(phase));
+        return accepts(mode, defaultResult(phase)) && ZLinkTelemetryOwner.hasProvider(LOGGER);
     }
 
     /**
      * Flow-correlation §4 capture gate, the one place that decides whether message-flow tracing is
-     * on: flow context is created, validated, installed and copied forward only at Normal and
-     * Detailed. At Off and Errors the processing point must not create, validate, install or
-     * propagate flow state (correlation_id is unaffected; Errors still records dispatch errors,
-     * backpressure and drops through {@link #dispatchErrorsEnabled()}).
+     * on: with a provider, flow context is created, validated, installed and copied forward at
+     * Normal and Detailed. At Off and Errors the processing point must not create, validate,
+     * install or propagate flow state (correlation_id is unaffected; Errors still records dispatch
+     * errors, backpressure and drops through {@link #dispatchErrorsEnabled()}).
      */
     public boolean captureEnabled() {
-        return captureEnabled(options.diagnostics().effectiveMessageFlow());
+        return captureEnabled(options.diagnostics().effectiveMessageFlow())
+                && ZLinkTelemetryOwner.hasProvider(LOGGER);
     }
 
     private static boolean captureEnabled(ZLinkMessageFlowLogMode mode) {
@@ -173,7 +176,8 @@ public final class ZLinkMessageFlowTracer {
 
     /** Whether dispatch error, backpressure and drop records are written (every level but Off). */
     public boolean dispatchErrorsEnabled() {
-        return accepts(options.diagnostics().effectiveMessageFlow(), ZLinkMessageFlowResult.FAILED);
+        return accepts(options.diagnostics().effectiveMessageFlow(), ZLinkMessageFlowResult.FAILED)
+                && ZLinkTelemetryOwner.hasProvider(LOGGER);
     }
 
     public TracePoint begin(ZLinkMessageFlowOutcome phase) {
@@ -182,7 +186,7 @@ public final class ZLinkMessageFlowTracer {
 
     public TracePoint begin(ZLinkMessageFlowOutcome phase, ZLinkMessageFlowResult result) {
         ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
-        if (!accepts(mode, result)) {
+        if (!accepts(mode, result) || !ZLinkTelemetryOwner.hasProvider(LOGGER)) {
             return null;
         }
         return event -> traceAtMode(event, mode);
@@ -190,7 +194,8 @@ public final class ZLinkMessageFlowTracer {
 
     public TracePoint beginDispatchError() {
         ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
-        if (!accepts(mode, ZLinkMessageFlowResult.FAILED)) {
+        if (!accepts(mode, ZLinkMessageFlowResult.FAILED)
+                || !ZLinkTelemetryOwner.hasProvider(LOGGER)) {
             return null;
         }
         return event -> traceAtMode(event, mode);
@@ -203,7 +208,7 @@ public final class ZLinkMessageFlowTracer {
     public TerminalTracePoint beginRequestTerminal(
             Throwable failure, java.util.concurrent.Future<?> request) {
         ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
-        if (mode == ZLinkMessageFlowLogMode.OFF) {
+        if (mode == ZLinkMessageFlowLogMode.OFF || !ZLinkTelemetryOwner.hasProvider(LOGGER)) {
             return null;
         }
         return beginRequestTerminalAtMode(failure, request != null && request.isCancelled(), mode);
@@ -220,7 +225,7 @@ public final class ZLinkMessageFlowTracer {
 
     public void trace(ZLinkMessageFlowEvent flow) {
         ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
-        if (!accepts(mode, flow.outcome())) {
+        if (!accepts(mode, flow.outcome()) || !ZLinkTelemetryOwner.hasProvider(LOGGER)) {
             return;
         }
         traceAtMode(flow, mode);
@@ -405,25 +410,25 @@ public final class ZLinkMessageFlowTracer {
             return Level.INFO;
         }
         if (flow.errorReason() == ZLinkDispatchErrorReason.HANDLER_EXCEPTION) {
-            return Level.SEVERE;
+            return Level.ERROR;
         }
         if (flow.messageKind() == ZLinkDispatchMessageKind.PUBLISH) {
-            return julLevel(options.unhandled().publishLogLevel());
+            return logLevel(options.unhandled().publishLogLevel());
         }
         if (flow.messageKind() == ZLinkDispatchMessageKind.SEND
                 || flow.messageKind() == ZLinkDispatchMessageKind.ACTOR_SEND) {
-            return julLevel(options.unhandled().sendLogLevel());
+            return logLevel(options.unhandled().sendLogLevel());
         }
-        return Level.SEVERE;
+        return Level.ERROR;
     }
 
-    private static Level julLevel(ZLinkLogLevel level) {
+    private static Level logLevel(ZLinkLogLevel level) {
         return switch (level) {
-            case TRACE -> Level.FINEST;
-            case DEBUG -> Level.FINE;
+            case TRACE -> Level.TRACE;
+            case DEBUG -> Level.DEBUG;
             case INFO -> Level.INFO;
-            case WARN -> Level.WARNING;
-            case ERROR -> Level.SEVERE;
+            case WARN -> Level.WARN;
+            case ERROR -> Level.ERROR;
         };
     }
 

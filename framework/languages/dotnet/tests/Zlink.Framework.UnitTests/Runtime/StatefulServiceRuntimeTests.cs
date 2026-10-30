@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
@@ -4365,7 +4366,10 @@ public sealed partial class StatefulServiceRuntimeTests
     public async Task InstanceSpotIngressAcceptsCanonicalApplicationPayload(bool durablePayload)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var source = NewNode(context, "canonical-instance-source");
+        var sourceContext = DispatchProxy.Create<IContext, CapturingRouterContext>();
+        var capture = (CapturingRouterContext)(object)sourceContext;
+        capture.Inner = context;
+        await using var source = NewNode(sourceContext, "canonical-instance-source");
         await using var target = NewNode(context, "canonical-instance-target");
         var endpoint = $"inproc://canonical-instance-{Guid.NewGuid():N}";
         target.SetBind(endpoint);
@@ -4377,6 +4381,7 @@ public sealed partial class StatefulServiceRuntimeTests
         await WaitUntilAsync(() =>
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
+        var socket = Assert.IsAssignableFrom<IRouterSocket>(capture.Router);
         var operation = new InstanceSpotActivationOperation(
             new InstanceSpotActivationTarget(
                 "objects",
@@ -4409,14 +4414,6 @@ public sealed partial class StatefulServiceRuntimeTests
                 null,
                 new ReadOnlyMemory<byte>[] { new byte[] { 1, 2, 3 } }
             );
-            var socket = (IRouterSocket)
-                typeof(ZLinkManagedMeshNode)
-                    .GetField(
-                        "_socket",
-                        System.Reflection.BindingFlags.Instance
-                            | System.Reflection.BindingFlags.NonPublic
-                    )!
-                    .GetValue(source)!;
             using var head = Message.From(
                 ZLinkServiceWireCodec.EncodeInstanceSpotActivation(operation, false)
             );
@@ -4450,28 +4447,17 @@ public sealed partial class StatefulServiceRuntimeTests
             }
             return;
         }
-        // Inject the canonical peer frame through the Framework's transport lane.
-        // Binding internals are not accessed.
-        var send = typeof(ZLinkManagedMeshNode).GetMethod(
-            "TryScheduleRoutedSend",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-        )!;
-        Assert.True(
-            (bool)
-                send.Invoke(
-                    source,
-                    new object?[]
-                    {
-                        target.RoutingId,
-                        new ReadOnlyMemory<byte>[]
-                        {
-                            ZLinkServiceWireCodec.EncodeInstanceSpotActivation(operation, false),
-                            application,
-                        },
-                        null,
-                    }
-                )!
+        using var activationHeader = Message.From(
+            ZLinkServiceWireCodec.EncodeInstanceSpotActivation(operation, false)
         );
+        using var activationBody = Message.From(application);
+        var submission = socket
+            .Send(target.RoutingId)
+            .Message(activationHeader)
+            .Message(activationBody)
+            .Async();
+        Assert.Equal(SubmitResult.Ok, submission.Result);
+        await submission.EnsureAcceptedAsync();
         await WaitUntilAsync(() => recorder.Count == 1);
         Assert.Equal(operation, recorder.LastOperation);
         Assert.Equal(new byte[] { 1, 2, 3 }, recorder.LastPayload.Single().ToArray());
@@ -4948,6 +4934,29 @@ public sealed partial class StatefulServiceRuntimeTests
 
         Assert.Equal(1, operationTarget.CreateCount);
         Assert.Equal(0, target.RetainedUserSpotOperationCount);
+    }
+
+    public class CapturingRouterContext : DispatchProxy
+    {
+        public IContext Inner { get; set; } = null!;
+        public IRouterSocket? Router { get; private set; }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod!.Name == nameof(IContext.CreateRouterSocket))
+                return Router = Inner.CreateRouterSocket();
+            try
+            {
+                return targetMethod.Invoke(Inner, args);
+            }
+            catch (TargetInvocationException error) when (error.InnerException is not null)
+            {
+                System
+                    .Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerException)
+                    .Throw();
+                throw;
+            }
+        }
     }
 
     private static ZLinkManagedMeshNode NewNode(
