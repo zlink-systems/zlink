@@ -840,10 +840,11 @@ public sealed partial class EntrySpotActorDispatchTests
             includeInstanceSpotRoute: true,
             relocationStore: new InMemoryRelocationStore()
         );
-        var shutdownToken = runtime.ShutdownToken;
+        using var shutdown = new CancellationTokenSource();
+        var shutdownToken = shutdown.Token;
         if (cancelledShutdown)
         {
-            await runtime.StopAsync(CancellationToken.None);
+            shutdown.Cancel();
             Assert.True(shutdownToken.IsCancellationRequested);
         }
         var flowId = ZlinkStreamFlowId.Create();
