@@ -34,6 +34,7 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                 var topology =
                         new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane());
                 setField(node, "topology", topology);
+                topology.observeChanges(node::publishPeerObservation);
                 assertEquals(
                         ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
                         topology.admit(
@@ -55,9 +56,7 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                 announced.put(peerRid, exchange);
                 setField(node, "selectedRoutes", Map.of(peerRid, endedGeneration));
 
-                var observe = ZLinkJavaRawMeshNode.class.getDeclaredMethod("observeSelectedRoutes");
-                observe.setAccessible(true);
-                observe.invoke(node);
+                node.observeTransportState(ZLinkJavaSocketReceivePoller.ROUTE_CHANGED);
 
                 boolean retained = endedGeneration != admittedGeneration;
                 assertEquals(retained, topology.peer(peerRid).isPresent());
