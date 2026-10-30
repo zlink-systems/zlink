@@ -34,11 +34,6 @@ on:
 #      - "scripts/ci/framework-java-test-results.ps1"
   workflow_dispatch:
   workflow_call:
-  # Job guards limit PR verification to ready-for-queue labels on same-repository branches.
-  pull_request:
-    types:
-      - labeled
-      - synchronize
   schedule:
     - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only;
@@ -60,15 +55,6 @@ concurrency:
 
 jobs:
   framework-java:
-    if: >-
-      github.event_name != 'pull_request' ||
-      (
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        (
-          (github.event.action == 'labeled' && github.event.label.name == 'ready-for-queue') ||
-          (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-for-queue'))
-        )
-      )
     name: ${{ matrix.target.name }} / Java 25
     # ZLINK_LINUX_RUNNER/ZLINK_WINDOWS_RUNNER (JSON label lists) move the x64 Linux/Windows
     # jobs to self-hosted runners; arm64 and macOS stay hosted. Queue, manual
@@ -206,19 +192,7 @@ jobs:
   framework-java-compare:
     name: Compare Linux and Windows Java results
     runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
-    if: >-
-      always() &&
-      !startsWith(github.ref_name, 'mergify/merge-queue/') &&
-      (
-        github.event_name != 'pull_request' ||
-        (
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          (
-            (github.event.action == 'labeled' && github.event.label.name == 'ready-for-queue') ||
-            (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-for-queue'))
-          )
-        )
-      )
+    if: always() && !startsWith(github.ref_name, 'mergify/merge-queue/')
     needs: framework-java
     steps:
       - name: Checkout repository
