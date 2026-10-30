@@ -130,6 +130,139 @@ class ZLinkMessageFlowTracerTest {
                         > 0L);
     }
 
+    @Test
+    void substituteProviderPredicateUsesTheExistingDelegateWithoutAllocating() {
+        var logger =
+                new org.slf4j.helpers.SubstituteLogger(
+                        "provider-bootstrap", new java.util.ArrayDeque<>(), false);
+        assertFalse(
+                ZLinkTelemetryOwner.hasProvider(logger),
+                "an unresolved bootstrap logger has no provider");
+
+        logger.setDelegate(org.slf4j.helpers.NOPLogger.NOP_LOGGER);
+        assertFalse(
+                ZLinkTelemetryOwner.hasProvider(logger),
+                "a bootstrap logger bound to NOP has no provider");
+        assertEquals(
+                0L,
+                PerCallAllocation.minWindow(
+                        () -> ZLinkTelemetryOwner.hasProvider(logger), 10000, 10000),
+                "querying a NOP delegate must allocate zero bytes");
+
+        logger.setDelegate(org.slf4j.LoggerFactory.getLogger(ZLinkMessageFlowTracer.class));
+        assertTrue(
+                ZLinkTelemetryOwner.hasProvider(logger),
+                "a bootstrap logger bound to the configured test provider must be accepted");
+        assertEquals(
+                0L,
+                PerCallAllocation.minWindow(
+                        () -> ZLinkTelemetryOwner.hasProvider(logger), 10000, 10000),
+                "querying a configured delegate must allocate zero bytes");
+    }
+
+    @Test
+    void configuredProviderPredicateAllocatesNothing() {
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Handler handler = new java.util.logging.StreamHandler();
+        logger.addHandler(handler);
+        try {
+            var detailed = tracer(options(ZLinkMessageFlowLogMode.DETAILED));
+            assertTrue(detailed.captureEnabled());
+            long allocated = PerCallAllocation.minWindow(detailed::captureEnabled, 10000, 10000);
+            assertEquals(0L, allocated, "provider presence query must allocate zero bytes");
+        } finally {
+            logger.removeHandler(handler);
+            handler.close();
+        }
+    }
+
+    @Test
+    void noProviderDetailedSkipsCaptureAndBuildersWithoutAllocation() throws Exception {
+        String service = "META-INF/services/org.slf4j.spi.SLF4JServiceProvider";
+        String classpath =
+                Arrays.stream(
+                                System.getProperty("java.class.path")
+                                        .split(
+                                                java.util.regex.Pattern.quote(
+                                                        java.io.File.pathSeparator)))
+                        .filter(
+                                entry ->
+                                        !java.nio.file.Files.isRegularFile(
+                                                java.nio.file.Path.of(entry, service)))
+                        .collect(java.util.stream.Collectors.joining(java.io.File.pathSeparator));
+        var child =
+                new ProcessBuilder(
+                                java.nio.file.Path.of(
+                                                System.getProperty("java.home"), "bin", "java")
+                                        .toString(),
+                                "--enable-native-access=ALL-UNNAMED",
+                                "-cp",
+                                classpath,
+                                ZLinkMessageFlowTracerTest.class.getName())
+                        .redirectErrorStream(true)
+                        .start();
+        try {
+            assertTrue(
+                    child.waitFor(20, java.util.concurrent.TimeUnit.SECONDS),
+                    "provider absence probe timed out");
+            String output =
+                    new String(
+                            child.getInputStream().readAllBytes(),
+                            java.nio.charset.StandardCharsets.UTF_8);
+            assertEquals(0, child.exitValue(), output);
+            assertTrue(output.contains("DEFAULT_JVM_NO_PROVIDER_CAPTURE_ZERO"), output);
+        } finally {
+            if (child.isAlive()) {
+                child.destroyForcibly();
+                child.waitFor();
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        assertNull(System.getProperty("java.util.logging.config.file"));
+        assertNull(System.getProperty("java.util.logging.config.class"));
+        assertTrue(
+                Arrays.stream(Logger.getLogger("").getHandlers())
+                        .anyMatch(java.util.logging.ConsoleHandler.class::isInstance),
+                "the default JUL ConsoleHandler must remain installed");
+        assertTrue(
+                org.slf4j.LoggerFactory.getLogger(ZLinkMessageFlowTracer.class)
+                        instanceof org.slf4j.helpers.NOPLogger,
+                "the fresh JVM must have no configured SLF4J provider");
+        var detailed = tracer(options(ZLinkMessageFlowLogMode.DETAILED));
+        int[] capturesAndBuilders = new int[2];
+        java.util.function.Supplier<Object> operation =
+                () -> {
+                    if (detailed.captureEnabled()) capturesAndBuilders[0]++;
+                    var point = detailed.begin(ZLinkMessageFlowOutcome.DISPATCHED);
+                    if (point != null) capturesAndBuilders[1]++;
+                    var error = detailed.beginDispatchError();
+                    if (error != null) capturesAndBuilders[1]++;
+                    var terminal = detailed.beginRequestTerminal(null, null);
+                    if (terminal != null) capturesAndBuilders[1]++;
+                    return point;
+                };
+        long allocated = PerCallAllocation.minWindow(operation, 10000, 10000);
+        org.junit.jupiter.api.Assertions.assertAll(
+                () ->
+                        assertEquals(
+                                0,
+                                capturesAndBuilders[0],
+                                "capture must not run without a provider"),
+                () ->
+                        assertEquals(
+                                0,
+                                capturesAndBuilders[1],
+                                "builders must not run without a provider"),
+                () ->
+                        assertEquals(
+                                0L,
+                                allocated,
+                                "provider-free processing must allocate zero bytes"));
+        System.out.println("DEFAULT_JVM_NO_PROVIDER_CAPTURE_ZERO");
+    }
+
     private static void awaitRecords(List<String> records, int count) {
         long end = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
         synchronized (records) {
@@ -1054,37 +1187,37 @@ class ZLinkMessageFlowTracerTest {
         ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.ERRORS));
 
         assertEquals(
-                Level.SEVERE,
+                org.slf4j.event.Level.ERROR,
                 tracer.logLevel(
                         error(
                                 ZLinkDispatchMessageKind.SEND,
                                 ZLinkDispatchErrorReason.HANDLER_EXCEPTION)));
         assertEquals(
-                Level.SEVERE,
+                org.slf4j.event.Level.ERROR,
                 tracer.logLevel(
                         error(
                                 ZLinkDispatchMessageKind.PUBLISH,
                                 ZLinkDispatchErrorReason.HANDLER_EXCEPTION)));
         assertEquals(
-                Level.WARNING,
+                org.slf4j.event.Level.WARN,
                 tracer.logLevel(
                         error(
                                 ZLinkDispatchMessageKind.SEND,
                                 ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED)));
         assertEquals(
-                Level.WARNING,
+                org.slf4j.event.Level.WARN,
                 tracer.logLevel(
                         error(
                                 ZLinkDispatchMessageKind.ACTOR_SEND,
                                 ZLinkDispatchErrorReason.INVALID_FRAME)));
         assertEquals(
-                Level.FINE,
+                org.slf4j.event.Level.DEBUG,
                 tracer.logLevel(
                         error(
                                 ZLinkDispatchMessageKind.PUBLISH,
                                 ZLinkDispatchErrorReason.HANDLER_MISSING)));
         assertEquals(
-                Level.SEVERE,
+                org.slf4j.event.Level.ERROR,
                 tracer.logLevel(
                         error(
                                 ZLinkDispatchMessageKind.REQUEST,

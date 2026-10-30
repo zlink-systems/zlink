@@ -11,6 +11,63 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Fact]
+    public async Task NoProviderDetailedSkipsCaptureAndBuildersWithoutAllocating()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MessageFlowDeliveryTests),
+                nameof(NoProviderDetailedSkipsCaptureAndBuildersWithoutAllocating)
+            )
+        )
+            return;
+
+        Assert.False(ZLinkTelemetry.ActivitySource.HasListeners());
+        var options = Options();
+        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
+        var tracer = new ZLinkMessageFlowTracer(options);
+        var captures = 0;
+        var builders = 0;
+        for (var i = 0; i < 10_000; ++i)
+            Produce();
+        captures = 0;
+        builders = 0;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 10_000; ++i)
+            Produce();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, allocated);
+        Assert.Equal(0, captures);
+        Assert.Equal(0, builders);
+
+        void Produce()
+        {
+            if (tracer.CaptureEnabled)
+            {
+                ++captures;
+                using var scope = ZLinkFlowContext.EnterCurrentOrCreate(
+                    ZLinkFlowOrigin.Application,
+                    tracer.CaptureEnabled
+                );
+            }
+            if (tracer.Enabled(ZLinkMessageFlowOutcome.Sent))
+            {
+                ++builders;
+                tracer.Trace(Event("no-provider"));
+            }
+            if (tracer.Enabled(ZLinkMessageFlowOutcome.Dropped, ZLinkMessageFlowResult.Failed))
+            {
+                ++builders;
+                tracer.Trace(Event("no-provider-error"));
+            }
+            if (tracer.DispatchErrorsEnabled)
+                ++builders;
+            if (tracer.DetailedEnabled)
+                ++builders;
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
