@@ -148,7 +148,7 @@ for (const manageMembership of [true, false]) {
       undefined,
       manageMembership,
       relocation,
-    { rid: 'target', lifecycleGeneration: 4n }
+      { rid: 'target', lifecycleGeneration: 4n }
     );
     try {
       assert.deepEqual(events, [
@@ -195,8 +195,10 @@ test('a failed Session seal leaves the source dispatching', async () => {
   const { runtime, handoff } = sourceRuntime(source, events, { sealFailure: failure });
 
   await assert.rejects(
-    runtime.prepareMaintenanceSession(source.actor, source.state, undefined, true, relocation,
-    { rid: 'target', lifecycleGeneration: 4n }),
+    runtime.prepareMaintenanceSession(source.actor, source.state, undefined, true, relocation, {
+      rid: 'target',
+      lifecycleGeneration: 4n
+    }),
     (error) => error === failure
   );
   assert.deepEqual(events, ['session:seal moving=false handoff=idle']);
@@ -218,8 +220,10 @@ test('a dispatch stop that fails after the seal releases the matching seal', asy
   });
 
   await assert.rejects(
-    runtime.prepareMaintenanceSession(source.actor, source.state, undefined, true, relocation,
-    { rid: 'target', lifecycleGeneration: 4n }),
+    runtime.prepareMaintenanceSession(source.actor, source.state, undefined, true, relocation, {
+      rid: 'target',
+      lifecycleGeneration: 4n
+    }),
     (error) => error === failure
   );
   assert.deepEqual(events, [
@@ -249,6 +253,17 @@ test('Spot relocation seals every member Session before the Spot capture stops d
   };
   const stopped = new Error('test stops after the seal');
   const runtime = new ZLinkHostServiceRelocationRuntime({
+    registration: {
+      spotNodes: new Map([
+        [
+          'mesh',
+          {
+            spotFactoryRegistrations: { Spot: { relocation: { kind: 'recreate' } } },
+            actorFactoryRegistrations: { Actor: { relocation: { kind: 'recreate' } } }
+          }
+        ]
+      ])
+    },
     locationStore: () => ({
       readAuthority: async () => ({
         kind: 'snapshot',
@@ -289,8 +304,6 @@ test('Spot relocation seals every member Session before the Spot capture stops d
       }
     }
   });
-  runtime.spotRegistration = () => ({ relocation: { kind: 'allowed' } });
-  runtime.actorRegistration = () => ({ relocation: { kind: 'allowed' } });
   runtime.waitForRelocationBudgetHeadroom = async () => {};
   runtime.captureApplication = async () => {
     throw stopped;
@@ -301,6 +314,7 @@ test('Spot relocation seals every member Session before the Spot capture stops d
   const states = members.map((actorId) => ({
     actorId,
     actor: { context: { actorId } },
+    meshName: 'mesh',
     actorType: 'Actor',
     spotMembershipEpoch: 1n
   }));

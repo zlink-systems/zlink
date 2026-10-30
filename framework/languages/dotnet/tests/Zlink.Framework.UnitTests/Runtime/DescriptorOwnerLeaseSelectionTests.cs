@@ -815,16 +815,13 @@ public sealed partial class EntrySpotActorDispatchTests
             "entry",
             TimeSpan.FromSeconds(1)
         );
-        // This fixture has no join descriptor; use the normal membership owner
-        // so scoped terminal cleanup includes the Actor before closing its gate.
-        const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var staged =
-            (ValueTask<ZLinkSpotActivation?>)
-                typeof(ZLinkSpotActivation)
-                    .GetMethod("StageActorMembershipAsync", flags)!
-                    .Invoke(activation, new object[] { actor, CancellationToken.None })!;
-        _ = await staged;
+        // Restore membership through the existing maintenance entry point without
+        // requiring an application join descriptor or invoking join callbacks.
+        await activation.PrepareTransferredActorJoinAndReplayAsync(
+            actor,
+            runtime.GetOrCreateActorState(actor.Context.ActorId),
+            CancellationToken.None
+        );
         Assert.True(activation.TryGetJoinedActor(actor.Context.ActorId, out var member));
         Assert.Same(actor, member);
         return activation;

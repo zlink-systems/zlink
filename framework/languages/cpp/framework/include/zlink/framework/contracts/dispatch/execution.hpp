@@ -19,6 +19,7 @@ namespace zlink::framework
 namespace detail
 {
 class dispatch_options_access_t;
+class telemetry_registration_t;
 }
 
 enum class handler_execution_t
@@ -64,10 +65,6 @@ class dispatch_diagnostics_options_t
 struct dispatch_options_t
 {
     dispatch_diagnostics_options_t diagnostics;
-    // When set, message-flow transitions and dispatch errors are emitted through
-    // the framework logger (so app.logging().use_file(...) captures them) instead
-    // of the std::clog fallback. Wired by the host at apply() only if a logging
-    // output sink is configured; otherwise left empty to preserve clog behavior.
     // Fluent diagnostics/tracing config (chains off configure_dispatch()). This is
     // the only supported way to set diagnostics (the fields are encapsulated).
     dispatch_options_t &message_flow (message_flow_log_mode_t mode)
@@ -91,6 +88,7 @@ struct dispatch_options_t
   private:
     friend class detail::dispatch_options_access_t;
 
+    std::shared_ptr<detail::telemetry_registration_t> _telemetry_registration;
     std::optional<logger_t<>> _diagnostics_logger;
     std::function<void (const void *)> _message_flow_observer;
     std::function<void (const void *)> _dispatch_error_observer;

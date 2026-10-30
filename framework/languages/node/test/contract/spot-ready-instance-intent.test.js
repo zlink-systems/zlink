@@ -56,6 +56,7 @@ for (const instanceIntent of [false, true]) {
   test(`Ready send and request retain the source call intent (${instanceIntent})`, async () => {
     const frames = [];
     const owner = new ServiceStatefulRuntime({ setServiceIngress() {},
+      isPeerRouteReady: () => true,
       async sendService(target, parts) { frames.push(parts[0]); return true; },
       async requestService(target, parts) {
         frames.push(parts[0]);

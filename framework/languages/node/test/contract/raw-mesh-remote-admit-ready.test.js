@@ -103,7 +103,6 @@ function fixture(deferred) {
 const {
   ZLinkNodeRawMeshBackend
 } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
-const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 
 for (const deferred of [false, true]) {
   test(`peer readiness requires inbound ADMIT (deferred HELLO=${deferred})`, async (t) => {
@@ -130,7 +129,7 @@ for (const deferred of [false, true]) {
         'local admission remains available to ingress'
       );
       assert.equal(f.runtime.isPeerRouteReady('peer'), false);
-      assert.deepEqual(f.runtime.observePeerRoute('peer'), { generation: 11n, ready: false });
+      assert.deepEqual(f.runtime.observePeerRoute('peer'), { generation: 11n, ready: false, selected: true, lifecycleGeneration: 1n, endpoint: descriptor('peer').advertisedEndpoint, connectionAttempts: [] });
       assert.equal(backend.status().admittedPeerCount, 0);
       assert.equal(f.runtime.topology.selectChannel('alpha'), undefined);
       assert.equal(f.runtime.topology.selectPlacement(), undefined);
@@ -141,7 +140,10 @@ for (const deferred of [false, true]) {
         SubmitResult.NotConnected
       );
       const request = f.runtime.requestToNode('peer', Buffer.from('payload'), 1000);
-      assert.equal((await request.promise).terminalResult, RequestResult.NotFound);
+      let completed = false;
+      void request.promise.then(() => { completed = true; }, () => { completed = true; });
+      await new Promise(setImmediate);
+      assert.equal(completed, false, 'Submit §5 waits for inbound ADMIT');
       assert.equal(f.sent.length, before, 'not-ready application records never reach Core');
       assert.deepEqual(f.requested, []);
       for (let period = 1; period <= 2; period++) {
@@ -151,9 +153,11 @@ for (const deferred of [false, true]) {
         assert.equal(f.hellos(), period + 1);
       }
       await f.receive(wire.M6aServiceWireCommand.admit);
+      await assert.rejects(request.promise, /Core request reached/);
+      assert.deepEqual(f.requested, ['peer']);
       assert.equal(f.runtime.isPeerRouteReady('peer', 1n), true);
       assert.equal(f.runtime.isPeerRouteReady('peer', 2n), false);
-      assert.deepEqual(f.runtime.observePeerRoute('peer'), { generation: 11n, ready: true });
+      assert.deepEqual(f.runtime.observePeerRoute('peer'), { generation: 11n, ready: true, selected: true, lifecycleGeneration: 1n, endpoint: descriptor('peer').advertisedEndpoint, connectionAttempts: [] });
       assert.equal(backend.status().admittedPeerCount, 1);
       assert.equal(f.runtime.topology.selectChannel('alpha').descriptor.nodeRoutingId, 'peer');
       assert.equal(f.runtime.topology.selectPlacement().descriptor.nodeRoutingId, 'peer');
@@ -162,7 +166,7 @@ for (const deferred of [false, true]) {
         f.runtime.requestToNode('peer', Buffer.from('payload'), 1000).promise,
         /Core request reached/
       );
-      assert.deepEqual(f.requested, ['peer']);
+      assert.deepEqual(f.requested, ['peer', 'peer']);
       await f.receive(wire.M6aServiceWireCommand.admit);
       await f.receive(wire.M6aServiceWireCommand.hello);
       assert.equal(backend.status().admittedPeerCount, 1);

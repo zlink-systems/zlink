@@ -40,6 +40,9 @@ services.AddZLinkFramework(options =>
 `zlink.framework`의 `Meter`, log는 `ILogger` category로 노출한다 — exporter와 원격 backend는
 application이 구성한다.
 
+`AddLogging()` 기본 등록에서 host가 시작된 뒤 `LoggerFactory.AddProvider`로 추가한 provider는
+message-flow provider 판정에 반영되지 않는다.
+
 **선택 기준.** Startup 시점에 기본 기록 수준을 정할 때 사용한다. 실행 중 level만 바꾸려면
 `IZLinkDiagnosticsRuntime`을 사용한다.
 
