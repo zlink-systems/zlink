@@ -117,6 +117,57 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
     }
 
     [Fact]
+    public async Task GetOrCreate_returns_Existing_when_new_creation_capacity_is_full()
+    {
+        await using var host = await SpotCloseHost.StartAsync(spotLimit: 1);
+        var created = await host
+            .Manager.GetOrCreate("capacity-room", SpotCloseHost.SpotType)
+            .InMesh(SpotCloseHost.MeshName)
+            .Async();
+        Assert.Equal(ZLinkSpotCreateState.Created, created.State);
+        var resolver = host.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+        var descriptor = Assert.Single(
+            await resolver.ListLiveMeshNodesAsync(SpotCloseHost.MeshName)
+        );
+        var repository = Assert.IsType<ZLinkProviderLocationRepository>(
+            host.Runtime.Registration.Locations.ResolveStore()
+        );
+        var descriptorKey = new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid);
+        await repository.RefreshCapacityAsync(descriptorKey);
+        var capacity = Assert.IsType<ZLinkPlacementCapacity>(
+            repository.ConfirmedCapacity(descriptorKey, descriptor.Capacity)
+        );
+        Assert.Equal(1, capacity.Spots.Active);
+        Assert.Equal(1, capacity.Spots.Limit);
+        // Publish the actual Store capacity snapshot used by placement selection.
+        var published = await repository.UpdateMeshNodeAsync(
+            descriptor with
+            {
+                DescriptorRevision = descriptor.DescriptorRevision + 1,
+                Capacity = capacity,
+            },
+            ZLinkLocationWriteIntent.Renew
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, published.Status);
+        var existing = await host
+            .Manager.GetOrCreate("capacity-room", SpotCloseHost.SpotType)
+            .InMesh(SpotCloseHost.MeshName)
+            .Async();
+        Assert.Equal(ZLinkSpotCreateState.Existing, existing.State);
+        Assert.Equal(created.Spot, existing.Spot);
+        Assert.Equal(1, host.State.FactoryCalls);
+        var exhausted = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await host
+                .Manager.GetOrCreate("other-capacity-room", SpotCloseHost.SpotType)
+                .InMesh(SpotCloseHost.MeshName)
+                .Async()
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, exhausted.Kind);
+        Assert.Contains("placement capacity", exhausted.Message);
+        Assert.Equal(1, host.State.FactoryCalls);
+    }
+
+    [Fact]
     public async Task GetOrCreate_preserves_Ready_after_membership_prevents_Close()
     {
         await using var host = await SpotCloseHost.StartAsync();
@@ -2269,7 +2320,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
     internal static async Task<SpotCloseHost> StartAsync(
         SpotCloseFaultStore? sharedStore = null,
         bool registerInstanceFactory = true,
-        bool registerUserSpotFactory = true
+        bool registerUserSpotFactory = true,
+        int spotLimit = 100
     )
     {
         var store =
@@ -2292,7 +2344,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
                 .Listen("tcp://127.0.0.1:0")
                 .SetRoutingIdPrefix("spot-close")
                 .SetActorLimit(100)
-                .SetSpotLimit(100)
+                .SetSpotLimit(spotLimit)
                 .Objects()
                 .Server()
                 .AddEntrySpot<SpotCloseEntrySpot>()
@@ -2455,6 +2507,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
 
 internal sealed class SpotCloseProbeState
 {
+    internal int FactoryCalls;
     private int _handlerCalls;
     private int _onClosingCalls;
 
@@ -2664,17 +2717,25 @@ internal sealed class SpotCloseJoinHandler
     }
 }
 
-internal sealed class SpotCloseProbeSpot(
-    IZLinkSpotContext context,
-    SpotCloseProbeState state,
-    SpotCloseScopedResource resource
-) : IZLinkSpot<SpotCloseActor>
+internal sealed class SpotCloseProbeSpot : IZLinkSpot<SpotCloseActor>
 {
-    public IZLinkSpotContext Context { get; } = context;
+    public SpotCloseProbeSpot(
+        IZLinkSpotContext context,
+        SpotCloseProbeState state,
+        SpotCloseScopedResource resource
+    )
+    {
+        Context = context;
+        State = state;
+        Resource = resource;
+        Interlocked.Increment(ref state.FactoryCalls);
+    }
 
-    internal SpotCloseProbeState State { get; } = state;
+    public IZLinkSpotContext Context { get; }
 
-    internal SpotCloseScopedResource Resource { get; } = resource;
+    internal SpotCloseProbeState State { get; }
+
+    internal SpotCloseScopedResource Resource { get; }
 
     public async ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,

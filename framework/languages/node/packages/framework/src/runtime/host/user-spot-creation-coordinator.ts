@@ -147,6 +147,25 @@ export class ZLinkUserSpotCreationCoordinator {
         );
       }
       if (target === undefined) {
+        try {
+          if (request.generatedIdentity !== true) {
+            const current = await this.options.store.readAuthority(
+              encodeAuthorityKey('user_spot', String(request.spotId)),
+              signal
+            );
+            if (current.kind !== 'missing') {
+              const spot = await this.awaitReady(request, signal);
+              if (spot !== undefined) {
+                deadline.close();
+                return { result: { spot, state: ZLinkSpotCreateState.Existing }, spot };
+              }
+              continue;
+            }
+          }
+        } catch (error) {
+          deadline.close();
+          throw error;
+        }
         deadline.close();
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,

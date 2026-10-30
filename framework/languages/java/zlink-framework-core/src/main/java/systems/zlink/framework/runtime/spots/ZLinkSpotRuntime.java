@@ -1327,9 +1327,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             boolean getOrCreate,
             Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
         return selectUserSpotTarget(locations, meshName, stableType, deadline, excludedTargets)
-                .thenCompose(
-                        target ->
-                                reserveAndCreate(
+                .handle(
+                        (target, failure) -> {
+                            if (failure == null) {
+                                return reserveAndCreate(
                                         locations,
                                         meshName,
                                         spotId,
@@ -1339,7 +1340,103 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         deadline,
                                         timeout,
                                         getOrCreate,
-                                        excludedTargets));
+                                        excludedTargets);
+                            }
+                            Throwable cause = unwrapCompletion(failure);
+                            if (!getOrCreate
+                                    || !(cause instanceof ZLinkFrameworkException unavailable)
+                                    || unavailable.kind() != ZLinkFrameworkErrorKind.UNAVAILABLE) {
+                                return CompletableFuture.<ZLinkSpotCreateResult>failedFuture(cause);
+                            }
+                            return locations
+                                    .read(
+                                            systems.zlink.framework.runtime.locations
+                                                    .ZLinkAuthorityKeyCodec.spot(spotId),
+                                            () -> System.currentTimeMillis() >= deadline)
+                                    .thenCompose(
+                                            read -> {
+                                                if (read
+                                                        instanceof
+                                                        ZLinkAuthoritySnapshot snapshot) {
+                                                    var existing =
+                                                            existingResult(
+                                                                    snapshot, spotId, stableType);
+                                                    if (existing.isPresent()) {
+                                                        return userSpotLocationResolvers
+                                                                .resolveReadySpot(spotId, snapshot)
+                                                                .thenApply(
+                                                                        route -> {
+                                                                            if (route == null) {
+                                                                                throw new CompletionException(
+                                                                                        cause);
+                                                                            }
+                                                                            return existing
+                                                                                    .orElseThrow();
+                                                                        });
+                                                    }
+                                                    return waitForUserSpotAuthority(
+                                                            locations,
+                                                            meshName,
+                                                            spotId,
+                                                            stableType,
+                                                            envelope,
+                                                            deadline,
+                                                            timeout,
+                                                            getOrCreate,
+                                                            excludedTargets);
+                                                }
+                                                return CompletableFuture.failedFuture(cause);
+                                            });
+                        })
+                .thenCompose(result -> result);
+    }
+
+    private CompletionStage<ZLinkSpotCreateResult> waitForUserSpotAuthority(
+            ZLinkLocationRepository locations,
+            String meshName,
+            String spotId,
+            String stableType,
+            byte[] envelope,
+            long deadline,
+            Duration timeout,
+            boolean getOrCreate,
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+        if (System.currentTimeMillis() >= deadline) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                            "Timed out waiting for User Spot authority"));
+        }
+        return CompletableFuture.supplyAsync(
+                        () -> null, CompletableFuture.delayedExecutor(10, TimeUnit.MILLISECONDS))
+                .thenCompose(
+                        ignored ->
+                                placeUserSpot(
+                                        locations,
+                                        meshName,
+                                        spotId,
+                                        stableType,
+                                        envelope,
+                                        deadline,
+                                        timeout,
+                                        getOrCreate,
+                                        excludedTargets))
+                .exceptionallyCompose(
+                        failure -> {
+                            Throwable cause = unwrapCompletion(failure);
+                            if (System.currentTimeMillis() >= deadline
+                                    && (cause instanceof java.util.concurrent.CancellationException
+                                            || cause
+                                                    instanceof
+                                                    java.util.concurrent.TimeoutException)) {
+                                return CompletableFuture.failedFuture(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                                "Timed out waiting for User Spot authority",
+                                                cause));
+                            }
+                            return CompletableFuture.failedFuture(cause);
+                        });
     }
 
     private CompletionStage<ZLinkSpotCreateResult> reserveAndCreate(
@@ -1420,49 +1517,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             }
                             if (result instanceof ZLinkObjectConflict
                                     || result instanceof ZLinkObjectAlreadyExists) {
-                                if (System.currentTimeMillis() >= deadline) {
-                                    return CompletableFuture.failedFuture(
-                                            new ZLinkFrameworkException(
-                                                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                                    "Timed out waiting for User Spot authority"));
-                                }
-                                return CompletableFuture.supplyAsync(
-                                                () -> null,
-                                                CompletableFuture.delayedExecutor(
-                                                        10, TimeUnit.MILLISECONDS))
-                                        .thenCompose(
-                                                ignored ->
-                                                        placeUserSpot(
-                                                                locations,
-                                                                meshName,
-                                                                spotId,
-                                                                stableType,
-                                                                envelope,
-                                                                deadline,
-                                                                timeout,
-                                                                getOrCreate,
-                                                                excludedTargets))
-                                        .exceptionallyCompose(
-                                                failure -> {
-                                                    Throwable cause = unwrapCompletion(failure);
-                                                    if (System.currentTimeMillis() >= deadline
-                                                            && (cause
-                                                                            instanceof
-                                                                            java.util.concurrent
-                                                                                    .CancellationException
-                                                                    || cause
-                                                                            instanceof
-                                                                            java.util.concurrent
-                                                                                    .TimeoutException)) {
-                                                        return CompletableFuture.failedFuture(
-                                                                new ZLinkFrameworkException(
-                                                                        ZLinkFrameworkErrorKind
-                                                                                .DEADLINE_EXCEEDED,
-                                                                        "Timed out waiting for User Spot authority",
-                                                                        cause));
-                                                    }
-                                                    return CompletableFuture.failedFuture(cause);
-                                                });
+                                return waitForUserSpotAuthority(
+                                        locations,
+                                        meshName,
+                                        spotId,
+                                        stableType,
+                                        envelope,
+                                        deadline,
+                                        timeout,
+                                        getOrCreate,
+                                        excludedTargets);
                             }
                             if (!(result instanceof ZLinkObjectReserved reserved)) {
                                 return CompletableFuture.failedFuture(
@@ -1573,6 +1637,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private Optional<ZLinkSpotCreateResult> existingResult(
             ZLinkAuthoritySnapshot snapshot, String spotId, String stableType) {
+        if (snapshot.allocation().objectKind() != ZLinkPlacementObjectKind.USER_SPOT
+                || !snapshot.allocation().stableType().equals(stableType)) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.TYPE_MISMATCH, "User Spot type does not match");
+        }
         var authority =
                 userSpotAuthorities
                         .decode(snapshot.payload())
@@ -1583,14 +1652,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     ZLinkFrameworkErrorKind.TYPE_MISMATCH, "User Spot type does not match");
         }
         if (authority.state()
-                == systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec.State
-                        .CLOSING) {
-            return Optional.empty();
-        }
-        if (authority.state()
                 != systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec.State
                         .READY) {
-            throw new IllegalStateException("User Spot type or state does not match");
+            return Optional.empty();
         }
         return Optional.of(
                 new ZLinkSpotCreateResult(

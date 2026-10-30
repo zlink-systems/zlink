@@ -9,6 +9,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/live_location_reader.hpp"
+#include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/actors/actor_manager_access.hpp"
@@ -35,6 +36,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstring>
 #include <cstdio>
 #include <future>
 #include <functional>
@@ -373,6 +375,7 @@ struct observations_t
     bool first_capture_pending = false;
     bool second_admission_during_capture = false;
     int instances = 0;
+    int room_factories = 0;
     creation_case_t creation_case = creation_case_t::accepted;
     int creation_callbacks = 0;
     int disconnect_callbacks = 0;
@@ -1145,6 +1148,10 @@ void configure (host_t &host,
       .add_spot_factory<room_t> (
         room_type,
         [evidence = observations] (fw::spot_context_t context) {
+            {
+                std::lock_guard lock (evidence->mutex);
+                ++evidence->room_factories;
+            }
             return std::make_shared<room_t> (std::move (context), evidence);
         },
         [spot_limit, application_signaled] (auto &factory) {
@@ -1312,6 +1319,112 @@ bool ready (host_t &host)
         std::this_thread::yield ();
     return host.app.is_ready ();
 }
+TEST (UserSpotCreation, ExistingReadyDoesNotRequireNewCapacity)
+{
+    auto evidence = std::make_shared<observations_t> ();
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t host;
+    configure (host, evidence, first_rid, store, relocations, default_follow_duration, 1);
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    auto &spots = services.get_required<fw::spot_manager_t> ();
+    const auto created = spots.get_or_create (fw::spot_id_t ("capacity-room"), room_type)
+                           .timeout (wait_budget)
+                           .async ()
+                           .result ();
+    ASSERT_TRUE (created);
+    ASSERT_EQ (created.value ().state, fw::spot_create_state_t::created);
+    auto &resolver = services.get_required<fw::runtime::store_location_resolvers_t> ();
+    const auto initial_descriptors = resolver.list_live_mesh_nodes (mesh_name).result ();
+    ASSERT_TRUE (initial_descriptors);
+    ASSERT_EQ (initial_descriptors.value ().size (), 1u);
+    const auto &descriptor = initial_descriptors.value ().front ();
+    // Publish the actual committed capacity row as a full descriptor. The C++
+    // provider currently returns stored descriptor usage without projecting it.
+    // This fixture uses URI-safe ASCII Mesh/RID names for the capacity key.
+    const fw::store_key_t capacity_key{"zlink:v11:capacity:" + descriptor.mesh_name + ":"
+                                       + descriptor.rid.to_string ()};
+    const auto capacity_read = store->read (capacity_key).result ();
+    ASSERT_TRUE (capacity_read);
+    const auto *capacity = std::get_if<fw::store_found_t> (&capacity_read.value ());
+    ASSERT_NE (capacity, nullptr);
+    const auto parse = [] (const std::vector<std::byte> &bytes) {
+        return nlohmann::json::parse (
+          std::string (reinterpret_cast<const char *> (bytes.data ()), bytes.size ()));
+    };
+    const auto counts = parse (capacity->value.bytes);
+    const std::string type_key = std::string ("user_spot") + '\0' + room_type;
+    ASSERT_EQ (counts.at ("active").at ("spots"), 1);
+    ASSERT_EQ (counts.at ("pending").at ("spots"), 0);
+    ASSERT_EQ (counts.at ("active").at ("spotTypes").at (type_key), 1);
+    ASSERT_EQ (counts.at ("pending").at ("spotTypes").value (type_key, 0), 0);
+    const fw::store_key_t descriptor_key{std::string ("mesh-node") + '\0' + descriptor.mesh_name
+                                         + '\0' + descriptor.rid.to_hex ()};
+    const auto descriptor_read = store->read (descriptor_key).result ();
+    ASSERT_TRUE (descriptor_read);
+    const auto *stored_descriptor = std::get_if<fw::store_found_t> (&descriptor_read.value ());
+    ASSERT_NE (stored_descriptor, nullptr);
+    auto record = parse (stored_descriptor->value.bytes);
+    auto &published = record.at ("descriptor");
+    auto &published_capacity = published.at ("capacity");
+    published_capacity.at ("spots").at ("active") = counts.at ("active").at ("spots");
+    published_capacity.at ("spots").at ("reserved") = counts.at ("pending").at ("spots");
+    for (auto &type : published_capacity.at ("spotTypes")) {
+        if (type.at ("objectKind") == "userSpot" && type.at ("stableType") == room_type) {
+            type.at ("active") = counts.at ("active").at ("spotTypes").at (type_key);
+            type.at ("reserved") = counts.at ("pending").at ("spotTypes").value (type_key, 0);
+        }
+    }
+    const auto revision = std::to_string (descriptor.descriptor_revision + 1);
+    published.at ("descriptorRevision") = revision;
+    record.at ("descriptorRevision") = revision;
+    const auto text = record.dump ();
+    std::vector<std::byte> bytes (text.size ());
+    std::memcpy (bytes.data (), text.data (), text.size ());
+    const auto written =
+      store
+        ->write ({{fw::store_version_condition_t{capacity_key, capacity->value.version},
+                   fw::store_version_condition_t{descriptor_key, stored_descriptor->value.version}},
+                  {fw::store_put_t{descriptor_key, std::move (bytes), std::nullopt}}})
+        .result ();
+    ASSERT_TRUE (written);
+    ASSERT_TRUE (std::holds_alternative<fw::store_write_applied_t> (written.value ()));
+    const auto descriptors = resolver.list_live_mesh_nodes (mesh_name).result ();
+    ASSERT_TRUE (descriptors);
+    ASSERT_EQ (descriptors.value ().size (), 1u);
+    const auto &types = descriptors.value ().front ().capacity.spot_types;
+    const auto full = std::find_if (types.begin (), types.end (), [] (const auto &type) {
+        return type.object_kind == fw::placement_object_kind_t::user_spot
+               && type.stable_type == room_type;
+    });
+    ASSERT_NE (full, types.end ());
+    ASSERT_EQ (full->usage.limit, 1);
+    ASSERT_EQ (full->usage.active, 1u);
+    ASSERT_EQ (full->usage.reserved, 0u);
+    const auto other = spots.get_or_create (fw::spot_id_t ("another-capacity-room"), room_type)
+                         .timeout (wait_budget)
+                         .async ()
+                         .result ();
+    ASSERT_FALSE (other);
+    EXPECT_EQ (other.error_kind (), fw::framework_error_kind_t::unavailable);
+    const auto existing = spots.get_or_create (fw::spot_id_t ("capacity-room"), room_type)
+                            .timeout (wait_budget)
+                            .async ()
+                            .result ();
+    ASSERT_TRUE (existing) << (existing.error () ? existing.error ()->what () : "no error");
+    EXPECT_EQ (existing.value ().state, fw::spot_create_state_t::existing);
+    EXPECT_EQ (existing.value ().spot.spot_id (), created.value ().spot.spot_id ());
+    EXPECT_EQ (existing.value ().spot.object_generation (),
+               created.value ().spot.object_generation ());
+    EXPECT_EQ (existing.value ().spot.mesh_name (), created.value ().spot.mesh_name ());
+    EXPECT_EQ (existing.value ().spot.node_rid ().value (),
+               created.value ().spot.node_rid ().value ());
+    std::lock_guard lock (evidence->mutex);
+    EXPECT_EQ (evidence->room_factories, 1);
+}
+
 bool move_to (fw::actor_client_t &sender,
               observations_t &evidence,
               std::string target,

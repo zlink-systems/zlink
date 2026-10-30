@@ -229,16 +229,39 @@ internal sealed class ZLinkSpotRuntimeManager(
                     && reservationRefreshAttempt == 0
                 )
                 {
-                    var anyCompatible = descriptors.Any(candidate =>
-                        IsCompatibleCandidate(candidate, stableType)
-                    );
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        anyCompatible
-                            ? $"No Ready User Spot target has placement capacity for '{stableType}'."
-                            : $"No compatible User Spot target is available for '{stableType}'.",
-                        ZLinkRetryAdvice.RetryAfterBackoff
-                    );
+                    if (
+                        joinExisting
+                        && await locationStore
+                            .ReadAuthorityAsync(key, deadlineToken.Token)
+                            .ConfigureAwait(false)
+                            is ZLinkAuthorityReadResult.Found observed
+                    )
+                    {
+                        completionExpected = true;
+                        var joined = await JoinExistingAsync(
+                                requestedSpotId,
+                                stableType,
+                                observed.Snapshot,
+                                deadlineAt,
+                                deadlineToken.Token
+                            )
+                            .ConfigureAwait(false);
+                        if (joined.HasValue)
+                            return joined.Value;
+                    }
+                    else
+                    {
+                        var anyCompatible = descriptors.Any(candidate =>
+                            IsCompatibleCandidate(candidate, stableType)
+                        );
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            anyCompatible
+                                ? $"No Ready User Spot target has placement capacity for '{stableType}'."
+                                : $"No compatible User Spot target is available for '{stableType}'.",
+                            ZLinkRetryAdvice.RetryAfterBackoff
+                        );
+                    }
                 }
                 if (selectedTarget is null)
                 {
@@ -555,8 +578,8 @@ internal sealed class ZLinkSpotRuntimeManager(
                 throw new ZLinkConfigurationException(
                     "Remote User Spot creation requires the owner lease tracker."
                 );
-            // Reserve already applied the repository's §6.1 decision. A retained
-            // authority with an unavailable owner ends this GetOrCreate operation.
+            // Read or reserve already applied the repository's §6.1 decision.
+            // A retained authority with an unavailable owner ends this operation.
             if (
                 !await _leaseTracker
                     .IsOwnerTokenLiveAsync(
