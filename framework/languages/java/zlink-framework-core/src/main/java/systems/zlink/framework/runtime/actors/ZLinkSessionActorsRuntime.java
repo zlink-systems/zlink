@@ -354,9 +354,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
     private CompletionStage<Void> notifyDisconnectedAllCore(Duration timeout) {
         Objects.requireNonNull(timeout, "timeout");
-        List<ZLinkSessionActor> current = List.copyOf(bound);
-        // Physical disconnect ends this Session owner's admission before Actor callbacks.
-        stopRelocationOwner(
+        // The existing state owner fixes the binding identities and ends its admission together.
+        StopRelocationState stopped = stopRelocationOwnerCore(null, null);
+        List<ZLinkSessionActor> current =
+                stopped == null ? List.copyOf(bound) : stopped.disconnected();
+        completeRelocationStop(
+                stopped,
                 new ZLinkConfigurationException(
                         "Session disconnected while relocation state was pending"));
         return CompletableFuture.allOf(
@@ -367,10 +370,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         (ignored, error) -> {
                             current.forEach(this::removeBinding);
                         });
-    }
-
-    private void stopRelocationOwner(Throwable failure) {
-        completeRelocationStop(stopRelocationOwnerCore(null, null), failure);
     }
 
     private StopRelocationState stopRelocationOwnerCore(
@@ -399,8 +398,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     routeFlights.clear();
                     sealTerminals.clear();
                     routeTerminals.clear();
-                    List<ZLinkSessionActor> disconnected =
-                            relocationFailed ? List.copyOf(bound) : List.of();
+                    List<ZLinkSessionActor> disconnected = List.copyOf(bound);
                     if (relocationFailed) {
                         bound.clear();
                     }
