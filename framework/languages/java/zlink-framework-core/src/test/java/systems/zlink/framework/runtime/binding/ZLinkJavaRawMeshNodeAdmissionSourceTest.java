@@ -98,6 +98,7 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                             Map.of(peerRid, generation),
                             Runnable::run)) {
                 var observed = new AtomicInteger();
+                var ended = new AtomicInteger();
                 var initial = new CompletableFuture<Void>();
                 var rejected = new CompletableFuture<Void>();
                 try (var registration =
@@ -107,7 +108,7 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                                     if (observed.incrementAndGet() == 1) initial.complete(null);
                                     else rejected.complete(null);
                                 },
-                                () -> {})) {
+                                ended::incrementAndGet)) {
                     initial.get(1, TimeUnit.SECONDS);
                     assertEquals(1, observed.get());
                     for (int attempt = 0; attempt < 2; attempt++) {
@@ -171,6 +172,7 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                         // The rejection branch gates publication with rejectedPeers.add;
                         // this count observation is not a fence for every async callback.
                         assertEquals(2, observed.get());
+                        assertEquals(1, ended.get(), "rejection ends waiting admission once");
                     }
                 }
             }

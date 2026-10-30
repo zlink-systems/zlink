@@ -43,6 +43,64 @@ final class ZLinkSpotDirectCompletionDispatchTest {
     private static final long WAIT_SECONDS = 5;
 
     @Test
+    void exceptionalBackendEmitsOnePublicTerminalWithErrorDetails() {
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+        var records = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var logger = java.util.logging.Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        var handler =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        records.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        var oldLevel = logger.getLevel();
+        logger.setLevel(java.util.logging.Level.ALL);
+        logger.addHandler(handler);
+        try {
+            var options = new ZLinkDispatchOptionsRegistration();
+            options.messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            var outbound =
+                    new ZLinkSpotDirectOutbound(
+                            new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
+                            new ZLinkMessageFlowTracer(
+                                    options, ZLinkHandlerActivator.reflection(), Runnable::run));
+            var failure = new IllegalStateException("connection admission failed");
+            try (var payload = message("request")) {
+                var result = request(outbound, CompletableFuture.failedFuture(failure), payload);
+                assertSame(
+                        failure,
+                        assertThrows(
+                                        java.util.concurrent.CompletionException.class,
+                                        () -> result.toCompletableFuture().join())
+                                .getCause());
+            }
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+            var terminals =
+                    records.stream()
+                            .filter(
+                                    record ->
+                                            record.contains("connection admission failed")
+                                                    && record.contains("reply_received"))
+                            .toList();
+            assertEquals(1, terminals.size(), records.toString());
+            assertTrue(
+                    terminals.getFirst().contains("error_type=IllegalStateException"),
+                    terminals.toString());
+            assertTrue(terminals.getFirst().contains(" flow="), terminals.toString());
+        } finally {
+            logger.removeHandler(handler);
+            logger.setLevel(oldLevel);
+        }
+    }
+
+    @Test
     void remoteReplyReusesTheRegisteredCompletionTurn() throws Exception {
         try (var registry = new ZLinkServiceOperationRegistry()) {
             var operation =
