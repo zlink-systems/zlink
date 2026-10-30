@@ -81,6 +81,8 @@ public sealed class StreamFlowEndToEndTests
             var sessionId = Assert.IsType<string>(callback.Value?.SessionId);
             Assert.False(string.IsNullOrWhiteSpace(sessionId));
 
+            await flowLogs.Replied.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
             await connector.Close.Async();
             await host.StopAsync();
 
@@ -226,11 +228,14 @@ public sealed class StreamFlowEndToEndTests
     {
         private readonly object _gate = new();
         private readonly List<string> _messages = [];
+        public TaskCompletionSource Replied { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public IReadOnlyList<string> Messages
         {
             get
             {
+                global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
                 lock (_gate)
                     return _messages.ToArray();
             }
@@ -258,8 +263,11 @@ public sealed class StreamFlowEndToEndTests
                 Func<TState, Exception?, string> formatter
             )
             {
+                var message = formatter(state, exception);
                 lock (owner._gate)
-                    owner._messages.Add(formatter(state, exception));
+                    owner._messages.Add(message);
+                if (message.Contains("phase=replied", StringComparison.Ordinal))
+                    owner.Replied.TrySetResult();
             }
         }
     }

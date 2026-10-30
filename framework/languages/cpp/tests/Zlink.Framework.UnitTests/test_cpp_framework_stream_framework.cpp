@@ -1520,7 +1520,7 @@ int transport_bound_close (bool tls, bool remote = false)
     const stateful::stream_connection_t connection{rid.to_hex (), 1, mesh->routing_id (),
                                                    status.lifecycle_generation ()};
     const stateful::object_ref_t actor{
-      stateful::object_kind_t::actor, "close-actor", 7, 11, "player",
+      stateful::object_kind_t::actor,   "close-actor", 7, 11, "player",
       status.routing_id ().to_string ()};
     const auto [retired_error, retired_binding] = sessions.bind_remote (connection, actor, 1, 13);
     if (retired_error != stateful::stateful_error_t::none)
@@ -1600,8 +1600,7 @@ int transport_bound_close (bool tls, bool remote = false)
     // Physical close removes the canonical binding even while the Session's
     // disconnected callback remains pending.
     const auto cleanup_deadline = std::chrono::steady_clock::now () + 2s;
-    while (sessions.is_current (binding)
-           && std::chrono::steady_clock::now () < cleanup_deadline)
+    while (sessions.is_current (binding) && std::chrono::steady_clock::now () < cleanup_deadline)
         std::this_thread::yield ();
     if (sessions.is_current (binding))
         return 348;

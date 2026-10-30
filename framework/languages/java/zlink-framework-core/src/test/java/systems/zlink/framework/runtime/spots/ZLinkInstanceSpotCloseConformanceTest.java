@@ -718,6 +718,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         String spotId = "java-close-instance-" + UUID.randomUUID();
         Observation observation = new Observation(failInitialization, queuedBeforeClose);
         observation.failConfigure = failConfigure;
+        // Keep the host open until pending-message diagnostics have reached the provider.
+        if (host.equals("Draining")) observation.hostCloseRelease = new CompletableFuture<>();
         current = observation;
         ObservedStore store = new ObservedStore(spotId, observation);
         ZLinkProviderLocationRepository repository = new ZLinkProviderLocationRepository(store);
@@ -734,8 +736,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         objects.addInstanceSpotFactory(
                 TYPE, Instance.class, factory -> factory.disableRelocation());
         DefaultZLinkFrameworkOptions targetOptions = null;
+        if (!host.equals("Serving")) addRelocationHold(objects);
         if (host.equals("Relocating")) {
-            addRelocationHold(objects);
             targetOptions = new DefaultZLinkFrameworkOptions();
             targetOptions.addLocationStore(store.inner);
             targetOptions.addRelocationStore(relocationStore);
@@ -755,7 +757,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 options, new ZLinkJavaBackendAdapterFactory())) {
             try {
-                if (host.equals("Relocating")) {
+                if (!host.equals("Serving")) {
                     String holdId = spotId + "-hold";
                     var hold =
                             runtime.spotManager()
@@ -805,6 +807,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                     if (queuedBeforeClose) {
                         pending = pending(runtime, spotId, true);
                         flow.ownerArrival.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        observation.hostCloseRelease.complete(null);
                         observation.activeRelease.complete(null);
                     } else {
                         assertEquals(
@@ -1125,16 +1128,19 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                 .toCompletableFuture()
                                 .get(WAIT.toSeconds(), TimeUnit.SECONDS);
                     }
+                    observation.hostCloseRelease.complete(null);
                     if (hostOperation != null) {
                         hostOperation.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
                     }
                     if (!host.equals("Serving")) assertEquals(1, flow.sendDiagnosticCount.get());
                 }
             } finally {
+                observation.hostCloseRelease.complete(null);
                 observation.activeRelease.complete(null);
                 observation.closingRelease.complete(null);
             }
         } finally {
+            observation.hostCloseRelease.complete(null);
             observation.activeRelease.complete(null);
             observation.closingRelease.complete(null);
         }
@@ -1399,6 +1405,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
 
     public static final class RelocationHold implements ZLinkSpot<ZLinkActor> {
         private final ZLinkSpotContext context;
+        private final Observation observation = current;
 
         public RelocationHold(ZLinkSpotContext context) {
             this.context = context;
@@ -1410,6 +1417,10 @@ final class ZLinkInstanceSpotCloseConformanceTest {
 
         public void configure() {
             context.handlers().addHandler(RelocationHoldHandler.class);
+        }
+
+        public CompletionStage<Void> onClosing(ZLinkSpotClosingContext closing) {
+            return observation.hostCloseRelease;
         }
 
         public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
@@ -1464,6 +1475,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         final CompletableFuture<Void> activeRelease = new CompletableFuture<>();
         final CompletableFuture<Void> closingEntered = new CompletableFuture<>();
         final CompletableFuture<Void> closingRelease = new CompletableFuture<>();
+        CompletableFuture<Void> hostCloseRelease = CompletableFuture.completedFuture(null);
         final CompletableFuture<Boolean> closeResult = new CompletableFuture<>();
         volatile String durableState;
         volatile ZLinkTimer oldTimer;

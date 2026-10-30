@@ -467,8 +467,6 @@ test('default JSON encoding adds no unused custom-replacer context', async (t) =
   }
   const baseline = await trackedCodecAllocations('/node-envelope-codec-cost.test.js', control);
   const allocations = await trackedCodecAllocations('/internal/framework-json-v1.js', encode);
-  // No attributed baseline objects means a zero budget, including an omitted
-  // function entry. Absence must never relax the allocation comparison.
   const expected = baseline.get('nativeJsonEncoding')?.objects ?? 0;
   const actual = allocationTotal(allocations);
   t.diagnostic(`1000 calls: native=${expected}, strict=${actual} objects`);
@@ -488,6 +486,8 @@ test('custom JSON validation adds no carrier per property', async (t) => {
   for (let index = 0; index < 1000; index++) {
     encode(small);
     encode(large);
+    nativeJsonEncoding(small);
+    nativeJsonEncoding(large);
   }
   const smallAllocations = await trackedCodecAllocations('/internal/framework-json-v1.js', () =>
     encode(small)
@@ -495,11 +495,38 @@ test('custom JSON validation adds no carrier per property', async (t) => {
   const largeAllocations = await trackedCodecAllocations('/internal/framework-json-v1.js', () =>
     encode(large)
   );
+  // V8 attributes native stringify work to its JS caller. Measure that work
+  // for each input shape before comparing Framework-owned incremental cost.
+  const nativeSmall = await trackedCodecAllocations('/node-envelope-codec-cost.test.js', () =>
+    nativeJsonEncoding(small)
+  );
+  const nativeLarge = await trackedCodecAllocations('/node-envelope-codec-cost.test.js', () =>
+    nativeJsonEncoding(large)
+  );
   const smaller = allocationTotal(smallAllocations);
   const larger = allocationTotal(largeAllocations);
-  t.diagnostic(`1000 calls: one-property=${smaller}, 32-properties=${larger} objects`);
+  const nativeSmaller = nativeSmall.get('nativeJsonEncoding').objects;
+  const nativeLarger = nativeLarge.get('nativeJsonEncoding').objects;
+  assert.ok(nativeSmaller >= 1000 && nativeLarger >= 1000, 'native stringify control is observed');
+  t.diagnostic(
+    `1000 calls: one-property=${smaller}, 32-properties=${larger}, native-one=${nativeSmaller}, native-32=${nativeLarger} objects`
+  );
   assert.equal(encode(large), JSON.stringify(large));
-  assert.ok(larger <= smaller, `${larger} allocations grow with properties from ${smaller}`);
+  const assertNoGrowth = (smallCount, largeCount) => {
+    const smallOverhead = smallCount - nativeSmaller;
+    const largeOverhead = largeCount - nativeLarger;
+    assert.ok(
+      largeOverhead <= smallOverhead,
+      `${largeOverhead} Framework allocations grow with properties from ${smallOverhead}`
+    );
+  };
+  assertNoGrowth(smaller, larger);
+  // A carrier for each extra property must still fail after native subtraction.
+  const extraCarriers = 1000 * (Object.keys(large).length - Object.keys(small).length);
+  assert.throws(
+    () => assertNoGrowth(smaller, larger + extraCarriers),
+    /Framework allocations grow/
+  );
 });
 
 test('custom JSON replacement preserves holder, key order and strict value validation', () => {

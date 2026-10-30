@@ -59,6 +59,7 @@ public sealed class SpotRouteDispatcherTests
         }
 
         Assert.Equal(["next"], probe.Values);
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         var spotTraces = activities
             .Where(activity =>
                 activity.OperationName == "zlink.message_flow"

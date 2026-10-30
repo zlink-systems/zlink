@@ -434,11 +434,13 @@ final class ZLinkStreamSessionContextStateTest {
                     public void close() {}
                 };
         Level level = logger.getLevel();
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(handler);
         logger.setLevel(Level.ALL);
         try {
             action.run();
         } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
             logger.setLevel(level);
         }
