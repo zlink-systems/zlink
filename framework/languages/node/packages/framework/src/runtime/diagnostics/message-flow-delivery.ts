@@ -17,9 +17,10 @@ export enum TelemetryCounter {
   WorkerFailures,
   Length
 }
-export const TELEMETRY_STATE_BYTES = Math.ceil(
-  TelemetryState.Length * Int32Array.BYTES_PER_ELEMENT / BigUint64Array.BYTES_PER_ELEMENT
-) * BigUint64Array.BYTES_PER_ELEMENT;
+export const TELEMETRY_STATE_BYTES =
+  Math.ceil(
+    (TelemetryState.Length * Int32Array.BYTES_PER_ELEMENT) / BigUint64Array.BYTES_PER_ELEMENT
+  ) * BigUint64Array.BYTES_PER_ELEMENT;
 
 export interface ZLinkTelemetryLease {
   readonly retired: Int32Array;
@@ -35,8 +36,7 @@ export function openTelemetryLease(): ZLinkTelemetryLease {
 }
 
 export function renewTelemetryLease(lease: ZLinkTelemetryLease | undefined): ZLinkTelemetryLease {
-  return lease === undefined || Atomics.load(lease.retired, 0) !== 0
-    ? openTelemetryLease() : lease;
+  return lease === undefined || Atomics.load(lease.retired, 0) !== 0 ? openTelemetryLease() : lease;
 }
 
 let processOwner: ZLinkMessageFlowDelivery | undefined;
@@ -46,9 +46,12 @@ export function messageFlowDelivery(): ZLinkMessageFlowDelivery {
 }
 
 export function telemetryProviderFailureCount(): number {
-  return processOwner === undefined ? 0
-    : Number(Atomics.load(processOwner.counters, TelemetryCounter.LoggerFailures)
-      + Atomics.load(processOwner.counters, TelemetryCounter.TraceFailures));
+  return processOwner === undefined
+    ? 0
+    : Number(
+        Atomics.load(processOwner.counters, TelemetryCounter.LoggerFailures) +
+          Atomics.load(processOwner.counters, TelemetryCounter.TraceFailures)
+      );
 }
 
 export function retireTelemetryLease(lease: ZLinkTelemetryLease): void {
@@ -57,9 +60,15 @@ export function retireTelemetryLease(lease: ZLinkTelemetryLease): void {
 }
 
 export class ZLinkMessageFlowDelivery {
-  private readonly sharedState = new SharedArrayBuffer(TELEMETRY_STATE_BYTES + TelemetryCounter.Length * BigUint64Array.BYTES_PER_ELEMENT);
+  private readonly sharedState = new SharedArrayBuffer(
+    TELEMETRY_STATE_BYTES + TelemetryCounter.Length * BigUint64Array.BYTES_PER_ELEMENT
+  );
   readonly state = new Int32Array(this.sharedState, 0, TelemetryState.Length);
-  readonly counters = new BigUint64Array(this.sharedState, TELEMETRY_STATE_BYTES, TelemetryCounter.Length);
+  readonly counters = new BigUint64Array(
+    this.sharedState,
+    TELEMETRY_STATE_BYTES,
+    TelemetryCounter.Length
+  );
   readonly ready: Promise<void>;
   private readonly worker?: Worker;
   private failure?: Error;
@@ -72,21 +81,24 @@ export class ZLinkMessageFlowDelivery {
     let published!: () => void;
     // A failed bootstrap leaves this incomplete. Runtime processing never waits
     // for it, and no rejected promise can escape into the host process.
-    this.ready = new Promise(resolve => { published = resolve; });
+    this.ready = new Promise((resolve) => {
+      published = resolve;
+    });
     // NODE_OPTIONS preloads precede execArgv preloads. Keep both application
     // lists intact and capture the public default provider before either list.
     try {
       const bootstrap = require.resolve('./message-flow-bootstrap').replace(/\\/g, '/');
       this.worker = new Worker(require.resolve('./message-flow-worker'), {
-      workerData: this.state.buffer,
-      env: {
-        ...process.env,
-        NODE_OPTIONS: `--require "${bootstrap}" ${process.env.NODE_OPTIONS ?? ''}`
-      }
-    });
-      this.worker.once('error', error => this.workerFailed(error));
-      this.worker.once('exit', code => {
-        if (this.failure === undefined) this.workerFailed(new Error(`Telemetry worker exited with code ${code}.`));
+        workerData: this.state.buffer,
+        env: {
+          ...process.env,
+          NODE_OPTIONS: `--require "${bootstrap}" ${process.env.NODE_OPTIONS ?? ''}`
+        }
+      });
+      this.worker.once('error', (error) => this.workerFailed(error));
+      this.worker.once('exit', (code) => {
+        if (this.failure === undefined)
+          this.workerFailed(new Error(`Telemetry worker exited with code ${code}.`));
       });
       this.worker.on('message', (message: unknown) => {
         if (message !== TELEMETRY_WORKER_AVAILABLE || this.failure !== undefined) return;
@@ -144,7 +156,13 @@ export class ZLinkMessageFlowDelivery {
   }
 
   private flush(): void {
-    if (this.worker === undefined || !this.workerReady || this.executing || this.pending.length === 0) return;
+    if (
+      this.worker === undefined ||
+      !this.workerReady ||
+      this.executing ||
+      this.pending.length === 0
+    )
+      return;
     const batch = this.pending;
     this.pending = [];
     this.executing = true;

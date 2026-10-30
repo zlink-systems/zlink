@@ -2164,9 +2164,10 @@ result_t<void> stream_runtime_t::dispatch_error (packet_stream_session_t &sessio
                                     [&] { return session.on_error (stream, error); });
 }
 
-result_t<void> stream_runtime_t::dispatch_error_async (
-  packet_stream_session_t &session, stream_t &stream, const stream_error_t &error,
-  async_dispatch_completion_t completion) const
+result_t<void> stream_runtime_t::dispatch_error_async (packet_stream_session_t &session,
+                                                       stream_t &stream,
+                                                       const stream_error_t &error,
+                                                       async_dispatch_completion_t completion) const
 {
     auto dispatch_stream = stream;
     return dispatch_infrastructure_async (

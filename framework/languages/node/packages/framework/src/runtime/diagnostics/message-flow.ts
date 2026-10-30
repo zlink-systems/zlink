@@ -139,8 +139,10 @@ export class ZLinkMessageFlowTracer {
 
   enabled(outcome: ZLinkMessageFlowOutcome): boolean {
     const mode = effectiveMessageFlow(this.ctx);
-    return MESSAGE_FLOW_MODE_RANK[mode] >= MESSAGE_FLOW_MODE_RANK[requiredMode(outcome)]
-      && messageFlowDelivery().accepts(this.telemetryLease);
+    return (
+      MESSAGE_FLOW_MODE_RANK[mode] >= MESSAGE_FLOW_MODE_RANK[requiredMode(outcome)] &&
+      messageFlowDelivery().accepts(this.telemetryLease)
+    );
   }
 
   accepts(outcome: ZLinkMessageFlowOutcome): boolean {
