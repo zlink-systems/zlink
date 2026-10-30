@@ -262,28 +262,6 @@ class provider_location_repository_t final : public location_repository_t
         _capacity_metrics.register_local (
           key_capacity (descriptor.mesh_name, descriptor.rid.to_string ()).value, descriptor);
         const auto key = key_mesh (descriptor.mesh_name, descriptor.rid);
-        auto current = co_await _store.read (key);
-        if (const auto *found = std::get_if<store_found_t> (&current)) {
-            const auto stored = decode_mesh_descriptor (
-              parse_canonical_record (found->value.bytes, "MeshNode descriptor")
-                .at (location_record_fields::descriptor));
-            descriptor.capacity.actors.active = stored.capacity.actors.active;
-            descriptor.capacity.actors.reserved = stored.capacity.actors.reserved;
-            descriptor.capacity.spots.active = stored.capacity.spots.active;
-            descriptor.capacity.spots.reserved = stored.capacity.spots.reserved;
-            for (auto &typed : descriptor.capacity.spot_types) {
-                const auto existing = std::find_if (
-                  stored.capacity.spot_types.begin (), stored.capacity.spot_types.end (),
-                  [&] (const spot_type_capacity_t &item) {
-                      return item.object_kind == typed.object_kind
-                             && item.stable_type == typed.stable_type;
-                  });
-                if (existing != stored.capacity.spot_types.end ()) {
-                    typed.usage.active = existing->usage.active;
-                    typed.usage.reserved = existing->usage.reserved;
-                }
-            }
-        }
         co_return co_await update_descriptor (
           key, descriptor.owner_id, descriptor.lease_generation, descriptor.lifecycle_generation,
           descriptor.descriptor_revision, encode_mesh_record (1, descriptor), intent,
@@ -303,10 +281,19 @@ class provider_location_repository_t final : public location_repository_t
     task_t<location_page_t<mesh_node_descriptor_t>>
     list_mesh_nodes (std::string mesh_name, location_page_request_t page = {}) override
     {
-        return list_descriptors<mesh_node_descriptor_t> (
+        auto listed = co_await list_descriptors<mesh_node_descriptor_t> (
           prefix_mesh (mesh_name), std::move (page), [] (const nlohmann::json &record) {
               return decode_mesh_descriptor (record.at (location_record_fields::descriptor));
           });
+        for (auto &descriptor : listed.items) {
+            const auto capacity =
+              co_await read_capacity_async ({descriptor.mesh_name,
+                                             node_rid_t::from_string (descriptor.rid.to_string ()),
+                                             descriptor.lifecycle_generation,
+                                             {descriptor.owner_id, descriptor.lease_generation}});
+            project_capacity (descriptor.capacity, capacity.record);
+        }
+        co_return listed;
     }
 
     task_t<location_write_result_t>
@@ -1160,26 +1147,34 @@ class provider_location_repository_t final : public location_repository_t
       std::stop_token cancellation = {},
       std::optional<object_reserve_request_t> request = std::nullopt) override
     {
-        if (cancellation.stop_requested ())
-            co_return co_await cancelled<bool> ();
         const auto row_key = key_authority (key.value);
-        const auto read = co_await _store.read (row_key);
-        const auto *found = std::get_if<store_found_t> (&read);
-        if (!found || found->value.version.value != expected_store_version)
-            co_return false;
-        const auto current =
-          decode_authority (found->value.bytes, found->value.version, found->value.store_now);
-        if (request && !authority_matches_creation_type (current, *request))
-            throw framework_exception_t (framework_error_kind_t::type_mismatch,
-                                         "Object type does not match the current authority");
-        if (current.allocation.state != placement_allocation_state_t::active) {
-            const auto locked = co_await authority_mutation_locked_async (key.value);
-            if (locked)
+        for (;;) {
+            if (cancellation.stop_requested ())
+                co_return co_await cancelled<bool> ();
+            if (request && request->operation_deadline != std::chrono::system_clock::time_point{}
+                && std::chrono::system_clock::now () >= request->operation_deadline)
+                throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                             "Object authority release deadline expired");
+            const auto read = co_await _store.read (row_key);
+            const auto *found = std::get_if<store_found_t> (&read);
+            if (!found || found->value.version.value != expected_store_version)
                 co_return false;
+            const auto current =
+              decode_authority (found->value.bytes, found->value.version, found->value.store_now);
+            if (request && !authority_matches_creation_type (current, *request))
+                throw framework_exception_t (framework_error_kind_t::type_mismatch,
+                                             "Object type does not match the current authority");
+            if (current.allocation.state != placement_allocation_state_t::active) {
+                const auto locked = co_await authority_mutation_locked_async (key.value);
+                if (locked)
+                    co_return false;
+            }
+            const auto reclaimed = co_await try_reclaim_reserved_authority_async (
+              row_key, *found, current, request ? &*request : nullptr, cancellation);
+            if (reclaimed == stale_authority_reclaim_result_t::conflict)
+                continue;
+            co_return reclaimed == stale_authority_reclaim_result_t::reclaimed;
         }
-        co_return co_await try_reclaim_reserved_authority_async (
-          row_key, *found, current, request ? &*request : nullptr, cancellation)
-          == stale_authority_reclaim_result_t::reclaimed;
     }
 
   public:
@@ -4238,23 +4233,26 @@ class provider_location_repository_t final : public location_repository_t
             metrics.counter ("zlink.location.store.errors", "{error}", 1,
                              {{"operation", operation}});
     }
+    static void project_capacity (placement_capacity_t &value, const capacity_record_t &record)
+    {
+        value.actors.active = record.actors.active;
+        value.actors.reserved = record.actors.pending;
+        value.spots.active = record.spots.active;
+        value.spots.reserved = record.spots.pending;
+        for (auto &type : value.spot_types) {
+            const auto type_key =
+              record.format == capacity_record_format_t::node_compatible
+                ? node_capacity_type_key (type.object_kind, type.stable_type)
+                : canonical_capacity_type_key (type.object_kind, type.stable_type);
+            const auto found = record.spot_types.find (type_key);
+            type.usage.active = found == record.spot_types.end () ? 0 : found->second.active;
+            type.usage.reserved = found == record.spot_types.end () ? 0 : found->second.pending;
+        }
+    }
     void confirm_capacity (const std::string &key, const capacity_record_t &record)
     {
-        _capacity_metrics.confirm (key, [&] (placement_capacity_t &value) {
-            value.actors.active = record.actors.active;
-            value.actors.reserved = record.actors.pending;
-            value.spots.active = record.spots.active;
-            value.spots.reserved = record.spots.pending;
-            for (auto &type : value.spot_types) {
-                const auto type_key =
-                  record.format == capacity_record_format_t::node_compatible
-                    ? node_capacity_type_key (type.object_kind, type.stable_type)
-                    : canonical_capacity_type_key (type.object_kind, type.stable_type);
-                const auto found = record.spot_types.find (type_key);
-                type.usage.active = found == record.spot_types.end () ? 0 : found->second.active;
-                type.usage.reserved = found == record.spot_types.end () ? 0 : found->second.pending;
-            }
-        });
+        _capacity_metrics.confirm (
+          key, [&] (placement_capacity_t &value) { project_capacity (value, record); });
     }
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
     capacity_metrics_t _capacity_metrics;
