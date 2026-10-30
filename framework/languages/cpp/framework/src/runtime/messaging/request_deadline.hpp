@@ -26,7 +26,8 @@ inline std::uint64_t request_deadline_unix_ms (std::chrono::steady_clock::time_p
     return static_cast<std::uint64_t> (unix_ms);
 }
 
-inline std::chrono::system_clock::time_point request_deadline_utc_from_unix_ms (std::uint64_t unix_ms)
+inline std::chrono::system_clock::time_point
+request_deadline_utc_from_unix_ms (std::uint64_t unix_ms)
 {
     using clock_t = std::chrono::system_clock;
     using milliseconds_t = std::chrono::duration<long double, std::milli>;

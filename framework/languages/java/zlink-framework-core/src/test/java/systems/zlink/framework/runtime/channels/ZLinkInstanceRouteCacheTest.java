@@ -133,7 +133,10 @@ final class ZLinkInstanceRouteCacheTest {
         var runtime =
                 new ZLinkChannelCallRuntime(
                         new ZLinkMessageFlowTracer(
-                                new ZLinkDispatchOptionsRegistration(), null, Runnable::run),
+                                new ZLinkDispatchOptionsRegistration(),
+                                systems.zlink.framework.runtime.internal.handlers
+                                        .ZLinkHandlerActivator.reflection(),
+                                Runnable::run),
                         null,
                         (channel, target, spot, generation, authority, lease, parts) ->
                                 CompletableFuture.failedFuture(terminal),

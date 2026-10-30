@@ -7,9 +7,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
-#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 #include <utility>
-#endif
+#include <mutex>
 
 namespace zlink::framework::runtime
 {
@@ -109,23 +108,44 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
     return true;
 }
 
-std::shared_ptr<void> offload_executor_t::retain_internal_work ()
+offload_executor_t::retained_work_t::retained_work_t (offload_executor_t &executor) noexcept :
+    _executor (&executor)
 {
-    struct retained_work_t
-    {
-        offload_executor_t &executor;
-        explicit retained_work_t (offload_executor_t &owner) : executor (owner)
-        {
-            std::lock_guard lock (executor._mutex);
-            ++executor._active;
-        }
-        ~retained_work_t ()
-        {
-            std::lock_guard lock (executor._mutex);
-            executor.complete_work_locked ();
-        }
-    };
-    return std::make_shared<retained_work_t> (*this);
+    std::lock_guard lock (executor._mutex);
+    ++executor._active;
+}
+
+offload_executor_t::retained_work_t::retained_work_t (retained_work_t &&other) noexcept :
+    _executor (std::exchange (other._executor, nullptr))
+{
+}
+
+offload_executor_t::retained_work_t &
+offload_executor_t::retained_work_t::operator= (retained_work_t &&other) noexcept
+{
+    if (this != &other) {
+        reset ();
+        _executor = std::exchange (other._executor, nullptr);
+    }
+    return *this;
+}
+
+offload_executor_t::retained_work_t::~retained_work_t () noexcept
+{
+    reset ();
+}
+
+void offload_executor_t::retained_work_t::reset () noexcept
+{
+    if (auto *executor = std::exchange (_executor, nullptr)) {
+        std::lock_guard lock (executor->_mutex);
+        executor->complete_work_locked ();
+    }
+}
+
+offload_executor_t::retained_work_t offload_executor_t::retain_internal_work () noexcept
+{
+    return retained_work_t (*this);
 }
 
 bool offload_executor_t::try_submit_cancellable (std::function<void (std::stop_token)> work)

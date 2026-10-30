@@ -111,7 +111,10 @@ final class ZLinkChannelSpotTerminalTest {
         var runtime =
                 new ZLinkChannelCallRuntime(
                         new ZLinkMessageFlowTracer(
-                                new ZLinkDispatchOptionsRegistration(), null, Runnable::run),
+                                new ZLinkDispatchOptionsRegistration(),
+                                systems.zlink.framework.runtime.internal.handlers
+                                        .ZLinkHandlerActivator.reflection(),
+                                Runnable::run),
                         null,
                         (channel, node, spot, generation, authority, lease, parts) -> {
                             probe.submissions++;
