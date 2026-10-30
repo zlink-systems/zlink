@@ -1,5 +1,5 @@
-import { SeverityNumber } from '@opentelemetry/api-logs';
-import { telemetryLogger } from '../diagnostics/message-flow';
+import { logs, SeverityNumber } from '@opentelemetry/api-logs';
+import { TELEMETRY_INSTRUMENTATION_NAME } from '../diagnostics/message-flow-record';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { ZLinkApplicationJobQueueProfile } from '../../contracts/Dispatch';
 import {
@@ -22,6 +22,8 @@ import {
   ApplicationJobReceiveFlowController,
   type ApplicationJobReceiveFlowTarget
 } from '../application-jobs/receive-flow-controller';
+
+const telemetryLogger = logs.getLogger(TELEMETRY_INSTRUMENTATION_NAME);
 
 export type ApplicationJobQueueProfileValue = 'compact' | 'low_latency' | 'balanced' | 'throughput';
 

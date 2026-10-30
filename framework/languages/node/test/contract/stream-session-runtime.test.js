@@ -2,17 +2,11 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const net = require('node:net');
 const test = require('node:test');
-const { logs } = require('@opentelemetry/api-logs');
-const { LoggerProvider } = require('@opentelemetry/sdk-logs');
-
-const telemetryRecords = [];
-logs.setGlobalLoggerProvider(new LoggerProvider({
-  processors: [{
-    onEmit(record) { telemetryRecords.push(record); },
-    forceFlush() { return Promise.resolve(); },
-    shutdown() { return Promise.resolve(); }
-  }]
-}));
+const observation = require('./fixtures/message-flow-observation.cjs')(
+  require('../../packages/framework/dist/runtime/diagnostics/message-flow-delivery'));
+const telemetryRecords = observation.telemetryRecords;
+test.beforeEach(async () => observation.observed());
+test.after(() => observation.close());
 
 const zlink = require('@zlink-systems/zlink');
 const connector = require('../../packages/stream-connector/dist');
@@ -415,15 +409,14 @@ test('session error and disconnect follow accepted packet callbacks', async () =
 test('stream session dispatch resolves only current Actor slots for sends and requests', async (t) => {
   const socket = new FakeStreamSocket();
   const dispatches = [];
+  await observation.observed();
   telemetryRecords.length = 0;
   const dispatch = {
     diagnostics: { messageFlow: 'normal', sampleRate: 1, includeMessageSizes: false }
   };
   const cell = framework.createMessageFlowModeCell(dispatch);
   const diagnostics = framework.createDiagnosticsContext(dispatch, undefined, cell);
-  const reporter = new ZLinkDispatchErrorReporter(
-    undefined, undefined, { reportRuntimeTaskException() {} }, diagnostics
-  );
+  const reporter = new ZLinkDispatchErrorReporter(diagnostics);
   let boundActor;
   let bindingReady;
   const bindingReadyPromise = new Promise((resolve) => { bindingReady = resolve; });
@@ -516,6 +509,7 @@ test('stream session dispatch resolves only current Actor slots for sends and re
   assert.equal(staleReply.header.kind, connector.ZlinkStreamMessageKind.Error);
   assert.equal(staleReply.header.requestSeq, 2n);
   assert.equal(JSON.parse(new TextDecoder().decode(staleReply.payload)).code, 'invalid_operation');
+  await observation.observed();
   const staleRecords = telemetryRecords.filter((record) =>
     (record.attributes.packet_name === 'StaleRequest' ||
       record.attributes.packet_name === 'StaleSend') &&
@@ -953,12 +947,7 @@ test('stream request dispatch emits exactly one replied terminal record (spec 26
   };
   const cell = framework.createMessageFlowModeCell(dispatch);
   const ctx = framework.createDiagnosticsContext(dispatch, undefined, cell);
-  const reporter = new ZLinkDispatchErrorReporter(
-    undefined,
-    undefined,
-    { reportRuntimeTaskException() {} },
-    ctx
-  );
+  const reporter = new ZLinkDispatchErrorReporter(ctx);
   let repliedResolve;
   const replied = new Promise((resolve) => { repliedResolve = resolve; });
   const runtime = createStreamRuntime({
@@ -3099,12 +3088,7 @@ test('stream session runtime records a shutdown drop for frames the closed seria
   };
   const cell = framework.createMessageFlowModeCell(dispatch);
   const ctx = framework.createDiagnosticsContext(dispatch, undefined, cell);
-  const reporter = new ZLinkDispatchErrorReporter(
-    undefined,
-    undefined,
-    { reportRuntimeTaskException() {} },
-    ctx
-  );
+  const reporter = new ZLinkDispatchErrorReporter(ctx);
   const runtime = new framework.ZLinkStreamSessionRuntime({
     socket: new FakeStreamSocket(),
     dispatchErrors: reporter,

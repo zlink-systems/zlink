@@ -117,14 +117,12 @@ const {
 } = require('../../packages/framework/dist/runtime/handlers/handler-instance-scope');
 
 test('local SPOT request failure rejects the caller and reports FailCaller', async () => {
+  await telemetry.observed();
   telemetry.reset();
   const events = telemetry.records
   ; const dispatcher = new ZLinkRoutedSpotPacketDispatch({
     resolveActivation: () => undefined,
-    dispatchErrors: dispatchErrorReporter(
-      undefined,
-      { reportRuntimeTaskException() {} }
-    )
+    dispatchErrors: dispatchErrorReporter()
   });
 
   await assert.rejects(
@@ -133,6 +131,7 @@ test('local SPOT request failure rejects the caller and reports FailCaller', asy
   );
   await new Promise((resolve) => setImmediate(resolve));
 
+  await telemetry.observed();
   assert.equal(events.length, 1);
   assert.equal(events[0].surface, 'spot');
   assert.equal(events[0].messageKind, 'request');
@@ -2146,6 +2145,7 @@ test('spot handler registry records packet and subscribe registrations from conf
 });
 
 test('ZLinkSpotManager reports SPOT subscription dispatch errors to the standard logger provider', async () => {
+  await telemetry.observed();
   telemetry.reset();
   const dispatchEvents = telemetry.records
   ; class StageSpot {}
@@ -2153,10 +2153,7 @@ test('ZLinkSpotManager reports SPOT subscription dispatch errors to the standard
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
-    dispatchErrors: dispatchErrorReporter(
-      undefined,
-      { reportRuntimeTaskException() {} }
-    )
+    dispatchErrors: dispatchErrorReporter()
   });
 
   await manager.getOrCreate('test.mesh', StageSpot, 'stage-subscription');
@@ -2166,6 +2163,7 @@ test('ZLinkSpotManager reports SPOT subscription dispatch errors to the standard
     parts: []
   });
 
+  await telemetry.observed();
   assert.equal(dispatchEvents.length, 1);
   assert.equal(dispatchEvents[0].surface, 'spot');
   //  message_kind 허용 값은 send/request/response/error/control 다섯 개로 닫혀 있다 —
@@ -2243,6 +2241,7 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
   // ZLinkDispatchMessageKind.Publish), so it must stay silent on the happy
   // path the same way ZLinkChannelDispatchPipeline.trace() already skips
   // Publish. This mirrors the BLK-001 precedent for classic fanout publish.
+  await telemetry.observed();
   telemetry.reset();
   const flowEvents = telemetry.records
   ; const handled = [];
@@ -2255,11 +2254,7 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
   const manager = new framework.DefaultZLinkSpotManager({
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
-    dispatchErrors: dispatchErrorReporter(
-      undefined,
-      { reportRuntimeTaskException() {} },
-      'normal'
-    ),
+    dispatchErrors: dispatchErrorReporter('normal'),
     detachedTaskRunner,
     spotSubscriptionHandlers: [{
       spotType: StageSpot,
@@ -2279,6 +2274,7 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
     await waitFor(() => handled.length > 0);
 
     assert.equal(handled.length, 1);
+    await telemetry.observed();
     assert.equal(flowEvents.length, 0);
   } finally {
     for (const part of message.parts) {
@@ -2288,6 +2284,7 @@ test('SPOT subscription dispatch runs the handler and never creates a message-fl
 });
 
 test('ZLinkSpotManager reports SPOT actor dispatch errors to the standard logger provider', async () => {
+  await telemetry.observed();
   telemetry.reset();
   const dispatchEvents = telemetry.records
   ; const badPart = zlink.Message.from('bad-frame');
@@ -2296,10 +2293,7 @@ test('ZLinkSpotManager reports SPOT actor dispatch errors to the standard logger
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
-    dispatchErrors: dispatchErrorReporter(
-      undefined,
-      { reportRuntimeTaskException() {} }
-    )
+    dispatchErrors: dispatchErrorReporter()
   });
 
   try {
@@ -2312,6 +2306,7 @@ test('ZLinkSpotManager reports SPOT actor dispatch errors to the standard logger
       }
     );
 
+    await telemetry.observed();
     assert.equal(dispatchEvents.length, 1);
     assert.equal(dispatchEvents[0].surface, 'actor');
     assert.equal(dispatchEvents[0].messageKind, 'send');
@@ -2326,6 +2321,7 @@ test('ZLinkSpotManager reports SPOT actor dispatch errors to the standard logger
 });
 
 test('ZLinkSpotManager replies routed actor request dispatch errors', async () => {
+  await telemetry.observed();
   telemetry.reset();
   const dispatchEvents = telemetry.records;
   const replyParts = [];
@@ -2335,10 +2331,7 @@ test('ZLinkSpotManager replies routed actor request dispatch errors', async () =
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [StageSpot],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
-    dispatchErrors: dispatchErrorReporter(
-      undefined,
-      { reportRuntimeTaskException() {} }
-    )
+    dispatchErrors: dispatchErrorReporter()
   });
 
   try {
@@ -2364,6 +2357,7 @@ test('ZLinkSpotManager replies routed actor request dispatch errors', async () =
       streamProtocol.ZLinkStreamMessageKind.Error
     );
     assert.match(JSON.parse(Buffer.from(replyFrame.payload).toString()).message, /not active|not found|registered/i);
+    await telemetry.observed();
     const errorEvents = dispatchEvents.filter((event) => event.outcome === 'failed');
     assert.equal(errorEvents.length, 1);
     assert.equal(errorEvents[0].surface, 'actor');
@@ -2537,6 +2531,7 @@ test('relocation materialization restores inherited User Spot handler registrati
 });
 
 test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerException errors', async () => {
+  await telemetry.observed();
   telemetry.reset();
   const dispatchEvents = telemetry.records;
   const replies = [];
@@ -2578,10 +2573,7 @@ test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerEx
       handlerType: ThrowRequestHandler,
       packetName: 'ThrowAsk'
     }],
-    dispatchErrors: dispatchErrorReporter(
-      undefined,
-      { reportRuntimeTaskException() {} }
-    )
+    dispatchErrors: dispatchErrorReporter()
   });
 
   try {
@@ -2612,6 +2604,7 @@ test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerEx
       message: 'handler boom',
       code: 'internal_failure'
     });
+    await telemetry.observed();
     const errorEvents = dispatchEvents.filter((event) => event.outcome === 'failed');
     assert.equal(errorEvents.length, 1);
     assert.equal(errorEvents[0].reason, 'handler_exception');
@@ -5332,20 +5325,15 @@ async function waitFor(predicate, timeoutMs = 1000, message) {
   assert.fail(message?.() ?? 'timed out waiting for condition');
 }
 
-function dispatchErrorReporter(_legacyObserverType, sink, mode = 'errors') {
-  return new framework.ZLinkDispatchErrorReporter(
-    undefined,
-    undefined,
-    sink,
-    {
+function dispatchErrorReporter(mode = 'errors') {
+  return new framework.ZLinkDispatchErrorReporter({
       diagnostics: {
         messageFlow: mode,
         sampleRate: 1,
         includeMessageSizes: false
       },
       liveMode: { mode }
-    }
-  );
+    });
 }
 
 test('HostShutdown closes occupied User and Instance scopes with membership visible to callbacks', async () => {
@@ -5411,3 +5399,7 @@ test('HostShutdown observes callback errors only after all Spot cleanup terminal
   await observed;
   assert.deepEqual(await manager.list('test.mesh'), []);
 });
+
+// Provider bootstrap is test setup; message handling itself never waits for it.
+test.beforeEach(async () => telemetry.observed());
+test.after(() => telemetry.close());

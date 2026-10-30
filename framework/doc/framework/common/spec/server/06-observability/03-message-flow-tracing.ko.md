@@ -300,7 +300,8 @@ handler 분배와 lifecycle 결정을 바꾸지 않는다.
 넘기는 데서 끝난다. Logger, span, observer, exporter와 telemetry provider의 호출과
 provider failure 처리는 이 경계의 실행 자원에서만 한다. 이 실행 자원은 application
 worker, completion 처리, deadline scheduler와 runtime status 전달에 쓰는 자원이 아니다.
-Provider가 없으면 trace만을 위한 allocation을 하지 않는다.
+Provider 유무의 판정은 telemetry 전달 경계 하나가 소유한다. Provider가 없으면 trace만을 위한
+allocation을 하지 않는다.
 
 | 상황 | 규칙 |
 |---|---|
@@ -309,12 +310,18 @@ Provider가 없으면 trace만을 위한 allocation을 하지 않는다.
 | Provider failure | Message operation failure가 아니다. 경계의 수명 동안 logger, trace와 fallback 역할마다 첫 실패 한 번만 실패한 provider가 아닌 application의 fallback logger 또는 process stderr에 기록하고, 그 뒤 실패는 횟수에만 반영한다. 실패한 fallback은 다시 호출하지 않는다. Fallback 기록의 실패도 message operation 결과, dispatch와 lifecycle을 바꾸지 않는다. |
 | Host 종료 | 그 host의 기록 제출을 닫고 아직 전달하지 않은 기록을 버린다. 종료로 버린 기록은 overflow에 세지 않는다. 실행 중인 provider 호출의 완료를 기다리거나 강제로 끝내지 않는다. 그 호출은 불변 snapshot과 provider만 참조하고 host runtime을 참조하지 않는다. |
 
-이 문서에서 trace 또는 dispatch error를 "정확히 한 번 기록한다"는 기록 한 건을 이 경계에
-정확히 한 번 제출한다는 뜻이다. 그 기록도 포화와 host 종료 규칙에 따라 버려질 수 있다.
+이 문서에서 trace 또는 dispatch error를 "정확히 한 번 기록한다"는 이 문서의 기록 생성 조건을
+만족한 기록 한 건을 이 경계에 정확히 한 번 제출한다는 뜻이다. 그 기록도 포화와 host 종료
+규칙에 따라 버려질 수 있다.
 
 Node에서 이 경계의 실행 자원은 worker thread이며, 경계는 여러 기록을 한 번에 worker로 넘길 수 있다. Framework는 이 worker를 만들 때 표준
 telemetry bootstrap의 preload 설정(`--require`·`--import`) 상속을 유지하며, 그 worker에
-설치된 provider에만 기록을 전달한다. C++ application logging의
+설치된 provider에만 기록을 전달한다. 이 경계는 worker가 bootstrap을 마친 뒤 게시한 provider
+유무를 사용한다. 그 결과가 게시되기 전에는 trace 기록을 생성하거나 제출하지 않으며, 이때
+생성하지 않은 기록은 overflow로 세지 않는다. 기록 제출과 message 처리·host lifecycle은
+이 결과를 기다리지 않는다.
+
+C++ application logging의
 async 설정(용량과 `block`을 포함한 overflow 정책)은 이 경계에 적용하지 않는다.
 
 Trace attribute에는 진단에 필요한 식별자만 넣으며 message 처리가 끝난 뒤 caller
