@@ -129,7 +129,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         Stream = new ZLinkManagedStream(socket, routingId, _runtime.Registration.Codecs, transport);
         _flow = new ZLinkMessageFlowTracer(
             _runtime.Registration.DispatchOptions,
-            ZLinkMessageFlowTracer.CreateLogger(scope.ServiceProvider.GetService<ILoggerFactory>()),
+            ZLinkMessageFlowTracer.GetLogger(scope.ServiceProvider),
             _runtime
         );
         _liveness = new ZLinkStreamSessionLiveness(timeProvider, livenessOptions);

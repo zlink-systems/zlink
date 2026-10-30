@@ -41,6 +41,9 @@ registration with no return value.
 `ActivitySource`, metrics through a `Meter` named `zlink.framework`, and logs through an
 `ILogger` category — the application configures the exporter and the remote backend.
 
+With the default `AddLogging()` registration, a provider added through `LoggerFactory.AddProvider`
+after host startup is not included in message-flow provider detection.
+
 **When to use it.** Use it to set the default recording level at startup. To change only the
 level while running, use `IZLinkDiagnosticsRuntime`.
 
