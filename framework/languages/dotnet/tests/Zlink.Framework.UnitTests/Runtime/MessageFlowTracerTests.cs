@@ -564,7 +564,7 @@ public sealed class MessageFlowTracerTests
     {
         var outerOptions = new ZLinkDispatchOptionsModel();
         outerOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
-        var outerTracer = new ZLinkMessageFlowTracer(outerOptions);
+        var outerTracer = new ZLinkMessageFlowTracer(outerOptions, new CapturingLogger());
         using var scope = ZLinkFlowContext.Enter(
             null,
             null,

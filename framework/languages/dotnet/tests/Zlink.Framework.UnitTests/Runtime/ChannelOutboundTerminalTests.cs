@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
@@ -396,8 +398,8 @@ public sealed class ChannelOutboundTerminalTests
         Assert.Equal("unavailable", offReply.ErrorCode);
         Assert.Equal("corr-reject", offReply.CorrelationId);
 
-        //  Gate on: spec 27 §3 classifies the malformed flow pair as a protocol
-        //  error and the operation completes as ProtocolError.
+        //  Gate on with a provider: spec 27 §3 classifies the malformed flow
+        //  pair as a protocol error and the operation completes as ProtocolError.
         var onReply = RejectRelocationReply(MalformedFlowId, validateFlow: true);
         Assert.Equal(ZLinkMessageKind.Error, onReply.Kind);
         Assert.Equal("protocol_error", onReply.ErrorCode);
@@ -412,6 +414,7 @@ public sealed class ChannelOutboundTerminalTests
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(static _ => { });
+        services.AddLogging(logging => logging.AddProvider(NullLoggerProvider.Instance));
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
         runtime.Registration.DispatchOptions.Diagnostics.SetLevel(
