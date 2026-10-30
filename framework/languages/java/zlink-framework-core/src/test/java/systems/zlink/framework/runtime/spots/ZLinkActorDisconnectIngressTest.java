@@ -93,6 +93,7 @@ final class ZLinkActorDisconnectIngressTest {
                     };
             var headerClosed = new AtomicInteger();
             var bodyClosed = new AtomicInteger();
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.addHandler(handler);
             try (var invalidHeader =
                             new ZLinkBackendActorReceived(
@@ -154,6 +155,7 @@ final class ZLinkActorDisconnectIngressTest {
                 assertEquals(1, entry.callbacks.get());
                 assertEquals(1, headerClosed.get());
                 assertEquals(1, bodyClosed.get());
+                systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
                 var invalidFrames =
                         records.stream()
                                 .filter(
@@ -167,6 +169,7 @@ final class ZLinkActorDisconnectIngressTest {
                 org.junit.jupiter.api.Assertions.assertTrue(
                         invalidFrames.getFirst().getMessage().contains("surface=actor"));
             } finally {
+                systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
                 logger.removeHandler(handler);
             }
         }
@@ -345,6 +348,7 @@ final class ZLinkActorDisconnectIngressTest {
                         @Override
                         public void close() {}
                     };
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.addHandler(handler);
             try {
                 var golden =
@@ -363,6 +367,7 @@ final class ZLinkActorDisconnectIngressTest {
                 dispatchDisconnect(activation, ref, zeroLifecycle);
                 dispatchDisconnect(activation, ref, zeroBinding);
                 assertEquals(1, entry.callbacks.get());
+                systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
                 var malformed =
                         warnings.stream()
                                 .filter(
@@ -374,6 +379,7 @@ final class ZLinkActorDisconnectIngressTest {
                 for (var warning : malformed)
                     assertEquals(java.util.logging.Level.WARNING, warning.getLevel());
             } finally {
+                systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
                 logger.removeHandler(handler);
             }
         }
