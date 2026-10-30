@@ -198,7 +198,8 @@ final class ZLinkJavaRawSubmissionFailureContractTest {
                                             if (value != null) value.close();
                                             assertNull(
                                                     value,
-                                                    "a binding failure must not become a terminal reply without its cause");
+                                                    "a binding failure must not become a terminal"
+                                                            + " reply without its cause");
                                             assertNotNull(error);
                                             return error;
                                         })

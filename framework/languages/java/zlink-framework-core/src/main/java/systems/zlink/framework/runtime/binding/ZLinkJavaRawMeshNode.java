@@ -6,6 +6,7 @@ import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.ConnectionAttempt;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterRoute;
 import systems.zlink.contracts.sockets.RouterSocket;
@@ -116,6 +117,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -207,8 +209,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private volatile PeerObservationRoot peerObservation =
             new PeerObservationRoot(null, Map.of(), Set.of(), Map.of(), null);
 
-    /** Publishes admission facts only, after the enclosing transport commit is complete. */
-    private void publishPeerObservation() {
+    /** Publishes the single observation of committed topology and selected-route facts. */
+    void publishPeerObservation() {
         Map<RoutingId, ZLinkServiceTopologyRegistry.Peer> peers = new java.util.LinkedHashMap<>();
         Set<RoutingId> ready = new java.util.HashSet<>();
         Map<String, Long> counts = new HashMap<>();
@@ -477,7 +479,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (topology != null) {
             port.inStateLane(
                     () -> {
-                        publishPeerObservation();
+                        topology.observeChanges(this::publishPeerObservation);
                         return null;
                     });
         } else {
@@ -956,7 +958,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             topology = topologyFactory.apply(localDescriptor, transportStateLane);
             port.inStateLane(
                     () -> {
-                        publishPeerObservation();
+                        topology.observeChanges(this::publishPeerObservation);
                         return null;
                     });
             state = MeshNodeState.STARTED;
@@ -1053,7 +1055,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 port.inStateLane(
                         () -> {
                             topology.publishLocal(updated);
-                            publishPeerObservation();
                             return topology.peers().stream()
                                     .map(peer -> peer.descriptor().nodeRoutingId())
                                     .toList();
@@ -1355,9 +1356,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         boolean absent =
                 port.inStateLane(
                         () -> {
-                            boolean changed =
-                                    disconnectAdmitted(target, admittedConnectionId(target));
-                            if (changed) publishPeerObservation();
+                            disconnectAdmitted(target, admittedConnectionId(target));
                             return topology == null || topology.peer(target).isEmpty();
                         });
         knownPeerChannels.remove(target);
@@ -1386,7 +1385,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         Objects.requireNonNull(routeChanged, "routeChanged"),
                         Objects.requireNonNull(lifecycleEnded, "lifecycleEnded"));
         stateListeners.add(observer);
-        deliverStateSignal(() -> notifyStateListener(observer, observer.routeChanged()));
+        deliverStateSignal(() -> notifyStateChanged(observer));
         return () -> stateListeners.removeIf(current -> current == observer);
     }
 
@@ -1403,7 +1402,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 observer -> {
                                     if (observer.target() == null
                                             || observer.target().equals(target))
-                                        notifyStateListener(observer, observer.routeChanged());
+                                        notifyStateChanged(observer);
                                 }));
     }
 
@@ -1446,6 +1445,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                         "MeshNode state publication failed",
                                         failure);
                         });
+    }
+
+    private void notifyStateChanged(StateObserver observer) {
+        if (observer.target() != null && rejectedPeers.contains(observer.target()))
+            notifyStateListener(observer, observer.lifecycleEnded());
+        notifyStateListener(observer, observer.routeChanged());
     }
 
     private void notifyStateListener(StateObserver observer, Runnable callback) {
@@ -1888,7 +1893,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         // authority and lease fence carried by command 28 (design principles
         // "제어 결정과 요청 수락의 소유", Actor membership §4).
         return peer.isPresent()
-                && isReadyPeer(peer.orElseThrow())
                 && peer.orElseThrow().descriptor().lifecycleGeneration()
                         == request.targetNodeGeneration()
                 && peer.orElseThrow()
@@ -2241,10 +2245,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             UUID operationId,
             CompletableFuture<Void> requestAdmission) {
         RouterSocket router = requireStarted();
-        if (topology == null || !topology.isReady(target)) {
-            return CompletableFuture.failedFuture(
-                    new ZlinkRequestException(RequestResult.NOT_CONNECTED));
-        }
         long correlation = allocateCorrelation();
         int flags =
                 metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
@@ -2439,8 +2439,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             ZLinkServiceOperationRegistry operationOwner,
             UUID operationId,
             CompletableFuture<Void> requestAdmission) {
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peerFromOwner(targetNodeRid);
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long authorityOwnerGeneration =
                 spots.spotAuthorityOwnerGeneration(
@@ -2448,8 +2446,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         long ownerLeaseGeneration =
                 spots.spotAuthorityOwnerLeaseGeneration(
                         targetNodeRid, targetSpotId, targetSpotGeneration);
-        if (peer.isEmpty()
-                || !isReadyPeer(peer.orElseThrow())
+        if (targetNodeGeneration(targetNodeRid) == 0
                 || targetSpotGeneration <= 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
@@ -2476,7 +2473,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                             targetSpotId,
                                             targetSpotGeneration,
                                             targetNodeRid,
-                                            peer.orElseThrow().descriptor().lifecycleGeneration(),
+                                            targetNodeGeneration(targetNodeRid),
                                             authorityOwnerGeneration,
                                             ownerLeaseGeneration))));
             if (flags != 0) {
@@ -2489,28 +2486,38 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             operationId,
                             timeout,
                             terminal ->
-                                    port.requestMessagesTo(
-                                            requireStarted(),
+                                    admitRequest(
                                             targetNodeRid,
-                                            frames,
-                                            timeout,
-                                            replyFrames ->
-                                                    completeSpotRequest(
-                                                            targetNodeRid,
-                                                            targetSpotId,
-                                                            correlation,
-                                                            RequestResult.OK,
-                                                            replyFrames),
-                                            failure ->
-                                                    completeSpotRequest(
-                                                            targetNodeRid,
-                                                            targetSpotId,
-                                                            correlation,
-                                                            requestTerminal(failure),
-                                                            List.of()),
+                                            operationOwner,
+                                            operationId,
+                                            completion,
                                             terminal,
-                                            peer.orElseThrow().liveness(),
-                                            requestAdmission),
+                                            frames,
+                                            requestAdmission,
+                                            admittedTimeout ->
+                                                    port.requestMessagesTo(
+                                                            requireStarted(),
+                                                            targetNodeRid,
+                                                            frames,
+                                                            admittedTimeout,
+                                                            replyFrames ->
+                                                                    completeSpotRequest(
+                                                                            targetNodeRid,
+                                                                            targetSpotId,
+                                                                            correlation,
+                                                                            RequestResult.OK,
+                                                                            replyFrames),
+                                                            failure ->
+                                                                    completeSpotRequest(
+                                                                            targetNodeRid,
+                                                                            targetSpotId,
+                                                                            correlation,
+                                                                            requestTerminal(
+                                                                                    failure),
+                                                                            List.of()),
+                                                            terminal,
+                                                            null,
+                                                            requestAdmission)),
                             ZLinkBackendReceived::close,
                             completion)
                     .whenComplete(
@@ -2901,12 +2908,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             return CompletableFuture.failedFuture(
                     new IllegalArgumentException("bound Actor request timeout must be positive"));
         }
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long authorityOwnerGeneration = spots.actorAuthorityOwnerGeneration(actor);
         long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (peer.isEmpty()
+        if (targetNodeGeneration(actor.nodeRid()) == 0
                 || actor.generation() <= 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
@@ -2932,7 +2937,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 null,
                                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
                                         actor,
-                                        peer.orElseThrow().descriptor().lifecycleGeneration(),
+                                        targetNodeGeneration(actor.nodeRid()),
                                         authorityOwnerGeneration,
                                         ownerLeaseGeneration),
                                 new ZLinkServiceM6BWireCodec.BoundSessionTail(
@@ -2940,7 +2945,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                         sourceBindingGeneration,
                                         sourceSessionSequence)),
                         wire.encodeFrameworkMultipartFrame(parts));
-        return port.request(requireStarted(), actor.nodeRid(), frames, timeout, null)
+        return requestApplication(actor.nodeRid(), frames, timeout, null)
                 .thenApply(
                         replyFrames -> {
                             try {
@@ -3103,13 +3108,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         byte[] ownedMetadata = metadata == null ? null : metadata.clone();
         return inSourceTurn(
                 () -> {
-                    if (!isReadyInstanceTarget(route)) {
-                        return CompletableFuture.failedFuture(
-                                ZLinkFrameworkErrorOrigin.framework(
-                                        ZLinkBackendRequestResult.NOT_CONNECTED
-                                                .toFrameworkErrorKind(),
-                                        "remote Instance Spot target is not connected"));
-                    }
                     long remainingNanos = deadlineNanos - System.nanoTime();
                     if (remainingNanos <= 0 || logicalClose.get() != null) {
                         return CompletableFuture.failedFuture(
@@ -3125,131 +3123,146 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     ZLinkServiceOperationRegistry.Operation<List<Message>> operation =
                             operations.registerOnOwner(remainingTimeout);
                     UUID operationId = operation.id();
-                    CompletionStage<List<byte[]>> submitted;
-                    try {
-                        int flags =
-                                ownedMetadata == null || ownedMetadata.length == 0
-                                        ? 0
-                                        : ServiceWireConstants.FLAG_METADATA;
-                        List<byte[]> frames = new ArrayList<>();
-                        frames.add(
-                                statefulWire.encodeInstanceSpotHeader(
-                                        new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
-                                                flags,
-                                                route,
-                                                true,
-                                                localDescriptor.lifecycleGeneration(),
-                                                routingId,
-                                                sourceSpotId,
-                                                true,
-                                                operationId.getMostSignificantBits(),
-                                                operationId.getLeastSignificantBits(),
-                                                correlation)));
-                        if (flags != 0) {
-                            frames.add(ownedMetadata);
-                        }
-                        frames.add(encodedPayload);
-                        remainingNanos = deadlineNanos - System.nanoTime();
-                        submitted =
-                                remainingNanos > 0
-                                        ? requestApplication(
-                                                route.targetNodeRid(),
-                                                frames,
-                                                Duration.ofNanos(remainingNanos),
-                                                requestAdmission)
-                                        : CompletableFuture.failedFuture(
-                                                new ZlinkRequestException(RequestResult.TIMED_OUT));
-                    } catch (RuntimeException | Error failure) {
-                        submitted = CompletableFuture.failedFuture(failure);
-                    }
-                    submitted.whenComplete(
-                            (replyFrames, failure) -> {
-                                RequestResult result = requestTerminal(failure);
-                                List<byte[]> replies =
-                                        replyFrames == null ? List.of() : replyFrames;
-                                if (result != RequestResult.OK || replies.isEmpty()) {
-                                    operations.completeExceptionally(
-                                            operation.id(),
-                                            ZLinkFrameworkErrorOrigin.framework(
-                                                    ZLinkBackendRequestResult.fromWireTerminal(
-                                                                    result.value())
-                                                            .toFrameworkErrorKind(),
-                                                    "remote Instance Spot request failed: "
-                                                            + result,
-                                                    failure));
-                                    return;
-                                }
+                    admitRequest(
+                            route.targetNodeRid(),
+                            operations,
+                            operationId,
+                            operation.completion(),
+                            (reply, failure) -> {
+                                if (failure != null)
+                                    operations.completeExceptionally(operationId, failure);
+                                else operations.complete(operationId, reply);
+                            },
+                            List.of(),
+                            requestAdmission,
+                            admittedTimeout -> {
+                                BiConsumer<List<byte[]>, Throwable> finished =
+                                        (replyFrames, failure) ->
+                                                finishInstanceSpotRequest(
+                                                        operationId,
+                                                        correlation,
+                                                        replyFrames,
+                                                        failure);
+                                CompletionStage<?> submitted;
                                 try {
-                                    var header = wire.decodeReplyHeader(replies.getFirst());
-                                    if (header.correlation() != correlation) {
-                                        throw new ZLinkFrameworkException(
-                                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                                "Instance Spot request correlation mismatch");
+                                    int flags =
+                                            ownedMetadata == null || ownedMetadata.length == 0
+                                                    ? 0
+                                                    : ServiceWireConstants.FLAG_METADATA;
+                                    List<byte[]> frames = new ArrayList<>();
+                                    frames.add(
+                                            statefulWire.encodeInstanceSpotHeader(
+                                                    new ZLinkServiceM6BWireCodec
+                                                            .InstanceSpotMessage(
+                                                            flags,
+                                                            route,
+                                                            true,
+                                                            localDescriptor.lifecycleGeneration(),
+                                                            routingId,
+                                                            sourceSpotId,
+                                                            true,
+                                                            operationId.getMostSignificantBits(),
+                                                            operationId.getLeastSignificantBits(),
+                                                            correlation)));
+                                    if (flags != 0) {
+                                        frames.add(ownedMetadata);
                                     }
-                                    if (header.terminalResult() != 0 || header.failureCode() != 0) {
-                                        //  Spec 51-internal-service-wire-protocol:97 — a
-                                        //  failed reply carries exactly the header frame; an
-                                        //  attached tail is rejected as a protocol error
-                                        //  before the carried terminal is honored.
-                                        if (replies.size() != 1) {
-                                            throw new ZLinkFrameworkException(
-                                                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                                    "invalid Instance Spot failed reply frame"
-                                                            + " count");
-                                        }
-                                        //  Classify the carried terminal + fine failure code
-                                        //  via the authoritative ownership-aware translator
-                                        //  instead of collapsing to a generic rejection
-                                        //  (spec 32-framework-error-model:81-118, 99-108).
-                                        // spotMoving is a Framework admission control result. Its
-                                        // failed reply has no metadata frame, so preserve that
-                                        // origin locally.
-                                        throw ZLinkRequestFailureMapping.receivedFailure(
-                                                ZLinkBackendRequestResult.fromWireTerminal(
-                                                                header.terminalResult())
-                                                        .toFrameworkErrorKind(header.failureCode()),
-                                                "remote Instance Spot request failed: terminal="
-                                                        + header.terminalResult()
-                                                        + " failureCode="
-                                                        + header.failureCode(),
-                                                header.failureCode(),
-                                                header.failureCode()
-                                                                == ServiceWireConstants
-                                                                        .FRAMEWORK_ERROR_SPOT_MOVING
-                                                        ? ZLinkFrameworkErrorOrigin
-                                                                .frameworkMetadata()
-                                                        : java.util.Map.of());
-                                    }
-                                    if (replies.size() != 2) {
-                                        throw new ZLinkFrameworkException(
-                                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                                "invalid Instance Spot request reply frame count");
-                                    }
-                                    var payload = wire.decodeApplicationPayload(replies.get(1));
-                                    List<Message> replyParts = decodeApplicationMessages(payload);
-                                    if (!operations.complete(operation.id(), replyParts)) {
-                                        replyParts.forEach(Message::close);
-                                    }
-                                } catch (ZLinkFrameworkException decodeFailure) {
-                                    operations.completeExceptionally(operation.id(), decodeFailure);
-                                } catch (IllegalArgumentException decodeFailure) {
-                                    //  A codec/malformed-wire failure (ZLinkServiceWireException
-                                    //  and friends derive from IllegalArgumentException) means
-                                    //  the reply can't be processed -> ProtocolError
-                                    //  (spec 32-framework-error-model:91-92).
-                                    operations.completeExceptionally(
-                                            operation.id(),
-                                            new ZLinkFrameworkException(
-                                                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                                    "remote Instance Spot request reply could not"
-                                                            + " be processed",
-                                                    decodeFailure));
-                                } catch (RuntimeException decodeFailure) {
-                                    operations.completeExceptionally(operation.id(), decodeFailure);
+                                    frames.add(encodedPayload);
+                                    submitted =
+                                            port.requestTo(
+                                                    requireStarted(),
+                                                    route.targetNodeRid(),
+                                                    frames,
+                                                    admittedTimeout,
+                                                    requestAdmission,
+                                                    finished);
+                                } catch (RuntimeException | Error failure) {
+                                    finished.accept(null, failure);
+                                    submitted = CompletableFuture.completedStage(null);
                                 }
+
+                                return submitted;
                             });
                     return operation.completion();
                 });
+    }
+
+    private void finishInstanceSpotRequest(
+            UUID operationId, long correlation, List<byte[]> replyFrames, Throwable failure) {
+        RequestResult result = requestTerminal(failure);
+        List<byte[]> replies = replyFrames == null ? List.of() : replyFrames;
+        if (result != RequestResult.OK || replies.isEmpty()) {
+            operations.completeExceptionally(
+                    operationId,
+                    ZLinkFrameworkErrorOrigin.framework(
+                            ZLinkBackendRequestResult.fromWireTerminal(result.value())
+                                    .toFrameworkErrorKind(),
+                            "remote Instance Spot request failed: " + result,
+                            failure));
+            return;
+        }
+        try {
+            var header = wire.decodeReplyHeader(replies.getFirst());
+            if (header.correlation() != correlation) {
+                throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                        "Instance Spot request correlation mismatch");
+            }
+            if (header.terminalResult() != 0 || header.failureCode() != 0) {
+                //  Spec 51-internal-service-wire-protocol:97 — a
+                //  failed reply carries exactly the header frame; an
+                //  attached tail is rejected as a protocol error
+                //  before the carried terminal is honored.
+                if (replies.size() != 1) {
+                    throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "invalid Instance Spot failed reply frame" + " count");
+                }
+                //  Classify the carried terminal + fine failure code
+                //  via the authoritative ownership-aware translator
+                //  instead of collapsing to a generic rejection
+                //  (spec 32-framework-error-model:81-118, 99-108).
+                // spotMoving is a Framework admission control result. Its
+                // failed reply has no metadata frame, so preserve that
+                // origin locally.
+                throw ZLinkRequestFailureMapping.receivedFailure(
+                        ZLinkBackendRequestResult.fromWireTerminal(header.terminalResult())
+                                .toFrameworkErrorKind(header.failureCode()),
+                        "remote Instance Spot request failed: terminal="
+                                + header.terminalResult()
+                                + " failureCode="
+                                + header.failureCode(),
+                        header.failureCode(),
+                        header.failureCode() == ServiceWireConstants.FRAMEWORK_ERROR_SPOT_MOVING
+                                ? ZLinkFrameworkErrorOrigin.frameworkMetadata()
+                                : java.util.Map.of());
+            }
+            if (replies.size() != 2) {
+                throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                        "invalid Instance Spot request reply frame count");
+            }
+            var payload = wire.decodeApplicationPayload(replies.get(1));
+            List<Message> replyParts = decodeApplicationMessages(payload);
+            if (!operations.complete(operationId, replyParts)) {
+                replyParts.forEach(Message::close);
+            }
+        } catch (ZLinkFrameworkException decodeFailure) {
+            operations.completeExceptionally(operationId, decodeFailure);
+        } catch (IllegalArgumentException decodeFailure) {
+            //  A codec/malformed-wire failure (ZLinkServiceWireException and
+            //  friends derive from IllegalArgumentException) means the reply
+            //  can't be processed -> ProtocolError
+            //  (spec 32-framework-error-model:91-92).
+            operations.completeExceptionally(
+                    operationId,
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "remote Instance Spot request reply could not" + " be processed",
+                            decodeFailure));
+        } catch (RuntimeException decodeFailure) {
+            operations.completeExceptionally(operationId, decodeFailure);
+        }
     }
 
     /**
@@ -3457,12 +3470,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             List<Message> parts,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long authorityOwnerGeneration = spots.actorAuthorityOwnerGeneration(actor);
         long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (peer.isEmpty()
+        if (targetNodeGeneration(actor.nodeRid()) == 0
                 || actor.generation() <= 0
                 || authorityOwnerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
@@ -3474,7 +3485,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return requestActor(
                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
                         actor,
-                        peer.orElseThrow().descriptor().lifecycleGeneration(),
+                        targetNodeGeneration(actor.nodeRid()),
                         authorityOwnerGeneration,
                         ownerLeaseGeneration),
                 parts,
@@ -3530,18 +3541,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         try {
             inSourceTurn(
                             () -> {
-                                Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                                        topology == null
-                                                ? Optional.empty()
-                                                : topology.peerFromOwner(actor.nodeRid());
-                                if (peer.isEmpty()) {
-                                    completion.completeExceptionally(
-                                            new ZLinkFrameworkException(
-                                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                    "remote Actor route is not connected"));
-                                    Message.closeAll(frames);
-                                    return CompletableFuture.completedFuture(null);
-                                }
                                 Duration remaining =
                                         ZLinkRequestCalls.remainingTimeout(
                                                 timeout, startedAt, System::nanoTime);
@@ -3550,20 +3549,30 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                 operationId,
                                                 remaining,
                                                 terminal ->
-                                                        port.requestMessagesTo(
-                                                                current,
+                                                        admitRequest(
                                                                 actor.nodeRid(),
-                                                                frames,
-                                                                remaining,
-                                                                replyFrames ->
-                                                                        decodeReply.apply(
-                                                                                decodeActorReply(
-                                                                                        correlation,
-                                                                                        replyFrames)),
-                                                                null,
+                                                                operations,
+                                                                operationId,
+                                                                completion,
                                                                 terminal,
-                                                                null,
-                                                                requestAdmission),
+                                                                frames,
+                                                                requestAdmission,
+                                                                admittedTimeout ->
+                                                                        port.requestMessagesTo(
+                                                                                current,
+                                                                                actor.nodeRid(),
+                                                                                frames,
+                                                                                admittedTimeout,
+                                                                                replyFrames ->
+                                                                                        decodeReply
+                                                                                                .apply(
+                                                                                                        decodeActorReply(
+                                                                                                                correlation,
+                                                                                                                replyFrames)),
+                                                                                null,
+                                                                                terminal,
+                                                                                null,
+                                                                                requestAdmission)),
                                                 discardReply,
                                                 completion)
                                         .whenComplete(
@@ -3929,12 +3938,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 return (Void) null;
                             });
         var submitted =
-                port.request(
-                        requireStarted(),
-                        request.session().sessionOwnerNodeRid(),
-                        List.of(encoded),
-                        timeout,
-                        null);
+                requestApplication(
+                        request.session().sessionOwnerNodeRid(), List.of(encoded), timeout, null);
         var terminal =
                 submitted.thenApply(
                         frames -> {
@@ -4181,7 +4186,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 return reply.clone();
                             });
         }
-        return port.request(requireStarted(), sessionOwnerNodeRid, List.of(record), timeout, null)
+        return requestApplication(sessionOwnerNodeRid, List.of(record), timeout, null)
                 .thenApply(
                         reply -> {
                             if (reply.size() != 1) {
@@ -4251,7 +4256,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                     : topology.peerFromOwner(targetNodeRid);
                     if (peer.isEmpty()
                             || localDescriptor == null
-                            || !isReadyPeer(peer.orElseThrow())
                             || !intent.reservation().targetNodeRid().equals(targetNodeRid)
                             || intent.reservation().targetNodeGeneration()
                                     != peer.orElseThrow().descriptor().lifecycleGeneration()) {
@@ -4325,20 +4329,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     Duration remainingTimeout =
                             ZLinkRequestCalls.remainingTimeout(
                                     timeout, startedAt, System::nanoTime);
-                    Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                            topology == null
-                                    ? Optional.empty()
-                                    : topology.peerFromOwner(targetNodeRid);
-                    if (peer.isEmpty()
-                            || localDescriptor == null
-                            || !isReadyPeer(peer.orElseThrow())) {
+                    if (targetNodeGeneration(targetNodeRid) == 0 || localDescriptor == null) {
                         return CompletableFuture.failedFuture(
                                 new IllegalStateException(
                                         "remote User Spot create target is not connected"));
                     }
                     if (!intent.reservation().targetNodeRid().equals(targetNodeRid)
                             || intent.reservation().targetNodeGeneration()
-                                    != peer.orElseThrow().descriptor().lifecycleGeneration()) {
+                                    != targetNodeGeneration(targetNodeRid)) {
                         return CompletableFuture.failedFuture(
                                 new IllegalStateException(
                                         "remote User Spot create target is not connected"));
@@ -4346,12 +4344,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     ZLinkServiceOperationRegistry.Operation<
                                     ZLinkInternalMeshNode.UserSpotCreateResponse>
                             operation = operations.registerOnOwner(remainingTimeout);
-                    ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
-                    operation
-                            .completion()
-                            .whenComplete(
-                                    (ignored, failure) ->
-                                            terminal.tryWin(completionTerminalCause(failure)));
                     long attemptCorrelation = allocateCorrelation();
                     ZLinkServiceM6BWireCodec.UserSpotCreate command =
                             new ZLinkServiceM6BWireCodec.UserSpotCreate(
@@ -4364,37 +4356,44 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                     intent.stableType(),
                                     intent.reservation(),
                                     intent.deadlineUnixMs());
-                    requestApplication(
-                                    targetNodeRid,
-                                    List.of(statefulWire.encodeUserSpotCreateHeader(command)),
-                                    remainingTimeout,
-                                    null)
-                            .whenComplete(
-                                    (replyFrames, failure) -> {
-                                        RequestResult result = requestTerminal(failure);
-                                        if (!terminal.tryWin(requestTerminalCause(result))) {
-                                            return;
-                                        }
-                                        completeUserSpotCreate(
-                                                operation.id(),
-                                                attemptCorrelation,
-                                                result,
-                                                replyFrames == null ? List.of() : replyFrames);
-                                    });
+                    admitRequest(
+                            targetNodeRid,
+                            operations,
+                            operation.id(),
+                            operation.completion(),
+                            (value, failure) -> {
+                                if (failure != null)
+                                    operations.completeExceptionally(operation.id(), failure);
+                                else operations.complete(operation.id(), value);
+                            },
+                            List.of(),
+                            null,
+                            admittedTimeout ->
+                                    port.requestTo(
+                                            requireStarted(),
+                                            targetNodeRid,
+                                            List.of(
+                                                    statefulWire.encodeUserSpotCreateHeader(
+                                                            command)),
+                                            admittedTimeout,
+                                            null,
+                                            (replyFrames, failure) -> {
+                                                if (failure != null) {
+                                                    operations.completeExceptionally(
+                                                            operation.id(),
+                                                            requestFailure(failure));
+                                                    return;
+                                                }
+                                                completeUserSpotCreate(
+                                                        operation.id(),
+                                                        attemptCorrelation,
+                                                        RequestResult.OK,
+                                                        replyFrames == null
+                                                                ? List.of()
+                                                                : replyFrames);
+                                            }));
                     return operation.completion();
                 });
-    }
-
-    private static ZLinkTerminalWinner.Cause requestTerminalCause(RequestResult result) {
-        return result == RequestResult.OK
-                ? ZLinkTerminalWinner.Cause.RESPONSE
-                : result == RequestResult.TIMED_OUT
-                        ? ZLinkTerminalWinner.Cause.TIMEOUT
-                        : result == RequestResult.TERMINATED
-                                ? ZLinkTerminalWinner.Cause.SHUTDOWN
-                                : result == RequestResult.NOT_CONNECTED
-                                        ? ZLinkTerminalWinner.Cause.DISCONNECT
-                                        : ZLinkTerminalWinner.Cause.FAILURE;
     }
 
     static RequestResult requestTerminal(Throwable failure) {
@@ -4500,18 +4499,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     Duration remainingTimeout =
                             ZLinkRequestCalls.remainingTimeout(
                                     timeout, startedAt, System::nanoTime);
-                    Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                            topology == null
-                                    ? Optional.empty()
-                                    : topology.peerFromOwner(targetNodeRid);
-                    if (peer.isEmpty()
+                    if (targetNodeGeneration(targetNodeRid) == 0
                             || localDescriptor == null
                             || !intent.target().targetNodeRid().equals(targetNodeRid)) {
                         return CompletableFuture.failedFuture(
                                 new IllegalStateException(
                                         "remote User Spot close target is not connected"));
                     }
-                    long peerGeneration = peer.orElseThrow().descriptor().lifecycleGeneration();
+                    long peerGeneration = targetNodeGeneration(targetNodeRid);
                     if (intent.target().targetNodeGeneration() != peerGeneration) {
                         return CompletableFuture.failedFuture(
                                 userSpotCloseTargetMoved(
@@ -4530,25 +4525,42 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                     localDescriptor.lifecycleGeneration(),
                                     intent.target(),
                                     intent.deadlineUnixMs());
-                    ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
-                    port.request(
-                                    requireStarted(),
-                                    targetNodeRid,
-                                    List.of(statefulWire.encodeUserSpotCloseHeader(command)),
-                                    remainingTimeout,
-                                    null)
-                            .whenComplete(
-                                    (replyFrames, failure) -> {
-                                        RequestResult result = requestTerminal(failure);
-                                        if (!terminal.tryWin(requestTerminalCause(result))) {
-                                            return;
-                                        }
-                                        completeUserSpotClose(
-                                                operation.id(),
-                                                correlation,
-                                                result,
-                                                replyFrames == null ? List.of() : replyFrames);
-                                    });
+                    admitRequest(
+                            targetNodeRid,
+                            operations,
+                            operation.id(),
+                            operation.completion(),
+                            (value, failure) -> {
+                                if (failure != null)
+                                    operations.completeExceptionally(operation.id(), failure);
+                                else operations.complete(operation.id(), value);
+                            },
+                            List.of(),
+                            null,
+                            admittedTimeout ->
+                                    port.requestTo(
+                                            requireStarted(),
+                                            targetNodeRid,
+                                            List.of(
+                                                    statefulWire.encodeUserSpotCloseHeader(
+                                                            command)),
+                                            admittedTimeout,
+                                            null,
+                                            (replyFrames, failure) -> {
+                                                if (failure != null) {
+                                                    operations.completeExceptionally(
+                                                            operation.id(),
+                                                            requestFailure(failure));
+                                                    return;
+                                                }
+                                                completeUserSpotClose(
+                                                        operation.id(),
+                                                        correlation,
+                                                        RequestResult.OK,
+                                                        replyFrames == null
+                                                                ? List.of()
+                                                                : replyFrames);
+                                            }));
                     return operation.completion();
                 });
     }
@@ -4980,32 +4992,43 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             operationOwner = operations;
             operationId = ZLinkServiceOperationIds.next();
         }
+        var registry = operationOwner;
+        var requestId = operationId;
         var completion = operationOwner.<ZLinkBackendReceived>prepareOperation(operationId);
         operationOwner
                 .submitTerminal(
                         operationId,
                         timeout,
                         terminal ->
-                                port.requestMessagesTo(
-                                        router,
+                                admitRequest(
                                         target,
-                                        frames,
-                                        timeout,
-                                        replyFrames ->
-                                                decodeRequestReply(
-                                                        target,
-                                                        correlation,
-                                                        RequestResult.OK,
-                                                        replyFrames),
-                                        failure ->
-                                                decodeRequestReply(
-                                                        target,
-                                                        correlation,
-                                                        requestTerminal(failure),
-                                                        List.of()),
+                                        registry,
+                                        requestId,
+                                        completion,
                                         terminal,
-                                        admission,
-                                        requestAdmission),
+                                        frames,
+                                        requestAdmission,
+                                        admittedTimeout ->
+                                                port.requestMessagesTo(
+                                                        router,
+                                                        target,
+                                                        frames,
+                                                        admittedTimeout,
+                                                        replyFrames ->
+                                                                decodeRequestReply(
+                                                                        target,
+                                                                        correlation,
+                                                                        RequestResult.OK,
+                                                                        replyFrames),
+                                                        failure ->
+                                                                decodeRequestReply(
+                                                                        target,
+                                                                        correlation,
+                                                                        requestTerminal(failure),
+                                                                        List.of()),
+                                                        terminal,
+                                                        admission,
+                                                        requestAdmission)),
                         ZLinkBackendReceived::close,
                         completion)
                 .whenComplete(
@@ -5224,9 +5247,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                     pumpSocket,
                                     managementDeadlineNanos(waitStartedAt),
                                     waitStartedAt);
-            // The existing pump remains this ROUTER's one route observer.
-            if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
-                observeSelectedRoutes();
+            // The existing pump observes both snapshots before waking logical admission.
+            if ((ready
+                            & (ZLinkJavaSocketReceivePoller.ROUTE_CHANGED
+                                    | ZLinkJavaSocketReceivePoller.CONNECTION_CHANGED))
+                    != 0) {
+                observeTransportState(ready);
             }
             drainPeerCloseRequests();
             Runnable afterManagement = port.inStateLane(pumpManagement);
@@ -5510,9 +5536,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         recordRotationReceive(source.orElseThrow(), inbound.routeGeneration());
                     if (command == ServiceWireConstants.COMMAND_HELLO
                             || command == ServiceWireConstants.COMMAND_ADMIT
-                            || command == ServiceWireConstants.COMMAND_UPDATE) {
+                            || command == ServiceWireConstants.COMMAND_UPDATE
+                            || command == ServiceWireConstants.COMMAND_REJECT) {
                         afterCommit = dispatchAdmission(inbound, command, head);
-                        publishPeerObservation();
                     }
                 }
             }
@@ -5540,17 +5566,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             int flags = header.flags();
             if (command == ServiceWireConstants.COMMAND_HELLO
                     || command == ServiceWireConstants.COMMAND_ADMIT
-                    || command == ServiceWireConstants.COMMAND_UPDATE) {
+                    || command == ServiceWireConstants.COMMAND_UPDATE
+                    || command == ServiceWireConstants.COMMAND_REJECT) {
                 record.afterCommit().run();
-                return;
-            }
-            if (command == ServiceWireConstants.COMMAND_REJECT) {
-                if (frames.size() == 1) {
-                    try {
-                        wire.decodeReject(head);
-                    } catch (RuntimeException ignored) {
-                    }
-                }
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_LIVENESS_PROBE
@@ -7674,12 +7692,26 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         ? observeSelectedRoutesOnLane()
                         : null;
         if (command == ServiceWireConstants.COMMAND_HELLO
-                || command == ServiceWireConstants.COMMAND_ADMIT) {
+                || command == ServiceWireConstants.COMMAND_ADMIT
+                || command == ServiceWireConstants.COMMAND_REJECT) {
             // A selected route can deliver HELLO before the pump's previous snapshot includes it.
             // Core can also deliver buffered records from an ended pipe (ROUTER §10.1).
             if (!Objects.equals(selectedRoutes.get(sourceRid), inbound.routeGeneration())) {
                 return () -> finishSelectedRouteObservation(routeChanges);
             }
+        }
+        if (command == ServiceWireConstants.COMMAND_REJECT) {
+            if (inbound.frames().size() != 1) return () -> {};
+            try {
+                wire.decodeReject(head);
+            } catch (IllegalArgumentException invalid) {
+                return () -> {};
+            }
+            boolean newlyRejected = rejectedPeers.add(sourceRid);
+            return () -> {
+                finishSelectedRouteObservation(routeChanges);
+                if (newlyRejected) signalStateChanged(sourceRid);
+            };
         }
         if (command == ServiceWireConstants.COMMAND_HELLO && peerAdmissionSealed.getAsBoolean()) {
             return () -> finishSelectedRouteObservation(routeChanges);
@@ -7928,18 +7960,27 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     /**
-     * Reads Core's selected-route snapshot (Core ROUTER §10.1). The receive pump is this socket's
-     * one route observer, so only the pump thread calls this. A RID whose observed route
-     * disappeared or changed generation ends its logical admission; a new RID or generation starts
-     * the service handshake on that route (transport-liveness §5, §6).
+     * Reads Core's route and connection snapshots on their respective readiness events. The receive
+     * pump is this socket's one observer, so only the pump thread calls this. A RID whose observed
+     * route disappeared or changed generation ends its logical admission; a new RID or generation
+     * starts the service handshake on that route (transport-liveness §5, §6).
      */
-    private void observeSelectedRoutes() {
+    void observeTransportState(int readiness) {
         var changes =
                 port.inStateLane(
                         () -> {
-                            var previous = selectedRoutes;
-                            var targets = observeSelectedRoutesOnLane();
-                            if (!previous.equals(selectedRoutes)) publishPeerObservation();
+                            boolean connectionsChanged =
+                                    (readiness & ZLinkJavaSocketReceivePoller.CONNECTION_CHANGED)
+                                            != 0;
+                            if (connectionsChanged)
+                                connectionAttempts =
+                                        List.copyOf(requireStarted().connectionAttemptsSnapshot());
+                            var targets =
+                                    (readiness & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0
+                                            ? observeSelectedRoutesOnLane()
+                                            : List.<RoutingId>of();
+                            if (connectionsChanged)
+                                stateListeners.forEach(observer -> notifyStateChanged(observer));
                             return targets;
                         });
         finishSelectedRouteObservation(changes);
@@ -7964,6 +8005,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 (peerRid, generation) -> {
                     if (!generation.equals(previous.get(peerRid))) changes.add(peerRid);
                 });
+        publishPeerObservation();
         return List.copyOf(changes);
     }
 
@@ -8134,7 +8176,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 disconnected.add(peer);
             }
         }
-        if (disconnected != null) publishPeerObservation();
         List<RoutingId> targets = disconnected == null ? List.of() : List.copyOf(disconnected);
         return () -> {
             for (var exchange : submissions) {
@@ -8248,24 +8289,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 observation.ready().contains(peerRid));
     }
 
-    private PeerRouteObservation observePeerRouteFromOwner(RoutingId peerRid) {
-        var peer = topology == null ? null : topology.peerOrNullFromOwner(peerRid);
-        return peerRouteObservation(
-                peerRid, selectedRoutes, peer, peer != null && isReadyPeer(peer));
-    }
-
     private static PeerRouteObservation peerRouteObservation(
             RoutingId peerRid,
             Map<RoutingId, Long> routes,
             ZLinkServiceTopologyRegistry.Peer peer,
             boolean admitted) {
         long generation = routes.getOrDefault(peerRid, 0L);
-        boolean ready =
-                generation != 0
-                        && peer != null
-                        && Long.parseUnsignedLong(peer.connectionId(), 16) == generation
-                        && admitted;
-        return new PeerRouteObservation(generation, ready);
+        return new PeerRouteObservation(generation, peerRouteReady(generation, peer, admitted));
+    }
+
+    private static boolean peerRouteReady(
+            long generation, ZLinkServiceTopologyRegistry.Peer peer, boolean admitted) {
+        return generation != 0
+                && peer != null
+                && Long.parseUnsignedLong(peer.connectionId(), 16) == generation
+                && admitted;
     }
 
     private Map.Entry<Long, PeerIntent> findExpectedPeer(
@@ -8334,7 +8372,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return ZLinkJavaDurableRequest.request(
                 () -> {
                     requireStarted();
-                    return prepare.get();
+                    var frames = prepare.get();
+                    if (frames == null)
+                        throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                "remote request target fence is no longer valid");
+                    return frames;
                 },
                 (frames, remaining, bindingAdmission, terminal) ->
                         port.requestTo(
@@ -8345,22 +8388,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 decodeReply,
                                 bindingAdmission,
                                 terminal),
-                () -> observePeerRouteFromOwner(target),
+                () -> observePeerRoute(target),
                 (changed, ended) -> onPeerStateChanged(target, changed, ended),
-                action -> {
-                    if (transportStateLane.isOnLane()) {
-                        action.run();
-                        return CompletableFuture.completedStage(null);
-                    }
-                    return transportStateLane.runNowOrQueue(
-                            () -> {
-                                action.run();
-                                return null;
-                            });
-                },
+                this::runAdmissionTurn,
                 timeout,
                 operations,
-                admission);
+                admission,
+                () -> connectionAttemptsFor(target));
     }
 
     private CompletionStage<List<byte[]>> requestApplication(
@@ -8368,9 +8402,89 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             List<byte[]> frames,
             Duration timeout,
             CompletableFuture<Void> requestAdmission) {
-        CompletionStage<List<byte[]>> submission =
-                port.request(requireStarted(), target, frames, timeout, requestAdmission);
-        return submission;
+        return requestDurable(
+                target,
+                () -> frames,
+                timeout,
+                messages -> messages.stream().map(Message::toByteArray).toList(),
+                requestAdmission);
+    }
+
+    // Written only by this socket's existing receive observer on the transport owner lane.
+    private List<ConnectionAttempt> connectionAttempts = List.of();
+
+    private List<ConnectionAttempt> connectionAttemptsFor(RoutingId target) {
+        var expectation = peerAdmissionExpectations.get(target);
+        return connectionAttempts.stream()
+                .filter(
+                        attempt ->
+                                expectation != null
+                                        ? expectation.endpoint().equals(attempt.endpoint())
+                                        : matchesConnectionIntent(target, attempt.endpoint()))
+                .toList();
+    }
+
+    private boolean matchesConnectionIntent(RoutingId target, String endpoint) {
+        for (var entry : peerIntents.entrySet()) {
+            if ((target.equals(entry.getValue().expectedRoutingId())
+                            || target.equals(peerIntentRoutingIds.get(entry.getKey())))
+                    && endpoint.equals(entry.getValue().endpoint())) return true;
+        }
+        return false;
+    }
+
+    private CompletionStage<Void> runAdmissionTurn(Runnable action) {
+        if (transportStateLane.isOnLane()) {
+            action.run();
+            return CompletableFuture.completedStage(null);
+        }
+        return transportStateLane.runNowOrQueue(
+                () -> {
+                    action.run();
+                    return null;
+                });
+    }
+
+    private <T> CompletionStage<?> admitRequest(
+            RoutingId target,
+            ZLinkServiceOperationRegistry registry,
+            UUID id,
+            CompletionStage<T> caller,
+            BiConsumer<T, Throwable> terminal,
+            List<Message> frames,
+            CompletableFuture<Void> requestAdmission,
+            Function<Duration, CompletionStage<?>> submit) {
+        if (requestAdmission != null)
+            caller.whenComplete(
+                    (reply, failure) -> {
+                        if (failure != null) requestAdmission.completeExceptionally(failure);
+                    });
+        return ZLinkJavaDurableRequest.attempt(
+                List::of,
+                (ignored, remaining, admission, completed) -> submit.apply(remaining),
+                () -> observePeerRoute(target),
+                () -> connectionAttemptsFor(target),
+                (changed, ended) -> onPeerStateChanged(target, changed, ended),
+                this::runAdmissionTurn,
+                registry,
+                id,
+                terminal,
+                requestAdmission,
+                caller,
+                () -> Message.closeAll(frames));
+    }
+
+    private long targetNodeGeneration(RoutingId target) {
+        var peer = topology == null ? null : topology.peerOrNullFromOwner(target);
+        if (peer != null) return peer.descriptor().lifecycleGeneration();
+        var expected = peerAdmissionExpectations.get(target);
+        if (expected != null) return expected.lifecycleGeneration();
+        return peerIntents.values().stream()
+                .filter(intent -> target.equals(intent.expectedRoutingId()))
+                .mapToLong(PeerIntent::expectedLifecycleGeneration)
+                .filter(value -> value != 0)
+                .findFirst()
+                .orElse(0);
     }
 
     private record PeerCloseRequest(long connectionIntentId, String endpoint) {}
