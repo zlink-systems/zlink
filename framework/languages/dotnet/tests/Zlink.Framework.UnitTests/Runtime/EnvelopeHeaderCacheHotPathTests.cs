@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Reflection;
 using System.Text.Json;
 using Zlink.Framework.Runtime.Execution;
@@ -106,8 +105,8 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             );
         }
 
-        Assert.True(((IDictionary)Field("SimpleHeaderCache")).Count <= 4096);
-        Assert.True(((Array)Field("DecodedHeaderCache")).Length <= 64);
+        Assert.True(ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders <= 4096);
+        Assert.True(ZLinkEnvelopeCodec.SnapshotCacheCounts().DecodedHeaders <= 64);
         using var replacement = ZLinkEnvelopeCodec.EncodeHeader(Header("cache-first"));
         Assert.Equal(first.ToArray(), replacement.ToArray());
         Assert.Equal("cache-first", ZLinkEnvelopeCodec.DecodeHeader(replacement).MessageName);
@@ -123,8 +122,8 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             CorrelationId = "warm",
         };
         using var warm = ZLinkEnvelopeCodec.EncodeHeader(header);
-        var count = ((IDictionary)Field("SimpleHeaderCache")).Count;
-        var decodedCount = ((Array)Field("DecodedHeaderCache")).Length;
+        var count = ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders;
+        var decodedCount = ZLinkEnvelopeCodec.SnapshotCacheCounts().DecodedHeaders;
         for (var index = 0; index < 128; index++)
         {
             var current = header with
@@ -141,8 +140,8 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             );
         }
 
-        Assert.Equal(count, ((IDictionary)Field("SimpleHeaderCache")).Count);
-        Assert.Equal(decodedCount, ((Array)Field("DecodedHeaderCache")).Length);
+        Assert.Equal(count, ZLinkEnvelopeCodec.SnapshotCacheCounts().SimpleHeaders);
+        Assert.Equal(decodedCount, ZLinkEnvelopeCodec.SnapshotCacheCounts().DecodedHeaders);
     }
 
     [Fact]

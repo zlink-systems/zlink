@@ -103,6 +103,7 @@ final class ZLinkJavaRawMeshNodeHeaderAccessTest {
                 var record = new Record(update)) {
             set(node, "localDescriptor", local);
             set(node, "topology", topology);
+            topology.observeChanges(node::publishPeerObservation);
             dispatch(node, record);
             record.assertClosed();
             assertEquals(
@@ -211,7 +212,9 @@ final class ZLinkJavaRawMeshNodeHeaderAccessTest {
         var node = new ZLinkJavaRawMeshNode(context, "header");
         var local = descriptor(RoutingId.from("header-local"), 1);
         set(node, "localDescriptor", local);
-        set(node, "topology", new ZLinkServiceTopologyRegistry(local));
+        var topology = new ZLinkServiceTopologyRegistry(local);
+        set(node, "topology", topology);
+        topology.observeChanges(node::publishPeerObservation);
         return node;
     }
 

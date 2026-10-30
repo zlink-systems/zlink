@@ -6,7 +6,12 @@
 // the off mode (dispatch_error_reporter_t). Tests install an application logger;
 // a runtime without a configured logger must not write to a process console.
 
+#include "../support/telemetry_observation.hpp"
+#include "../support/allocation_counter.hpp"
+
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "metric_test_reader.hpp"
+#include <set>
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
@@ -16,6 +21,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -37,16 +44,40 @@ using zlink::framework::detail::message_flow_tracer_t;
 constexpr auto error_message_max_length =
   zlink::framework::detail::diagnostic_event_sink_t::error_message_max_length;
 
-thread_local std::string *captured_logs = nullptr;
+struct log_capture_t
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::string text;
+    std::size_t records = 0;
+};
+std::atomic<std::shared_ptr<log_capture_t>> captured_logs;
+// Some legacy cases construct temporary standalone options. Keep their registration
+// until the acknowledged record below has bounded every preceding observation.
+std::vector<dispatch_options_t> retained_test_options;
+std::uint64_t captured_trace_attempts = 0;
+
+using zlink::framework::test::acknowledge_delivery;
 
 template <typename Fn> std::string capture_logs (Fn &&fn)
 {
-    std::string captured;
-    auto *previous = captured_logs;
-    captured_logs = &captured;
+    auto capture = std::make_shared<log_capture_t> ();
+    auto previous = captured_logs.exchange (capture);
+    const auto before = message_flow_tracer_t::traced () + dispatch_error_reporter_t::reported ();
     std::forward<Fn> (fn) ();
-    captured_logs = previous;
-    return captured;
+    captured_trace_attempts = message_flow_tracer_t::traced ();
+    const auto expected = captured_trace_attempts + dispatch_error_reporter_t::reported () - before;
+    {
+        std::unique_lock lock (capture->mutex);
+        if (!capture->changed.wait_for (lock, std::chrono::milliseconds (500),
+                                        [&] { return capture->records >= expected; }))
+            throw std::runtime_error ("log record acknowledgment timed out");
+    }
+    acknowledge_delivery ();
+    captured_logs.store (previous);
+    retained_test_options.clear ();
+    std::lock_guard lock (capture->mutex);
+    return capture->text;
 }
 
 dispatch_options_t options_with_mode (message_flow_log_mode_t mode)
@@ -55,16 +86,20 @@ dispatch_options_t options_with_mode (message_flow_log_mode_t mode)
     options.message_flow (mode);
     logging_builder_t logging;
     logging.use_provider ("message-flow-test", [] (const log_record_t &record) {
-        if (captured_logs == nullptr)
+        auto capture = captured_logs.load ();
+        if (!capture)
             return;
-        *captured_logs += "zlink flow:";
-        for (const auto &field : record.fields) {
-            *captured_logs += " " + field.key + "=" + field.value;
-        }
-        captured_logs->push_back ('\n');
+        std::lock_guard lock (capture->mutex);
+        capture->text += "zlink flow:";
+        for (const auto &field : record.fields)
+            capture->text += " " + field.key + "=" + field.value;
+        capture->text.push_back ('\n');
+        ++capture->records;
+        capture->changed.notify_all ();
     });
     zlink::framework::detail::dispatch_options_access_t::set_logger (
       options, logging.create_logger ("message-flow-test"));
+    retained_test_options.push_back (options);
     return options;
 }
 
@@ -143,12 +178,12 @@ bool file_provider_failure_does_not_change_message_result ()
     options.message_flow (message_flow_log_mode_t::normal);
     zlink::framework::detail::dispatch_options_access_t::set_logger (
       options, app.logging ().factory ().create ("message-flow-test"));
-    std::atomic_bool observed_success{false};
+    auto observed_success = std::make_shared<std::atomic_bool> (false);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-      options, [&] (const message_flow_event_t &event) {
+      options, [observed_success] (const message_flow_event_t &event) {
           if (event.outcome == message_flow_outcome_t::completed
               && event.result == message_flow_result_t::succeeded) {
-              observed_success.store (true, std::memory_order_release);
+              observed_success->store (true, std::memory_order_release);
           }
       });
 
@@ -160,7 +195,7 @@ bool file_provider_failure_does_not_change_message_result ()
         return message_flow_result_t::succeeded;
     }();
     const bool observer_received_success =
-      wait_until ([&] { return observed_success.load (std::memory_order_acquire); });
+      wait_until ([&] { return observed_success->load (std::memory_order_acquire); });
     const auto failures_after = message_flow_tracer_t::observer_failures ();
     std::error_code cleanup_error;
     fs::remove_all (failed_log_path, cleanup_error);
@@ -176,11 +211,12 @@ int dispatch_error_observer_failures_preserve_operation ()
     bool passed = true;
     for (const bool factory_failure : {false, true}) {
         auto options = options_with_mode (message_flow_log_mode_t::normal);
-        unsigned observer_calls = 0;
+        auto observation = std::make_shared<unsigned> (0);
+        auto &observer_calls = *observation;
         unsigned factory_calls = 0;
         zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-          options, [&] (const auto &) {
-              ++observer_calls;
+          options, [observation, factory_failure] (const auto &) {
+              ++*observation;
               if (!factory_failure)
                   throw std::runtime_error ("dispatch observer failed");
           });
@@ -198,6 +234,7 @@ int dispatch_error_observer_failures_preserve_operation ()
                                                               "operation rejected")
                                    : result_t<void>::success ();
         }();
+        acknowledge_delivery ();
         const auto delta = dispatch_error_reporter_t::observer_failures () - before;
         const bool unchanged =
           factory_failure
@@ -230,28 +267,34 @@ int dispatch_error_logger_failures_preserve_operation ()
         }
         app_t app;
         logging_builder_t logging;
-        unsigned provider_calls = 0;
-        unsigned observer_calls = 0;
+        struct counts_t
+        {
+            unsigned provider = 0, observer = 0;
+        };
+        auto counts = std::make_shared<counts_t> ();
+        auto &provider_calls = counts->provider;
+        auto &observer_calls = counts->observer;
         auto options = options_with_mode (message_flow_log_mode_t::normal);
         if (file_failure) {
             app.logging ().use_file (failed_log_path.string ());
             zlink::framework::detail::dispatch_options_access_t::set_logger (
               options, app.logging ().factory ().create ("dispatch-file-failure"));
         } else {
-            logging.use_provider ("throwing-dispatch-provider", [&] (const log_record_t &) {
-                ++provider_calls;
+            logging.use_provider ("throwing-dispatch-provider", [counts] (const log_record_t &) {
+                ++counts->provider;
                 throw std::runtime_error ("dispatch logging provider failed");
             });
             zlink::framework::detail::dispatch_options_access_t::set_logger (
               options, logging.create_logger ("dispatch-provider-failure"));
         }
         zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-          options, [&] (const auto &) { ++observer_calls; });
+          options, [counts] (const auto &) { ++counts->observer; });
         const auto before = dispatch_error_reporter_t::observer_failures ();
         const auto operation_result = [&] {
             dispatch_error_reporter_t (options).report (error_event ());
             return message_flow_result_t::succeeded;
         }();
+        acknowledge_delivery ();
         const auto delta = dispatch_error_reporter_t::observer_failures () - before;
         const bool unchanged = operation_result == message_flow_result_t::succeeded;
         std::error_code cleanup_error;
@@ -297,10 +340,19 @@ int errors_flow_owner ()
                 const auto expected_id = explicit_pair ? explicit_id : ambient_id;
                 const auto expected_origin =
                   explicit_pair ? flow_origin_t::timer : flow_origin_t::application;
-                unsigned error_calls = 0;
-                bool error_fields = true;
+                struct observation_t
+                {
+                    unsigned calls = 0;
+                    bool fields = true;
+                };
+                auto error_observation = std::make_shared<observation_t> ();
+                auto &error_calls = error_observation->calls;
+                auto &error_fields = error_observation->fields;
                 access::set_dispatch_error_observer_for_tests (
-                  options, [&] (const message_dispatch_error_event_t &event) {
+                  options, [error_observation, traces, expected_id,
+                            expected_origin] (const message_dispatch_error_event_t &event) {
+                      auto &error_calls = error_observation->calls;
+                      auto &error_fields = error_observation->fields;
                       ++error_calls;
                       error_fields = event.correlation_id == "corr-123"
                                      && (traces ? event.flow_id == expected_id
@@ -338,14 +390,18 @@ int errors_flow_owner ()
                 for (const bool explicit_session : {false, true}) {
                     // Exercise each stamp_flow caller without sampling errors or drops.
                     for (int entry = 0; entry != 4; ++entry) {
-                        unsigned calls = 0;
-                        bool fields = true;
+                        auto observation = std::make_shared<observation_t> ();
+                        auto &calls = observation->calls;
+                        auto &fields = observation->fields;
                         const auto expected_session =
                           explicit_session ? std::optional<std::string>{"own-session"}
                           : traces         ? std::optional<std::string>{"foreign-session"}
                                            : std::nullopt;
                         access::set_observer_for_tests (
-                          options, [&] (const message_flow_event_t &event) {
+                          options, [observation, expected_session, traces, expected_id,
+                                    expected_origin] (const message_flow_event_t &event) {
+                              auto &calls = observation->calls;
+                              auto &fields = observation->fields;
                               ++calls;
                               fields = event.outcome == message_flow_outcome_t::dropped
                                        && event.correlation_id == "corr-123"
@@ -382,7 +438,7 @@ int errors_flow_owner ()
                         const bool ok =
                           calls == unsigned (emits) && fields
                           && builds == unsigned (entry == 0 || emits)
-                          && message_flow_tracer_t::traced () - before == unsigned (emits)
+                          && captured_trace_attempts - before == unsigned (emits)
                           && occurrences (log, "event_id=zlink.message_flow") == unsigned (emits)
                           && occurrences (log, "phase=dropped") == unsigned (emits)
                           && occurrences (log, "corr=corr-123") == unsigned (emits)
@@ -409,8 +465,417 @@ int errors_flow_owner ()
     return passed ? 0 : 1;
 }
 
+template <typename T> struct release_provider_t
+{
+    std::shared_ptr<T> state;
+    ~release_provider_t ()
+    {
+        std::lock_guard lock (state->mutex);
+        state->release = true;
+        state->changed.notify_all ();
+    }
+};
+
+int blocked_public_provider (bool reporter = false)
+{
+    struct state_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool entered = false;
+        bool release = false;
+        bool completed = false;
+    };
+    auto state = std::make_shared<state_t> ();
+    logging_builder_t logging;
+    logging.use_provider ("blocked-public-provider", [state] (const log_record_t &) {
+        std::unique_lock lock (state->mutex);
+        state->entered = true;
+        state->changed.notify_all ();
+        state->changed.wait (lock, [&] { return state->release; });
+    });
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::normal);
+    detail::dispatch_options_access_t::set_logger (options, logging.create_logger ("blocked"));
+    std::thread producer ([&] {
+        if (reporter)
+            dispatch_error_reporter_t (options).report (error_event ());
+        else
+            message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::received));
+        std::lock_guard lock (state->mutex);
+        state->completed = true;
+        state->changed.notify_all ();
+    });
+    struct join_t
+    {
+        std::thread &producer;
+        ~join_t ()
+        {
+            if (producer.joinable ())
+                producer.join ();
+        }
+    } join{producer};
+    release_provider_t release{state};
+    bool entered, progressed;
+    {
+        std::unique_lock lock (state->mutex);
+        const auto budget = std::chrono::milliseconds (500); // Existing wait_until fixture budget.
+        entered = state->changed.wait_for (lock, budget, [&] { return state->entered; });
+        progressed = state->changed.wait_for (lock, budget, [&] { return state->completed; });
+        state->release = true;
+        state->changed.notify_all ();
+    }
+    producer.join ();
+    std::cout << "blocked_public_provider reporter=" << reporter << " entered=" << entered
+              << " producer_completed_before_release=" << progressed << std::endl;
+    return entered && progressed ? 0 : 81;
+}
+
+int bounded_process_delivery (bool retire_first, int waiting = 8192)
+{
+    using access = detail::dispatch_options_access_t;
+    struct state_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool entered = false, release = false, produced = false;
+        std::vector<std::string> ids;
+    };
+    auto state = std::make_shared<state_t> ();
+    release_provider_t release{state};
+    metric_test::provider_t metrics;
+    auto provider = metrics.api ();
+    auto meter = provider->GetMeter ("zlink.framework");
+    auto first = std::make_unique<dispatch_options_t> ();
+    auto second = std::make_unique<dispatch_options_t> ();
+    logging_builder_t logging;
+    logging.disable_record_capture ().use_provider (
+      "bounded-process-delivery", [state] (const log_record_t &record) {
+          std::unique_lock lock (state->mutex);
+          if (!state->entered) {
+              state->entered = true;
+              state->changed.notify_all ();
+              state->changed.wait (lock, [&] { return state->release; });
+          }
+          for (const auto &field : record.fields)
+              if (field.key == "corr")
+                  state->ids.push_back (field.value);
+          state->changed.notify_all ();
+      });
+    for (auto *options : {first.get (), second.get ()}) {
+        options->message_flow (message_flow_log_mode_t::normal);
+        access::set_logger (*options, logging.create_logger ("bounded"));
+        access::bind_telemetry (*options, provider, meter);
+    }
+    auto submit = [] (dispatch_options_t &options, int index, std::string id) {
+        if (index % 3 == 1) {
+            auto event = error_event ();
+            event.correlation_id = std::move (id);
+            dispatch_error_reporter_t (options).report (std::move (event));
+        } else {
+            auto event = flow_event (index % 3 == 0 ? message_flow_outcome_t::received
+                                                    : message_flow_outcome_t::dropped);
+            event.correlation_id = std::move (id);
+            message_flow_tracer_t (options).trace (std::move (event));
+        }
+    };
+    const auto before = message_flow_tracer_t::observer_dropped ();
+    submit (*first, 0, "inflight-A");
+    bool entered;
+    {
+        std::unique_lock lock (state->mutex);
+        entered = state->changed.wait_for (lock, std::chrono::milliseconds (500),
+                                           [&] { return state->entered; });
+    }
+    // Both registrations share the spec's process limit, excluding the executing record.
+    std::thread producer ([&] {
+        for (int index = 0; index != waiting; ++index)
+            submit (index % 2 == 0 ? *first : *second, index, std::to_string (index));
+        for (int index = 0; index != 3; ++index)
+            submit (index % 2 == 0 ? *first : *second, index, "overflow-" + std::to_string (index));
+        std::lock_guard lock (state->mutex);
+        state->produced = true;
+        state->changed.notify_all ();
+    });
+    struct join_t
+    {
+        std::thread &producer;
+        std::shared_ptr<state_t> state;
+        ~join_t ()
+        {
+            if (!producer.joinable ())
+                return;
+            {
+                std::lock_guard lock (state->mutex);
+                state->release = true;
+                state->changed.notify_all ();
+            }
+            producer.join ();
+        }
+    } join{producer, state};
+    bool producer_completed;
+    {
+        std::unique_lock lock (state->mutex);
+        producer_completed = state->changed.wait_for (lock, std::chrono::milliseconds (500),
+                                                      [&] { return state->produced; });
+        if (!producer_completed) {
+            state->release = true;
+            state->changed.notify_all ();
+        }
+    }
+    producer.join ();
+    const auto overflow = message_flow_tracer_t::observer_dropped () - before;
+    // Host metric attachment must preserve the registration and its already queued records.
+    access::bind_telemetry (*first, provider, meter);
+    if (retire_first) {
+        access::retire_telemetry (*first);
+        access::retire_telemetry (*first); // Normal close and destruction may both retire.
+        submit (*first, 0, "closed-A");
+        submit (*second, 0, "surviving-B");
+        first.reset ();
+        second->message_flow (message_flow_log_mode_t::off); // Metrics remain enabled.
+    }
+    {
+        std::lock_guard lock (state->mutex);
+        state->release = true;
+        state->changed.notify_all ();
+    }
+    const auto expected = retire_first ? waiting / 2 + 2 : waiting + 1;
+    bool delivered;
+    {
+        std::unique_lock lock (state->mutex);
+        delivered = state->changed.wait_for (lock, std::chrono::milliseconds (500), [&] {
+            return state->ids.size () >= std::size_t (expected);
+        });
+    }
+    acknowledge_delivery ();
+    bool ids_ok;
+    {
+        std::lock_guard lock (state->mutex);
+        const std::set<std::string> ids (state->ids.begin (), state->ids.end ());
+        ids_ok = state->ids.size () == std::size_t (expected) && ids.size () == state->ids.size ()
+                 && ids.contains ("inflight-A") && !ids.contains ("closed-A");
+        for (int index = 0; index != waiting; ++index)
+            ids_ok =
+              ids_ok && ids.contains (std::to_string (index)) == (!retire_first || index % 2 == 1);
+        for (int index = 0; index != 3; ++index)
+            ids_ok = ids_ok && !ids.contains ("overflow-" + std::to_string (index));
+        if (retire_first)
+            ids_ok = ids_ok && ids.contains ("surviving-B");
+    }
+    double exported = 0;
+    for (const auto &fields : metrics.collect_fields ())
+        if (fields.at ("name") == "zlink.observability.events.overflow"
+            && fields.at ("unit") == "{event}" && fields.at ("source") == "message_flow")
+            exported += std::stod (fields.at ("value"));
+    const bool passed = entered && producer_completed && delivered && overflow == 3 && ids_ok
+                        && exported == 3
+                        && message_flow_tracer_t::observer_dropped () - before == 3;
+    std::cout << "bounded_process_delivery retire=" << retire_first << " entered=" << entered
+              << " producer_completed_before_release=" << producer_completed
+              << " overflow=" << overflow << " metric=" << exported
+              << " delivered=" << state->ids.size () << " expected=" << expected
+              << " exact_ids=" << ids_ok << " passed=" << passed << std::endl;
+    return passed ? 0 : 82;
+}
+
+int frozen_process_capture (bool wrong_capture = false)
+{
+    using access = detail::dispatch_options_access_t;
+    struct state_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool entered = false, release = false;
+        std::vector<log_record_t> records;
+    };
+    auto state = std::make_shared<state_t> ();
+    release_provider_t release{state};
+    logging_builder_t logging;
+    logging.use_provider ("frozen-process-capture", [state] (const log_record_t &record) {
+        std::unique_lock lock (state->mutex);
+        if (!state->entered) {
+            state->entered = true;
+            state->changed.notify_all ();
+            state->changed.wait (lock, [&] { return state->release; });
+        }
+        state->records.push_back (record);
+    });
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::detailed).include_message_sizes (true);
+    auto live =
+      std::make_shared<std::atomic<message_flow_log_mode_t>> (message_flow_log_mode_t::detailed);
+    access::set_live_mode (options, live);
+    access::set_logger (options, logging.create_logger ("frozen"));
+    message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::received));
+    bool entered;
+    {
+        std::unique_lock lock (state->mutex);
+        entered = state->changed.wait_for (lock, std::chrono::milliseconds (500),
+                                           [&] { return state->entered; });
+    }
+    struct owned_exception_t : std::runtime_error
+    {
+        std::shared_ptr<int> owner;
+        explicit owned_exception_t (std::shared_ptr<int> owner) :
+            std::runtime_error ("token=secret\nprivate"), owner (std::move (owner))
+        {
+        }
+    };
+    std::weak_ptr<int> exception_owner;
+    {
+        auto scope = runtime::flow_context_t::enter (
+          std::optional<std::string>{wrong_capture ? "019a1234-5678-7000-8000-000000000099"
+                                                   : "019a1234-5678-7000-8000-000000000001"},
+          flow_origin_t::application, message_flow_log_mode_t::normal, flow_origin_t::inbound,
+          std::string ("frozen-session"));
+        auto event = flow_event (message_flow_outcome_t::completed);
+        event.result = message_flow_result_t::failed;
+        auto owner = std::make_shared<int> (2758);
+        exception_owner = owner;
+        event.exception = std::make_exception_ptr (owned_exception_t (owner));
+        message_flow_tracer_t (options).trace (std::move (event));
+        live->store (message_flow_log_mode_t::errors);
+        auto error = error_event ();
+        error.flow_id = "019a1234-5678-7000-8000-000000000002";
+        error.flow_origin = flow_origin_t::timer;
+        dispatch_error_reporter_t (options).report (std::move (error));
+    }
+    const bool exception_released = exception_owner.expired ();
+    options.include_message_sizes (false);
+    live->store (message_flow_log_mode_t::off);
+    {
+        std::lock_guard lock (state->mutex);
+        state->release = true;
+        state->changed.notify_all ();
+    }
+    acknowledge_delivery ();
+    std::string flow, error;
+    for (const auto &record : state->records) {
+        auto &out = record.message == "dispatch error" ? error : flow;
+        for (const auto &field : record.fields)
+            out += " " + field.key + "=" + field.value;
+    }
+    const bool passed = entered && exception_released && state->records.size () == 3
+                        && contains (flow, " flow=019a1234-5678-7000-8000-000000000001")
+                        && contains (flow, " origin=application")
+                        && contains (flow, " session=frozen-session") && contains (flow, " size=42")
+                        && contains (flow, " error_message=token=<redacted>")
+                        && !contains (flow, "secret") && !contains (flow, "private")
+                        && contains (error, " corr=corr-123") && !contains (error, " flow=")
+                        && !contains (error, " origin=");
+    std::cout << "frozen_process_capture records=" << state->records.size ()
+              << " exception_released=" << exception_released << " passed=" << passed << std::endl;
+    return passed ? 0 : 83;
+}
+
+int process_failure_roles (bool fallback_fails)
+{
+    struct state_t
+    {
+        std::atomic_uint logger{0}, trace{0};
+    };
+    auto state = std::make_shared<state_t> ();
+    const auto before = message_flow_tracer_t::observer_failures ();
+    constexpr unsigned records_per_host = 3;
+    for (unsigned host = 0; host != 2; ++host) {
+        logging_builder_t logging;
+        logging.use_provider ("failing-provider-role", [state] (const log_record_t &) {
+            ++state->logger;
+            throw std::runtime_error ("logger failure");
+        });
+        dispatch_options_t options;
+        options.message_flow (message_flow_log_mode_t::normal);
+        detail::dispatch_options_access_t::set_logger (options,
+                                                       logging.create_logger ("failure-role"));
+        detail::dispatch_options_access_t::set_observer_for_tests (options, [state] (const auto &) {
+            ++state->trace;
+            throw std::runtime_error ("trace failure");
+        });
+        for (unsigned index = 0; index != records_per_host; ++index)
+            message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::received));
+        acknowledge_delivery ();
+    }
+    const auto failures = message_flow_tracer_t::observer_failures () - before;
+    const bool passed = state->logger == 2 * records_per_host
+                        && state->trace == 2 * records_per_host
+                        && failures == 4 * records_per_host + unsigned (fallback_fails);
+    std::cout << "process_failure_roles logger=" << state->logger << " trace=" << state->trace
+              << " failures=" << failures
+              << " expected=" << 4 * records_per_host + unsigned (fallback_fails)
+              << " passed=" << passed << std::endl;
+    return passed ? 0 : 84;
+}
+
+// Provider absence must gate capture and both lazy builders before allocation.
+int no_provider_capture ()
+{
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::detailed);
+    unsigned built = 0;
+    bool capture = false;
+    bool reporter = false;
+    const auto allocations = zlink::framework::tests::count_allocations ([&] {
+        detail::dispatch_options_access_t::set_logger (options, std::nullopt);
+        detail::dispatch_options_access_t::set_observer_for_tests (options, {});
+        detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (options, {});
+        message_flow_tracer_t tracer (options);
+        capture = tracer.capture_enabled ();
+        reporter = dispatch_error_reporter_t (options).enabled ();
+        if (capture) {
+            ++built;
+            const std::string snapshot (1024, 's');
+            if (snapshot.empty ())
+                ++built;
+        }
+        tracer.trace (message_flow_outcome_t::received, [&] {
+            ++built;
+            return flow_event (message_flow_outcome_t::received);
+        });
+        dispatch_error_reporter_t (options).report_lazy ([&] {
+            ++built;
+            return error_event ();
+        });
+    });
+    std::cout << "no_provider allocations=" << allocations << " built=" << built
+              << " capture=" << capture << " reporter=" << reporter << '\n';
+    if (allocations != 0 || built != 0 || capture || reporter) {
+        std::cerr << "no-provider capture must not build or allocate telemetry\n";
+        return 91;
+    }
+    return 0;
+}
+
 int main (int argc, char **argv)
 {
+    if (const auto result = no_provider_capture (); result != 0)
+        return result;
+    if (argc == 2 && std::string (argv[1]) == "--no-provider")
+        return 0;
+    if (argc == 2 && std::string (argv[1]) == "--negative-overflow-control")
+        return bounded_process_delivery (false, 8191);
+    if (argc == 2 && std::string (argv[1]) == "--negative-capture-control")
+        return frozen_process_capture (true);
+    if (argc == 2 && std::string (argv[1]) == "--failure-roles")
+        return process_failure_roles (false);
+    if (argc == 2 && std::string (argv[1]) == "--failed-fallback")
+        return process_failure_roles (true);
+    if (argc == 2 && std::string (argv[1]) == "--bounded-process")
+        return bounded_process_delivery (false);
+    if (argc == 2 && std::string (argv[1]) == "--retire-process")
+        return bounded_process_delivery (true);
+    if (argc == 2 && std::string (argv[1]) == "--frozen-capture")
+        return frozen_process_capture ();
+    if (argc == 2 && std::string (argv[1]) == "--blocked-reporter")
+        return blocked_public_provider (true);
+    if (argc == 2 && std::string (argv[1]) == "--blocked-provider")
+        return blocked_public_provider ();
+    if (argc == 1) {
+        if (const auto result = blocked_public_provider (); result != 0)
+            return result;
+        if (const auto result = blocked_public_provider (true); result != 0)
+            return result;
+    }
     if (argc == 2 && std::string (argv[1]) == "--errors-flow-owner")
         return errors_flow_owner ();
     if (argc == 2 && std::string (argv[1]) == "--logger-failures")
@@ -422,6 +887,12 @@ int main (int argc, char **argv)
     if (const auto result = dispatch_error_observer_failures_preserve_operation (); result != 0)
         return result;
     if (const auto result = dispatch_error_logger_failures_preserve_operation (); result != 0)
+        return result;
+    if (const auto result = bounded_process_delivery (false); result != 0)
+        return result;
+    if (const auto result = bounded_process_delivery (true); result != 0)
+        return result;
+    if (const auto result = frozen_process_capture (); result != 0)
         return result;
     // off silences every success transition, including drops.
     {
@@ -608,9 +1079,11 @@ int main (int argc, char **argv)
            + std::string (error_message_max_length + 1, 'x'))
             .substr (0, error_message_max_length);
         auto options = options_with_mode (message_flow_log_mode_t::errors);
-        std::optional<message_dispatch_error_event_t> observed;
+        auto observation = std::make_shared<std::optional<message_dispatch_error_event_t>> ();
+        auto &observed = *observation;
         zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-          options, [&] (const message_dispatch_error_event_t &event) { observed = event; });
+          options,
+          [observation] (const message_dispatch_error_event_t &event) { *observation = event; });
         const auto out = capture_logs ([&] {
             dispatch_error_reporter_t (options).report (message_dispatch_error_event_t{
               .surface = dispatch_error_surface_t::channel,
@@ -641,9 +1114,11 @@ int main (int argc, char **argv)
     // Empty exception messages remain present in both observer and log projections.
     {
         auto options = options_with_mode (message_flow_log_mode_t::errors);
-        std::optional<message_dispatch_error_event_t> observed;
+        auto observation = std::make_shared<std::optional<message_dispatch_error_event_t>> ();
+        auto &observed = *observation;
         zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-          options, [&] (const message_dispatch_error_event_t &event) { observed = event; });
+          options,
+          [observation] (const message_dispatch_error_event_t &event) { *observation = event; });
         const auto out = capture_logs ([&] {
             dispatch_error_reporter_t (options).report (message_dispatch_error_event_t{
               .surface = dispatch_error_surface_t::channel,
@@ -847,10 +1322,18 @@ int main (int argc, char **argv)
     // The internal test observer sees the same event fields as the logger adapter.
     {
         auto options = options_with_mode (message_flow_log_mode_t::normal);
-        std::atomic_int observed{0};
-        std::atomic_bool saw_packet{false};
+        struct observation_t
+        {
+            std::atomic_int calls{0};
+            std::atomic_bool packet{false};
+        };
+        auto observation = std::make_shared<observation_t> ();
+        auto &observed = observation->calls;
+        auto &saw_packet = observation->packet;
         zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-          options, [&] (const message_flow_event_t &event) {
+          options, [observation] (const message_flow_event_t &event) {
+              auto &observed = observation->calls;
+              auto &saw_packet = observation->packet;
               if (event.packet_name && *event.packet_name == "PlaceOrder") {
                   saw_packet.store (true, std::memory_order_release);
               }

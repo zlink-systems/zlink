@@ -8,7 +8,6 @@
   "test/contract/actor-transfer-authority.test.js",
   "test/contract/channel-client.test.js",
   "test/contract/client-server-location-runtime.test.js",
-  "test/contract/drain-control.test.js",
   "test/contract/ended-instance-activation.test.js",
   "test/contract/fixtures/raw-mesh-close.js",
   "test/contract/instance-activation-terminal.test.js",

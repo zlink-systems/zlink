@@ -64,7 +64,8 @@ std::shared_ptr<host::public_host_runtime_t> make_host ()
     runtime->configure_spot_route_fence_resolver (
       [] (auto, auto, auto) -> fw::task_t<std::optional<host::route_fence_t>> {
           return fw::task_t<std::optional<host::route_fence_t>> (
-            fw::result_t<std::optional<host::route_fence_t>>::success (host::route_fence_t{1, 1}));
+            fw::result_t<std::optional<host::route_fence_t>>::success (
+              host::route_fence_t{1, 1, 1}));
       });
     return runtime;
 }

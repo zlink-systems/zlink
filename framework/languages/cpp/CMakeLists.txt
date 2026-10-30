@@ -189,6 +189,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/execution/state_lane.cpp
   framework/src/runtime/messaging/call_facade_runtime.cpp
   framework/src/runtime/messaging/logical_multicast_runtime.cpp
+  framework/src/runtime/diagnostics/process_telemetry_delivery.cpp
   framework/src/runtime/diagnostics/runtime_observation.cpp
   framework/src/runtime/diagnostics/logging.cpp
   framework/src/runtime/diagnostics/monitoring_runtime.cpp
@@ -2697,6 +2698,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_message_flow
     tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp
     "framework-unit;framework-regression;framework-observability;diagnostics")
+  add_zlink_framework_test(
+    test_cpp_framework_telemetry_process_exit
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_telemetry_process_exit.cpp
+    "framework-unit;framework-regression;framework-observability;diagnostics")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_telemetry_blocked_process_exit
+    COMMAND test_cpp_framework_telemetry_process_exit --blocked-provider
+    LABELS "framework-unit;framework-regression;framework-observability;diagnostics"
+    TIMEOUT 30)
+  target_sources(test_cpp_framework_message_flow PRIVATE tests/support/allocation_counter.cpp)
+  target_link_libraries(test_cpp_framework_message_flow PRIVATE opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_message_flow PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
@@ -2857,7 +2869,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
     target_link_options(test_cpp_framework_idle_receive_cost PRIVATE
       "-Wl,--wrap=_ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_16receive_record_tESt6vectorINS_9message_tESaISD_EEEEbS3_IFbvEE"
-      "-Wl,--wrap=_ZN5zlink9framework6detail35dispatch_completion_receive_handoffERKSt8functionIFbvEERKPNS1_23completion_dispatcher_tE"
+      "-Wl,--wrap=_ZN5zlink9framework6detail35dispatch_completion_receive_handoffERKSt8functionIFbvEERKSt10shared_ptrINS1_23completion_dispatcher_tEE"
       "-Wl,--wrap=_ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE"
     )
   endif()

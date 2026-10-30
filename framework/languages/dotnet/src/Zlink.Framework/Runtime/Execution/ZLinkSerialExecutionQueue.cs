@@ -70,6 +70,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     internal Action? ConsumerSelected { get; set; }
     internal Action<ZLinkSerialGateOperation>? GateOperation { get; set; }
 
+    internal bool HasExecutionSource => Volatile.Read(ref _drainSource) is not null;
+
     internal int ApplicationPendingCount
     {
         get

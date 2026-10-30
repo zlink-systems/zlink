@@ -113,6 +113,227 @@ TEST (CppFrameworkMeshSelectedRoute, AdmissionFollowsCoreSelectedRouteAcrossHand
     first->close ();
 }
 
+// Submit §5: the first request precedes service admission; no warm-up is sent.
+class CppFrameworkRequestAdmission : public testing::TestWithParam<std::tuple<bool, bool>>
+{
+};
+
+TEST_P (CppFrameworkRequestAdmission, FirstRequestWaitsForAdmissionAndSendsOnce)
+{
+    mesh::raw_mesh_node_owner_t source (options ("first-source", 101));
+    mesh::raw_mesh_node_owner_t target (options ("first-target", 201));
+    source.start ();
+    target.start ();
+    const auto descriptor = target.topology ().local_descriptor ();
+    ASSERT_TRUE (source.connect_peer (target.endpoint (), descriptor));
+    using terminal_t = zlink::framework::runtime::foundation::operation_terminal_t;
+    auto completion = std::make_shared<zlink::framework::task_completion_source_t<terminal_t>> ();
+    auto terminal = completion->task ();
+    const auto payload =
+      protocol::application_payload_t{"admission.probe", "application/json", {123, 125}};
+    const auto [delayed, instance] = GetParam ();
+    const auto domain = instance ? mesh::service_mailbox_domain_t::infrastructure
+                                 : mesh::service_mailbox_domain_t::application;
+    const auto completed = [completion] (auto result, auto) {
+        completion->complete (zlink::framework::result_t<terminal_t>::success (result));
+    };
+    auto submitted = [&] {
+        if (!instance)
+            return source.request_to_node (descriptor.node_routing_id, payload, 3s, completed);
+        const auto local = source.topology ().local_descriptor ();
+        const auto expires = static_cast<std::uint64_t> (
+          std::chrono::duration_cast<std::chrono::milliseconds> (
+            (std::chrono::system_clock::now () + 3s).time_since_epoch ())
+            .count ());
+        protocol::instance_spot_activation_header_t activation{
+          {descriptor.node_routing_id, descriptor.lifecycle_generation, "instance-1", "admission",
+           "room", "descriptor-1", expires},
+          local.lifecycle_generation,
+          local.node_routing_id,
+          std::string ("source-spot"),
+          true,
+          {local.lifecycle_generation, 91},
+          0,
+          false};
+        return source.request_instance_spot_activation (
+          descriptor.node_routing_id, std::move (activation), std::nullopt, payload, 3s, completed);
+    }();
+    // The original Node request returns false synchronously at this assertion.
+    ASSERT_FALSE (submitted.await_ready ());
+    if (delayed) {
+        // Only the source progresses: the healthy target has not serviced HELLO.
+        for (int turn = 0; turn != 8; ++turn)
+            progress (source);
+        EXPECT_FALSE (submitted.await_ready ());
+        EXPECT_FALSE (terminal.await_ready ());
+    }
+    ASSERT_TRUE (pump_until ({&source, &target}, [&] { return submitted.await_ready (); }));
+    EXPECT_TRUE (submitted.result ().value ());
+    ASSERT_TRUE (pump_until ({&source, &target},
+                             [&] { return target.mailbox ().pending_messages (domain) != 0; }));
+    EXPECT_EQ (1u, target.mailbox ().pending_messages (domain));
+    EXPECT_FALSE (terminal.await_ready ());
+    auto claim = target.mailbox ().try_claim (domain, 1, 65536);
+    ASSERT_TRUE (claim);
+    auto request = target.mailbox ().take ({claim, 0});
+    ASSERT_TRUE (request);
+    EXPECT_TRUE (instance ? target.reply_instance_spot_activation (*request, 0, 0, payload)
+                          : target.reply (*request, payload));
+    (void) target.mailbox ().release (*claim);
+    ASSERT_TRUE (pump_until ({&source, &target}, [&] { return terminal.await_ready (); }));
+    EXPECT_EQ (zlink::framework::runtime::foundation::operation_terminal_t::completed,
+               terminal.result ().value ());
+    for (int turn = 0; turn != 8; ++turn) {
+        progress (source);
+        progress (target);
+    }
+    EXPECT_EQ (0u, target.mailbox ().pending_messages (domain));
+    source.close ();
+    target.close ();
+}
+
+INSTANTIATE_TEST_SUITE_P (ImmediateAndDelayedService,
+                          CppFrameworkRequestAdmission,
+                          testing::Combine (testing::Bool (), testing::Bool ()));
+
+TEST (CppFrameworkMeshSelectedRoute, FailedEndpointCompletesBeforeRequestDeadline)
+{
+    mesh::raw_mesh_node_owner_t source (options ("failed-source", 101));
+    // Releasing the actual listener leaves a valid descriptor and a refused endpoint.
+    auto target = std::make_unique<mesh::raw_mesh_node_owner_t> (options ("failed-target", 201));
+    source.start ();
+    target->start ();
+    const auto descriptor = target->topology ().local_descriptor ();
+    const auto endpoint = target->endpoint ();
+    target->close ();
+    target.reset ();
+    ASSERT_TRUE (source.connect_peer (endpoint, descriptor));
+    using terminal_t = zlink::framework::runtime::foundation::operation_terminal_t;
+    auto completion = std::make_shared<zlink::framework::task_completion_source_t<terminal_t>> ();
+    auto terminal = completion->task ();
+    const auto started = std::chrono::steady_clock::now ();
+    auto submitted = source.request_to_node (
+      descriptor.node_routing_id,
+      protocol::application_payload_t{"admission.probe", "application/json", {123, 125}}, 30s,
+      [completion] (auto result, auto) {
+          completion->complete (zlink::framework::result_t<terminal_t>::success (result));
+      });
+    ASSERT_TRUE (pump_until ({&source}, [&] { return terminal.await_ready (); }));
+    EXPECT_EQ (zlink::framework::runtime::foundation::operation_terminal_t::route_unavailable,
+               terminal.result ().value ());
+    EXPECT_TRUE (submitted.await_ready ());
+    EXPECT_LT (std::chrono::steady_clock::now () - started, 30s);
+    const auto result = submitted.result ();
+    EXPECT_FALSE (result);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable, result.error_kind ());
+    source.close ();
+}
+
+TEST (CppFrameworkMeshSelectedRoute, ReplacedIntentFailsWaitingRequestBeforeHealthyAdmission)
+{
+    mesh::raw_mesh_node_owner_t source (options ("replace-source", 101));
+    mesh::raw_mesh_node_owner_t target (options ("replace-target", 201));
+    source.start ();
+    target.start ();
+    const auto descriptor = target.topology ().local_descriptor ();
+    ASSERT_TRUE (source.connect_peer (target.endpoint (), descriptor));
+    // The single observer publishes the original Core row before the wait starts.
+    (void) source.observe_routes ();
+    using terminal_t = zlink::framework::runtime::foundation::operation_terminal_t;
+    auto completion = std::make_shared<zlink::framework::task_completion_source_t<terminal_t>> ();
+    auto terminal = completion->task ();
+    const auto payload =
+      protocol::application_payload_t{"admission.probe", "application/json", {123, 125}};
+    auto submitted = source.request_to_node (
+      descriptor.node_routing_id, payload, 30s, [completion] (auto result, auto) {
+          completion->complete (zlink::framework::result_t<terminal_t>::success (result));
+      });
+    ASSERT_FALSE (submitted.await_ready ());
+    source.disconnect_peer (descriptor.node_routing_id, target.endpoint ());
+    ASSERT_TRUE (source.connect_peer (target.endpoint (), descriptor));
+    std::size_t received = 0;
+    ASSERT_TRUE (pump_until ({&source, &target}, [&] {
+        if (auto claim =
+              target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 65536)) {
+            if (auto request = target.mailbox ().take ({claim, 0})) {
+                ++received;
+                (void) target.reply (*request, payload);
+            }
+            (void) target.mailbox ().release (*claim);
+        }
+        return terminal.await_ready ();
+    }));
+    EXPECT_EQ (zlink::framework::runtime::foundation::operation_terminal_t::route_unavailable,
+               terminal.result ().value ());
+    EXPECT_EQ (0u, received);
+    source.close ();
+    target.close ();
+}
+
+TEST (CppFrameworkMeshSelectedRoute, AdmissionDeadlineExpiresWithoutBindingSubmission)
+{
+    mesh::raw_mesh_node_owner_t source (options ("deadline-source", 101));
+    mesh::raw_mesh_node_owner_t target (options ("deadline-target", 201));
+    source.start ();
+    target.start ();
+    const auto descriptor = target.topology ().local_descriptor ();
+    ASSERT_TRUE (source.connect_peer (target.endpoint (), descriptor));
+    using terminal_t = zlink::framework::runtime::foundation::operation_terminal_t;
+    auto completion = std::make_shared<zlink::framework::task_completion_source_t<terminal_t>> ();
+    auto terminal = completion->task ();
+    const auto started = std::chrono::steady_clock::now ();
+    auto submitted = source.request_to_node (
+      descriptor.node_routing_id,
+      protocol::application_payload_t{"admission.probe", "application/json", {123, 125}}, 30ms,
+      [completion] (auto result, auto) {
+          completion->complete (zlink::framework::result_t<terminal_t>::success (result));
+      });
+    ASSERT_FALSE (submitted.await_ready ());
+    ASSERT_TRUE (pump_until ({&source}, [&] { return terminal.await_ready (); }));
+    EXPECT_EQ (zlink::framework::runtime::foundation::operation_terminal_t::timed_out,
+               terminal.result ().value ());
+    EXPECT_GE (std::chrono::steady_clock::now () - started, 30ms);
+    ASSERT_TRUE (submitted.await_ready ());
+    const auto result = submitted.result ();
+    EXPECT_FALSE (result);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::deadline_exceeded, result.error_kind ());
+    EXPECT_EQ (0u,
+               target.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application));
+    source.close ();
+    target.close ();
+}
+
+TEST (CppFrameworkMeshSelectedRoute, ShutdownCompletesUnsubmittedAdmission)
+{
+    mesh::raw_mesh_node_owner_t source (options ("shutdown-source", 101));
+    mesh::raw_mesh_node_owner_t target (options ("shutdown-target", 201));
+    source.start ();
+    target.start ();
+    const auto descriptor = target.topology ().local_descriptor ();
+    ASSERT_TRUE (source.connect_peer (target.endpoint (), descriptor));
+    using terminal_t = zlink::framework::runtime::foundation::operation_terminal_t;
+    auto completion = std::make_shared<zlink::framework::task_completion_source_t<terminal_t>> ();
+    auto terminal = completion->task ();
+    auto submitted = source.request_to_node (
+      descriptor.node_routing_id,
+      protocol::application_payload_t{"admission.probe", "application/json", {123, 125}}, 30s,
+      [completion] (auto result, auto) {
+          completion->complete (zlink::framework::result_t<terminal_t>::success (result));
+      });
+    ASSERT_FALSE (submitted.await_ready ());
+    source.close ();
+    ASSERT_TRUE (terminal.await_ready ());
+    EXPECT_EQ (zlink::framework::runtime::foundation::operation_terminal_t::shutdown,
+               terminal.result ().value ());
+    ASSERT_TRUE (submitted.await_ready ());
+    const auto result = submitted.result ();
+    EXPECT_FALSE (result);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::shutting_down, result.error_kind ());
+    EXPECT_EQ (0u,
+               target.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application));
+    target.close ();
+}
+
 enum class remote_hello_t
 {
     none,

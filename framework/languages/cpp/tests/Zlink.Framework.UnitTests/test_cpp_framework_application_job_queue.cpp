@@ -5,6 +5,8 @@
 //  the named, filterable counterparts of the anonymous queue block in
 //  test_cpp_framework_execution.cpp.
 
+#include "../support/telemetry_observation.hpp"
+
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
@@ -402,7 +404,7 @@ local_admission_host (const std::shared_ptr<queue_t> &queue)
       .object_stable_types = {"framework.spot", "player"}});
     native->configure_spot_route_fence_resolver (
       [] (auto, auto, auto) -> zlink::framework::task_t<std::optional<host::route_fence_t>> {
-          co_return host::route_fence_t{1, 1};
+          co_return host::route_fence_t{1, 1, 1};
       });
     native->start ();
     return native;
@@ -511,7 +513,8 @@ TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOrigina
     for (const unsigned failure_mode : {0u, 1u, 2u}) {
         const bool invalid_reply = failure_mode != 0;
         SCOPED_TRACE (failure_mode);
-        std::vector<framework::message_dispatch_error_event_t> errors;
+        auto observations = std::make_shared<
+          framework::test::telemetry_observations_t<framework::message_dispatch_error_event_t>> ();
         host::host_options_t options{
           .mesh = {.descriptor = {.mesh_name = "stateful-dispatch-errors",
                                   .node_routing_id =
@@ -524,7 +527,8 @@ TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOrigina
           .object_stable_types = {"player"}};
         options.mesh.dispatch.message_flow (framework::message_flow_log_mode_t::normal);
         detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-          options.mesh.dispatch, [&errors] (const auto &event) { errors.push_back (event); });
+          options.mesh.dispatch,
+          [observations] (const auto &event) { observations->record (event); });
         auto native = std::make_shared<host::public_host_runtime_t> (std::move (options));
         native->configure_stateful_dispatch (
           [] (const stateful::accepted_record_authority_query_t &query)
@@ -572,6 +576,8 @@ TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOrigina
             EXPECT_FALSE (delayed_reply.local_reply ({}));
         }
         EXPECT_EQ (1u, dispatched);
+        framework::test::acknowledge_delivery ();
+        const auto errors = observations->snapshot ();
         EXPECT_EQ (1u, errors.size ());
         EXPECT_EQ (0u, native->pending_operation_count ());
         if (errors.empty ()) {
