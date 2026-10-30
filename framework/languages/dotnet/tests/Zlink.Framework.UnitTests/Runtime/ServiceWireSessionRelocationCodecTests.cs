@@ -49,6 +49,7 @@ public sealed class ServiceWireSessionRelocationCodecTests
         );
 
         Assert.Equal(false, handled);
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         var error = Assert.Single(
             activities.Where(item => Equals(item.GetTagItem("event_id"), "zlink.dispatch_error"))
         );
@@ -91,6 +92,7 @@ public sealed class ServiceWireSessionRelocationCodecTests
             seal.Coordinator.NodeGeneration,
             seal
         );
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         var drop = Assert.Single(
             events.Where(item =>
                 Equals(item.GetTagItem("packet_name"), "sessionRelocationSeal")
