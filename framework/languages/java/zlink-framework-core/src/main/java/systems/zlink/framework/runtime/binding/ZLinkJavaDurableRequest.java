@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.sockets.ConnectionAttempt;
+import systems.zlink.contracts.sockets.ConnectionAttemptState;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -10,6 +12,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationReg
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -20,8 +23,9 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
-/** Owns readiness for one registered lifecycle request. */
+/** Owns connection admission for one registered remote request. */
 public final class ZLinkJavaDurableRequest<T> {
     public static Throwable requestFailure(Throwable failure) {
         return ZLinkJavaRawMeshNode.requestFailure(failure);
@@ -36,6 +40,7 @@ public final class ZLinkJavaDurableRequest<T> {
                 BiConsumer<T, Throwable> terminal);
     }
 
+    private static final CompletionStage<Void> SUBMITTING = CompletableFuture.completedStage(null);
     private static final Logger LOGGER = Logger.getLogger(ZLinkJavaDurableRequest.class.getName());
     private final Supplier<List<byte[]>> prepare;
     private final Submit<T> submit;
@@ -45,8 +50,11 @@ public final class ZLinkJavaDurableRequest<T> {
     private final UUID id;
     private final BiConsumer<T, Throwable> terminal;
     private final CompletableFuture<Void> admission;
+    private final Supplier<List<ConnectionAttempt>> connections;
+    private Map<Long, Long> baseline;
     private CompletionStage<?> pending;
     private AutoCloseable observation;
+    private Runnable abandon = () -> {};
 
     private ZLinkJavaDurableRequest(
             Supplier<List<byte[]>> prepare,
@@ -56,7 +64,9 @@ public final class ZLinkJavaDurableRequest<T> {
             ZLinkServiceOperationRegistry operations,
             UUID id,
             BiConsumer<T, Throwable> terminal,
-            CompletableFuture<Void> admission) {
+            CompletableFuture<Void> admission,
+            Supplier<List<ConnectionAttempt>> connections) {
+        this.connections = connections;
         this.admission = admission;
         this.prepare = prepare;
         this.submit = submit;
@@ -75,7 +85,15 @@ public final class ZLinkJavaDurableRequest<T> {
             Function<Runnable, CompletionStage<Void>> owner,
             Duration timeout,
             ZLinkServiceOperationRegistry operations) {
-        return request(prepare, submit, route, observe, owner, timeout, operations, null);
+        return request(
+                prepare,
+                submit,
+                route,
+                observe,
+                owner,
+                timeout,
+                operations,
+                new CompletableFuture<>());
     }
 
     static <T> CompletionStage<T> request(
@@ -87,8 +105,28 @@ public final class ZLinkJavaDurableRequest<T> {
             Duration timeout,
             ZLinkServiceOperationRegistry operations,
             CompletableFuture<Void> requestAdmission) {
-        CompletableFuture<Void> admission =
-                requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
+        return request(
+                prepare,
+                submit,
+                route,
+                observe,
+                owner,
+                timeout,
+                operations,
+                requestAdmission,
+                List::of);
+    }
+
+    static <T> CompletionStage<T> request(
+            Supplier<List<byte[]>> prepare,
+            Submit<T> submit,
+            Supplier<PeerRouteObservation> route,
+            BiFunction<Runnable, Runnable, AutoCloseable> observe,
+            Function<Runnable, CompletionStage<Void>> owner,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            CompletableFuture<Void> requestAdmission,
+            Supplier<List<ConnectionAttempt>> connections) {
         UUID id = ZLinkServiceOperationIds.next();
         var caller = operations.<T>prepareOperation(id);
         if (requestAdmission != null)
@@ -101,32 +139,127 @@ public final class ZLinkJavaDurableRequest<T> {
                 id,
                 timeout,
                 terminal -> {
-                    var request =
-                            new ZLinkJavaDurableRequest<>(
-                                    prepare,
-                                    submit,
-                                    route,
-                                    owner,
-                                    operations,
-                                    id,
-                                    terminal,
-                                    admission);
-                    // Logical completion releases readiness; the binding retains its physical
-                    // receiver.
-                    caller.whenComplete((reply, failure) -> request.post(request::release));
-                    request.post(
-                            () -> {
-                                if (!operations.isPending(id)) return;
-                                request.observation =
-                                        observe.apply(
-                                                () -> request.post(request::attempt),
-                                                request::endTarget);
-                                request.attempt();
-                            });
+                    start(
+                            prepare,
+                            submit,
+                            route,
+                            connections,
+                            observe,
+                            owner,
+                            operations,
+                            id,
+                            terminal,
+                            requestAdmission,
+                            caller);
                     return null;
                 },
                 ignored -> {},
                 caller);
+        return caller;
+    }
+
+    static <T> CompletionStage<?> start(
+            Supplier<List<byte[]>> prepare,
+            Submit<T> submit,
+            Supplier<PeerRouteObservation> route,
+            Supplier<List<ConnectionAttempt>> connections,
+            BiFunction<Runnable, Runnable, AutoCloseable> observe,
+            Function<Runnable, CompletionStage<Void>> owner,
+            ZLinkServiceOperationRegistry operations,
+            UUID id,
+            BiConsumer<T, Throwable> terminal,
+            CompletableFuture<Void> admission,
+            CompletionStage<T> caller) {
+        return attempt(
+                prepare,
+                submit,
+                route,
+                connections,
+                observe,
+                owner,
+                operations,
+                id,
+                terminal,
+                admission,
+                caller,
+                () -> {});
+    }
+
+    static <T> CompletionStage<?> attempt(
+            Supplier<List<byte[]>> prepare,
+            Submit<T> submit,
+            Supplier<PeerRouteObservation> route,
+            Supplier<List<ConnectionAttempt>> connections,
+            BiFunction<Runnable, Runnable, AutoCloseable> observe,
+            Function<Runnable, CompletionStage<Void>> owner,
+            ZLinkServiceOperationRegistry operations,
+            UUID id,
+            BiConsumer<T, Throwable> terminal,
+            CompletableFuture<Void> admission,
+            CompletionStage<T> caller,
+            Runnable abandon) {
+        // A new request reads the observer's published route without entering its lane.
+        // Only requests that need to wait allocate an observer and capture failure history.
+        if (route.get().ready()) {
+            if (submit(prepare, submit, operations, id, terminal, admission) != null) return caller;
+            if (!operations.isPending(id)) {
+                abandon.run();
+                return caller;
+            }
+        }
+        return waitForAdmission(
+                prepare,
+                submit,
+                route,
+                connections,
+                observe,
+                owner,
+                operations,
+                id,
+                terminal,
+                admission,
+                caller,
+                abandon);
+    }
+
+    private static <T> CompletionStage<T> waitForAdmission(
+            Supplier<List<byte[]>> prepare,
+            Submit<T> submit,
+            Supplier<PeerRouteObservation> route,
+            Supplier<List<ConnectionAttempt>> connections,
+            BiFunction<Runnable, Runnable, AutoCloseable> observe,
+            Function<Runnable, CompletionStage<Void>> owner,
+            ZLinkServiceOperationRegistry operations,
+            UUID id,
+            BiConsumer<T, Throwable> terminal,
+            CompletableFuture<Void> admission,
+            CompletionStage<T> caller,
+            Runnable abandon) {
+        var request =
+                new ZLinkJavaDurableRequest<>(
+                        prepare,
+                        submit,
+                        route,
+                        owner,
+                        operations,
+                        id,
+                        terminal,
+                        admission,
+                        connections);
+        request.abandon = abandon;
+        caller.whenComplete((reply, failure) -> request.post(request::release));
+        request.post(
+                () -> {
+                    if (!operations.isPending(id)) return;
+                    request.attempt();
+                    if (!operations.isPending(id) || request.pending != null) return;
+                    request.observation =
+                            observe.apply(
+                                    () -> request.post(request::attempt),
+                                    () -> request.post(request::endTarget));
+                    if (!operations.isPending(id)) request.release();
+                    else request.attempt();
+                });
         return caller;
     }
 
@@ -143,30 +276,85 @@ public final class ZLinkJavaDurableRequest<T> {
     }
 
     private void attempt() {
-        if (!operations.isPending(id) || pending != null || !route.get().ready()) return;
+        if (!operations.isPending(id) || pending != null) return;
+        var currentRoute = route.get();
+        var current =
+                baseline == null && currentRoute.ready()
+                        ? List.<ConnectionAttempt>of()
+                        : connections.get();
+        if (baseline != null) {
+            for (var previous : baseline.entrySet()) {
+                if (current.stream()
+                        .noneMatch(
+                                attempt ->
+                                        attempt.intentId() == previous.getKey()
+                                                && attempt.lastFailureId()
+                                                        == previous.getValue())) {
+                    endTarget();
+                    return;
+                }
+            }
+            if (baseline.isEmpty() && !current.isEmpty()) {
+                if (current.stream().anyMatch(attempt -> attempt.lastFailureId() != 0)) {
+                    endTarget();
+                    return;
+                }
+            }
+        }
+        // Only a new request with an already admitted selected route bypasses past failures.
+        if (!currentRoute.ready()) {
+            if (currentRoute.selectedGeneration() == 0
+                    && current.stream()
+                            .anyMatch(
+                                    attempt ->
+                                            attempt.state()
+                                                    == ConnectionAttemptState.ATTEMPT_FAILED)) {
+                endTarget();
+                return;
+            }
+            if (baseline == null || baseline.isEmpty())
+                baseline =
+                        current.stream()
+                                .collect(
+                                        Collectors.toUnmodifiableMap(
+                                                ConnectionAttempt::intentId,
+                                                ConnectionAttempt::lastFailureId));
+            return;
+        }
+        // Mark the operation before submit: a synchronous terminal must not abandon its frames.
+        pending = SUBMITTING;
+        pending = submit(prepare, submit, operations, id, terminal, admission);
+        if (pending == null && !operations.isPending(id)) release();
+    }
+
+    private static <T> CompletionStage<?> submit(
+            Supplier<List<byte[]>> prepare,
+            Submit<T> submit,
+            ZLinkServiceOperationRegistry operations,
+            UUID id,
+            BiConsumer<T, Throwable> terminal,
+            CompletableFuture<Void> admission) {
         Duration remaining = operations.remainingTimeout(id);
-        if (remaining.isZero()) return;
+        if (remaining.isZero() || !operations.isPending(id)) return null;
         try {
             List<byte[]> frames = prepare.get();
-            if (frames == null) return;
+            if (frames == null) return null;
             remaining = operations.remainingTimeout(id);
-            if (remaining.isZero() || !operations.isPending(id)) return;
+            if (remaining.isZero() || !operations.isPending(id)) return null;
             // §5: after this binding operation starts, route changes cannot resubmit it.
-            pending =
-                    Objects.requireNonNull(
-                            submit.apply(
-                                    frames,
-                                    remaining,
-                                    admission,
-                                    (reply, failure) ->
-                                            terminal.accept(
-                                                    reply,
-                                                    failure == null
-                                                            ? null
-                                                            : terminalFailure(failure))),
-                            "binding request");
+            return Objects.requireNonNull(
+                    submit.apply(
+                            frames,
+                            remaining,
+                            admission,
+                            (reply, failure) ->
+                                    terminal.accept(
+                                            reply,
+                                            failure == null ? null : terminalFailure(failure))),
+                    "binding request");
         } catch (RuntimeException failure) {
             terminal.accept(null, terminalFailure(failure));
+            return SUBMITTING;
         }
     }
 
@@ -184,10 +372,15 @@ public final class ZLinkJavaDurableRequest<T> {
                 null,
                 new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
-                        "durable request target lifecycle ended"));
+                        "remote request connection admission ended"));
     }
 
     private void release() {
+        if (pending == null) {
+            var cleanup = abandon;
+            abandon = () -> {};
+            cleanup.run();
+        }
         if (observation != null) {
             try {
                 observation.close();
@@ -196,6 +389,5 @@ public final class ZLinkJavaDurableRequest<T> {
             }
             observation = null;
         }
-        pending = null;
     }
 }

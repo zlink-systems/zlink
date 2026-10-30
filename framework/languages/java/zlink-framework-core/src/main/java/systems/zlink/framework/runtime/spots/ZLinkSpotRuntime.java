@@ -1458,7 +1458,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                 new ZLinkFrameworkException(
                                                                         ZLinkFrameworkErrorKind
                                                                                 .DEADLINE_EXCEEDED,
-                                                                        "Timed out waiting for User Spot authority",
+                                                                        "Timed out waiting for User"
+                                                                                + " Spot authority",
                                                                         cause));
                                                     }
                                                     return CompletableFuture.failedFuture(cause);
@@ -1498,7 +1499,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             var intent =
                                     new ZLinkInternalMeshNode.UserSpotCreateIntent(
                                             spotId, stableType, fence, deadline);
-                            return ensureManualObjectPeer(meshName, source, target, deadline)
+                            return ensureManualObjectPeer(meshName, source, target)
                                     .thenCompose(
                                             ignored ->
                                                     source.requestUserSpotCreate(
@@ -1546,8 +1547,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private CompletionStage<Void> ensureManualObjectPeer(
             String meshName,
             ZLinkInternalMeshNode source,
-            systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor target,
-            long deadline) {
+            systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor target) {
         if (source.status().routingId().equals(target.rid())
                 || manualRouterPeerNodeRids.contains(target.rid())) {
             return CompletableFuture.completedFuture(null);
@@ -1563,12 +1563,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         if (!configured) {
             return CompletableFuture.completedFuture(null);
         }
-        return source.preparePeerConnectionAsync(
-                target.endpoint(),
+        return source.observePeerAdmissionExpectation(
                 target.rid(),
+                target.endpoint(),
                 target.lifecycleGeneration(),
                 target.securityIdentity(),
-                Duration.ofMillis(Math.max(1L, deadline - System.currentTimeMillis())));
+                target.objectRole());
     }
 
     private Optional<ZLinkSpotCreateResult> existingResult(
@@ -3347,7 +3347,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                     ZLinkFrameworkErrorKind
                                                                             .UNAVAILABLE,
                                                                     "Cold activation target is not"
-                                                                            + " the current owner"));
+                                                                        + " the current owner"));
                                                 })
                                         .whenComplete(
                                                 (route, failure) ->
@@ -3381,9 +3381,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                 ZLinkFrameworkErrorKind
                                                                                                         .UNAVAILABLE,
                                                                                                 "Cold activation"
-                                                                                                        + " target"
-                                                                                                        + " descriptor"
-                                                                                                        + " is missing"));
+                                                                                                    + " target"
+                                                                                                    + " descriptor"
+                                                                                                    + " is missing"));
                                                 byte[] root =
                                                         new systems.zlink.framework.runtime.internal
                                                                         .service
@@ -3417,9 +3417,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                 .failedFuture(
                                                                                         new IllegalStateException(
                                                                                                 "Invalid"
-                                                                                                        + " activation"
-                                                                                                        + " recovery"
-                                                                                                        + " receipt"));
+                                                                                                    + " activation"
+                                                                                                    + " recovery"
+                                                                                                    + " receipt"));
                                                                     }
                                                                     var request =
                                                                             new systems.zlink
@@ -3578,10 +3578,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                                                         : ZLinkFrameworkErrorKind
                                                                                                                                                                 .UNAVAILABLE,
                                                                                                                                                 "Instance"
-                                                                                                                                                        + " cold"
-                                                                                                                                                        + " activation"
-                                                                                                                                                        + " reservation"
-                                                                                                                                                        + " was refused")));
+                                                                                                                                                    + " cold"
+                                                                                                                                                    + " activation"
+                                                                                                                                                    + " reservation"
+                                                                                                                                                    + " was refused")));
                                                                                     });
                                                                 });
                                             });
@@ -4007,11 +4007,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                 .failedFuture(
                                                                                         new IllegalStateException(
                                                                                                 "Instance"
-                                                                                                        + " Spot"
-                                                                                                        + " Ready"
-                                                                                                        + " commit"
-                                                                                                        + " lost"
-                                                                                                        + " its reservation"));
+                                                                                                    + " Spot"
+                                                                                                    + " Ready"
+                                                                                                    + " commit"
+                                                                                                    + " lost"
+                                                                                                    + " its reservation"));
                                                                     }
                                                                     activation.setAuthorityFence(
                                                                             route.ownerId(),
@@ -6212,11 +6212,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                     stored)) {
                                                                                                         throw new IllegalStateException(
                                                                                                                 "Instance"
-                                                                                                                        + " Spot"
-                                                                                                                        + " Reincarnate"
-                                                                                                                        + " Ready"
-                                                                                                                        + " fence"
-                                                                                                                        + " changed");
+                                                                                                                    + " Spot"
+                                                                                                                    + " Reincarnate"
+                                                                                                                    + " Ready"
+                                                                                                                    + " fence"
+                                                                                                                    + " changed");
                                                                                                     }
                                                                                                     fresh
                                                                                                             .setAuthorityFence(
@@ -6332,12 +6332,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                         .failedFuture(
                                                                                                                                 new IllegalStateException(
                                                                                                                                         "Instance"
-                                                                                                                                                + " Spot"
-                                                                                                                                                + " Reincarnate"
-                                                                                                                                                + " failure"
-                                                                                                                                                + " cleanup"
-                                                                                                                                                + " fence"
-                                                                                                                                                + " changed"));
+                                                                                                                                            + " Spot"
+                                                                                                                                            + " Reincarnate"
+                                                                                                                                            + " failure"
+                                                                                                                                            + " cleanup"
+                                                                                                                                            + " fence"
+                                                                                                                                            + " changed"));
                                                                                                             }
                                                                                                             var
                                                                                                                     currentActivation =
@@ -6426,12 +6426,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                                                 .ZLinkAuthorityDeleted)) {
                                                                                                                                     throw new IllegalStateException(
                                                                                                                                             "Instance"
-                                                                                                                                                    + " Spot"
-                                                                                                                                                    + " Reincarnate"
-                                                                                                                                                    + " failure"
-                                                                                                                                                    + " Delete"
-                                                                                                                                                    + " fence"
-                                                                                                                                                    + " changed");
+                                                                                                                                                + " Spot"
+                                                                                                                                                + " Reincarnate"
+                                                                                                                                                + " failure"
+                                                                                                                                                + " Delete"
+                                                                                                                                                + " fence"
+                                                                                                                                                + " changed");
                                                                                                                                 }
                                                                                                                                 return false;
                                                                                                                             });
@@ -7029,7 +7029,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             copyActorReceived(headerCopy),
                                             actor.context().actorId(),
                                             new ZLinkConfigurationException(
-                                                    "No SPOT actor request handler is registered for '"
+                                                    "No SPOT actor request handler is registered"
+                                                            + " for '"
                                                             + packetHeader.packetName()
                                                             + "'."));
                                 }
