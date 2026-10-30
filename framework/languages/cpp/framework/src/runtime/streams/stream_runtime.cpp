@@ -2164,6 +2164,19 @@ result_t<void> stream_runtime_t::dispatch_error (packet_stream_session_t &sessio
                                     [&] { return session.on_error (stream, error); });
 }
 
+result_t<void> stream_runtime_t::dispatch_error_async (
+  packet_stream_session_t &session, stream_t &stream, const stream_error_t &error,
+  async_dispatch_completion_t completion) const
+{
+    auto dispatch_stream = stream;
+    return dispatch_infrastructure_async (
+      stream, "error",
+      [session = &session, dispatch_stream = std::move (dispatch_stream), error] () mutable {
+          return session->on_error (dispatch_stream, error);
+      },
+      std::move (completion));
+}
+
 void stream_runtime_t::attach_transport_writer (
   stream_t &stream,
   std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> writer) const

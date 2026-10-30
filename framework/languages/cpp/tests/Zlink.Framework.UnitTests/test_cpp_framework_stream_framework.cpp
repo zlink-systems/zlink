@@ -269,12 +269,14 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
 
     zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
     {
+        callbacks.push_back ("disconnected");
         co_return;
     }
 
     zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
-                                             const zlink::framework::stream_error_t &) override
+                                             const zlink::framework::stream_error_t &error) override
     {
+        callbacks.push_back ("error:" + std::string (error.message ()));
         co_return;
     }
 
@@ -282,6 +284,7 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
                                               const zlink::framework::session_message_context_t &,
                                               const zlink::framework::message_t &payload) override
     {
+        callbacks.push_back ("packet");
         _entered.set_value ();
         co_await _resume.task ();
         try {
@@ -298,6 +301,7 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
     void resume () { _resume.complete (zlink::framework::result_t<void>::success ()); }
 
     std::optional<zlink::framework::result_t<void>> reply_result;
+    std::vector<std::string> callbacks;
 
   private:
     std::promise<void> _entered;
@@ -1516,7 +1520,8 @@ int transport_bound_close (bool tls, bool remote = false)
     const stateful::stream_connection_t connection{rid.to_hex (), 1, mesh->routing_id (),
                                                    status.lifecycle_generation ()};
     const stateful::object_ref_t actor{
-      stateful::object_kind_t::actor, "close-actor", 7, 11, "player", "actor-owner"};
+      stateful::object_kind_t::actor, "close-actor", 7, 11, "player",
+      status.routing_id ().to_string ()};
     const auto [retired_error, retired_binding] = sessions.bind_remote (connection, actor, 1, 13);
     if (retired_error != stateful::stateful_error_t::none)
         return 343;
@@ -1592,12 +1597,13 @@ int transport_bound_close (bool tls, bool remote = false)
         return 344;
     if (!closed || !sessions.is_current (other_binding))
         return 345;
-    /* The bound close is the subject of this case. The Session's binding to
-     * "actor-owner", a node that never answers, is incidental. Remove it
-     * before cleanup releases the disconnected dispatch, so the reader's
-     * retirement does not wait out the remote tombstone deadline in stop. */
-    if (const auto [unbind_error, unbound] = sessions.unbind (binding);
-        unbind_error != stateful::stateful_error_t::none || !unbound)
+    // Physical close removes the canonical binding even while the Session's
+    // disconnected callback remains pending.
+    const auto cleanup_deadline = std::chrono::steady_clock::now () + 2s;
+    while (sessions.is_current (binding)
+           && std::chrono::steady_clock::now () < cleanup_deadline)
+        std::this_thread::yield ();
+    if (sessions.is_current (binding))
         return 348;
     // The native socket must already be closed when the close task completes.
     auto &socket = tls ? tls_client.next_layer () : ws_client.next_layer ();
@@ -2514,6 +2520,19 @@ int main (int argc, char **argv)
         == std::future_status::ready) {
         return 231;
     }
+    std::promise<zlink::framework::result_t<void>> error_completion_source;
+    auto error_completion = error_completion_source.get_future ();
+    const auto error_submitted = runtime.dispatch_error_async (
+      async_session, async_stream,
+      zlink::framework::stream_error_t (zlink::framework::stream_session_error_t::transport_error,
+                                        "async-transport"),
+      [&error_completion_source] (const zlink::framework::result_t<void> &result) {
+          error_completion_source.set_value (result);
+      });
+    if (!error_submitted
+        || error_completion.wait_for (std::chrono::milliseconds::zero ())
+             == std::future_status::ready)
+        return 349;
     std::promise<zlink::framework::result_t<void>> disconnect_completion_source;
     auto disconnect_completion = disconnect_completion_source.get_future ();
     const auto disconnect_submitted = runtime.dispatch_disconnected_async (
@@ -2529,12 +2548,16 @@ int main (int argc, char **argv)
     async_session.resume ();
     if (packet_completion.wait_for (std::chrono::seconds (2)) != std::future_status::ready
         || !packet_completion.get ()
+        || error_completion.wait_for (std::chrono::seconds (2)) != std::future_status::ready
+        || !error_completion.get ()
         || disconnect_completion.wait_for (std::chrono::seconds (2)) != std::future_status::ready
         || !disconnect_completion.get ()) {
         return 233;
     }
     runtime.drain_async_dispatch (async_stream);
-    if (!async_session.reply_result || !*async_session.reply_result
+    if (async_session.callbacks
+          != std::vector<std::string>{"packet", "error:async-transport", "disconnected"}
+        || !async_session.reply_result || !*async_session.reply_result
         || runtime.written_payloads (async_stream).size () != 1
         || runtime.written_payloads (async_stream)[0].to_string () != "async-payload") {
         return 234;
