@@ -15,6 +15,7 @@ const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
 const {
+  admitServiceRequest,
   requestDurableService
 } = require('../../packages/framework/dist/runtime/foundation/durable-service-request');
 const {
@@ -397,6 +398,78 @@ for (const kind of ['node', 'nodeObserved', 'spot', 'spotObserved']) {
   });
 }
 
+test('ready admission creates no waiting subscriptions or attempt arrays', async (t) => {
+  for (const ready of [false, true]) {
+    const f = fixture('lifecycle');
+    const costs = { route: 0, intent: 0, stop: 0, attempts: 0, promise: 0 };
+    try {
+      const rows = [attempt(ConnectionAttemptState.Connected)];
+      await f.snapshot(rows);
+      if (ready) await f.admit();
+      for (const [method, counter] of [
+        ['observePeerRouteChanged', 'route'],
+        ['observePeerConnectionIntentRemoved', 'intent']
+      ]) {
+        const original = f.raw[method].bind(f.raw);
+        t.mock.method(f.raw, method, (...args) => {
+          costs[counter]++;
+          return original(...args);
+        });
+      }
+      const signal = f.raw.requestStopSignal;
+      const add = signal.addEventListener.bind(signal);
+      t.mock.method(signal, 'addEventListener', (...args) => {
+        costs.stop++;
+        return add(...args);
+      });
+      Object.defineProperty(rows, 'filter', {
+        value: (...args) => {
+          costs.attempts++;
+          return Array.prototype.filter.apply(rows, args);
+        }
+      });
+      const pending = f.raw.beginInfrastructureRequest(1000);
+      const then = pending.promise.then.bind(pending.promise);
+      const promiseProbe = t.mock.method(pending.promise, 'then', (...args) => {
+        costs.promise++;
+        return then(...args);
+      });
+      admitServiceRequest(
+        f.raw,
+        'target',
+        pending,
+        (remaining, finished) => {
+          void f.raw.requestService('target', [Buffer.from('PREPARE')], remaining).then(
+            (reply) => {
+              finished();
+              pending.complete(reply);
+            },
+            (error) => {
+              finished();
+              pending.fail(error);
+            }
+          );
+        },
+        (error) => pending.fail(error)
+      );
+      promiseProbe.mock.restore();
+      if (!ready) await f.admit();
+      await pending.promise;
+      assert.equal(f.submissions.length, 1);
+      t.diagnostic(JSON.stringify({ ready, costs }));
+      if (ready) {
+        assert.deepEqual(costs, { route: 0, intent: 0, stop: 0, attempts: 0, promise: 0 });
+      } else {
+        for (const [kind, count] of Object.entries(costs)) {
+          assert.ok(count > 0, `waiting admission must exercise the ${kind} cost probe`);
+        }
+      }
+    } finally {
+      f.close();
+    }
+  }
+});
+
 test('ready observation borrows the socket snapshot without filtering or descriptor cloning', async (t) => {
   const f = fixture('node');
   try {
@@ -474,11 +547,23 @@ test(
     const {
       ZLinkNodeRawBindingPort
     } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
+    let requesterRouter;
+    const binding = new ZLinkNodeRawBindingPort();
+    const createHost = binding.createHost.bind(binding);
+    t.mock.method(binding, 'createHost', () => {
+      const host = createHost();
+      const createRouter = host.createRouter.bind(host);
+      t.mock.method(host, 'createRouter', () => {
+        requesterRouter = createRouter();
+        return requesterRouter;
+      });
+      return host;
+    });
     const make = (rid) =>
       new RawServiceMeshRuntime({
         descriptor: descriptor(rid, 'tcp://127.0.0.1:0'),
         applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
-        bindingPort: new ZLinkNodeRawBindingPort()
+        bindingPort: binding
       });
     const owner = make('healthy-owner'),
       requester = make('healthy-requester');
@@ -496,7 +581,7 @@ test(
     try {
       owner.start();
       requester.start();
-      const router = requester.requireStarted();
+      const router = requesterRouter;
       const snapshot = router.connectionAttemptsSnapshot.bind(router);
       t.mock.method(router, 'connectionAttemptsSnapshot', () => {
         const rows = snapshot();

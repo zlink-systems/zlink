@@ -4910,7 +4910,7 @@ export class ServiceStatefulRuntime {
         operationFailed: (_id: bigint, error: unknown) =>
           receiver.operationFailed(pending.id, error, undefined)
       };
-      if (this.raw.isPeerRouteReady?.(targetNodeRid) === true) {
+      if (this.raw.isPeerRouteReady(targetNodeRid) === true) {
         this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted, pending, completion);
         return;
       }
@@ -4936,7 +4936,7 @@ export class ServiceStatefulRuntime {
       return;
     }
     const reply =
-      this.raw.isPeerRouteReady?.(targetNodeRid) === true
+      this.raw.isPeerRouteReady(targetNodeRid) === true
         ? this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted, pending)
         : requestDurableService(
             this.raw,
@@ -5771,7 +5771,7 @@ export class ServiceStatefulRuntime {
 
   private tryEntrySpotFence(targetNodeRid: string): ServiceDirectSpotRouteFence | undefined {
     const targetNodeGeneration =
-      this.raw.peerLifecycleGeneration?.(targetNodeRid) ?? this.tryPeerGeneration(targetNodeRid);
+      this.raw.peerLifecycleGeneration(targetNodeRid) ?? this.tryPeerGeneration(targetNodeRid);
     if (targetNodeGeneration === undefined) return undefined;
     return {
       spot: {
@@ -5815,8 +5815,8 @@ export class ServiceStatefulRuntime {
         : undefined;
     }
     if (
-      (this.raw.peerLifecycleGeneration?.(targetNodeRid) ??
-        this.tryPeerGeneration(targetNodeRid)) !== targetNodeGeneration
+      (this.raw.peerLifecycleGeneration(targetNodeRid) ?? this.tryPeerGeneration(targetNodeRid)) !==
+      targetNodeGeneration
     ) {
       return undefined;
     }

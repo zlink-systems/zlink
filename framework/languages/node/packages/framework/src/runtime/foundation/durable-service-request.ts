@@ -86,19 +86,25 @@ export function admitServiceRequest(
     lifecycleFailure(error);
     pending.fail(error);
   };
-  const check = () => {
-    if (disposed || submitted) return;
+  const check = (): boolean => {
+    if (disposed || submitted) return true;
+    if (port.requestStopSignal?.aborted === true) {
+      stopped();
+      return true;
+    }
     if (!pending.isPending()) {
       cleanup();
-      return;
+      return true;
     }
     try {
       const remaining = remainingRequestTimeout(operationKind, pending.deadlineMs)!;
       const observation = port.observePeerRoute(target);
       const attempts =
-        observation.connectionAttempts?.filter(
-          (attempt) => attempt.endpoint === observation.endpoint
-        ) ?? [];
+        baseline !== undefined || !observation.ready
+          ? observation.connectionAttempts?.filter(
+              (attempt) => attempt.endpoint === observation.endpoint
+            )
+          : undefined;
       if (
         baseline !== undefined &&
         ((baseline.lifecycleGeneration !== undefined &&
@@ -106,50 +112,54 @@ export function admitServiceRequest(
           (baseline.endpoint !== undefined && baseline.endpoint !== observation.endpoint))
       ) {
         unavailable('Request target descriptor changed.');
-        return;
+        return true;
       }
       // Compare the waiting request's tokens before accepting a recovered route.
       if (
         baseline !== undefined &&
         (baseline.connectionAttempts ?? []).some(
           (previous) =>
-            !attempts.some(
+            attempts?.some(
               (current) =>
                 current.intentId === previous.intentId &&
                 current.lastFailureId === previous.lastFailureId
-            )
+            ) !== true
         )
       ) {
         unavailable('Request connection intent ended, changed, or failed.');
-        return;
+        return true;
       }
       if (
         baseline !== undefined &&
         (baseline.connectionAttempts ?? []).length === 0 &&
-        attempts.some((attempt) => attempt.lastFailureId !== 0n)
+        attempts?.some((attempt) => attempt.lastFailureId !== 0n) === true
       ) {
         unavailable('Request first connection observation contains a failure.');
-        return;
+        return true;
       }
       if (observation.ready) {
         submitted = true;
         unobserveRoute();
         start(remaining, cleanup);
-        return;
+        return true;
       }
       if (
-        !observation.selected &&
-        attempts.some((attempt) => attempt.state === ConnectionAttemptState.AttemptFailed)
+        observation.selected !== true &&
+        attempts?.some((attempt) => attempt.state === ConnectionAttemptState.AttemptFailed) === true
       ) {
         unavailable('Request connection attempt failed.');
-        return;
+        return true;
       }
       if (baseline === undefined || (baseline.connectionAttempts ?? []).length === 0)
         baseline = { ...observation, connectionAttempts: attempts };
     } catch (error) {
       fail(error);
+      return true;
     }
+    return false;
   };
+  if (check()) return;
+
   unobserveRoute = port.observePeerRouteChanged((rid) => {
     if (rid === target) check();
   });

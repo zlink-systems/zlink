@@ -31,6 +31,8 @@ function fixture(request, disconnectOnFailure = true) {
   const routes = new Map();
   let nextRouteGeneration = 1n;
   const attempts = [];
+  const bindingFailures = new Set();
+  const bindingFailure = new ZLinkBackendResultError('request', RequestResult.NotConnected);
   let connectionRows = [];
   const router = {
     setRoutingId() {}, setReceiveFlowState() {}, bind() {}, connectToRoutingId() {}, connect() {},
@@ -43,10 +45,11 @@ function fixture(request, disconnectOnFailure = true) {
       const record = parts[0][3] === 28 ? decodeActorJoin28(parts) : wire.decodeStatefulHeader(parts[0]);
       const attempt = { rid, parts, timeoutMs, record, existing };
       attempts.push(attempt);
+
       try {
         const result = request(attempt, attempts.length);
         onAdmitted?.();
-        return await result;
+        return await Promise.race([result, new Promise((_resolve, reject) => { bindingFailures.add(reject); })]);
       } catch (error) {
         if (disconnectOnFailure && error instanceof ZLinkBackendResultError) {
           routes.delete(target.nodeRoutingId);
@@ -90,6 +93,10 @@ function fixture(request, disconnectOnFailure = true) {
       await raw.observeSelectedRoutes();
       assert.equal(raw.topology.peer(target.nodeRoutingId), undefined);
     },
+    bindingFailure,
+    failBinding() {
+      for (const failed of bindingFailures) failed(bindingFailure);
+    },
     start(kind, timeoutMs = 80) {
       const common = { sourceNodeRid: 'source-node', sourceNodeGeneration: 7n,
         deadlineUnixMs: BigInt(Date.now() + timeoutMs) };
@@ -113,7 +120,7 @@ function fixture(request, disconnectOnFailure = true) {
 
 for (const kind of operationKinds) {
   for (const mode of ['inFlight', 'beforeStart']) {
-    test(`${kind}: intent removal immediately terminates ${mode} as Unavailable`, async t => {
+    test(`${kind}: intent removal uses ${mode} completion owner`, async t => {
       let now = 1000;
       t.mock.method(performance, 'now', () => now);
       t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -127,8 +134,16 @@ for (const kind of operationKinds) {
         assert.equal(outcome, undefined);
         f.raw.disconnectPeer(f.target.advertisedEndpoint, f.target.nodeRoutingId, 7n);
         await turn();
-        assert.equal(outcome?.error?.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
-        assert.match(outcome.error.message, /lifecycle ended/);
+        if (mode === 'inFlight') {
+          assert.equal(outcome, undefined, 'started request awaits binding terminal');
+          f.failBinding();
+          await turn();
+        }
+        if (mode === 'inFlight') assert.equal(outcome?.error, f.bindingFailure);
+        else {
+          assert.equal(outcome?.error?.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+          assert.match(outcome.error.message, /lifecycle ended/);
+        }
         assert.equal(now, 1000, 'termination does not consume a timer tick');
         await operation;
         finishAttempt?.(f.terminal(f.attempts[0]));
@@ -141,7 +156,7 @@ for (const kind of operationKinds) {
     });
   }
 
-  test(`${kind}: physical disconnect preserves the original request until logical intent removal`, async t => {
+  test(`${kind}: started request retains binding completion after physical and logical disconnect`, async t => {
     let now = 1000;
     t.mock.method(performance, 'now', () => now);
     t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -160,8 +175,10 @@ for (const kind of operationKinds) {
       assert.equal(f.attempts.length, 1, 'absent routes receive no submission');
       f.raw.disconnectPeerEndpoint(f.target.advertisedEndpoint);
       await turn();
-      assert.equal(outcome?.error?.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
-      assert.match(outcome.error.message, /lifecycle ended/);
+      assert.equal(outcome, undefined, 'logical removal does not replace the binding terminal');
+      f.failBinding();
+      await turn();
+      assert.equal(outcome?.error, f.bindingFailure);
       await operation;
       reply(f.terminal(f.attempts[0]));
       await turn();
