@@ -86,7 +86,10 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                     new ZLinkSpotDirectOutbound(
                             new ZLinkSpotRouteMessages(serializer),
                             new ZLinkMessageFlowTracer(
-                                    new ZLinkDispatchOptionsRegistration(), null, Runnable::run));
+                                    new ZLinkDispatchOptionsRegistration(),
+                                    systems.zlink.framework.runtime.internal.handlers
+                                            .ZLinkHandlerActivator.reflection(),
+                                    Runnable::run));
             var outbound =
                     new DefaultSpotOutbound(
                             backend,
