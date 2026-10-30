@@ -493,18 +493,15 @@ final class ZLinkStreamRuntimeIngressTest {
         FakeStream stream = new FakeStream();
         var clock = new java.util.concurrent.atomic.AtomicLong();
         ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
-        var contextsField = ZLinkStreamRuntime.class.getDeclaredField("sessionContexts");
-        contextsField.setAccessible(true);
-        var contexts = (java.util.Set<?>) contextsField.get(runtime);
         TestSession.failNextConstruction = true;
         assertThrows(
                 RuntimeException.class,
                 () ->
                         stream.errorHandler.handle(
                                 PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready"));
-        assertEquals(0, contexts.size());
+        assertEquals(0, runtime.sessionContextCount());
         stream.errorHandler.handle(PEER_B, MonitorEventType.CONNECTION_READY, 0, "ready");
-        assertEquals(1, contexts.size());
+        assertEquals(1, runtime.sessionContextCount());
     }
 
     private ZLinkStreamRuntime startDeterministic(
@@ -1089,9 +1086,7 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(1, TestSession.createdCount.get());
         assertEquals(PEER_B, session.context.routingId().orElseThrow());
         assertEquals(List.of("good"), session.packetNames);
-        var contexts = ZLinkStreamRuntime.class.getDeclaredField("sessionContexts");
-        contexts.setAccessible(true);
-        assertEquals(1, ((java.util.Set<?>) contexts.get(runtime)).size());
+        assertEquals(1, runtime.sessionContextCount());
     }
 
     @Test

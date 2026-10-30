@@ -188,22 +188,20 @@ final class ZLinkJavaRawServicePortContractTest {
                         systems.zlink.contracts.errors.CloseResult.BUSY, 16);
         try (var context = systems.zlink.contracts.core.Zlink.createContext();
                 var router = context.createRouterSocket()) {
-            var owner = new ZLinkJavaSocketReceivePoller(router);
-            var field = ZLinkJavaSocketReceivePoller.class.getDeclaredField("poller");
-            field.setAccessible(true);
-            ((systems.zlink.contracts.eventing.Poller) field.get(owner)).close();
-            field.set(
-                    owner,
-                    java.lang.reflect.Proxy.newProxyInstance(
-                            systems.zlink.contracts.eventing.Poller.class.getClassLoader(),
-                            new Class<?>[] {systems.zlink.contracts.eventing.Poller.class},
-                            (proxy, method, args) -> {
-                                assertEquals("close", method.getName());
-                                if (attempts.incrementAndGet() == 1) {
-                                    throw failure;
-                                }
-                                return null;
-                            }));
+            var poller =
+                    (systems.zlink.contracts.eventing.Poller)
+                            java.lang.reflect.Proxy.newProxyInstance(
+                                    systems.zlink.contracts.eventing.Poller.class.getClassLoader(),
+                                    new Class<?>[] {systems.zlink.contracts.eventing.Poller.class},
+                                    (proxy, method, args) -> {
+                                        assertEquals("close", method.getName());
+                                        if (attempts.incrementAndGet() == 1) {
+                                            throw failure;
+                                        }
+                                        return null;
+                                    });
+            var owner =
+                    new ZLinkJavaSocketReceivePoller(router, true, false, () -> poller, () -> null);
             assertSame(failure, assertThrows(failure.getClass(), owner::close));
             owner.close();
             owner.close();

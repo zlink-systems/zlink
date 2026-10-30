@@ -20,28 +20,30 @@ final class ZLinkJavaRawMeshNodeIngressAdmissionTest {
     @ValueSource(booleans = {false, true})
     void updateCannotEstablishAdmissionOnAReplacementRoute(boolean admittedRoute) throws Exception {
         var rid = RoutingId.from("ingress-peer");
+        var local = descriptor(RoutingId.from("ingress-local"), 1);
+        var topology = new ZLinkServiceTopologyRegistry(local);
         try (var context = Zlink.createContext();
-                var node = new ZLinkJavaRawMeshNode(context, "ingress")) {
-            var local = descriptor(RoutingId.from("ingress-local"), 1);
-            var topology = new ZLinkServiceTopologyRegistry(local);
+                var port = new ZLinkJavaRawServicePort(context);
+                var node =
+                        ZLinkJavaRawMeshNodeTesting.create(
+                                "ingress",
+                                port,
+                                null,
+                                local,
+                                topology,
+                                java.util.Map.of(),
+                                Runnable::run)) {
             // A synthetic Received has route generation zero. The other connection is
             // still admitted in topology while Core delivers a replacement route's record.
             topology.admit(
                     descriptor(rid, 1),
                     admittedRoute ? "0" : "1",
                     ServiceWireConstants.COMMAND_HELLO);
-            set(node, "localDescriptor", local);
-            set(node, "topology", topology);
-            var dispatch =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "dispatch", ZLinkJavaRawServicePort.Inbound.class);
-            dispatch.setAccessible(true);
             var update =
                     new ZLinkServiceM6AWireCodec()
                             .encodeAdmission(
                                     ServiceWireConstants.COMMAND_UPDATE, descriptor(rid, 2));
-            dispatch.invoke(
-                    node,
+            node.dispatch(
                     new ZLinkJavaRawServicePort.Inbound(
                             rid, null, List.of(update), new Received()));
             assertEquals(
@@ -56,16 +58,21 @@ final class ZLinkJavaRawMeshNodeIngressAdmissionTest {
     @ValueSource(ints = {ServiceWireConstants.COMMAND_HELLO, ServiceWireConstants.COMMAND_ADMIT})
     void endedRouteHandshakeCannotRestoreAdmission(int command) throws Exception {
         var rid = RoutingId.from("ingress-peer");
+        var local = descriptor(RoutingId.from("ingress-local"), 1);
+        var topology = new ZLinkServiceTopologyRegistry(local);
         try (var context = Zlink.createContext();
-                var node = new ZLinkJavaRawMeshNode(context, "ingress");
+                var port = new ZLinkJavaRawServicePort(context);
+                var router = port.openRouter(local.nodeRoutingId(), true);
+                var node =
+                        ZLinkJavaRawMeshNodeTesting.create(
+                                "ingress",
+                                port,
+                                router,
+                                local,
+                                topology,
+                                java.util.Map.of(),
+                                Runnable::run);
                 var remote = new ZLinkJavaRawServicePort(context)) {
-            var local = descriptor(RoutingId.from("ingress-local"), 1);
-            var topology = new ZLinkServiceTopologyRegistry(local);
-            set(node, "localDescriptor", local);
-            set(node, "topology", topology);
-            var port = (ZLinkJavaRawServicePort) field(node, "port");
-            var router = port.openRouter(local.nodeRoutingId(), true);
-            set(node, "router", router);
             var endpoint = "inproc://ended-admission-" + java.util.UUID.randomUUID();
             router.bind(endpoint);
             var peer = remote.openRouter(rid);
@@ -99,11 +106,7 @@ final class ZLinkJavaRawMeshNodeIngressAdmissionTest {
                 } while (!((java.util.Map<?, ?>) field(node, "selectedRoutes")).isEmpty());
                 // Core ROUTER §10.1 permits buffered records after a selected pipe ends.
                 // Receipt is not selection, so a pending handshake cannot restore admission.
-                var dispatch =
-                        ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                                "dispatch", ZLinkJavaRawServicePort.Inbound.class);
-                dispatch.setAccessible(true);
-                dispatch.invoke(node, retained);
+                node.dispatch(retained);
                 assertTrue(topology.peer(rid).isEmpty());
                 assertNull(
                         ((systems.zlink.framework.runtime.internal.service
@@ -119,12 +122,6 @@ final class ZLinkJavaRawMeshNodeIngressAdmissionTest {
         var field = owner.getClass().getDeclaredField(name);
         field.setAccessible(true);
         return field.get(owner);
-    }
-
-    private static void set(Object owner, String name, Object value) throws Exception {
-        var field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(owner, value);
     }
 
     private static ZLinkServiceNodeDescriptor descriptor(RoutingId rid, long revision) {
