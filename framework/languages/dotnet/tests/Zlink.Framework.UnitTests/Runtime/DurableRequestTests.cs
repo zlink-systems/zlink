@@ -350,6 +350,358 @@ public sealed class DurableRequestTests
         );
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Connection_failure_is_terminal_even_after_recovery(bool recovered)
+    {
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var route = new ZLinkPeerRouteObservation(
+            0,
+            0,
+            changed.Task,
+            new ConnectionAttempt(
+                "tcp://owner",
+                11,
+                1,
+                0,
+                ConnectionAttemptState.Connecting,
+                default
+            )
+        );
+        var submissions = 0;
+        var request = ZLinkDurableRequest
+            .RequestAsync<string>(
+                [],
+                Stopwatch.GetTimestamp(),
+                TimeSpan.FromSeconds(30),
+                (_, _, _) =>
+                {
+                    submissions++;
+                    return ValueTask.FromResult("unexpected");
+                },
+                CancellationToken.None,
+                () => route
+            )
+            .AsTask();
+        Assert.False(request.IsCompleted);
+        route = new(
+            recovered ? 7UL : 0,
+            recovered ? 7UL : 0,
+            NoTopologyChange,
+            new ConnectionAttempt(
+                "tcp://owner",
+                11,
+                3,
+                9,
+                recovered ? ConnectionAttemptState.Connected : ConnectionAttemptState.AttemptFailed,
+                default
+            )
+        );
+        changed.SetResult();
+        var error = await Assert.ThrowsAsync<ZlinkSubmitException>(async () =>
+            await request.WaitAsync(TimeSpan.FromSeconds(3))
+        );
+        Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, error.Result);
+        Assert.Equal(0, submissions);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Waiting_intent_removal_or_replacement_prevents_submission(bool replaced)
+    {
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var route = new ZLinkPeerRouteObservation(
+            0,
+            0,
+            changed.Task,
+            new ConnectionAttempt(
+                "tcp://owner",
+                11,
+                1,
+                0,
+                ConnectionAttemptState.Connecting,
+                default
+            )
+        );
+        var submissions = 0;
+        var request = ZLinkDurableRequest
+            .RequestAsync<string>(
+                [],
+                Stopwatch.GetTimestamp(),
+                TimeSpan.FromSeconds(30),
+                (_, _, _) =>
+                {
+                    submissions++;
+                    return ValueTask.FromResult("unexpected");
+                },
+                CancellationToken.None,
+                () => route
+            )
+            .AsTask();
+        route = new(
+            7,
+            7,
+            NoTopologyChange,
+            replaced
+                ? new ConnectionAttempt(
+                    "tcp://owner",
+                    12,
+                    2,
+                    0,
+                    ConnectionAttemptState.Connected,
+                    default
+                )
+                : null
+        );
+        changed.SetResult();
+        var error = await Assert.ThrowsAsync<ZlinkSubmitException>(async () =>
+            await request.WaitAsync(TimeSpan.FromSeconds(3))
+        );
+        Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, error.Result);
+        Assert.Equal(0, submissions);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Missing_initial_core_row_preserves_first_failure_history(bool failed)
+    {
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var route = new ZLinkPeerRouteObservation(0, 0, changed.Task);
+        var submissions = 0;
+        var request = ZLinkDurableRequest
+            .RequestAsync<string>(
+                [],
+                Stopwatch.GetTimestamp(),
+                TimeSpan.FromSeconds(30),
+                (_, _, _) =>
+                {
+                    submissions++;
+                    return ValueTask.FromResult("reply");
+                },
+                CancellationToken.None,
+                () => route
+            )
+            .AsTask();
+        Assert.Equal(0, submissions);
+        route = new(
+            7,
+            7,
+            NoTopologyChange,
+            new ConnectionAttempt(
+                "tcp://owner",
+                11,
+                2,
+                failed ? 9UL : 0,
+                ConnectionAttemptState.Connected,
+                default
+            )
+        );
+        changed.SetResult();
+        if (failed)
+        {
+            var error = await Assert.ThrowsAsync<ZlinkSubmitException>(async () =>
+                await request.WaitAsync(TimeSpan.FromSeconds(3))
+            );
+            Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, error.Result);
+            Assert.Equal(0, submissions);
+        }
+        else
+        {
+            Assert.Equal("reply", await request.WaitAsync(TimeSpan.FromSeconds(3)));
+            Assert.Equal(1, submissions);
+        }
+    }
+
+    [Theory]
+    [InlineData(0UL, false)]
+    [InlineData(9UL, false)]
+    [InlineData(0UL, true)]
+    [InlineData(9UL, true)]
+    public async Task Ready_snapshot_is_scanned_only_for_an_already_waiting_request(
+        ulong failureId,
+        bool initiallyMissing
+    )
+    {
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempt = new ConnectionAttempt(
+            "tcp://owner",
+            11,
+            1,
+            0,
+            ConnectionAttemptState.Connecting,
+            default
+        );
+        var route = new ZLinkPeerRouteObservation(
+            0,
+            0,
+            changed.Task,
+            initiallyMissing ? null : attempt,
+            attempt.Endpoint,
+            initiallyMissing ? [] : [attempt]
+        );
+        var submissions = 0;
+        var request = ZLinkDurableRequest
+            .RequestAsync<string>(
+                [],
+                Stopwatch.GetTimestamp(),
+                TimeSpan.FromSeconds(30),
+                (_, _, _) =>
+                {
+                    submissions++;
+                    return ValueTask.FromResult("reply");
+                },
+                CancellationToken.None,
+                () => route
+            )
+            .AsTask();
+        route = new(
+            7,
+            7,
+            NoTopologyChange,
+            Attempts:
+            [
+                attempt with
+                {
+                    Revision = 2,
+                    LastFailureId = failureId,
+                    State = ConnectionAttemptState.Connected,
+                },
+            ]
+        );
+        changed.SetResult();
+        if (failureId == 0)
+        {
+            Assert.Equal("reply", await request.WaitAsync(TimeSpan.FromSeconds(3)));
+            Assert.Equal(1, submissions);
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<ZlinkSubmitException>(async () =>
+                await request.WaitAsync(TimeSpan.FromSeconds(3))
+            );
+            Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, error.Result);
+            Assert.Equal(0, submissions);
+        }
+    }
+
+    [Fact]
+    public async Task Late_connection_and_admission_submit_once_with_the_remaining_budget()
+    {
+        var connected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observedConnection = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var attempt = new ConnectionAttempt(
+            "inproc://late-owner",
+            11,
+            1,
+            0,
+            ConnectionAttemptState.Connecting,
+            default
+        );
+        var route = new ZLinkPeerRouteObservation(0, 0, connected.Task, attempt);
+        var submissions = 0;
+        var timeout = TimeSpan.FromSeconds(30);
+        var request = ZLinkDurableRequest
+            .RequestAsync<string>(
+                [],
+                Stopwatch.GetTimestamp(),
+                timeout,
+                (_, remaining, _) =>
+                {
+                    Assert.True(remaining > TimeSpan.Zero && remaining < timeout);
+                    submissions++;
+                    return ValueTask.FromResult("reply");
+                },
+                CancellationToken.None,
+                () =>
+                {
+                    var current = route;
+                    if (current.SelectedGeneration != 0)
+                        observedConnection.TrySetResult();
+                    return current;
+                }
+            )
+            .AsTask();
+        Assert.False(request.IsCompleted);
+        Assert.Equal(0, submissions);
+        route = new(
+            7,
+            0,
+            admitted.Task,
+            attempt with
+            {
+                Revision = 2,
+                State = ConnectionAttemptState.Connected,
+            }
+        );
+        connected.SetResult();
+        await observedConnection.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.False(request.IsCompleted);
+        Assert.Equal(0, submissions);
+        route = route with { ReadyGeneration = 7, Changed = NoTopologyChange };
+        admitted.SetResult();
+        Assert.Equal("reply", await request.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.Equal(1, submissions);
+    }
+
+    [Fact]
+    public async Task Ready_route_ignores_unrelated_outgoing_failure_history()
+    {
+        var submissions = 0;
+        Assert.Equal(
+            "reply",
+            await ZLinkDurableRequest.RequestAsync<string>(
+                [],
+                Stopwatch.GetTimestamp(),
+                TimeSpan.FromSeconds(30),
+                (_, _, _) =>
+                {
+                    submissions++;
+                    return ValueTask.FromResult("reply");
+                },
+                CancellationToken.None,
+                () =>
+                    new(
+                        7,
+                        7,
+                        NoTopologyChange,
+                        new ConnectionAttempt(
+                            "tcp://owner",
+                            11,
+                            2,
+                            9,
+                            ConnectionAttemptState.AttemptFailed,
+                            default
+                        )
+                    )
+            )
+        );
+        Assert.Equal(1, submissions);
+    }
+
+    [Fact]
+    public async Task Deadline_before_submission_is_deadline_exceeded()
+    {
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await ZLinkDurableRequest.RequestAsync<string>(
+                [],
+                Stopwatch.GetTimestamp(),
+                TimeSpan.Zero,
+                (_, _, _) => throw new Xunit.Sdk.XunitException("Expired request submitted."),
+                CancellationToken.None,
+                ReadyRoute
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+    }
+
     private static readonly Task NoTopologyChange = new TaskCompletionSource().Task;
 
     private static ZLinkPeerRouteObservation ReadyRoute() => new(1, 1, NoTopologyChange);
