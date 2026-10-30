@@ -127,6 +127,7 @@ final class ZLinkJavaDurableRequestTest {
     @Test
     void bindingTerminalClaimsTheEntryBeforeAQueuedRouteTurn() {
         var source = new Source();
+        source.route = new PeerRouteObservation(1, false);
         var turns = new java.util.ArrayDeque<Runnable>();
         var pending = new CompletableFuture<List<byte[]>>();
         var terminal = List.of(new byte[] {9});
@@ -148,6 +149,9 @@ final class ZLinkJavaDurableRequestTest {
                                 Duration.ofSeconds(5),
                                 () -> 0)
                         .toCompletableFuture();
+        turns.remove().run();
+        assertEquals(0, attempts.get());
+        source.route = new PeerRouteObservation(1, true);
         turns.remove().run();
         source.route = new PeerRouteObservation(2, true);
         source.signal();
@@ -174,6 +178,7 @@ final class ZLinkJavaDurableRequestTest {
     }
 
     private void lifecycleRemovalAfterReceivedTerminal(Throwable failure) throws Exception {
+        var ready = new AtomicBoolean();
         var turns = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
         var removed = new java.util.concurrent.atomic.AtomicReference<Runnable>();
         var pending = new CompletableFuture<List<byte[]>>();
@@ -187,7 +192,7 @@ final class ZLinkJavaDurableRequestTest {
                                     admission.complete(null);
                                     return pending;
                                 },
-                                () -> new PeerRouteObservation(1, true),
+                                () -> new PeerRouteObservation(1, ready.get()),
                                 (changed, ended) -> {
                                     removed.set(ended);
                                     changed.run();
@@ -200,6 +205,9 @@ final class ZLinkJavaDurableRequestTest {
                                 Duration.ofSeconds(5),
                                 () -> 0)
                         .toCompletableFuture();
+        turns.remove().run();
+        assertEquals(0, attempts.get());
+        ready.set(true);
         turns.remove().run();
         if (failure == null) pending.complete(terminal);
         else pending.completeExceptionally(failure);
@@ -512,6 +520,7 @@ final class ZLinkJavaDurableRequestTest {
     void sourceSignalsDoNotDuplicateAnInFlightAttemptAndCancellationReleasesObserver()
             throws Exception {
         var source = new Source();
+        source.route = new PeerRouteObservation(1, false);
         var attempts = new AtomicInteger();
         var pending = new CompletableFuture<List<byte[]>>();
         var completion =
@@ -524,6 +533,8 @@ final class ZLinkJavaDurableRequestTest {
                                 () -> false,
                                 Duration.ofSeconds(5))
                         .toCompletableFuture();
+        assertEquals(0, attempts.get());
+        source.route = new PeerRouteObservation(1, true);
         source.signal();
         source.signal();
         assertEquals(1, attempts.get());
@@ -545,6 +556,7 @@ final class ZLinkJavaDurableRequestTest {
     @Test
     void ownerFailureBeforeObservationDoesNotInstallAnObserver() {
         var source = new Source();
+        source.route = new PeerRouteObservation(1, false);
         var failure = new IllegalStateException("owner unavailable");
         var completion =
                 ZLinkJavaDurableRequestTest.request(
@@ -569,6 +581,7 @@ final class ZLinkJavaDurableRequestTest {
     @Test
     void missingRouteWaitsForSourceAndTargetRemovalEndsPendingRequest() throws Exception {
         var source = new Source();
+        source.route = new PeerRouteObservation(1, false);
         var route = new AtomicBoolean();
         var ended = new AtomicBoolean();
         var attempts = new AtomicInteger();
@@ -585,6 +598,7 @@ final class ZLinkJavaDurableRequestTest {
                         .toCompletableFuture();
         assertEquals(0, attempts.get());
         route.set(true);
+        source.route = new PeerRouteObservation(1, true);
         source.signal();
         assertEquals(1, attempts.get());
         ended.set(true);
@@ -608,6 +622,7 @@ final class ZLinkJavaDurableRequestTest {
     @Test
     void durableNotAdmittedRetainsItsTypedTerminalWithoutReplay() throws Exception {
         var source = new Source();
+        source.route = new PeerRouteObservation(1, false);
         var terminal = new ZlinkSubmitException(SubmitResult.NOT_ADMITTED);
         var attempts = new AtomicInteger();
         var completion =
@@ -619,6 +634,9 @@ final class ZLinkJavaDurableRequestTest {
                         },
                         () -> false,
                         Duration.ofSeconds(5));
+        assertEquals(0, attempts.get());
+        source.route = new PeerRouteObservation(1, true);
+        source.signal();
         assertSame(
                 terminal,
                 assertThrows(
@@ -759,7 +777,8 @@ final class ZLinkJavaDurableRequestTest {
                             admission.complete(null);
                         return pending;
                     },
-                    () -> route,
+                    // Match retireUnownedPeer: publish the removed route before its end event.
+                    () -> ended.getAsBoolean() ? new PeerRouteObservation(0, false) : route,
                     (changed, removed) ->
                             observe(
                                     () -> {

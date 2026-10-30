@@ -50,6 +50,7 @@ public final class ZLinkRelocationRawSessionFixture implements AutoCloseable {
             var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid, 17));
             topology.admit(descriptor(peerRid, 31), "ready", ServiceWireConstants.COMMAND_ADMIT);
             set("topology", topology);
+            topology.observeChanges(node::publishPeerObservation);
         } catch (ReflectiveOperationException | RuntimeException | Error failure) {
             close();
             throw new AssertionError(failure);
