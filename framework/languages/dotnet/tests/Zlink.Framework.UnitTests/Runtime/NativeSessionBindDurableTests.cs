@@ -106,12 +106,18 @@ public sealed partial class StatefulServiceRuntimeTests
         options.Diagnostics.SetLevel(level);
         node.SetFlowTracer(new ZLinkMessageFlowTracer(options));
         var events = new ConcurrentQueue<Activity>();
+        var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = events.Enqueue,
+            ActivityStopped = activity =>
+            {
+                events.Enqueue(activity);
+                if (Equals(activity.GetTagItem("packet_name"), "BoundSessionBind"))
+                    observed.TrySetResult();
+            },
         };
         ActivitySource.AddActivityListener(listener);
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
@@ -135,6 +141,8 @@ public sealed partial class StatefulServiceRuntimeTests
             Assert.Empty(failures);
             return;
         }
+        await observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         var failure = Assert.Single(failures);
         Assert.Equal("replied", failure.GetTagItem("phase"));
         Assert.Equal("failed", failure.GetTagItem("outcome"));

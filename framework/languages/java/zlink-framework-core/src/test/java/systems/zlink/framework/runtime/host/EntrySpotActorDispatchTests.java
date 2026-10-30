@@ -26,6 +26,7 @@ import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
@@ -146,6 +147,7 @@ final class EntrySpotActorDispatchTests {
                     @Override
                     public void close() {}
                 };
+        ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(handler);
         try {
             disconnectRequestRepliesAfterCallbackOrDiscard("malformed", replyFlags);
@@ -154,6 +156,7 @@ final class EntrySpotActorDispatchTests {
             assertEquals(java.util.logging.Level.WARNING, record.getLevel());
             assertTrue(records.isEmpty(), "one discarded notification must produce one error log");
         } finally {
+            ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
         }
     }
@@ -266,6 +269,7 @@ final class EntrySpotActorDispatchTests {
                 actor.disconnectTerminal.complete(null);
                 replies.forEach(reply -> reply.parts().forEach(Message::close));
             }
+            ZLinkTelemetryTestFence.awaitIdle();
         }
     }
 
