@@ -353,9 +353,13 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
 
 // A registration settles only when resumption starts or its execution owner
 // cancels it. A queued result delivery therefore cannot revive a stopped turn.
-class task_wait_registration_t : public std::enable_shared_from_this<task_wait_registration_t>
+template <typename T> class task_shared_state_t;
+
+class task_wait_registration_t
 {
   public:
+    task_wait_registration_t () = default;
+
     task_wait_registration_t (std::coroutine_handle<> handle, task_scheduler_t scheduler) :
         task_wait_registration_t (
           [handle] (bool cancelled, const ambient_context_snapshot_t &ambient) {
@@ -373,11 +377,34 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
 
     task_wait_registration_t (std::function<void (bool, const ambient_context_snapshot_t &)> work,
                               task_scheduler_t explicit_scheduler) :
-        _work (std::move (work)),
-        _scheduler (std::move (explicit_scheduler)),
-        _turn (capture_current_serial_turn ()),
-        _ambient (capture_ambient_context ())
+        _work (std::move (work))
     {
+        prepare_context (std::move (explicit_scheduler));
+    }
+
+    void prepare (std::coroutine_handle<> handle, task_scheduler_t scheduler)
+    {
+        _cancellation.reset ();
+        _started.store (false, std::memory_order_release);
+        _next.reset ();
+        _work = [handle] (bool cancelled, const ambient_context_snapshot_t &ambient) {
+            const auto ambient_guard = enter_ambient_context (ambient, false);
+            if (cancelled)
+                set_serial_resume_failure (framework_error_kind_t::shutting_down,
+                                           registered_execution_context_shutting_down_message);
+            handle.resume ();
+            if (cancelled)
+                (void) take_serial_resume_failure ();
+        };
+        prepare_context (std::move (scheduler));
+    }
+
+  private:
+    void prepare_context (task_scheduler_t explicit_scheduler)
+    {
+        _scheduler = std::move (explicit_scheduler);
+        _turn = capture_current_serial_turn ();
+        _ambient = capture_ambient_context ();
         // Completion owners place the caller's turn (hot path E5 and state
         // lane scope exit). Internal task wrappers propagate that result in
         // the same turn. Explicit scope-exit and Yield schedulers own their
@@ -395,32 +422,40 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
             _completion_dispatcher = borrow_completion_dispatcher ();
     }
 
+  public:
     bool has_wait_owner () const noexcept { return _ambient.wait_owner.stop_possible (); }
 
-    void bind_owner (std::weak_ptr<void> state,
-                     void (*cleanup) (const std::shared_ptr<void> &,
-                                      const task_wait_registration_t *))
+    void bind_owner (const std::shared_ptr<task_wait_registration_t> &self,
+                     std::weak_ptr<void> state,
+                     bool (*cleanup) (const std::shared_ptr<void> &, task_wait_registration_t *))
     {
         if (_ambient.wait_owner.stop_possible ())
             _cancellation.emplace (_ambient.wait_owner,
-                                   cancellation_t{weak_from_this (), std::move (state), cleanup});
+                                   cancellation_t{self, std::move (state), cleanup});
     }
 
     bool pending () const noexcept { return !_started.load (std::memory_order_acquire); }
 
-    bool deliver (std::shared_ptr<void> lifetime) noexcept
+    bool deliver (const std::shared_ptr<task_wait_registration_t> &self,
+                  std::shared_ptr<void> lifetime,
+                  std::mutex &owner_mutex) noexcept
     {
-        if (_started.load (std::memory_order_acquire))
-            return true;
-        auto self = shared_from_this ();
+        task_scheduler_t scheduler;
+        bool inline_allowed = false;
+        {
+            std::lock_guard lock (owner_mutex);
+            if (_started.load (std::memory_order_acquire))
+                return true;
+            scheduler = std::move (_scheduler);
+            inline_allowed = _ambient.infrastructure_wait || _turn != nullptr;
+        }
         std::function<void ()> resume = [self, lifetime = std::move (lifetime)] {
             (void) lifetime; // Retain the terminal result until delivery finishes.
             self->resume (false);
         };
-        const bool inline_allowed = _ambient.infrastructure_wait || _turn != nullptr;
         try {
-            if (_scheduler)
-                _scheduler (std::move (resume));
+            if (scheduler)
+                scheduler (std::move (resume));
             else
                 dispatch_completion (std::move (resume), inline_allowed, nullptr,
                                      _completion_dispatcher);
@@ -435,8 +470,14 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
              * is already requested and its callback has not run yet. The
              * registration stays owned until that callback settles it. */
             if (!dispatch_shutdown_fallback (resume, _ambient.wait_owner, inline_allowed,
-                                             _completion_dispatcher))
-                return false;
+                                             _completion_dispatcher)) {
+                std::lock_guard lock (owner_mutex);
+                if (pending ()) {
+                    _scheduler = std::move (scheduler);
+                    return false;
+                }
+                return true;
+            }
             return true;
         }
         return true;
@@ -450,12 +491,18 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         bool pending = false;
         if (!_started.compare_exchange_strong (pending, true, std::memory_order_acq_rel))
             return true;
+        return resume_claimed (cancelled);
+    }
+
+    bool resume_claimed (bool cancelled) noexcept
+    {
         // A registration restores only a turn it still owned when it was made.
         // Otherwise the continuation keeps the turn its delivery runs in, such
         // as the new queue turn a Yield resumes in (execution gate §3·§4).
+        auto turn = std::move (_turn);
         std::optional<serial_turn_scope_t> turn_guard;
-        if (_turn)
-            turn_guard.emplace (_turn);
+        if (turn)
+            turn_guard.emplace (turn);
         auto work = std::move (_work);
         work (cancelled, _ambient);
         return true;
@@ -471,17 +518,23 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
     {
         std::weak_ptr<task_wait_registration_t> waiter;
         std::weak_ptr<void> state;
-        void (*cleanup) (const std::shared_ptr<void> &, const task_wait_registration_t *);
+        bool (*cleanup) (const std::shared_ptr<void> &, task_wait_registration_t *);
         void operator() () const noexcept
         {
             if (auto self = waiter.lock ()) {
-                self->cancel ();
-                if (auto owner = state.lock ())
-                    cleanup (owner, self.get ());
+                if (auto owner = state.lock ()) {
+                    if (cleanup (owner, self.get ()))
+                        self->resume_claimed (true);
+                } else
+                    self->cancel ();
             }
         }
     };
     std::optional<std::stop_callback<cancellation_t>> _cancellation;
+
+    std::shared_ptr<task_wait_registration_t> _next;
+
+    template <typename> friend class task_shared_state_t;
 };
 
 template <typename T>
@@ -502,7 +555,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
 
     bool complete (result_t<T> result)
     {
-        std::vector<std::shared_ptr<task_wait_registration_t>> continuations;
+        std::shared_ptr<task_wait_registration_t> continuations;
         std::vector<callback_t> terminal_callbacks;
         auto self = this->shared_from_this ();
         {
@@ -511,7 +564,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
                 return false;
             }
             _result.emplace (std::move (result));
-            continuations = std::move (_continuations);
+            continuations = std::move (_continuations_head);
+            _continuations_tail = nullptr;
             terminal_callbacks = std::move (_terminal_callbacks);
         }
         _ready.notify_all ();
@@ -521,8 +575,11 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
                 const auto ambient_guard = enter_ambient_context (callback.ambient);
                 callback.invoke (*_result);
             }
-            for (auto &continuation : continuations)
+            while (continuations) {
+                auto continuation = std::move (continuations);
+                continuations = std::move (continuation->_next);
                 deliver_registration (continuation, self);
+            }
         }();
         return true;
     }
@@ -533,13 +590,10 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         return _result.has_value ();
     }
 
-    void set_continuation (std::coroutine_handle<> continuation,
-                           task_scheduler_t explicit_scheduler = {})
+    void set_continuation (const std::shared_ptr<task_wait_registration_t> &registration)
     {
         auto self = this->shared_from_this ();
         std::shared_ptr<task_shared_state_t<T>> lifetime;
-        auto registration =
-          std::make_shared<task_wait_registration_t> (continuation, std::move (explicit_scheduler));
         const auto owner_state = registration->has_wait_owner ()
                                    ? this->weak_from_this ()
                                    : std::weak_ptr<task_shared_state_t<T>>{};
@@ -548,10 +602,10 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             if (_result) {
                 lifetime = std::move (self);
             } else {
-                _continuations.push_back (registration);
+                append_continuation_unlocked (registration);
             }
         }
-        bind_wait_owner (registration, owner_state);
+        bind_wait_owner (registration, registration, owner_state);
         if (lifetime)
             lifetime->deliver_registration (registration, lifetime);
     }
@@ -606,11 +660,11 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
                           callback (*self->_result);
                   },
                   std::move (scheduler));
-                _continuations.push_back (registration);
+                append_continuation_unlocked (registration);
             }
         }
         if (registration) {
-            bind_wait_owner (registration, owner_state);
+            bind_wait_owner (registration, registration, owner_state);
             return;
         }
         auto invoke = [self, callback = std::move (callback),
@@ -647,35 +701,62 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     void deliver_registration (const std::shared_ptr<task_wait_registration_t> &registration,
                                const std::shared_ptr<task_shared_state_t<T>> &lifetime) noexcept
     {
-        if (registration->deliver (lifetime))
+        if (registration->deliver (registration, lifetime, _mutex))
             return;
         // A rejected delivery remains owned until its registered owner stops.
         // Keeping it in the original list also covers ready-registration races.
         std::lock_guard lock (_mutex);
         if (registration->pending ())
-            _continuations.push_back (registration);
+            append_continuation_unlocked (registration);
+    }
+
+    void append_continuation_unlocked (
+      const std::shared_ptr<task_wait_registration_t> &registration) noexcept
+    {
+        if (_continuations_tail)
+            _continuations_tail->_next = registration;
+        else
+            _continuations_head = registration;
+        _continuations_tail = registration.get ();
     }
 
   protected:
     virtual void bind_wait_owner (const std::shared_ptr<task_wait_registration_t> &,
+                                  const std::shared_ptr<task_wait_registration_t> &,
                                   std::weak_ptr<void>)
     {
     }
 
-    static void erase_registration (const std::shared_ptr<void> &state,
-                                    const task_wait_registration_t *registration)
+    static bool erase_registration (const std::shared_ptr<void> &state,
+                                    task_wait_registration_t *registration)
     {
         auto owner = std::static_pointer_cast<task_shared_state_t<T>> (state);
         std::lock_guard lock (owner->_mutex);
-        std::erase_if (owner->_continuations,
-                       [registration] (const auto &entry) { return entry.get () == registration; });
+        auto *previous = static_cast<task_wait_registration_t *> (nullptr);
+        auto *link = &owner->_continuations_head;
+        while (*link && link->get () != registration) {
+            previous = link->get ();
+            link = &((*link)->_next);
+        }
+        if (*link) {
+            auto removed = std::move (*link);
+            auto *removed_pointer = removed.get ();
+            *link = std::move (removed->_next);
+            if (owner->_continuations_tail == removed_pointer)
+                owner->_continuations_tail = previous;
+        }
+        registration->_scheduler = {};
+        bool pending = false;
+        return registration->_started.compare_exchange_strong (pending, true,
+                                                               std::memory_order_acq_rel);
     }
 
   private:
     mutable std::mutex _mutex;
     std::condition_variable _ready;
     std::optional<result_t<T>> _result;
-    std::vector<std::shared_ptr<task_wait_registration_t>> _continuations;
+    std::shared_ptr<task_wait_registration_t> _continuations_head;
+    task_wait_registration_t *_continuations_tail = nullptr;
     std::vector<callback_t> _terminal_callbacks;
 };
 
@@ -683,10 +764,18 @@ template <typename T> class application_task_shared_state_t final : public task_
 {
   private:
     void bind_wait_owner (const std::shared_ptr<task_wait_registration_t> &registration,
+                          const std::shared_ptr<task_wait_registration_t> &self,
                           std::weak_ptr<void> state) override
     {
-        registration->bind_owner (std::move (state), &task_shared_state_t<T>::erase_registration);
+        registration->bind_owner (self, std::move (state),
+                                  &task_shared_state_t<T>::erase_registration);
     }
+};
+
+template <typename T> class coroutine_task_shared_state_t final : public task_shared_state_t<T>
+{
+  public:
+    task_wait_registration_t continuation_registration;
 };
 
 } // namespace detail
@@ -761,6 +850,13 @@ template <typename T> result_t<T> current_exception_result ()
 template <typename T> class coroutine_promise_t
 {
   public:
+    using completion_state_t = coroutine_task_shared_state_t<T>;
+
+    std::shared_ptr<task_wait_registration_t> continuation_registration () noexcept
+    {
+        return {completion, &completion->continuation_registration};
+    }
+
     task_scheduler_t zlink_continuation_scheduler ()
     {
         return capture_native_continuation_scheduler ();
@@ -777,8 +873,8 @@ template <typename T> class coroutine_promise_t
   protected:
     void store_return (result_t<T> result) { _return_result.emplace (std::move (result)); }
 
-    std::shared_ptr<task_shared_state_t<T>> completion =
-      std::make_shared<task_shared_state_t<T>> ();
+    std::shared_ptr<coroutine_task_shared_state_t<T>> completion =
+      std::make_shared<coroutine_task_shared_state_t<T>> ();
 
   private:
     std::optional<result_t<T>> _return_result;
@@ -818,10 +914,19 @@ template <typename T> class task_t
     ~task_t () = default;
 
     bool await_ready () const noexcept { return _state->is_ready (); }
-    void await_suspend (std::coroutine_handle<> continuation)
+    template <typename TPromise> void await_suspend (std::coroutine_handle<TPromise> continuation)
     {
-        _state->set_continuation (continuation, detail::task_suspend_scheduler (
-                                                  _resume_scheduler, _release_turn_on_suspend));
+        auto scheduler =
+          detail::task_suspend_scheduler (_resume_scheduler, _release_turn_on_suspend);
+        if constexpr (requires (TPromise &promise) { promise.continuation_registration (); }) {
+            auto registration = continuation.promise ().continuation_registration ();
+            registration->prepare (continuation, std::move (scheduler));
+            _state->set_continuation (registration);
+        } else {
+            std::coroutine_handle<> erased = continuation;
+            _state->set_continuation (
+              std::make_shared<detail::task_wait_registration_t> (erased, std::move (scheduler)));
+        }
     }
     T await_resume ()
     {
@@ -887,10 +992,19 @@ template <> class task_t<void>
     ~task_t () = default;
 
     bool await_ready () const noexcept { return _state->is_ready (); }
-    void await_suspend (std::coroutine_handle<> continuation)
+    template <typename TPromise> void await_suspend (std::coroutine_handle<TPromise> continuation)
     {
-        _state->set_continuation (continuation, detail::task_suspend_scheduler (
-                                                  _resume_scheduler, _release_turn_on_suspend));
+        auto scheduler =
+          detail::task_suspend_scheduler (_resume_scheduler, _release_turn_on_suspend);
+        if constexpr (requires (TPromise &promise) { promise.continuation_registration (); }) {
+            auto registration = continuation.promise ().continuation_registration ();
+            registration->prepare (continuation, std::move (scheduler));
+            _state->set_continuation (registration);
+        } else {
+            std::coroutine_handle<> erased = continuation;
+            _state->set_continuation (
+              std::make_shared<detail::task_wait_registration_t> (erased, std::move (scheduler)));
+        }
     }
     void await_resume ()
     {

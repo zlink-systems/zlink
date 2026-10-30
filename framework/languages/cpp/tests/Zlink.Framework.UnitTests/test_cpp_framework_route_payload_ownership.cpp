@@ -24,19 +24,152 @@
 
 #include <array>
 #include <chrono>
+#include <coroutine>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iostream>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <sstream>
 #include <thread>
 #include <tuple>
+#include <utility>
 
 namespace
 {
 using namespace zlink::framework;
+
+struct task_registration_probe_t
+{
+    struct promise_type
+    {
+        explicit promise_type (std::atomic_bool &resumed) : resumed (resumed) {}
+
+        task_registration_probe_t get_return_object ()
+        {
+            return task_registration_probe_t{
+              std::coroutine_handle<promise_type>::from_promise (*this)};
+        }
+        std::suspend_always initial_suspend () noexcept { return {}; }
+        std::suspend_always final_suspend () noexcept { return {}; }
+        void return_void () noexcept { resumed.store (true, std::memory_order_release); }
+        void unhandled_exception () noexcept { std::terminate (); }
+
+        std::atomic_bool &resumed;
+    };
+
+    using handle_t = std::coroutine_handle<promise_type>;
+
+    explicit task_registration_probe_t (handle_t value) : handle (value) {}
+    task_registration_probe_t (task_registration_probe_t &&other) noexcept : handle (other.handle)
+    {
+        other.handle = {};
+    }
+    task_registration_probe_t (const task_registration_probe_t &) = delete;
+    task_registration_probe_t &operator= (const task_registration_probe_t &) = delete;
+    task_registration_probe_t &operator= (task_registration_probe_t &&) = delete;
+    ~task_registration_probe_t ()
+    {
+        if (handle)
+            handle.destroy ();
+    }
+
+    handle_t handle;
+};
+
+task_registration_probe_t task_registration_probe (std::atomic_bool &resumed)
+{
+    co_return;
+}
+
+task_t<void> eager_registration_child (bool &child_started)
+{
+    child_started = true;
+    co_return;
+}
+
+task_t<void> eager_registration_parent (bool &parent_started, bool &child_started)
+{
+    parent_started = true;
+    co_await eager_registration_child (child_started);
+}
+
+template <typename TState>
+std::shared_ptr<detail::task_wait_registration_t>
+make_continuation_registration (TState &state, std::coroutine_handle<> continuation)
+{
+    detail::task_scheduler_t scheduler = [] (std::function<void ()> &&work) { work (); };
+    if constexpr (requires (TState &candidate, std::coroutine_handle<> handle,
+                            detail::task_scheduler_t resume) {
+                      candidate.set_continuation (handle, std::move (resume));
+                  }) {
+        return std::make_shared<detail::task_wait_registration_t> (continuation,
+                                                                   std::move (scheduler));
+    } else {
+        return std::make_shared<detail::task_wait_registration_t> ();
+    }
+}
+
+template <typename TTask>
+inline constexpr bool has_task_promise_registration_v =
+  requires (typename TTask::promise_type &promise) { promise.continuation_registration (); };
+
+template <typename TState, typename TRegistration>
+std::size_t
+measure_continuation_link_allocations (TState &state,
+                                       const std::shared_ptr<TRegistration> &registration,
+                                       std::coroutine_handle<> continuation)
+{
+    detail::task_scheduler_t scheduler = [] (std::function<void ()> &&work) { work (); };
+    if constexpr (requires (TState &candidate, const std::shared_ptr<TRegistration> &prepared,
+                            std::coroutine_handle<> handle, detail::task_scheduler_t resume) {
+                      prepared->prepare (handle, resume);
+                      candidate.set_continuation (prepared);
+                  }) {
+        registration->prepare (continuation, std::move (scheduler));
+        return zlink::framework::tests::count_allocations (
+          [&] { state.set_continuation (registration); });
+    } else {
+        return zlink::framework::tests::count_allocations (
+          [&] { state.set_continuation (continuation, std::move (scheduler)); });
+    }
+}
+
+TEST (TaskContinuationRegistration, ReservesBeforeEagerStartAndLinksWithoutAllocation)
+{
+    bool parent_started = false;
+    bool child_started = false;
+
+    auto &allocations_before_failure = zlink::framework::tests::allocations_before_failure;
+    constexpr bool has_promise_registration = has_task_promise_registration_v<task_t<void>>;
+    allocations_before_failure = has_promise_registration ? 1 : 2;
+    bool allocation_failed = false;
+    try {
+        auto task = eager_registration_parent (parent_started, child_started);
+        (void) task;
+    }
+    catch (const std::bad_alloc &) {
+        allocation_failed = true;
+    }
+    const bool injected = !allocations_before_failure.has_value ();
+    allocations_before_failure.reset ();
+
+    EXPECT_TRUE (allocation_failed);
+    EXPECT_TRUE (injected);
+    EXPECT_FALSE (parent_started);
+    EXPECT_FALSE (child_started);
+
+    auto state = std::make_shared<detail::task_shared_state_t<void>> ();
+    std::atomic_bool resumed{false};
+    auto continuation = task_registration_probe (resumed);
+    auto registration = make_continuation_registration (*state, continuation.handle);
+    EXPECT_EQ (0u,
+               measure_continuation_link_allocations (*state, registration, continuation.handle));
+    EXPECT_TRUE (state->complete (result_t<void>::success ()));
+    EXPECT_TRUE (resumed.load (std::memory_order_acquire));
+}
 
 struct suspended_route_state_t
 {
@@ -779,6 +912,16 @@ template <typename TMake> std::size_t single_allocation_size (TMake make)
     return count == 1 ? events[0].size : 0;
 }
 
+template <typename TTask> std::size_t public_task_state_allocation_size ()
+{
+    using promise_t = typename TTask::promise_type;
+    if constexpr (requires { typename promise_t::completion_state_t; }) {
+        using state_t = typename promise_t::completion_state_t;
+        return single_allocation_size ([] { (void) std::make_shared<state_t> (); });
+    } else
+        return single_allocation_size ([] { TTask ready (result_t<void>::success ()); });
+}
+
 struct route_send_fixture_t
 {
     serializer_registry_t serializers;
@@ -805,8 +948,7 @@ struct route_send_fixture_t
 // The transport boundary is the only coroutine between the call and the transport task.
 TEST (RoutePayloadOwnership, NodeSendCreatesOneTaskAboveTheTransport)
 {
-    const auto public_state =
-      single_allocation_size ([] { task_t<void> ready (result_t<void>::success ()); });
+    const auto public_state = public_task_state_allocation_size<task_t<void>> ();
     const auto transport_state = single_allocation_size ([] {
         task_t<result_t<void>> ready (
           result_t<result_t<void>>::success (result_t<void>::success ()));
