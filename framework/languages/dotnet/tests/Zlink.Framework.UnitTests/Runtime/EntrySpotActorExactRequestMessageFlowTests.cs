@@ -81,9 +81,10 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task Actor_PublicAsync_PreservesAdmissionAndReplyStageIsolation(bool local)
     {
         var node = new CapturingSpotNode();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, actor) = await CreateStartedRuntimeAsync(
             node,
-            new CapturingMessageFlowObserver(),
+            observer,
             includeActorFactory: local
         );
         var firstEntered = new TaskCompletionSource(
@@ -162,7 +163,7 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task Actor_Client_Request_All_Failure_Branches_Emit_One_Terminal_Each()
     {
         var node = new CapturingSpotNode();
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, actor) = await CreateStartedRuntimeAsync(node, observer);
         try
         {
@@ -246,7 +247,7 @@ public sealed partial class EntrySpotActorDispatchTests
     [Fact]
     public async Task Actor_Client_Request_Route_Failure_Emits_Exactly_One_Failed_Terminal()
     {
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, _) = await CreateStartedRuntimeAsync(new CapturingSpotNode(), observer);
         try
         {
@@ -347,7 +348,7 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task Spot_Actor_Request_Ingress_Emits_Received_Then_Replied_With_The_Wire_Identity()
     {
         var node = new CapturingSpotNode();
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
             observer,
