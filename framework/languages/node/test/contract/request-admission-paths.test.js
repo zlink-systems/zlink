@@ -1,4 +1,6 @@
-const { prepareZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const {
+  prepareZLinkRequestReply
+} = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate } = require('node:timers/promises');
@@ -74,9 +76,24 @@ for (const path of [
     const transport = {
       async sendToSpot() {},
       request: (_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
-        prepareZLinkRequestReply(start(onAdmitted, undefined, () => 'reply'), (value) => value),
-      requestToChannel: (_mesh, _channel, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
-        prepareZLinkRequestReply(start(onAdmitted, undefined, () => 'reply'), (value) => value),
+        prepareZLinkRequestReply(
+          start(onAdmitted, undefined, () => 'reply'),
+          (value) => value
+        ),
+      requestToChannel: (
+        _mesh,
+        _channel,
+        _packet,
+        _request,
+        _timeout,
+        _signal,
+        _metadata,
+        onAdmitted
+      ) =>
+        prepareZLinkRequestReply(
+          start(onAdmitted, undefined, () => 'reply'),
+          (value) => value
+        ),
       requestToSpot: (_target, _request, options) =>
         prepareZLinkRequestReply(
           start(options.onAdmitted, options.requestOperation, () => 'reply'),
@@ -158,7 +175,9 @@ for (const path of [
     const pending = call.submit();
     let admitted = false;
     let replied = false;
-    void pending.admitted.then(() => { admitted = true; });
+    void pending.admitted.then(() => {
+      admitted = true;
+    });
     const terminal = pending.then((value) => {
       replied = true;
       return value;
@@ -191,6 +210,9 @@ test('Instance activation public request observes existing remote submission adm
   const runtime = new ServiceStatefulRuntime(
     {
       setServiceIngress() {},
+      isPeerRouteReady: () => true,
+      observePeerRoute: () => ({ ready: true }),
+      observePeerRouteChanged: () => () => {},
       requestService(_target, _parts, _timeout, onAdmitted) {
         void admission.promise.then(onAdmitted);
         submitted.resolve();
@@ -212,7 +234,14 @@ test('Instance activation public request observes existing remote submission adm
       }
     }),
     requestToMissingInstanceSpot(target, parts, deadline, _source, _metadata, onAdmitted) {
-      operation = runtime.requestToMissingInstanceSpotFrame(target, Buffer.from('{}'), deadline, undefined, undefined, onAdmitted);
+      operation = runtime.requestToMissingInstanceSpotFrame(
+        target,
+        Buffer.from('{}'),
+        deadline,
+        undefined,
+        undefined,
+        onAdmitted
+      );
       return operation.id;
     }
   };
@@ -263,31 +292,58 @@ test('Instance activation public request observes existing remote submission adm
 });
 
 test('public routed local Spot request observes serial queue acceptance before handler reply', async () => {
-  const { ZLinkRoutedSpotPacketDispatch } = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');
+  const {
+    ZLinkRoutedSpotPacketDispatch
+  } = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');
   const reply = deferred();
   const entered = deferred();
   class Query {}
-  class Handler { async handle() { entered.resolve(); return reply.promise; } }
+  class Handler {
+    async handle() {
+      entered.resolve();
+      return reply.promise;
+    }
+  }
   const activation = {
-    spotId: 'room', meshName: 'mesh', spot: {},
+    spotId: 'room',
+    meshName: 'mesh',
+    spot: {},
     serial: new framework.ZLinkSpotSerialTurnExecutor(),
     handlers: { snapshot: () => [{ kind: 'packet', packetName: 'Query', handlerType: Handler }] }
   };
   const dispatcher = new ZLinkRoutedSpotPacketDispatch({ resolveActivation: () => activation });
   const client = new framework.DefaultZLinkRouteClient(
-    framework.createFrameworkRegistration({ spotNodes: { mesh: { router: { bind: 'inproc://local-stage' } } } }),
-    { async sendToSpot() {}, requestToSpot(_target, request, options) {
-      return prepareZLinkRequestReply(dispatcher.request('room', 'Query', request, { channelName: 'mesh', onAdmitted: options.onAdmitted }), (reply) => reply);
-    } }
+    framework.createFrameworkRegistration({
+      spotNodes: { mesh: { router: { bind: 'inproc://local-stage' } } }
+    }),
+    {
+      async sendToSpot() {},
+      requestToSpot(_target, request, options) {
+        return prepareZLinkRequestReply(
+          dispatcher.request('room', 'Query', request, {
+            channelName: 'mesh',
+            onAdmitted: options.onAdmitted
+          }),
+          (reply) => reply
+        );
+      }
+    }
   );
   const handle = framework.createSpotHandle('room', async () => ({
-    meshName: 'mesh', nodeRid: 'local', spotId: 'room', spotKind: framework.ZLinkSpotKind.User
+    meshName: 'mesh',
+    nodeRid: 'local',
+    spotId: 'room',
+    spotKind: framework.ZLinkSpotKind.User
   }));
   const pending = client.requestToSpot(handle, new Query()).submit();
   let admitted = false;
   let replied = false;
-  void pending.admitted.then(() => { admitted = true; });
-  void pending.then(() => { replied = true; });
+  void pending.admitted.then(() => {
+    admitted = true;
+  });
+  void pending.then(() => {
+    replied = true;
+  });
   try {
     await entered.promise;
     await setImmediate();
