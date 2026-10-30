@@ -167,6 +167,7 @@ public sealed class ChannelEnvelopeHandoffTests
             CancellationToken.None,
             envelope
         );
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         Assert.Equal(captureFlow ? (rejected ? 1 : 2) : 0, logger.Messages.Count);
         if (captureFlow && !rejected)
         {
@@ -271,6 +272,7 @@ public sealed class ChannelEnvelopeHandoffTests
             CancellationToken.None,
             envelope
         );
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         Assert.True(probe.Calls == (malformed ? 0 : 1), string.Join("; ", logger.Messages));
         if (malformed)
             Assert.Single(logger.Messages);
@@ -317,6 +319,7 @@ public sealed class ChannelEnvelopeHandoffTests
         {
             await dispatcher.DispatchEventMessageAsync("work", received, CancellationToken.None);
         }
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         var report = Assert.Single(logger.Messages);
         Assert.Contains(ZLinkEnvelopeCodec.MissingHeader().Message, report);
         Assert.Contains(nameof(ZLinkEnvelopeProtocolException), report);
