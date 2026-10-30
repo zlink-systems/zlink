@@ -449,11 +449,10 @@ final class ZLinkBoundActorReturnTest {
                                     .get(WAIT.toSeconds(), TimeUnit.SECONDS));
             var actor = runtime.localActor(created.actor().actorId()).orElseThrow();
             var actorRef = runtime.actorRef(actor);
-            var nodeField = runtime.getClass().getDeclaredField("spotNode");
-            nodeField.setAccessible(true);
             var node =
-                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode)
-                            nodeField.get(runtime);
+                    ((systems.zlink.framework.runtime.spots.ZLinkSpotRuntime)
+                                    host.runtime().spotManager())
+                            .primaryNode();
             long oldAuthority = node.actorAuthorityOwnerGeneration(actorRef);
             long ownerLease = node.actorAuthorityOwnerLeaseGeneration(actorRef);
             var source =
