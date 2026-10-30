@@ -128,6 +128,9 @@ need them.
     | `zlink-stream-connector` | When the server is also a STREAM client |
     | `zlink-framework-testkit` | Starting the runtime inside tests |
 
+    Message-flow records are delivered to an SLF4J provider. To view them through JUL,
+    configure an SLF4J-to-JUL binding such as `slf4j-jdk14`.
+
     All of them are in the `systems.zlink` group. The runtime requires JDK 25 or later, and the
     path to a first run is covered by the [quickstart](java/quickstart.en.md).
 
