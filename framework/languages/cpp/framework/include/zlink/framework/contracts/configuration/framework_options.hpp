@@ -618,7 +618,7 @@ class client_server_channel_builder_t
     void apply_channel ()
     {
         const auto channel_name = _channel_name;
-        const auto options = _options;
+        const auto *options = _options.get ();
         const auto server_port = _server_port;
         const auto server_bind_host_override = _server_bind_host_override;
         const auto server_weight = _server_weight;
@@ -948,7 +948,7 @@ class fanout_channel_builder_t
     void apply ()
     {
         const auto channel_name = _channel_name;
-        const auto options = _options;
+        const auto *options = _options.get ();
         const auto publisher_endpoint = _publisher_endpoint;
         const auto publisher_port = _publisher_port;
         const auto publisher_bind_host_override = _publisher_bind_host_override;
@@ -1369,7 +1369,7 @@ class stream_node_options_builder_t
         const auto tls_private_key_file = _tls_private_key_file;
         const auto tls_require_client_certificate = _tls_require_client_certificate;
         const auto advertise_host_override = _advertise_host_override;
-        const auto options = _options;
+        const auto *options = _options.get ();
         _options->set_zlink_action (
           "stream_node:" + stream_name,
           [stream_name, endpoint, port, bind_host_override, options, session_name, max_message_size,
