@@ -479,20 +479,13 @@ public sealed class SessionActorCoordinatorTests
     [Fact]
     public async Task Actor_Request_Yields_While_Registry_State_Is_Busy()
     {
-        var registry = new ZLinkActorSessionRegistry();
+        await using var lane = new ZLinkStateLane();
+        var registry = new ZLinkActorSessionRegistry(lane: lane);
         var router = new ZLinkActorDispatchRouter(
             CreateRuntime(),
             registry,
             static (_, _) => throw new InvalidOperationException()
         );
-        var lane = (ZLinkStateLane)
-            typeof(ZLinkActorSessionRegistry)
-                .GetField(
-                    "_lane",
-                    System.Reflection.BindingFlags.Instance
-                        | System.Reflection.BindingFlags.NonPublic
-                )!
-                .GetValue(registry)!;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var held = lane.RunAsync(async () =>
