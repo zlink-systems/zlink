@@ -255,6 +255,7 @@
         <Compile Include="Runtime/StreamWireInteropTests.cs"/>
         <Compile Include="Runtime/StreamSessionLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
+        <Compile Include="Runtime/StreamDisconnectProgressTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
         <Compile Include="Runtime/StreamFrameWriteTests.cs"/>
