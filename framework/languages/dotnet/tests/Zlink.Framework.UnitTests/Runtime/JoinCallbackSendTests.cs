@@ -18,6 +18,9 @@ public sealed class JoinCallbackSendTests
         var actorId = $"join-failure-{Guid.NewGuid():N}";
         var errors =
             new System.Collections.Concurrent.ConcurrentQueue<System.Diagnostics.Activity>();
+        var reportedError = new TaskCompletionSource<System.Diagnostics.Activity>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         using var listener = new System.Diagnostics.ActivityListener
         {
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
@@ -30,7 +33,10 @@ public sealed class JoinCallbackSendTests
                     activity.GetTagItem(ZLinkTraceFormat.ActorIdField)?.ToString() == actorId
                     && activity.GetTagItem(ZLinkTraceFormat.ErrorTypeField) is not null
                 )
+                {
                     errors.Enqueue(activity);
+                    reportedError.TrySetResult(activity);
+                }
             },
         };
         System.Diagnostics.ActivitySource.AddActivityListener(listener);
@@ -75,23 +81,30 @@ public sealed class JoinCallbackSendTests
             .Services.GetRequiredService<IZLinkActorClient>()
             .RequestToActor(actorId, new BeginBehaviorJoin(spot.Spot.SpotId))
             .Async<BehaviorAck>();
-        await trace.WaitAsync("publicJoinCompleted");
-        Assert.IsType<ZLinkActorJoinCompletion.Failed>(
-            Assert.Single(trace.JoinCompletions).Completion
-        );
-        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
+        var publicJoinCompleted = trace.WaitAsync("publicJoinCompleted");
         if (diagnosticsLevel == ZLinkDiagnosticsLevel.Off)
         {
+            await publicJoinCompleted;
+            Assert.IsType<ZLinkActorJoinCompletion.Failed>(
+                Assert.Single(trace.JoinCompletions).Completion
+            );
+            global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
             Assert.Empty(errors);
             return;
         }
-        Assert.Contains(
-            errors,
-            error =>
-                error.GetTagItem(ZLinkTraceFormat.ErrorTypeField)?.ToString()
-                    == nameof(InvalidOperationException)
-                && error.GetTagItem(ZLinkTraceFormat.ErrorMessageField)?.ToString()
-                    == "target lifecycle sentinel"
+        await Task.WhenAll(publicJoinCompleted, reportedError.Task)
+            .WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.IsType<ZLinkActorJoinCompletion.Failed>(
+            Assert.Single(trace.JoinCompletions).Completion
+        );
+        var error = await reportedError.Task;
+        Assert.Equal(
+            nameof(InvalidOperationException),
+            error.GetTagItem(ZLinkTraceFormat.ErrorTypeField)?.ToString()
+        );
+        Assert.Equal(
+            "target lifecycle sentinel",
+            error.GetTagItem(ZLinkTraceFormat.ErrorMessageField)?.ToString()
         );
     }
 

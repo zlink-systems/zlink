@@ -1,14 +1,16 @@
 package systems.zlink.framework.runtime.diagnostics;
 
+import org.slf4j.Logger;
+import org.slf4j.event.Level;
+import org.slf4j.helpers.NOPLogger;
+import org.slf4j.helpers.SubstituteLogger;
+
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.logging.Level;
-import java.util.logging.LogRecord;
-import java.util.logging.Logger;
 
 /** The process boundary for message-flow provider delivery, independent of host executors. */
 public final class ZLinkTelemetryOwner {
@@ -28,6 +30,15 @@ public final class ZLinkTelemetryOwner {
         worker = new Thread(null, this::run, "zlink-process-telemetry", 0, false);
         worker.setDaemon(true);
         worker.start();
+    }
+
+    /** Provider discovery belongs to the delivery boundary and does not start its worker. */
+    static boolean hasProvider(Logger logger) {
+        while (logger instanceof SubstituteLogger substitute) {
+            if (substitute.isDelegateNull()) return false;
+            logger = substitute.delegate();
+        }
+        return !(logger instanceof NOPLogger);
     }
 
     public static Host openHost() {
@@ -141,13 +152,10 @@ public final class ZLinkTelemetryOwner {
 
     private void deliver(Delivery delivery) {
         try {
-            LogRecord record =
-                    new LogRecord(
-                            delivery.level(),
-                            ZLinkTraceFormat.flowLine(delivery.event(), delivery.size()));
-            record.setInstant(delivery.observed());
-            record.setLoggerName(delivery.logger().getName());
-            delivery.logger().log(record);
+            delivery.logger()
+                    .atLevel(delivery.level())
+                    .addKeyValue(ZLinkTraceFormat.TIMESTAMP_FIELD, delivery.observed())
+                    .log(ZLinkTraceFormat.flowLine(delivery.event(), delivery.size()));
         } catch (Throwable failure) {
             delivery.failures().incrementAndGet();
             providerFailed(ProviderRole.LOGGER, failure);
