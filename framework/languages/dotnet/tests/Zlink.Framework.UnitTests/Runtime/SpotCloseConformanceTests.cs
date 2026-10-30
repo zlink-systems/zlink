@@ -443,6 +443,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             await closing.PendingApplicationCompletion.WaitAsync(Wait);
             Assert.Equal("Missing", await host.AuthorityAsync(spotId));
             Assert.DoesNotContain("ready-send-released", host.State.InstanceHandlerMarkers);
+            global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
             var records = listener
                 .ReadLines()
                 .Where(line =>
@@ -521,6 +522,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             await closing.PendingApplicationCompletion.WaitAsync(Wait);
             Assert.Equal("Missing", await host.AuthorityAsync(spotId));
             Assert.DoesNotContain("ready-request-released", host.State.InstanceHandlerMarkers);
+            global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
             var records = listener
                 .ReadLines()
                 .Where(line =>
@@ -1605,6 +1607,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             ).Async();
             sendDiagnostic = await ObserveSendDiagnosticAsync(flow);
         }
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         var records = flow.ReadLines()
             .Where(line => line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal));
         var record = Assert.Single(records);
