@@ -15225,8 +15225,6 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public int NodeRequestAttempts { get; private set; }
 
-        public bool LastNodeRequestDurable { get; private set; }
-
         public RoutingId LastNodeSendTarget { get; private set; }
 
         public SendFlags LastNodeSendFlags { get; private set; }
@@ -15882,13 +15880,11 @@ public sealed partial class EntrySpotActorDispatchTests
             TimeSpan timeout,
             CancellationToken cancellationToken,
             ReadOnlyMemory<byte> metadata = default,
-            bool durable = false,
             Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null
         )
         {
             cancellationToken.ThrowIfCancellationRequested();
             NodeRequestAttempts++;
-            LastNodeRequestDurable = durable;
             LastNodeRequestTarget = targetNodeRid;
             _ = parts;
             LastNodeRequestFlags = flags;
