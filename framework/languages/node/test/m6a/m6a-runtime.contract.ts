@@ -787,13 +787,12 @@ test('raw runtime admits a discovered same-RID replacement only after its exact 
   );
   assert.equal(runtime.isPeerRouteReady(old.nodeRoutingId, old.lifecycleGeneration), true);
 
-  internal.expectedPeers.set(old.nodeRoutingId, {
-    meshName: replacement.meshName,
-    nodeRoutingId: replacement.nodeRoutingId,
-    endpoint: replacement.advertisedEndpoint,
-    securityIdentity: replacement.securityIdentity,
-    lifecycleGeneration: replacement.lifecycleGeneration
-  });
+  runtime.expectPeerByRoutingId(
+    replacement.advertisedEndpoint,
+    replacement.nodeRoutingId,
+    replacement.securityIdentity,
+    replacement.lifecycleGeneration
+  );
   runtime.disconnectPeer(old.advertisedEndpoint, old.nodeRoutingId, old.lifecycleGeneration);
   assert.deepEqual(disconnectedRids, []);
   assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, oldConnection);
@@ -1892,25 +1891,12 @@ test('normal receive pump carries application and liveness traffic on one route'
     });
     assert.equal(right.mailbox.pendingMessages('application'), 1);
 
-    const rightInternal = right as unknown as {
-      expectedPeers: Map<
-        string,
-        {
-          meshName: string;
-          nodeRoutingId: string;
-          endpoint: string;
-          securityIdentity: string;
-          lifecycleGeneration: bigint;
-        }
-      >;
-    };
-    rightInternal.expectedPeers.set(leftDescriptor.nodeRoutingId, {
-      meshName: leftDescriptor.meshName,
-      nodeRoutingId: leftDescriptor.nodeRoutingId,
-      endpoint: leftDescriptor.advertisedEndpoint,
-      securityIdentity: leftDescriptor.securityIdentity,
-      lifecycleGeneration: leftDescriptor.lifecycleGeneration
-    });
+    right.expectPeerByRoutingId(
+      leftDescriptor.advertisedEndpoint,
+      leftDescriptor.nodeRoutingId,
+      leftDescriptor.securityIdentity,
+      leftDescriptor.lifecycleGeneration
+    );
     assert.equal(
       await left.sendService(rightDescriptor.nodeRoutingId, [
         encodeRouteMeshAdmission(M6aServiceWireCommand.update, {
