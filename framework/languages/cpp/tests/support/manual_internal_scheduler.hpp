@@ -28,7 +28,7 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
         if (!_accepting)
             return false;
         _ready.push (std::move (work));
-        _wake->ready_changed.notify_one ();
+        _wake->ready_changed.notify_all ();
         return true;
     }
 
@@ -96,7 +96,7 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
         detail::observe_task_terminal (terminal, [wake = _wake, completed] (const result_t<T> &) {
             std::lock_guard lock (wake->mutex);
             *completed = true;
-            wake->ready_changed.notify_one ();
+            wake->ready_changed.notify_all ();
         });
         run_until ([completed] { return *completed; });
     }
