@@ -11,10 +11,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
 import java.util.function.BooleanSupplier;
@@ -96,19 +93,16 @@ final class ZLinkJavaRawMeshNodeSelectedRouteTest {
         node.start();
     }
 
-    private static String endpoint(ZLinkJavaRawMeshNode node) throws Exception {
-        return ((ZLinkServiceNodeDescriptor) get(node, "localDescriptor")).advertisedEndpoint();
+    private static String endpoint(ZLinkJavaRawMeshNode node) {
+        return node.advertisedEndpoint();
     }
 
     private static long admittedGeneration(ZLinkJavaRawMeshNode node) {
-        try {
-            return topology(node)
-                    .peer(TARGET)
-                    .map(peer -> peer.descriptor().lifecycleGeneration())
-                    .orElse(0L);
-        } catch (ReflectiveOperationException failure) {
-            throw new AssertionError(failure);
-        }
+        return node.peers().stream()
+                .filter(peer -> TARGET.equals(peer.routingId()))
+                .mapToLong(MeshPeerEntry::lifecycleGeneration)
+                .findFirst()
+                .orElse(0L);
     }
 
     private static MeshPeerState manualState(ZLinkJavaRawMeshNode node) {
@@ -117,17 +111,6 @@ final class ZLinkJavaRawMeshNodeSelectedRouteTest {
                 .map(MeshPeerEntry::state)
                 .findFirst()
                 .orElse(null);
-    }
-
-    private static ZLinkServiceTopologyRegistry topology(ZLinkJavaRawMeshNode node)
-            throws ReflectiveOperationException {
-        return (ZLinkServiceTopologyRegistry) get(node, "topology");
-    }
-
-    private static Object get(Object owner, String name) throws ReflectiveOperationException {
-        Field field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
     }
 
     private static void await(BooleanSupplier condition) throws Exception {

@@ -93,6 +93,10 @@ public final class ZLinkStateLane {
         return queue == null ? 0 : queue.size();
     }
 
+    boolean sharesExecutorWith(ZLinkStateLane other) {
+        return executor == other.executor;
+    }
+
     public static ZLinkStateLane current() {
         return CURRENT.get();
     }
