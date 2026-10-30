@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/telemetry_observation.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -615,18 +616,10 @@ std::size_t count_occurrences (const std::string &text, const std::string &needl
 
 std::vector<zlink::framework::message_dispatch_error_event_t>
 wait_dispatch_errors (std::vector<zlink::framework::message_dispatch_error_event_t> &events,
-                      std::mutex &mutex,
-                      std::size_t expected)
+                      std::mutex &mutex)
 {
-    for (int attempt = 0; attempt < 100; ++attempt) {
-        {
-            std::lock_guard lock (mutex);
-            if (events.size () >= expected) {
-                return events;
-            }
-        }
-        std::this_thread::sleep_for (std::chrono::milliseconds (1));
-    }
+    zlink::framework::test::acknowledge_delivery (std::chrono::steady_clock::now ()
+                                                  + std::chrono::milliseconds (100));
     std::lock_guard lock (mutex);
     return events;
 }
@@ -873,18 +866,25 @@ int main ()
             return 220;
         dispatch_options_t options;
         options.message_flow (message_flow_log_mode_t::normal);
-        bool preserved = false;
+        auto observations = std::make_shared<
+          zlink::framework::test::telemetry_observations_t<message_flow_event_t>> ();
+        const auto expected_flow_id = header.flow_id;
+        const auto expected_flow_origin = header.flow_origin;
         detail::dispatch_options_access_t::set_observer_for_tests (
-          options, [&] (const message_flow_event_t &event) {
+          options, [observations] (const message_flow_event_t &event) {
               if (event.outcome == message_flow_outcome_t::received)
-                  preserved =
-                    event.flow_id == header.flow_id && event.flow_origin == header.flow_origin;
+                  observations->record (event);
           });
         detail::mesh_record_dispatcher_t on (provider, serializers, handlers, filters, options);
-        if (!on.dispatch (record, parts (wire),
-                          codec.decode_header (msg::message_parts_t (parts (wire)), true).value ())
-               .result ()
-            || !preserved || handler.invocations != 2 || handler.last_value != 42)
+        const auto dispatched =
+          on.dispatch (record, parts (wire),
+                       codec.decode_header (msg::message_parts_t (parts (wire)), true).value ())
+            .result ();
+        zlink::framework::test::acknowledge_delivery ();
+        const auto observed = observations->snapshot ();
+        if (!dispatched || observed.size () != 1 || observed.front ().flow_id != expected_flow_id
+            || observed.front ().flow_origin != expected_flow_origin || handler.invocations != 2
+            || handler.last_value != 42)
             return 221;
         auto invalid_parts = parts (malformed);
         auto decoded = runtime::decode_mesh_record_header (record, invalid_parts, true);
@@ -1596,8 +1596,7 @@ int main ()
         || request_deserialize_count.load (std::memory_order_relaxed) != 0) {
         return 21;
     }
-    auto observed_dispatch_errors =
-      wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex, 1);
+    auto observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
     if (observed_dispatch_errors.size () != 1
         || observed_dispatch_errors[0].surface
              != zlink::framework::dispatch_error_surface_t::channel
@@ -1628,7 +1627,7 @@ int main ()
     if (!missing_send_result || missing_send_result.value ().size () != 0) {
         return 103;
     }
-    observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex, 1);
+    observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
     if (observed_dispatch_errors.size () != 1
         || observed_dispatch_errors[0].surface
              != zlink::framework::dispatch_error_surface_t::channel
@@ -1670,7 +1669,7 @@ int main ()
     if (!missing_publish_result || missing_publish_result.value ().size () != 0) {
         return 112;
     }
-    observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex, 1);
+    observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
     if (observed_dispatch_errors.size () != 1
         || observed_dispatch_errors[0].surface
              != zlink::framework::dispatch_error_surface_t::channel
@@ -1712,7 +1711,7 @@ int main ()
         || request_deserialize_count.load (std::memory_order_relaxed) != 1) {
         return 109;
     }
-    observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex, 1);
+    observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
     if (observed_dispatch_errors.size () != 1
         || observed_dispatch_errors[0].surface
              != zlink::framework::dispatch_error_surface_t::channel
@@ -1728,7 +1727,9 @@ int main ()
         || observed_dispatch_errors[0].correlation_id.value_or ("") != "corr-payload-decode"
         || !observed_dispatch_errors[0].exception
         || observed_dispatch_errors[0].error_type.value_or ("").empty ()
-        || observed_dispatch_errors[0].error_message.value_or ("").empty ()) {
+        || observed_dispatch_errors[0].error_message.value_or ("").empty ()
+        || observed_dispatch_errors[0].error_message
+             != malformed_reply_header.value ().error_message) {
         return 110;
     }
     try {
@@ -1766,7 +1767,7 @@ int main ()
         || request_deserialize_count.load (std::memory_order_relaxed) != 1) {
         return 106;
     }
-    observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex, 1);
+    observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
     if (observed_dispatch_errors.size () != 1
         || observed_dispatch_errors[0].surface
              != zlink::framework::dispatch_error_surface_t::channel
@@ -2728,7 +2729,7 @@ int main ()
         || route_error_header.value ().error_code.value_or ("") != "not_found") {
         return 47;
     }
-    observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex, 1);
+    observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
     if (observed_dispatch_errors.size () != 1
         || observed_dispatch_errors[0].surface
              != zlink::framework::dispatch_error_surface_t::route_mesh_channel

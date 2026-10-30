@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/telemetry_observation.hpp"
 #include "metric_test_reader.hpp"
 
 #include <zlink/framework.hpp>
@@ -985,18 +986,21 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     namespace fw = zlink::framework;
     auto app = fw::app_t::create ();
     auto &options = app.add_zlink_framework ();
-    std::promise<fw::message_flow_event_t> dropped;
-    auto drop = dropped.get_future ();
-    std::atomic_int drops{0};
+    auto flows = std::make_shared<fw::test::telemetry_observations_t<fw::message_flow_event_t>> ();
+    auto errors =
+      std::make_shared<fw::test::telemetry_observations_t<fw::message_dispatch_error_event_t>> ();
     auto &dispatch = options.configure_dispatch ();
     dispatch.message_flow (fw::message_flow_log_mode_t::normal);
     fw::detail::dispatch_options_access_t::set_observer_for_tests (
-      dispatch, [&] (const fw::message_flow_event_t &event) {
+      dispatch, [flows] (const fw::message_flow_event_t &event) {
           if (event.surface == fw::dispatch_error_surface_t::instance_spot
-              && event.outcome == fw::message_flow_outcome_t::dropped) {
-              if (drops.fetch_add (1) == 0)
-                  dropped.set_value (event);
-          }
+              && event.outcome == fw::message_flow_outcome_t::dropped)
+              flows->record (event);
+      });
+    fw::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      dispatch, [errors] (const fw::message_dispatch_error_event_t &event) {
+          if (event.surface == fw::dispatch_error_surface_t::instance_spot)
+              errors->record (event);
       });
     class lookup_gate_store_t final : public fw::location_store_t
     {
@@ -1070,8 +1074,18 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     ASSERT_TRUE (*admitted);
     // Spot address messaging §4.2/§5: admission does not finish activation.
     // Observe that activation's terminal instead of assuming a later request starts a new one.
-    ASSERT_EQ (std::future_status::ready, drop.wait_for (3s));
-    const auto terminal = drop.get ();
+    const auto observation_deadline = std::chrono::steady_clock::now () + 3s;
+    {
+        std::unique_lock lock (errors->mutex);
+        ASSERT_TRUE (errors->changed.wait_until (lock, observation_deadline,
+                                                 [&] { return !errors->events.empty (); }));
+    }
+    // Activation records its dropped flow before reporting this terminal error.
+    fw::test::acknowledge_delivery (observation_deadline);
+    const auto dropped = flows->snapshot ();
+    const auto diagnostics = errors->snapshot ();
+    ASSERT_EQ (1u, dropped.size ());
+    const auto &terminal = dropped.front ();
     EXPECT_EQ (fw::message_flow_reason_t::activation_timeout, terminal.reason);
     ASSERT_TRUE (terminal.exception);
     try {
@@ -1080,10 +1094,14 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     catch (const fw::framework_exception_t &error) {
         EXPECT_EQ (fw::framework_error_kind_t::deadline_exceeded, error.kind ());
     }
+    EXPECT_EQ (fw::dispatch_error_action_t::drop, terminal.error_action);
+    ASSERT_EQ (1u, diagnostics.size ());
+    EXPECT_EQ (typeid (fw::framework_exception_t).name (), diagnostics.front ().error_type);
+    EXPECT_EQ ("Instance Spot activation deadline expired", diagnostics.front ().error_message);
     EXPECT_FALSE (instance);
     EXPECT_TRUE (send.result ());
     cleanup.reset ();
-    EXPECT_EQ (1, drops.load ());
+    EXPECT_EQ (1u, flows->snapshot ().size ());
     EXPECT_EQ (0, exit_code);
 }
 
@@ -1146,21 +1164,12 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
                               .descriptor_revision = 1,
                               .advertised_endpoint = "tcp://127.0.0.1:0"},
                .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}};
-    std::promise<fw::framework_error_kind_t> diagnostic_promise;
-    auto diagnostic_future = diagnostic_promise.get_future ();
-    int diagnostics = 0;
+    auto diagnostics =
+      std::make_shared<fw::test::telemetry_observations_t<fw::message_dispatch_error_event_t>> ();
     if (one_way)
         fw::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-          options.mesh.dispatch, [&] (const fw::message_dispatch_error_event_t &event) {
-              ++diagnostics;
-              EXPECT_EQ (fw::dispatch_error_action_t::drop, event.action);
-              EXPECT_EQ (fw::dispatch_message_kind_t::send, event.message_kind);
-              try {
-                  std::rethrow_exception (event.exception);
-              }
-              catch (const fw::framework_exception_t &error) {
-                  diagnostic_promise.set_value (error.kind ());
-              }
+          options.mesh.dispatch, [diagnostics] (const fw::message_dispatch_error_event_t &event) {
+              diagnostics->record (event);
           });
     // Declared before `target` so it outlives the terminal that close() delivers.
     int terminals = 0;
@@ -1220,17 +1229,32 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
     ASSERT_TRUE (submitted);
     ASSERT_TRUE (submitted.value ());
     const auto pump_deadline = std::chrono::steady_clock::now () + 3s;
-    while ((one_way ? diagnostic_future.wait_for (0ms) : reply_future.wait_for (0ms))
-             != std::future_status::ready
+    while ((one_way ? diagnostics->snapshot ().empty ()
+                    : reply_future.wait_for (0ms) != std::future_status::ready)
            && std::chrono::steady_clock::now () < pump_deadline) {
         ASSERT_TRUE (
           target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
         std::this_thread::yield ();
     }
+    fw::test::acknowledge_delivery (pump_deadline);
+    const auto observed_diagnostics = diagnostics->snapshot ();
     if (one_way) {
-        ASSERT_EQ (std::future_status::ready, diagnostic_future.wait_for (0ms));
-        EXPECT_EQ (fw::framework_error_kind_t::unavailable, diagnostic_future.get ());
-        EXPECT_EQ (1, diagnostics);
+        ASSERT_EQ (1u, observed_diagnostics.size ());
+        const auto &event = observed_diagnostics.front ();
+        EXPECT_EQ (fw::dispatch_error_action_t::drop, event.action);
+        EXPECT_EQ (fw::dispatch_message_kind_t::send, event.message_kind);
+        EXPECT_EQ (fw::dispatch_error_surface_t::instance_spot, event.surface);
+        EXPECT_EQ (fw::dispatch_error_reason_t::stale_target, event.reason);
+        EXPECT_EQ (typeid (fw::framework_exception_t).name (), event.error_type);
+        EXPECT_EQ ("Instance Spot activation failed because the target route is not connected.",
+                   event.error_message);
+        ASSERT_TRUE (event.exception);
+        try {
+            std::rethrow_exception (event.exception);
+        }
+        catch (const fw::framework_exception_t &error) {
+            EXPECT_EQ (fw::framework_error_kind_t::unavailable, error.kind ());
+        }
         EXPECT_EQ (0, terminals);
     } else {
         ASSERT_EQ (std::future_status::ready, reply_future.wait_for (0ms));
@@ -1242,7 +1266,7 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
                                    : fw::framework_error_kind_t::unavailable,
                    error.kind ());
         EXPECT_EQ (1, terminals);
-        EXPECT_EQ (0, diagnostics);
+        EXPECT_TRUE (observed_diagnostics.empty ());
     }
     EXPECT_EQ (1, store->reads);
     EXPECT_EQ (1, store->reserves);
@@ -2869,30 +2893,25 @@ static void verify_activation_failure_terminal (bool local,
                .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}};
     options.mesh.metric_provider = metrics.api ();
     options.mesh.dispatch.message_flow (fw::message_flow_log_mode_t::normal);
-    std::vector<fw::message_flow_event_t> events;
-    std::vector<fw::message_dispatch_error_event_t> errors;
-    std::atomic_bool terminal_observed{false};
+    auto flows = std::make_shared<fw::test::telemetry_observations_t<fw::message_flow_event_t>> ();
+    auto diagnostics =
+      std::make_shared<fw::test::telemetry_observations_t<fw::message_dispatch_error_event_t>> ();
     fw::detail::dispatch_options_access_t::set_observer_for_tests (
-      options.mesh.dispatch, [&] (const auto &event) {
+      options.mesh.dispatch, [flows] (const auto &event) {
           if (event.surface == fw::dispatch_error_surface_t::instance_spot
               && event.outcome == fw::message_flow_outcome_t::dropped)
-              events.push_back (event);
+              flows->record (event);
       });
     fw::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      options.mesh.dispatch, [&] (const auto &event) {
-          errors.push_back (event);
-          terminal_observed.store (true, std::memory_order_release);
-      });
+      options.mesh.dispatch, [diagnostics] (const auto &event) { diagnostics->record (event); });
     auto target = std::make_shared<host::public_host_runtime_t> (std::move (options));
     int dispatches = 0;
     int cleanups = 0;
     std::promise<void> preparation_cleaned;
-    std::promise<void> delivery_release;
-    auto release_delivery = delivery_release.get_future ().share ();
-    std::promise<void> delivery_completed;
+    auto delivery_release = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto delivery_completed = std::make_shared<std::promise<void>> ();
     std::promise<void> initialization_entered;
-    std::promise<void> initialization_release;
-    auto release_initialization = initialization_release.get_future ().share ();
+    auto initialization_release = std::make_shared<fw::task_completion_source_t<void>> ();
     const bool deadline_failure =
       failure == activation_failure_t::deadline || failure == activation_failure_t::initialization;
     target->configure_instance_spot_operations (
@@ -2916,7 +2935,7 @@ static void verify_activation_failure_terminal (bool local,
                 throw fw::framework_exception_t (expected_kind, "typed activation failure");
             if (failure == activation_failure_t::initialization) {
                 initialization_entered.set_value ();
-                release_initialization.get ();
+                (void) initialization_release->task ().result ();
             }
             if (failure == activation_failure_t::deadline)
                 std::this_thread::sleep_until (std::chrono::system_clock::time_point (
@@ -2942,7 +2961,11 @@ static void verify_activation_failure_terminal (bool local,
     target->start ();
     auto cleanup = std::unique_ptr<host::public_host_runtime_t,
                                    std::function<void (host::public_host_runtime_t *)>> (
-      target.get (), [&] (auto *) { target->close (); });
+      target.get (), [target, initialization_release, delivery_release] (auto *) {
+          initialization_release->complete (fw::result_t<void>::success ());
+          delivery_release->complete (fw::result_t<void>::success ());
+          target->close ();
+      });
     if (failure == activation_failure_t::shutdown)
         target->close ();
     const auto deadline =
@@ -2963,29 +2986,76 @@ static void verify_activation_failure_terminal (bool local,
     rt::protocol::application_payload_t payload{"probe", "application/json", {1}};
     payload.flow_id = flow_id;
     payload.flow_origin = fw::flow_origin_t::application;
+    std::chrono::steady_clock::time_point observation_deadline;
     if (local) {
-        int terminals = 0;
-        std::promise<void> terminal_ready;
+        auto terminals = std::make_shared<int> (0);
+        auto accepted_terminals = std::make_shared<int> (0);
+        auto terminal_ready = std::make_shared<std::promise<void>> ();
         auto run = [&] {
             auto activation = host::public_host_runtime_test_access_t::activate (
-              *target, {header, std::nullopt, payload}, [&] (const auto &result) {
-                  ++terminals;
-                  terminal_ready.set_value ();
+              *target, {header, std::nullopt, payload},
+              [terminals, accepted_terminals, terminal_ready, failure, expected_kind, hold_delivery,
+               delivery_release, delivery_completed] (const auto &result) {
+                  ++*terminals;
+                  terminal_ready->set_value ();
+                  // This is the actual local operation result, before telemetry projection.
+                  // Remote send rows independently cover admission and owned diagnostics.
+                  if (failure != activation_failure_t::accepted_handler) {
+                      EXPECT_TRUE (result.exception);
+                      if (result.exception) {
+                          try {
+                              std::rethrow_exception (result.exception);
+                          }
+                          catch (const fw::framework_exception_t &cause) {
+                              EXPECT_NE (activation_failure_t::factory, failure);
+                              EXPECT_NE (activation_failure_t::cancelled, failure);
+                              EXPECT_NE (activation_failure_t::non_std_factory, failure);
+                              EXPECT_EQ (expected_kind, cause.kind ());
+                          }
+                          catch (const std::system_error &cause) {
+                              EXPECT_EQ (activation_failure_t::cancelled, failure);
+                              EXPECT_EQ (std::make_error_code (std::errc::operation_canceled),
+                                         cause.code ());
+                          }
+                          catch (const std::runtime_error &cause) {
+                              EXPECT_EQ (activation_failure_t::factory, failure);
+                              EXPECT_TRUE (typeid (std::runtime_error) == typeid (cause));
+                              EXPECT_STREQ ("factory terminal failure", cause.what ());
+                          }
+                          catch (int cause) {
+                              EXPECT_EQ (activation_failure_t::non_std_factory, failure);
+                              EXPECT_EQ (7, cause);
+                          }
+                          catch (...) {
+                              ADD_FAILURE () << "Unexpected local activation cause type";
+                          }
+                      }
+                  }
                   const auto error =
                     rt::messaging::request_failure_mapper_t{}.reply_header_exception (
                       result.terminal_result, result.failure_code, "Activation regression");
                   EXPECT_EQ (expected_kind, error.kind ());
-                  if (result.accepted_turn_terminal)
+                  EXPECT_EQ (failure == activation_failure_t::accepted_handler,
+                             static_cast<bool> (result.accepted_turn_terminal));
+                  if (result.accepted_turn_terminal) {
+                      ++*accepted_terminals;
                       result.accepted_turn_terminal ();
+                  }
                   if (hold_delivery) {
-                      release_delivery.get ();
-                      delivery_completed.set_value ();
+                      (void) delivery_release->task ().result ();
+                      delivery_completed->set_value ();
                   }
               });
             EXPECT_TRUE (activation.result ());
         };
         if (failure == activation_failure_t::initialization) {
             auto running = std::async (std::launch::async, run);
+            // Release stalled test stimuli before running's destructor can join on failure.
+            auto release_on_exit = std::unique_ptr<void, std::function<void (void *)>> (
+              target.get (), [initialization_release, delivery_release] (void *) {
+                  initialization_release->complete (fw::result_t<void>::success ());
+                  delivery_release->complete (fw::result_t<void>::success ());
+              });
             EXPECT_EQ (std::future_status::ready,
                        initialization_entered.get_future ().wait_for (1s));
             std::future<bool> expired;
@@ -2994,35 +3064,47 @@ static void verify_activation_failure_terminal (bool local,
                     return host::public_host_runtime_test_access_t::expire_activation (
                       *target, "terminal-room");
                 });
-            EXPECT_EQ (std::future_status::ready, terminal_ready.get_future ().wait_for (1s));
-            initialization_release.set_value ();
+            EXPECT_EQ (std::future_status::ready, terminal_ready->get_future ().wait_for (1s));
+            initialization_release->complete (fw::result_t<void>::success ());
             if (hold_delivery) {
                 EXPECT_EQ (std::future_status::ready,
                            preparation_cleaned.get_future ().wait_for (1s));
                 EXPECT_EQ (std::future_status::timeout, running.wait_for (100ms));
-                delivery_release.set_value ();
+                delivery_release->complete (fw::result_t<void>::success ());
                 EXPECT_EQ (std::future_status::ready,
-                           delivery_completed.get_future ().wait_for (1s));
+                           delivery_completed->get_future ().wait_for (1s));
             }
             running.get ();
             if (expired.valid ())
                 EXPECT_TRUE (expired.get ());
         } else
             run ();
-        EXPECT_EQ (1, terminals);
+        EXPECT_EQ (1, *terminals);
+        EXPECT_EQ (failure == activation_failure_t::accepted_handler ? 1 : 0, *accepted_terminals);
+        observation_deadline = std::chrono::steady_clock::now () + 3s;
     } else {
         ASSERT_TRUE (
           target->send_instance_spot_activation_remote (descriptor.rid, header, {}, payload)
             .result ()
             .value ());
-        const auto until = std::chrono::steady_clock::now () + 3s;
-        while (!terminal_observed.load (std::memory_order_acquire)
-               && std::chrono::steady_clock::now () < until) {
+        observation_deadline = std::chrono::steady_clock::now () + 3s;
+        while (diagnostics->snapshot ().empty ()
+               && std::chrono::steady_clock::now () < observation_deadline) {
             ASSERT_TRUE (
               target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
             std::this_thread::yield ();
         }
     }
+    // Local activate().result() completes the producer. Remotely, dispatch diagnostics
+    // follow record_activation, so their delivery also orders the preceding flow submission.
+    {
+        std::unique_lock lock (diagnostics->mutex);
+        ASSERT_TRUE (diagnostics->changed.wait_until (
+          lock, observation_deadline, [&] { return !diagnostics->events.empty (); }));
+    }
+    fw::test::acknowledge_delivery (observation_deadline);
+    const auto events = flows->snapshot ();
+    const auto errors = diagnostics->snapshot ();
     target->close ();
     int activation_count = 0;
     int duration_count = 0;
@@ -3106,8 +3188,35 @@ static void verify_activation_failure_terminal (bool local,
     EXPECT_EQ (0, dispatches);
     EXPECT_EQ (failure == activation_failure_t::shutdown ? 0 : 1, cleanups);
     ASSERT_EQ (1u, errors.size ());
-    EXPECT_TRUE (errors.front ().error_type);
-    EXPECT_TRUE (errors.front ().error_message);
+    const auto &error = errors.front ();
+    EXPECT_EQ (fw::dispatch_error_surface_t::instance_spot, error.surface);
+    EXPECT_EQ (fw::dispatch_message_kind_t::send, error.message_kind);
+    EXPECT_EQ (fw::dispatch_error_action_t::drop, error.action);
+    EXPECT_EQ (flow_id, error.flow_id);
+    EXPECT_EQ (fw::flow_origin_t::application, error.flow_origin);
+    EXPECT_EQ (failure == activation_failure_t::factory     ? typeid (std::runtime_error).name ()
+               : failure == activation_failure_t::cancelled ? typeid (std::system_error).name ()
+               : failure == activation_failure_t::non_std_factory
+                 ? "non-standard exception"
+                 : typeid (fw::framework_exception_t).name (),
+               error.error_type);
+    if (failure == activation_failure_t::factory)
+        EXPECT_EQ ("factory terminal failure", error.error_message);
+    else if (failure == activation_failure_t::non_std_factory)
+        EXPECT_EQ ("non-standard exception", error.error_message);
+    else if (failure == activation_failure_t::conflict
+             || failure == activation_failure_t::store_failure
+             || failure == activation_failure_t::fenced)
+        EXPECT_EQ ("typed activation failure", error.error_message);
+    else if (failure == activation_failure_t::cancelled)
+        EXPECT_EQ (std::make_error_code (std::errc::operation_canceled).message (),
+                   error.error_message);
+    else if (failure == activation_failure_t::shutdown)
+        EXPECT_EQ ("Instance Spot activation target stopped", error.error_message);
+    else if (deadline_failure)
+        EXPECT_EQ (expire_admission ? "Activation admission expired"
+                                    : "Instance Spot activation deadline expired",
+                   error.error_message);
     if (failure != activation_failure_t::shutdown) {
         const auto authority =
           store->read_authority (rt::spot_authority_key ("terminal-room")).result ().value ();

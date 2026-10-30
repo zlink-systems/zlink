@@ -102,6 +102,14 @@ inline task_t<void> invoke_spot_closing (
     return closing;
 }
 
+enum class handler_invocation_phase_t
+{
+    before_admission,
+    after_queue_submission
+};
+using handler_invocation_callback_t = std::function<void (
+  handler_invocation_phase_t, std::string_view, std::string_view, std::string_view)>;
+
 class spot_node_builder_state_t
 {
   public:
@@ -156,6 +164,8 @@ class spot_node_builder_state_t
     user_spot_close_begin_callback_t begin_user_spot_close;
     std::shared_ptr<channel_runtime_state_t> channel_runtime;
     dispatch_options_t dispatch;
+    // Install before node start; clear after node stop. Only tests wait in this callback.
+    handler_invocation_callback_t handler_invocation_for_tests;
     runtime::location_lifecycle_t *location_lifecycle = nullptr;
     std::shared_ptr<runtime::spot_address_resolver_t> spot_location_resolver;
     std::optional<service_provider_t> root_services;
