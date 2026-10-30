@@ -274,6 +274,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
                     new ZLinkDispatchErrorReporter(
                             options, ZLinkHandlerActivator.reflection(), Runnable::run);
             node.setDispatchErrorReporter(reporter);
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.addHandler(logHandler);
             logger.setLevel(Level.ALL);
             node.setPeerAuthorityResolver(
@@ -325,6 +326,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
         }
 
         void assertReported(Throwable failure, String action) {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(1, reporter.reportedCount());
             assertTrue(
                     records.stream()
@@ -337,6 +339,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
         }
 
         public void close() {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(logHandler);
             logger.setLevel(previousLevel);
         }
