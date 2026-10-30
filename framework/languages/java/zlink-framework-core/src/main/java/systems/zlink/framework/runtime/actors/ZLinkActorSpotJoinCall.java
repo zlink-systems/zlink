@@ -672,7 +672,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         if (remaining == null) {
             return CompletableFuture.failedFuture(
                     new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                             "Actor join deadline elapsed before canonical admission"));
         }
         byte[] payload = requestPart.toByteArray();
