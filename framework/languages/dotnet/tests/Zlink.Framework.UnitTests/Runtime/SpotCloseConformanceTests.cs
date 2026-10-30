@@ -117,6 +117,227 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
     }
 
     [Fact]
+    public async Task GetOrCreate_returns_Existing_when_new_creation_capacity_is_full()
+    {
+        await using var host = await SpotCloseHost.StartAsync(spotLimit: 1);
+        var created = await host
+            .Manager.GetOrCreate("capacity-room", SpotCloseHost.SpotType)
+            .InMesh(SpotCloseHost.MeshName)
+            .Async();
+        Assert.Equal(ZLinkSpotCreateState.Created, created.State);
+        var resolver = host.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+        var descriptor = Assert.Single(
+            await resolver.ListLiveMeshNodesAsync(SpotCloseHost.MeshName)
+        );
+        Assert.Equal(1, descriptor.Capacity.Spots.Active);
+        Assert.Equal(0, descriptor.Capacity.Spots.Reserved);
+        Assert.Equal(1, descriptor.Capacity.Spots.Limit);
+        var existing = await host
+            .Manager.GetOrCreate("capacity-room", SpotCloseHost.SpotType)
+            .InMesh(SpotCloseHost.MeshName)
+            .Async();
+        Assert.Equal(ZLinkSpotCreateState.Existing, existing.State);
+        Assert.Equal(created.Spot, existing.Spot);
+        Assert.Equal(1, host.State.FactoryCalls);
+        var exhausted = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await host
+                .Manager.GetOrCreate("other-capacity-room", SpotCloseHost.SpotType)
+                .InMesh(SpotCloseHost.MeshName)
+                .Async()
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, exhausted.Kind);
+        Assert.Contains("placement capacity", exhausted.Message);
+        Assert.Equal(1, host.State.FactoryCalls);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetOrCreate_releases_expired_Ready_or_ended_Creating_before_capacity_selection(
+        bool ready
+    )
+    {
+        var time = new ManualTimeProvider();
+        var store = new SpotCloseFaultStore(new ZLinkInMemoryProviderLocationStore(time));
+        await using var host = await SpotCloseHost.StartAsync(store, spotLimit: 1);
+        _ = await host
+            .Manager.GetOrCreate("occupied-room", SpotCloseHost.SpotType)
+            .InMesh(SpotCloseHost.MeshName)
+            .Async();
+        var repository = host.Runtime.Registration.Locations.ResolveStore()!;
+        var descriptor = Assert.Single(
+            await host
+                .Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
+                .ListLiveMeshNodesAsync(SpotCloseHost.MeshName)
+        );
+        var expiredOwner = Assert
+            .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                await repository.ClaimOwnerLeaseAsync(
+                    "expired-ready-owner",
+                    TimeSpan.FromSeconds(1)
+                )
+            )
+            .Token;
+        var expiredDescriptor = descriptor with
+        {
+            Rid = RoutingId.From("expired-ready-node"),
+            OwnerId = expiredOwner.OwnerId,
+            LeaseGeneration = expiredOwner.LeaseGeneration,
+            DescriptorRevision = 1,
+            EntrySpotId = ZLinkSpotId.CreateEntrySpotId("expired-ready"),
+        };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await repository.UpdateMeshNodeAsync(
+                    expiredDescriptor,
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("expired-ready-room");
+        var payload = new ZLinkUserSpotAuthorityPayload(
+            ZLinkUserSpotAuthorityState.Creating,
+            SpotCloseHost.SpotType,
+            "expired-ready-room",
+            expiredOwner.OwnerId,
+            checked((ulong)expiredOwner.LeaseGeneration),
+            SpotCloseHost.MeshName,
+            expiredDescriptor.Rid,
+            expiredDescriptor.LifecycleGeneration
+        );
+        var reserved = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(
+                await repository.ReserveAsync(
+                    new ZLinkObjectReservationRequest(
+                        ZLinkPlacementObjectKind.UserSpot,
+                        key,
+                        SpotCloseHost.SpotType,
+                        ZLinkInlineCreationIntentCodec.Encode(Array.Empty<byte>()),
+                        System.Security.Cryptography.SHA256.HashData(Array.Empty<byte>()),
+                        0,
+                        new ZLinkMeshNodeDescriptorKey(
+                            expiredDescriptor.MeshName,
+                            expiredDescriptor.Rid
+                        ),
+                        expiredDescriptor.LifecycleGeneration,
+                        expiredOwner,
+                        ZLinkUserSpotAuthorityPayloadCodec.Encode(payload),
+                        new ZLinkCapacityVector(
+                            0,
+                            1,
+                            new ZLinkSpotTypeCapacityDelta(
+                                ZLinkPlacementObjectKind.UserSpot,
+                                SpotCloseHost.SpotType,
+                                1
+                            )
+                        ),
+                        ZLinkObjectRelocationRegistration.DisabledPolicy
+                    )
+                )
+            )
+            .Reservation;
+        if (ready)
+        {
+            Assert.IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(
+                    reserved,
+                    ZLinkUserSpotAuthorityPayloadCodec.Encode(
+                        payload with
+                        {
+                            State = ZLinkUserSpotAuthorityState.Ready,
+                        }
+                    )
+                )
+            );
+            time.Advance(TimeSpan.FromSeconds(2));
+        }
+        else
+        {
+            Assert.Equal(
+                ZLinkLocationWriteStatus.Stored,
+                await repository.RemoveMeshNodeAsync(
+                    new ZLinkMeshNodeDescriptorKey(
+                        expiredDescriptor.MeshName,
+                        expiredDescriptor.Rid
+                    ),
+                    expiredOwner
+                )
+            );
+        }
+        var rejected = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await host
+                .Manager.GetOrCreate("expired-ready-room", SpotCloseHost.SpotType)
+                .InMesh(SpotCloseHost.MeshName)
+                .Timeout(Wait)
+                .Async()
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, rejected.Kind);
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(await repository.ReadAuthorityAsync(key));
+        var expired = (
+            await repository.ListMeshNodesAsync(SpotCloseHost.MeshName, default)
+        ).Items.SingleOrDefault(item => item.Rid == expiredDescriptor.Rid);
+        if (ready)
+        {
+            Assert.NotNull(expired);
+            Assert.Equal(0, expired.Capacity.Spots.Active);
+        }
+        else
+            Assert.Null(expired);
+        Assert.Equal(1, host.State.FactoryCalls);
+    }
+
+    [Fact]
+    public async Task GetOrCreate_observes_same_id_winner_after_capacity_race()
+    {
+        await using var host = await SpotCloseHost.StartAsync(spotLimit: 1);
+        var descriptor = Assert.Single(
+            await host
+                .Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>()
+                .ListLiveMeshNodesAsync(SpotCloseHost.MeshName)
+        );
+        var key = ZLinkProviderLocationRepository.MeshKey(descriptor.MeshName, descriptor.Rid);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = 0;
+        host.Store.BeforeRead = async readKey =>
+        {
+            if (readKey == key && Interlocked.Exchange(ref held, 1) == 0)
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(Wait);
+            }
+        };
+        var losing = host
+            .Manager.GetOrCreate("capacity-race-room", SpotCloseHost.SpotType)
+            .InMesh(SpotCloseHost.MeshName)
+            .Timeout(Wait)
+            .Async()
+            .AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(Wait);
+            var winner = await host
+                .Manager.GetOrCreate("capacity-race-room", SpotCloseHost.SpotType)
+                .InMesh(SpotCloseHost.MeshName)
+                .Timeout(Wait)
+                .Async();
+            Assert.Equal(ZLinkSpotCreateState.Created, winner.State);
+            release.TrySetResult();
+            var existing = await losing.WaitAsync(Wait);
+            Assert.Equal(ZLinkSpotCreateState.Existing, existing.State);
+            Assert.Equal(winner.Spot, existing.Spot);
+            Assert.Equal(1, host.State.FactoryCalls);
+        }
+        finally
+        {
+            release.TrySetResult();
+            host.Store.BeforeRead = null;
+            await losing;
+        }
+    }
+
+    [Fact]
     public async Task GetOrCreate_preserves_Ready_after_membership_prevents_Close()
     {
         await using var host = await SpotCloseHost.StartAsync();
@@ -2272,7 +2493,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
     internal static async Task<SpotCloseHost> StartAsync(
         SpotCloseFaultStore? sharedStore = null,
         bool registerInstanceFactory = true,
-        bool registerUserSpotFactory = true
+        bool registerUserSpotFactory = true,
+        int spotLimit = 100
     )
     {
         var store =
@@ -2295,7 +2517,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
                 .Listen("tcp://127.0.0.1:0")
                 .SetRoutingIdPrefix("spot-close")
                 .SetActorLimit(100)
-                .SetSpotLimit(100)
+                .SetSpotLimit(spotLimit)
                 .Objects()
                 .Server()
                 .AddEntrySpot<SpotCloseEntrySpot>()
@@ -2458,6 +2680,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
 
 internal sealed class SpotCloseProbeState
 {
+    internal int FactoryCalls;
     private int _handlerCalls;
     private int _onClosingCalls;
 
@@ -2667,17 +2890,25 @@ internal sealed class SpotCloseJoinHandler
     }
 }
 
-internal sealed class SpotCloseProbeSpot(
-    IZLinkSpotContext context,
-    SpotCloseProbeState state,
-    SpotCloseScopedResource resource
-) : IZLinkSpot<SpotCloseActor>
+internal sealed class SpotCloseProbeSpot : IZLinkSpot<SpotCloseActor>
 {
-    public IZLinkSpotContext Context { get; } = context;
+    public SpotCloseProbeSpot(
+        IZLinkSpotContext context,
+        SpotCloseProbeState state,
+        SpotCloseScopedResource resource
+    )
+    {
+        Context = context;
+        State = state;
+        Resource = resource;
+        Interlocked.Increment(ref state.FactoryCalls);
+    }
 
-    internal SpotCloseProbeState State { get; } = state;
+    public IZLinkSpotContext Context { get; }
 
-    internal SpotCloseScopedResource Resource { get; } = resource;
+    internal SpotCloseProbeState State { get; }
+
+    internal SpotCloseScopedResource Resource { get; }
 
     public async ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
@@ -2793,10 +3024,17 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
     private int _missingPlacementCalls;
     internal int MissingPlacementCalls => Volatile.Read(ref _missingPlacementCalls);
 
-    public ValueTask<ZLinkStoreReadResult> ReadAsync(
+    internal Func<ZLinkStoreKey, Task>? BeforeRead { get; set; }
+
+    public async ValueTask<ZLinkStoreReadResult> ReadAsync(
         ZLinkStoreKey key,
         CancellationToken cancellationToken = default
-    ) => inner.ReadAsync(key, cancellationToken);
+    )
+    {
+        if (BeforeRead is { } beforeRead)
+            await beforeRead(key);
+        return await inner.ReadAsync(key, cancellationToken);
+    }
 
     public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
         ZLinkStoreWriteRequest request,
