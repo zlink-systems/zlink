@@ -17,6 +17,7 @@ namespace zlink::framework
 namespace detail
 {
 class logging_state_t;
+class diagnostic_event_sink_t;
 } // namespace detail
 
 enum class log_level_t
@@ -79,7 +80,8 @@ void emit_log (const std::shared_ptr<logging_state_t> &state,
                int level,
                const std::string &category,
                const std::string &message,
-               std::vector<log_field_t> fields);
+               std::vector<log_field_t> fields,
+               void (*failure) () noexcept = nullptr);
 } // namespace detail
 
 class logger_factory_t;
@@ -145,6 +147,7 @@ template <typename TCategory = void> class logger_t
 
   private:
     friend class logger_factory_t;
+    friend class detail::diagnostic_event_sink_t;
 
     logger_t (std::shared_ptr<detail::logging_state_t> state, std::string category) :
         _state (std::move (state)), _category (std::move (category))
