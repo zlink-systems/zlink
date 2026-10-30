@@ -23,7 +23,7 @@ import {
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { requestDurableService } from './durable-service-request';
+import { admitServiceRequest, requestDurableService } from './durable-service-request';
 import { shouldCompactBackingArray } from '../admission';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
@@ -2202,12 +2202,12 @@ export class ServiceStatefulRuntime {
     );
     const reply = routingIdsEqual(binding.sessionOwnerNodeRid, this.nodeRid)
       ? this.requestLocalInfrastructure(header, pending.id, pending)
-      : this.raw.requestService(
+      : requestDurableService(
+          this.raw,
           binding.sessionOwnerNodeRid,
           [header],
-          timeoutMs,
-          undefined,
-          pending
+          pending,
+          'boundSessionClose'
         );
     void reply.then(
       (parts) =>
@@ -4904,14 +4904,51 @@ export class ServiceStatefulRuntime {
       return;
     }
     if (receiver !== undefined) {
-      this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted, pending, {
-        operationCompleted: (_id, reply) =>
+      const completion = {
+        operationCompleted: (_id: bigint, reply: readonly Buffer[]) =>
           this.completeRemoteReply(pending, targetNodeRid, operationKind, actor, reply, receiver),
-        operationFailed: (_id, error) => receiver.operationFailed(pending.id, error, undefined)
-      });
+        operationFailed: (_id: bigint, error: unknown) =>
+          receiver.operationFailed(pending.id, error, undefined)
+      };
+      if (this.raw.isPeerRouteReady?.(targetNodeRid) === true) {
+        this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted, pending, completion);
+        return;
+      }
+      admitServiceRequest(
+        this.raw,
+        targetNodeRid,
+        pending,
+        (remaining, finished) => {
+          this.raw.requestService(targetNodeRid, parts, remaining, onAdmitted, pending, {
+            operationCompleted: (id, reply) => {
+              finished();
+              completion.operationCompleted(id, reply);
+            },
+            operationFailed: (id, error) => {
+              finished();
+              completion.operationFailed(id, error);
+            }
+          });
+        },
+        (error) => completion.operationFailed(pending.id, error),
+        operationKind
+      );
       return;
     }
-    void this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted, pending).then(
+    const reply =
+      this.raw.isPeerRouteReady?.(targetNodeRid) === true
+        ? this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted, pending)
+        : requestDurableService(
+            this.raw,
+            targetNodeRid,
+            parts,
+            pending,
+            operationKind,
+            undefined,
+            undefined,
+            onAdmitted
+          );
+    void reply.then(
       (reply) => this.completeRemoteReply(pending, targetNodeRid, operationKind, actor, reply),
       (error) => pending.replyFailure(error)
     );
@@ -5536,11 +5573,15 @@ export class ServiceStatefulRuntime {
                 1,
                 Math.min(30_000, Math.ceil(state.expiresAtMs - performance.now()))
               );
-              const reply = await this.raw.requestService(
+              const pending = this.raw.beginInfrastructureRequest(remainingMs);
+              const reply = await requestDurableService(
+                this.raw,
                 state.target.targetNodeRid,
                 parts,
-                remainingMs
+                pending,
+                'spot message follow'
               );
+              pending.complete(reply);
               this.raw.replyService(current.ingress, reply);
             } catch (error) {
               const result = failure(error);
@@ -5730,9 +5771,7 @@ export class ServiceStatefulRuntime {
 
   private tryEntrySpotFence(targetNodeRid: string): ServiceDirectSpotRouteFence | undefined {
     const targetNodeGeneration =
-      targetNodeRid === this.nodeRid
-        ? this.nodeGeneration
-        : this.raw.topology.peer(targetNodeRid)?.descriptor.lifecycleGeneration;
+      this.raw.peerLifecycleGeneration?.(targetNodeRid) ?? this.tryPeerGeneration(targetNodeRid);
     if (targetNodeGeneration === undefined) return undefined;
     return {
       spot: {
@@ -5775,8 +5814,10 @@ export class ServiceStatefulRuntime {
         ? current
         : undefined;
     }
-    const peer = this.raw.topology.peer(targetNodeRid);
-    if (peer?.descriptor.lifecycleGeneration !== targetNodeGeneration) {
+    if (
+      (this.raw.peerLifecycleGeneration?.(targetNodeRid) ??
+        this.tryPeerGeneration(targetNodeRid)) !== targetNodeGeneration
+    ) {
       return undefined;
     }
     this.rememberSpotRoute(requested);

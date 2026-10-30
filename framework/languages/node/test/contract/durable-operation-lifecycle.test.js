@@ -31,11 +31,13 @@ function fixture(request, disconnectOnFailure = true) {
   const routes = new Map();
   let nextRouteGeneration = 1n;
   const attempts = [];
+  let connectionRows = [];
   const router = {
     setRoutingId() {}, setReceiveFlowState() {}, bind() {}, connectToRoutingId() {}, connect() {},
     disconnect() {}, disconnectRid() {}, close() {}, localEndpoint: () => 'inproc://source-node',
     receive: () => incoming.shift(), send: async () => {},
     submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }),
+    connectionAttemptsSnapshot: () => connectionRows,
     routesSnapshot: () => [...routes].map(([routingId, routeGeneration]) => ({ routingId, routeGeneration })),
     request: (rid, parts, timeoutMs, onReply, onFailed, _recordReceived, onAdmitted, existing) => (async () => {
       const record = parts[0][3] === 28 ? decodeActorJoin28(parts) : wire.decodeStatefulHeader(parts[0]);
@@ -74,6 +76,7 @@ function fixture(request, disconnectOnFailure = true) {
   };
   return {
     raw, runtime, attempts, target, router,
+    async snapshot(rows) { connectionRows = rows; await raw.pumpBatch(false, false, true); },
     async admit() {
       const routeGeneration = nextRouteGeneration++;
       routes.set(target.nodeRoutingId, routeGeneration);
@@ -389,5 +392,23 @@ for (const mode of ['sync', 'async', 'cancel-at-creation']) {
       assert.equal(submitted, 1);
       assert.equal(requests.registry.size, 0);
     } finally { resolve([]); requests.close(); f.runtime.close(); f.raw.close(); }
+  });
+}
+
+for (const kind of operationKinds) {
+  test(`${kind}: Core ATTEMPT_FAILED ends readiness as Unavailable before sender deadline`, async () => {
+    const f = fixture(() => { throw new Error('Failed connection must not start a binding request'); });
+    const row = (state, lastFailureId) => ({ endpoint: f.target.advertisedEndpoint,
+      intentId: 1n, revision: 1n, state, lastFailureId,
+      lastFailure: { kind: zlink.ConnectionFailureKind.Refused,
+        stage: zlink.ConnectionFailureStage.Transport, normalizedErrno: 0, disconnectReason: 0 } });
+    try {
+      await f.snapshot([row(zlink.ConnectionAttemptState.Connecting, 0n)]);
+      const rejected = assert.rejects(f.start(kind, 1000),
+        error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable);
+      await f.snapshot([row(zlink.ConnectionAttemptState.AttemptFailed, 2n)]);
+      await rejected;
+      assert.equal(f.attempts.length, 0);
+    } finally { f.close(); }
   });
 }

@@ -196,9 +196,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private maintenanceDueMs = Number.POSITIVE_INFINITY;
   private pumpTask?: Promise<void>;
   private readable = 0;
-  private readonly onReadable = (receiveReady: boolean, routeReady: boolean): void => {
+  private readonly onReadable = (
+    receiveReady: boolean,
+    routeReady: boolean,
+    connectReady: boolean
+  ): void => {
     if (receiveReady) this.readable |= 1;
     if (routeReady) this.readable |= 2;
+    if (connectReady) this.readable |= 4;
     this.pump();
   };
   private readonly onMaintenance = (): void => {
@@ -425,7 +430,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       resolveAdvertisedEndpoint: (boundEndpoint) => this.resolveAdvertisedEndpoint(boundEndpoint),
       bindingPort: this.bindingPort,
       applicationJobQueue: this.requireApplicationJobQueue(),
-      onReceiveReady: () => this.onReadable(true, false),
+      onReceiveReady: () => this.onReadable(true, false, false),
       infrastructureTaskRunner: this.infrastructureTaskRunner,
       peerAdmissionSealed: this.peerAdmissionSealed,
       onReceiveFlowConfigFailure: this.applicationJobReceiveFlowFailureSink,
@@ -1818,7 +1823,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private pumpReceiveBatch(runtime: RawServiceMeshRuntime): boolean | Promise<boolean> {
     const ready = this.readable;
     this.readable = 0;
-    return runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
+    return runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0, (ready & 4) !== 0);
   }
 
   private hasPumpReadiness(): boolean {
