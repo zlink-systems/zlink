@@ -5,6 +5,7 @@
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/mesh/service_liveness_registry.hpp"
 #include "runtime/transport/listener_identity.hpp"
+#include <zlink/Contracts/Sockets/connection_attempt.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
 
 #include <service_wire_constants.hpp>
@@ -142,9 +143,13 @@ class service_topology_registry_t
     {
         std::optional<admitted_peer_t> peer;
         task_t<void> changed;
+        std::shared_ptr<const std::vector<zlink::connection_attempt_t>> attempts;
+        std::string endpoint;
+        std::optional<zlink::connection_attempt_t> connection_attempt () const;
     };
     using peer_observer_t = std::function<peer_observation_t ()>;
-    peer_observer_t observe_peer (std::vector<std::uint8_t> node_routing_id) const;
+    peer_observer_t observe_peer (std::vector<std::uint8_t> node_routing_id,
+                                  std::string endpoint = {}) const;
 
     peer_admission_result_t admit (service_node_descriptor_t descriptor,
                                    std::vector<std::uint8_t> connection_id,
@@ -200,13 +205,17 @@ class service_topology_registry_t
                                         const service_node_descriptor_t *expected_descriptor,
                                         service_liveness_registry_t::clock_t::time_point now,
                                         protocol::command command);
+    std::function<void ()>
+    publish_connection_attempts_on_lane (std::vector<zlink::connection_attempt_t> attempts);
     struct topology_state_t;
-    std::function<void ()> publish_topology (std::shared_ptr<topology_state_t> next);
+    std::function<void ()> publish_topology (std::shared_ptr<topology_state_t> next,
+                                             std::function<void ()> handler);
 
     runtime::state_lane_t &_lane;
     struct topology_state_t
     {
         service_node_descriptor_t local;
+        std::vector<zlink::connection_attempt_t> attempts;
         std::shared_ptr<task_completion_source_t<void>> changed =
           std::make_shared<task_completion_source_t<void>> ();
         std::map<std::vector<std::uint8_t>, admitted_peer_t, byte_vector_less_t> peers;
