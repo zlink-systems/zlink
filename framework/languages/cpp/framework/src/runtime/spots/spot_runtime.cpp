@@ -4606,6 +4606,13 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       std::string ("serial_dispatch=") + (serial_dispatch ? "true" : "false")};
               });
         }
+        std::string callback_spot_id;
+        if (trace_owner && trace_owner->handler_invocation_for_tests) {
+            callback_spot_id = actor_execution_spot_id;
+            trace_owner->handler_invocation_for_tests (
+              detail::handler_invocation_phase_t::before_admission, packet_name,
+              actor_execution_spot_id, actor_execution_id);
+        }
         auto completion = std::make_shared<spot_handler_terminal_t> ();
         auto task = completion->task ();
         if (retained_message) {
@@ -5025,6 +5032,10 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                               + " pending=" + std::to_string (trace_serial_queue->pending_count ())
                           : " queue=inline");
           });
+        if (trace_owner && trace_owner->handler_invocation_for_tests)
+            trace_owner->handler_invocation_for_tests (
+              detail::handler_invocation_phase_t::after_queue_submission, packet_name,
+              callback_spot_id, actor_execution_id);
         if (!posted) {
             // The queue did not take the work: its admission ends here.
             if (!admission_preclaimed)
