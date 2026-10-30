@@ -14,13 +14,11 @@ public sealed class SourceLayoutContracts
     // 이 목록은 private 접근 시험을 공개 동작 관찰로 옮길 때 줄어들기만 해야 합니다.
     private static readonly string[] LegacyNonPublicReflectionFiles =
     [
-        "Zlink.Framework.UnitTests/Configuration/Registration/Monitoring.cs",
         "Zlink.Framework.UnitTests/Runtime/ClientServerClientAckTests.cs",
         "Zlink.Framework.UnitTests/Runtime/ClientServerLivenessLaneTests.cs",
         "Zlink.Framework.UnitTests/Runtime/DurableSenderRuntimeTests.cs",
         "Zlink.Framework.UnitTests/Runtime/EntrySpotActorDispatchTests.cs",
         "Zlink.Framework.UnitTests/Runtime/EnvelopeHeaderCacheHotPathTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/ErrorReplyWireConvergenceTests.cs",
         "Zlink.Framework.UnitTests/Runtime/LogicalMulticastSubmitTests.cs",
         "Zlink.Framework.UnitTests/Runtime/MeshChannelSelectionHotPathTests.cs",
         "Zlink.Framework.UnitTests/Runtime/MeshLivenessDisconnectContractTests.cs",
