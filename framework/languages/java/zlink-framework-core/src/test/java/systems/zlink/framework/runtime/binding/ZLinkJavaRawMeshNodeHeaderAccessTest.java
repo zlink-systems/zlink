@@ -99,10 +99,8 @@ final class ZLinkJavaRawMeshNodeHeaderAccessTest {
                         .encodeAdmission(
                                 ServiceWireConstants.COMMAND_UPDATE, descriptor(SOURCE, 2));
         try (var context = Zlink.createContext();
-                var node = node(context);
+                var node = node(context, local, topology);
                 var record = new Record(update)) {
-            set(node, "localDescriptor", local);
-            set(node, "topology", topology);
             dispatch(node, record);
             record.assertClosed();
             assertEquals(
@@ -208,25 +206,26 @@ final class ZLinkJavaRawMeshNodeHeaderAccessTest {
     }
 
     private static ZLinkJavaRawMeshNode node(Context context) throws Exception {
-        var node = new ZLinkJavaRawMeshNode(context, "header");
         var local = descriptor(RoutingId.from("header-local"), 1);
-        set(node, "localDescriptor", local);
-        set(node, "topology", new ZLinkServiceTopologyRegistry(local));
-        return node;
+        return node(context, local, new ZLinkServiceTopologyRegistry(local));
     }
 
-    private static void dispatch(ZLinkJavaRawMeshNode node, Record record) throws Exception {
-        var method =
-                ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                        "dispatch", ZLinkJavaRawServicePort.Inbound.class);
-        method.setAccessible(true);
-        method.invoke(node, record.inbound);
+    private static ZLinkJavaRawMeshNode node(
+            Context context,
+            ZLinkServiceNodeDescriptor local,
+            ZLinkServiceTopologyRegistry topology) {
+        return ZLinkJavaRawMeshNodeTesting.create(
+                "header",
+                new ZLinkJavaRawServicePort(context),
+                null,
+                local,
+                topology,
+                java.util.Map.of(),
+                Runnable::run);
     }
 
-    private static void set(Object owner, String name, Object value) throws Exception {
-        var field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(owner, value);
+    private static void dispatch(ZLinkJavaRawMeshNode node, Record record) {
+        node.dispatch(record.inbound);
     }
 
     private static byte[] prefix(int command) {
