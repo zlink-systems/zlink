@@ -3207,7 +3207,7 @@ TEST (FrameworkRelocationSealContract, native_public_requester_terminal_uses_reg
     host->configure_stateful_dispatch ([lease] { return lease; });
     host->configure_spot_route_fence_resolver (
       [] (const auto &, const auto &, auto) -> task_t<std::optional<host::route_fence_t>> {
-          co_return host::route_fence_t{1, 3};
+          co_return host::route_fence_t{1, 3, 1};
       });
     const stateful::object_ref_t spot{
       stateful::object_kind_t::user_spot, "native-local", 1, 1, "mesh", "native-requester"};
@@ -3328,7 +3328,7 @@ TEST (FrameworkRelocationSealContract,
     requester->configure_stateful_dispatch ([lease] { return lease; });
     requester->configure_spot_route_fence_resolver (
       [] (const auto &, const auto &, auto) -> task_t<std::optional<host::route_fence_t>> {
-          co_return host::route_fence_t{1, 1};
+          co_return host::route_fence_t{1, 1, 1};
       });
     requester->start ();
     previous->start ();

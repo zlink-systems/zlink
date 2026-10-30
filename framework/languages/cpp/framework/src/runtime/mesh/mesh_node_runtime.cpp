@@ -20,7 +20,6 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
-#include "runtime/utils/poll_interval_wait.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/transport/endpoint_notation.hpp"
 #include "runtime/utils/uuid.hpp"
@@ -2039,22 +2038,6 @@ void mesh_node_runtime_t::disconnect_peer (const zlink::routing_id_t &expected_r
     });
 }
 
-bool mesh_node_runtime_t::wait_for_peer_ready (const zlink::routing_id_t &target,
-                                               std::chrono::milliseconds timeout) const
-{
-    if (!_node || timeout <= std::chrono::milliseconds::zero ())
-        return false;
-    const auto deadline = std::chrono::steady_clock::now () + timeout;
-    const auto routing_id = target.to_bytes ();
-    do {
-        if (_node->transport ().topology ().peer (routing_id)) {
-            return true;
-        }
-        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
-    } while (std::chrono::steady_clock::now () < deadline);
-    return _node->transport ().topology ().peer (routing_id) != nullptr;
-}
-
 task_t<host::spot_handle_t> mesh_node_runtime_t::get_or_create_spot_async (std::string spot_id)
 {
     if (!_node) {
@@ -2397,13 +2380,6 @@ mesh_node_runtime_t::request_actor_join_spot_route (const runtime::spot_address_
         const auto failure = failure_mapper.reply_header_exception (
           completed.record.terminal_result, completed.record.failure_errno,
           "Actor transfer route request");
-        if (failure.kind () == framework_error_kind_t::deadline_exceeded
-            && target.node_generation != 0
-            && !has_admitted_peer (target.node_rid, target.node_generation)) {
-            co_return result_t<runtime::messaging::message_parts_t>::failure (
-              framework_error_kind_t::unavailable,
-              "Actor transfer route target RouteMesh peer became unavailable");
-        }
         co_return result_t<runtime::messaging::message_parts_t>::failure (failure.kind (),
                                                                           failure.what ());
     }
