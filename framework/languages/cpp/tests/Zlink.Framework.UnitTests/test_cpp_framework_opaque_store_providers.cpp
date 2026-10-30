@@ -242,6 +242,146 @@ store_key_t capacity_key (const mesh_node_descriptor_t &descriptor)
     return {"zlink:v11:capacity:" + descriptor.mesh_name + ":" + descriptor.rid.to_string ()};
 }
 
+
+TEST (ZLinkFrameworkOpaqueStoreProviders, DescriptorCapacityUsesCurrentStoreCounts)
+{
+    in_memory_location_store_t store;
+    provider_location_repository_t writer (store), reader (store);
+    const auto owner =
+      std::get<owner_lease_claimed_t> (
+        writer.claim_owner_lease ("capacity-projection-owner", 60s).result ().value ())
+        .token;
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "capacity-projection";
+    descriptor.rid = zlink::routing_id_t::from ("capacity-node");
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = owner.owner_id;
+    descriptor.lease_generation = owner.lease_generation;
+    descriptor.object_role = object_role_t::server;
+    descriptor.state = framework_runtime_state_t::serving;
+    descriptor.security_identity = "capacity-node";
+    descriptor.entry_spot_id = "capacity-entry";
+    descriptor.object_capabilities = {
+      {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::disabled, false, 0,
+       true},
+      {placement_object_kind_t::user_spot, "room", maintenance_policy_kind_t::disabled, false, 2},
+      {placement_object_kind_t::instance_spot, "unused", maintenance_policy_kind_t::disabled, false,
+       5}};
+    // Published usage is a stale copy; a missing capacity record means zero.
+    descriptor.capacity.actors = {1, 1, 3};
+    descriptor.capacity.spots = {1, 1, 3};
+    descriptor.capacity.spot_types = {
+      {placement_object_kind_t::user_spot, "room", {1, 0, 2}},
+      {placement_object_kind_t::instance_spot, "unused", {1, 0, 5}}};
+    ASSERT_EQ (writer.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    const auto observe = [&] (std::uint64_t actors_active, std::uint64_t actors_reserved,
+                              std::uint64_t spots_active, std::uint64_t spots_reserved) {
+        const auto page = reader.list_mesh_nodes (descriptor.mesh_name, {1, {}}).result ();
+        ASSERT_TRUE (page);
+        ASSERT_EQ (page.value ().items.size (), 1u);
+        const auto &current = page.value ().items.front ();
+        EXPECT_EQ (current.rid, descriptor.rid);
+        EXPECT_EQ (current.lifecycle_generation, descriptor.lifecycle_generation);
+        EXPECT_EQ (current.descriptor_revision, descriptor.descriptor_revision);
+        EXPECT_EQ (current.owner_id, descriptor.owner_id);
+        EXPECT_EQ (current.capacity.actors.limit, 3);
+        EXPECT_EQ (current.capacity.spots.limit, 3);
+        EXPECT_EQ (current.capacity.actors.active, actors_active);
+        EXPECT_EQ (current.capacity.actors.reserved, actors_reserved);
+        EXPECT_EQ (current.capacity.spots.active, spots_active);
+        EXPECT_EQ (current.capacity.spots.reserved, spots_reserved);
+        ASSERT_EQ (current.capacity.spot_types.size (), 2u);
+        const auto &room = current.capacity.spot_types[0];
+        EXPECT_EQ (room.usage.limit, 2);
+        EXPECT_EQ (room.usage.active, spots_active);
+        EXPECT_EQ (room.usage.reserved, spots_reserved);
+        const auto &unused = current.capacity.spot_types[1];
+        EXPECT_EQ (unused.usage.limit, 5);
+        EXPECT_EQ (unused.usage.active, 0u);
+        EXPECT_EQ (unused.usage.reserved, 0u);
+    };
+    observe (0, 0, 0, 0);
+    object_reserve_request_t actor;
+    actor.key = {placement_object_kind_t::actor, "capacity-actor"};
+    actor.intent.stable_type = "player";
+    actor.target = {descriptor.mesh_name, node_rid_t::from_string (descriptor.rid.to_string ()), 1,
+                    owner};
+    actor.capacity_bundle.actor_slots = 1;
+    object_reserve_request_t spot;
+    spot.key = {placement_object_kind_t::user_spot, "capacity-spot"};
+    spot.intent.stable_type = "room";
+    spot.target = actor.target;
+    spot.capacity_bundle = {
+      0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}};
+    const auto actor_reserved =
+      std::get<object_reserved_t> (writer.reserve (actor).result ().value ());
+    const auto spot_reserved =
+      std::get<object_reserved_t> (writer.reserve (spot).result ().value ());
+    observe (0, 1, 0, 1);
+    const auto actor_ready = encode_actor_authority_payload (actor_authority_payload_t{
+      .state = actor_authority_state_t::ready,
+      .stable_type = "player",
+      .actor_id = actor.key.global_id,
+      .current_spot_id = *descriptor.entry_spot_id,
+      .current_spot_generation = 1,
+      .current_spot_kind = actor_authority_spot_kind_t::entry,
+      .owner_id = owner.owner_id,
+      .owner_lease_generation = static_cast<std::uint64_t> (owner.lease_generation),
+      .mesh_name = descriptor.mesh_name,
+      .node_rid = actor.target.node_rid,
+      .node_generation = 1});
+    ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+      writer.commit ({actor.key, actor_reserved.fence, actor_ready}).result ().value ()));
+    const auto spot_ready = encode_user_spot_authority_payload (user_spot_authority_payload_t{
+      .state = user_spot_authority_state_t::ready,
+      .stable_type = "room",
+      .spot_id = spot.key.global_id,
+      .owner_id = owner.owner_id,
+      .owner_lease_generation = static_cast<std::uint64_t> (owner.lease_generation),
+      .mesh_name = descriptor.mesh_name,
+      .node_rid = spot.target.node_rid,
+      .node_generation = 1});
+    ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+      writer.commit ({spot.key, spot_reserved.fence, spot_ready}).result ().value ()));
+    observe (1, 0, 1, 0);
+    for (const auto &key :
+         {actor_authority_key (actor.key.global_id), spot_authority_key (spot.key.global_id)}) {
+        const auto current =
+          std::get<authority_snapshot_t> (writer.read_authority (key).result ().value ());
+        ASSERT_TRUE (std::holds_alternative<authority_deleted_t> (
+          writer.compare_exchange_authority (key, current.store_version, authority_delete_t{})
+            .result ()
+            .value ()));
+    }
+    observe (0, 0, 0, 0);
+    auto second = descriptor;
+    second.rid = zlink::routing_id_t::from ("capacity-z");
+    second.entry_spot_id = "capacity-entry-z";
+    ASSERT_EQ (writer.update_mesh_node (second, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    const auto first_page = reader.list_mesh_nodes (descriptor.mesh_name, {1, {}}).result ();
+    ASSERT_TRUE (first_page);
+    ASSERT_TRUE (first_page.value ().continuation_token.has_value ());
+    const auto second_page =
+      reader.list_mesh_nodes (descriptor.mesh_name, {1, first_page.value ().continuation_token})
+        .result ();
+    ASSERT_TRUE (second_page);
+    ASSERT_EQ (second_page.value ().items.size (), 1u);
+    EXPECT_EQ (second_page.value ().items.front ().rid, second.rid);
+    EXPECT_FALSE (second_page.value ().continuation_token.has_value ());
+    EXPECT_EQ (second_page.value ().items.front ().capacity.spots.active, 0u);
+    EXPECT_EQ (second_page.value ().items.front ().capacity.spots.limit, 3);
+}
+
 TEST (ZLinkFrameworkOpaqueStoreProviders, ValueConditionFencesBytesButNotVersion)
 {
     in_memory_location_store_t store;
@@ -634,6 +774,86 @@ class creation_terminal_failure_store_t final : public location_store_t
     std::optional<std::chrono::system_clock::time_point> terminal_read_store_now;
     std::optional<std::chrono::system_clock::time_point> terminal_write_store_now;
 };
+
+
+TEST (ZLinkFrameworkOpaqueStoreProviders,
+      CreationReleaseRequalifiesUnchangedAuthorityAfterCapacityConflict)
+{
+    creation_terminal_failure_store_t store;
+    provider_location_repository_t repository (store);
+    const auto owner =
+      std::get<owner_lease_claimed_t> (
+        repository.claim_owner_lease ("release-conflict-owner", 60s).result ().value ())
+        .token;
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "release-conflict";
+    descriptor.rid = zlink::routing_id_t::from ("release-conflict-node");
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = owner.owner_id;
+    descriptor.lease_generation = owner.lease_generation;
+    descriptor.object_role = object_role_t::server;
+    descriptor.state = framework_runtime_state_t::serving;
+    descriptor.security_identity = "release-conflict-node";
+    descriptor.entry_spot_id = "release-conflict-entry";
+    descriptor.object_capabilities.push_back (
+      {placement_object_kind_t::user_spot, "room", maintenance_policy_kind_t::disabled, false, 1});
+    descriptor.capacity.spots.limit = 1;
+    descriptor.capacity.spot_types.push_back (
+      {placement_object_kind_t::user_spot, "room", {0, 0, 1}});
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::user_spot, "release-conflict-room"};
+    request.intent.stable_type = "room";
+    request.target = {descriptor.mesh_name, node_rid_t::from_string (descriptor.rid.to_string ()),
+                      1, owner};
+    request.creating_payload = bytes ("creating");
+    request.capacity_bundle = {
+      0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}};
+    request.relocation_policy = detail::factory_relocation_kind_t::disabled;
+    const auto reserved =
+      std::get<object_reserved_t> (repository.reserve (request).result ().value ());
+    const auto ready = encode_user_spot_authority_payload (user_spot_authority_payload_t{
+      .state = user_spot_authority_state_t::ready,
+      .stable_type = "room",
+      .spot_id = request.key.global_id,
+      .owner_id = owner.owner_id,
+      .owner_lease_generation = static_cast<std::uint64_t> (owner.lease_generation),
+      .mesh_name = descriptor.mesh_name,
+      .node_rid = request.target.node_rid,
+      .node_generation = 1});
+    ASSERT_TRUE (std::holds_alternative<object_committed_t> (
+      repository.commit ({request.key, reserved.fence, ready}).result ().value ()));
+    const auto key = spot_authority_key (request.key.global_id);
+    const auto before =
+      std::get<authority_snapshot_t> (repository.read_authority (key).result ().value ());
+    ASSERT_TRUE (std::holds_alternative<owner_lease_released_t> (
+      repository.release_owner_lease (owner).result ().value ()));
+    const auto successor = std::get<owner_lease_claimed_t> (
+                             repository.claim_owner_lease (owner.owner_id, 60s).result ().value ())
+                             .token;
+    ASSERT_NE (successor.lease_generation, owner.lease_generation);
+    ASSERT_EQ (capacity_record (store, descriptor).at ("active").at ("spots"), 1);
+    store.conflicting_capacity_key = capacity_key (descriptor);
+    store.fault = creation_terminal_failure_store_t::fault_t::capacity_conflict_once;
+    const auto writes_before = store.creation_writes.size ();
+    request.operation_deadline = std::chrono::system_clock::now () + 5s;
+    const auto released =
+      repository.release_ended_reservation (key, before.store_version, {}, request).result ();
+    ASSERT_TRUE (released);
+    EXPECT_EQ (store.fault, creation_terminal_failure_store_t::fault_t::none);
+    EXPECT_TRUE (released.value ());
+    EXPECT_EQ (store.creation_writes.size (), writes_before + 2);
+    const auto current = repository.read_authority (key).result ();
+    ASSERT_TRUE (current);
+    EXPECT_TRUE (std::holds_alternative<authority_missing_t> (current.value ()));
+    EXPECT_EQ (capacity_record (store, descriptor).at ("active").at ("spots"), 0);
+}
 
 class ActiveActorReclaimTest : public ::testing::TestWithParam<std::tuple<bool, std::string>>
 {
@@ -3616,7 +3836,8 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     auto capacity = capacity_record (provider, descriptor);
     EXPECT_EQ (capacity.at ("pending").at ("actors"), 1);
     EXPECT_EQ (capacity.at ("active").at ("actors"), 0);
-    EXPECT_EQ (nodes.items.front ().capacity.actors.reserved, 0u);
+    EXPECT_EQ (nodes.items.front ().capacity.actors.reserved,
+               capacity.at ("pending").at ("actors").get<std::uint64_t> ());
     EXPECT_EQ (nodes.items.front ().capacity.actors.active, 0u);
 
     const auto ready =
@@ -3630,6 +3851,11 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     capacity = capacity_record (provider, descriptor);
     EXPECT_EQ (capacity.at ("pending").at ("actors"), 0);
     EXPECT_EQ (capacity.at ("active").at ("actors"), 1);
+
+    EXPECT_EQ (nodes.items.front ().capacity.actors.active,
+               capacity.at ("active").at ("actors").get<std::uint64_t> ());
+    EXPECT_EQ (nodes.items.front ().capacity.actors.reserved,
+               capacity.at ("pending").at ("actors").get<std::uint64_t> ());
 
     provider_location_repository_t reopened (provider);
     const auto actor_key = actor_authority_key ("actor-1");
@@ -5052,10 +5278,18 @@ class lost_descriptor_reply_store_t final : public location_store_t
     bool hide_confirmation_on_loss = false;
     int descriptor_reads = 0;
     int descriptor_writes = 0;
+    int reads_before_lost_reply = 0;
+    std::optional<store_key_t> lost_write_key;
+    std::optional<store_key_t> pending_confirmation_key;
+    std::vector<store_key_t> confirmation_read_keys;
     task_t<store_read_result_t> read (store_key_t key) override
     {
         if (key.value.starts_with (std::string ("mesh-node") + '\0')) {
             ++descriptor_reads;
+            if (pending_confirmation_key) {
+                confirmation_read_keys.push_back (key);
+                pending_confirmation_key.reset ();
+            }
             if (lose_confirmation) {
                 lose_confirmation = false;
                 co_return result_t<store_read_result_t>::failure (
@@ -5071,16 +5305,21 @@ class lost_descriptor_reply_store_t final : public location_store_t
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
         for (const auto &mutation : request.mutations) {
-            if (std::visit (
-                  [] (const auto &value) {
-                      return value.key.value.starts_with (std::string ("mesh-node") + '\0');
-                  },
-                  mutation))
-                ++descriptor_writes;
+            std::visit (
+              [&] (const auto &value) {
+                  if (value.key.value.starts_with (std::string ("mesh-node") + '\0')) {
+                      ++descriptor_writes;
+                      if (lose_reply)
+                          lost_write_key = value.key;
+                  }
+              },
+              mutation);
         }
         auto result = co_await inner.write (std::move (request));
         if (lose_reply) {
             lose_reply = false;
+            reads_before_lost_reply = descriptor_reads;
+            pending_confirmation_key = lost_write_key;
             lose_confirmation = hide_confirmation_on_loss;
             co_return result_t<store_write_result_t>::failure (
               framework_error_kind_t::internal_failure, "injected lost descriptor reply");
@@ -5110,7 +5349,13 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, DescriptorLostReplyIsConfirmedBySameKe
                           .result ()
                           .value ();
     EXPECT_EQ (location_write_status_t::stored, result.status);
-    EXPECT_EQ (3, store.descriptor_reads); // capacity read, fence read, lost-reply confirmation
+    EXPECT_EQ (1, store.reads_before_lost_reply);
+    ASSERT_TRUE (store.lost_write_key);
+    ASSERT_EQ (1u, store.confirmation_read_keys.size ());
+    EXPECT_EQ (store.lost_write_key->value, store.confirmation_read_keys.front ().value);
+    EXPECT_EQ (store.reads_before_lost_reply + store.confirmation_read_keys.size (),
+               store.descriptor_reads);
+    EXPECT_EQ (1, store.descriptor_writes);
     descriptor.updated_at += 1ms;
     EXPECT_EQ (location_write_status_t::stored,
                repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)

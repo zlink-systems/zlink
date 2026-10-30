@@ -61,7 +61,7 @@ export class ZLinkLocationRuntimeOwner {
   }
 
   get currentLeaseTracker(): ZLinkOwnerLeaseTracker | undefined {
-    return this.leaseTrackerState?.tracker;
+    return this.stores === undefined ? undefined : this.leaseTracker(this.stores);
   }
 
   setSpotRouteInvalidator(invalidator?: (spotId: RoutingId) => void): void {
