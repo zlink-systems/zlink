@@ -66,7 +66,7 @@ uint64_t control_runtime_t::add_periodic_task (control_task_fn *fn_,
                                                        uint32_t interval_ms_,
                                                        bool run_immediately_)
 {
-    if (!fn_ || interval_ms_ == 0) {
+    if (!fn_) {
         errno = EINVAL;
         return 0;
     }
@@ -100,6 +100,8 @@ uint64_t control_runtime_t::add_periodic_task (control_task_fn *fn_,
         task.schedule_it =
           _schedule.insert (std::make_pair (task.next_run_ms, task.id));
         task.scheduled = true;
+        if (interval_ms_ == 0 && !run_immediately_)
+            deschedule_task_locked (&task);
     }
     catch (const std::bad_alloc &) {
         if (task_it != _tasks.end ())
@@ -204,6 +206,21 @@ void control_runtime_t::deschedule_task_locked (task_entry_t *task_)
     task_->scheduled = false;
 }
 
+#ifdef ZLINK_BUILD_TESTS
+bool control_runtime_t::test_task_scheduled (uint64_t task_id_)
+{
+    scoped_lock_t lock (_sync);
+    const std::map<uint64_t, task_entry_t>::const_iterator it = _tasks.find (task_id_);
+    return it != _tasks.end () && it->second.scheduled;
+}
+
+bool control_runtime_t::test_task_exists (uint64_t task_id_)
+{
+    scoped_lock_t lock (_sync);
+    return _tasks.find (task_id_) != _tasks.end ();
+}
+#endif
+
 void control_runtime_t::loop ()
 {
     zlink::clock_t clock;
@@ -238,8 +255,10 @@ void control_runtime_t::loop ()
                     task.cached_node = _schedule.extract (next);
                     task.scheduled = false;
 
-                    task.next_run_ms = now + task.interval_ms;
-                    schedule_task_locked (&task);
+                    if (task.interval_ms != 0) {
+                        task.next_run_ms = now + task.interval_ms;
+                        schedule_task_locked (&task);
+                    }
 
                     call.task_id = task.id;
                     call.fn = task.fn;
@@ -274,9 +293,10 @@ void control_runtime_t::loop ()
         }
         catch (const std::bad_alloc &) {
             //  Policy: the failed tick is dropped, never the worker or the
-            //  task. The task was rescheduled before the call, so it simply
-            //  retries at its next interval. The epilogue below must still
-            //  run or a concurrent remove_task()/ctx teardown waits forever
+            //  task. Periodic tasks were rescheduled before the call; an
+            //  explicitly scheduled task owns its pending work recovery.
+            //  The epilogue below must still run or a concurrent
+            //  remove_task()/ctx teardown waits forever
             //  on the stale active ID.
         }
 
