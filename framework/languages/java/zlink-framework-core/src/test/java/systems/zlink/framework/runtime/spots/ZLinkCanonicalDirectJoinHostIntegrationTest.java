@@ -26,6 +26,7 @@ import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTur
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome;
@@ -826,6 +827,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     var failed =
                             assertInstanceOf(ZLinkActorJoinCompletion.Failed.class, completion);
                     assertEquals(operationId, failed.operationId());
+                    ZLinkTelemetryTestFence.awaitIdle();
                     assertTrue(
                             diagnostics.errors.stream()
                                     .anyMatch(
@@ -1039,6 +1041,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         final List<String> errors = new CopyOnWriteArrayList<>();
 
         JoinFailureDiagnostics() {
+            ZLinkTelemetryTestFence.awaitIdle();
             logger.addHandler(this);
         }
 
@@ -1052,6 +1055,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
         @Override
         public void close() {
+            ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(this);
         }
     }

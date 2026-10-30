@@ -109,6 +109,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     replyHeader.CorrelationId
                 );
             }
+            global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
             var errors = logger
                 .Messages.Where(line =>
                     line.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
@@ -817,6 +818,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         var result = await reply.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await taskRunner.StopAsync();
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
 
         var matching = loggerFactory
             .Messages.Where(line =>

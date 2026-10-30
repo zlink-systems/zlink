@@ -265,6 +265,7 @@ final class ZLinkChannelMessageDispatcherTest {
                     public void close() {}
                 };
         logger.setLevel(Level.ALL);
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(trace);
         try {
             dispatch(
@@ -296,6 +297,7 @@ final class ZLinkChannelMessageDispatcherTest {
         } finally {
             probe.releaseFirst.complete("first-reply");
             workers.drain();
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(trace);
             logger.setLevel(previous);
             gateProbe = null;
@@ -574,6 +576,7 @@ final class ZLinkChannelMessageDispatcherTest {
                     public void close() {}
                 };
         logger.setLevel(Level.ALL);
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(trace);
         try {
             ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
@@ -650,6 +653,7 @@ final class ZLinkChannelMessageDispatcherTest {
             var closing = registry.awaitQuiescence().toCompletableFuture();
             assertFalse(closing.isDone());
 
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(
                     4L,
                     traces.stream().filter(line -> line.contains("phase=admitted")).count(),
@@ -705,6 +709,7 @@ final class ZLinkChannelMessageDispatcherTest {
                     traces.stream().filter(line -> line.contains("phase=dispatched")).count(),
                     traces.toString());
         } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(trace);
             logger.setLevel(previousLevel);
             probe.releaseFirst.complete("first-reply");
@@ -828,6 +833,7 @@ final class ZLinkChannelMessageDispatcherTest {
         Level previousLevel = logger.getLevel();
         Handler handler = traceHandler(traces, dispatchError);
         logger.setLevel(Level.ALL);
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(handler);
         try {
             ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
@@ -860,6 +866,7 @@ final class ZLinkChannelMessageDispatcherTest {
 
             assertReplyPathMissingWithoutReplied(traces, dispatchError);
         } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
             logger.setLevel(previousLevel);
         }
@@ -873,6 +880,7 @@ final class ZLinkChannelMessageDispatcherTest {
         Level previousLevel = logger.getLevel();
         Handler handler = traceHandler(traces, dispatchError);
         logger.setLevel(Level.ALL);
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(handler);
         try {
             ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
@@ -908,6 +916,7 @@ final class ZLinkChannelMessageDispatcherTest {
 
             assertReplyPathMissingWithoutReplied(traces, dispatchError);
         } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
             logger.setLevel(previousLevel);
         }
@@ -921,6 +930,7 @@ final class ZLinkChannelMessageDispatcherTest {
         Level previousLevel = logger.getLevel();
         Handler handler = traceHandler(traces, dispatchError);
         logger.setLevel(Level.ALL);
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(handler);
         try {
             ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
@@ -949,6 +959,7 @@ final class ZLinkChannelMessageDispatcherTest {
 
             assertReplyPathMissingWithoutReplied(traces, dispatchError);
         } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
             logger.setLevel(previousLevel);
         }

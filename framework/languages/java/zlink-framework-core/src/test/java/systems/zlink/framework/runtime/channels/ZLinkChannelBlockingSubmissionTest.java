@@ -412,7 +412,10 @@ final class ZLinkChannelBlockingSubmissionTest {
             runtime =
                     new ZLinkChannelCallRuntime(
                             new ZLinkMessageFlowTracer(
-                                    options.registration().dispatchOptions(), null, Runnable::run),
+                                    options.registration().dispatchOptions(),
+                                    systems.zlink.framework.runtime.internal.handlers
+                                            .ZLinkHandlerActivator.reflection(),
+                                    Runnable::run),
                             new ZLinkChannelReplyDecoder(new ZLinkJsonMessageSerializer()),
                             null,
                             null);

@@ -328,6 +328,9 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
 
         public void DisconnectRid(RoutingId routingId) => throw new NotSupportedException();
 
+        public IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot() =>
+            throw new NotSupportedException();
+
         public void SetRoutingId(RoutingId routingId) => throw new NotSupportedException();
 
         public RoutingId GetRoutingId() => throw new NotSupportedException();

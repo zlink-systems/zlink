@@ -58,7 +58,7 @@ public sealed partial class UnhandledDispatchPolicyTests
     [Fact]
     public async Task SpotSubscription_Fanout_Instances_Keep_One_Flow_And_Owner_Skip_Uses_The_Same_Identity()
     {
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var services = new ServiceCollection().BuildServiceProvider();
@@ -189,8 +189,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
         };
-        var activities = new List<Activity>();
-        listener.ActivityStopped = activities.Add;
+        var activities = new ConcurrentQueue<Activity>();
+        listener.ActivityStopped = activities.Enqueue;
         ActivitySource.AddActivityListener(listener);
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Off);
@@ -298,6 +298,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         }
 
         Assert.Equal(1, nativeSpot.LastJoinResultCode);
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         Assert.Contains(
             logger.Messages,
             message => message.Contains("no_handler", StringComparison.Ordinal)
@@ -313,8 +314,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
         };
-        var activities = new List<Activity>();
-        listener.ActivityStopped = activities.Add;
+        var activities = new ConcurrentQueue<Activity>();
+        listener.ActivityStopped = activities.Enqueue;
         ActivitySource.AddActivityListener(listener);
         using var runtimeServices = CreateDispatchRuntime(out var runtime);
         var options = new ZLinkDispatchOptionsModel();
@@ -365,6 +366,9 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZLinkMessageParts.DisposeAll(parts);
         }
 
+        TelemetryReceipt.Wait(() =>
+            activities.Any(activity => activity.OperationName == "zlink.dispatch_error")
+        );
         Assert.Contains(
             activities,
             activity =>
@@ -405,7 +409,7 @@ public sealed partial class UnhandledDispatchPolicyTests
             .BuildServiceProvider();
         var registration = new ZLinkFrameworkRegistration();
         registration.Filters.Add(typeof(CapturingFanoutFilter));
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var runner = new ZLinkRuntimeTaskRunner(
             new ZLinkRuntimeErrorSink(),
@@ -513,7 +517,7 @@ public sealed partial class UnhandledDispatchPolicyTests
     [Fact]
     public async Task DispatchErrorReporter_DeliversMessageFlowErrorSnapshot()
     {
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var services = new ServiceCollection().BuildServiceProvider();
@@ -549,7 +553,7 @@ public sealed partial class UnhandledDispatchPolicyTests
     [Fact]
     public async Task ReplyPathMissing_ReportsFailCallerMessageFlowError()
     {
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var services = new ServiceCollection().BuildServiceProvider();
@@ -618,6 +622,7 @@ public sealed partial class UnhandledDispatchPolicyTests
             null
         );
 
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         Assert.Contains(
             logger.Messages,
             message =>
@@ -694,6 +699,7 @@ public sealed partial class UnhandledDispatchPolicyTests
             null
         );
 
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         Assert.Contains(
             logger.Messages,
             message =>
@@ -746,7 +752,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         bool malformed
     )
     {
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var services = new ServiceCollection().BuildServiceProvider();
@@ -999,7 +1005,14 @@ public sealed partial class UnhandledDispatchPolicyTests
             ActivitySource.AddActivityListener(_listener);
         }
 
-        public IReadOnlyCollection<ObservedMessageFlow> Events => _events.ToArray();
+        public IReadOnlyCollection<ObservedMessageFlow> Events
+        {
+            get
+            {
+                global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
+                return _events.ToArray();
+            }
+        }
 
         public bool HasTerminal => _observed.Task.IsCompleted;
 
