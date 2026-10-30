@@ -290,8 +290,10 @@ public sealed partial class EntrySpotActorDispatchTests
                 1
             ),
         };
+        using var loggerFactory = CreateFlowTestLoggerFactory();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
+            loggerFactory: loggerFactory,
             messageFlowMode: ZLinkDiagnosticsLevel.Normal,
             includeJoinTarget: true
         );

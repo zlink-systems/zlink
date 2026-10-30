@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Systems.Zlink;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.LocationProvider;
@@ -1567,6 +1569,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         var services = new ServiceCollection();
         var probe = new FlowProbe();
         services.AddSingleton(probe);
+        services.AddLogging(logging => logging.AddProvider(NullLoggerProvider.Instance));
         services.AddZLinkFramework(options =>
         {
             options
@@ -1577,7 +1580,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         });
         await using var server = services.BuildServiceProvider();
         // Flow-correlation §4: flow IDs are carried only while message-flow
-        // tracing is on, at Normal or Detailed.
+        // tracing is on with a provider, at Normal or Detailed.
         server
             .GetRequiredService<ZLinkFrameworkRegistration>()
             .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
@@ -1588,7 +1591,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         var endpoint = (
             await GetServerBundle(serverState, "work").ClientServerServer!.ReadAsync()
         ).AdvertisedEndpoint;
-        await using var client = CreateClient(endpoint);
+        await using var client = CreateClient(endpoint, includeMessageFlowProvider: true);
         client
             .GetRequiredService<ZLinkFrameworkRegistration>()
             .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
@@ -4480,10 +4483,13 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         string endpoint,
         long maximumMessageBytes = 16L * 1024L * 1024L,
         TimeProvider? timeProvider = null,
-        string? additionalEndpoint = null
+        string? additionalEndpoint = null,
+        bool includeMessageFlowProvider = false
     )
     {
         var services = new ServiceCollection();
+        if (includeMessageFlowProvider)
+            services.AddLogging(logging => logging.AddProvider(NullLoggerProvider.Instance));
         services.AddZLinkFramework(options =>
         {
             var client = options.AddClientServerChannel("work").Client().Connect(endpoint);

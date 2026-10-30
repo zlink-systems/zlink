@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Contracts.Messaging;
@@ -8348,7 +8349,8 @@ public sealed partial class EntrySpotActorDispatchTests
         var root = Path.Combine(Path.GetTempPath(), $"zlink-current-publish-{Guid.NewGuid():N}");
         var logPath = Path.Combine(root, "flow.log");
         var node = new CapturingSpotNode();
-        var (runtime, _) = await CreateStartedRuntimeAsync(node);
+        using var loggerFactory = CreateFlowTestLoggerFactory();
+        var (runtime, _) = await CreateStartedRuntimeAsync(node, loggerFactory: loggerFactory);
         runtime.Registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
 
         try
@@ -8387,8 +8389,10 @@ public sealed partial class EntrySpotActorDispatchTests
         var root = Path.Combine(Path.GetTempPath(), $"zlink-external-publish-{Guid.NewGuid():N}");
         var logPath = Path.Combine(root, "flow.log");
         var node = new CapturingSpotNode();
+        using var loggerFactory = CreateFlowTestLoggerFactory();
         var (runtime, _) = await CreateStartedRuntimeAsync(
             node,
+            loggerFactory: loggerFactory,
             includeEntryChannelMembership: true
         );
         runtime.Registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
@@ -9318,9 +9322,11 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var node = new CapturingSpotNode();
         // Flow-correlation §4: flow IDs are carried only while message-flow
-        // tracing is on, at Normal or Detailed.
+        // tracing is on with a provider, at Normal or Detailed.
+        using var loggerFactory = CreateFlowTestLoggerFactory();
         var (runtime, actor) = await CreateStartedRuntimeAsync(
             node,
+            loggerFactory: loggerFactory,
             messageFlowMode: ZLinkDiagnosticsLevel.Normal
         );
         try
@@ -11094,9 +11100,11 @@ public sealed partial class EntrySpotActorDispatchTests
         const string flowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
         var node = new CapturingSpotNode();
         // Flow-correlation §4: flow IDs are carried only while message-flow
-        // tracing is on, at Normal or Detailed.
+        // tracing is on with a provider, at Normal or Detailed.
+        using var loggerFactory = CreateFlowTestLoggerFactory();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
+            loggerFactory: loggerFactory,
             messageFlowMode: ZLinkDiagnosticsLevel.Normal
         );
         try
@@ -12492,6 +12500,9 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         return CreateActivationWithRuntime(services, new CapturingSpot()).Activation;
     }
+
+    private static ILoggerFactory CreateFlowTestLoggerFactory() =>
+        LoggerFactory.Create(builder => builder.AddProvider(NullLoggerProvider.Instance));
 
     private static async Task<(
         ZLinkFrameworkRuntime Runtime,

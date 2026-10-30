@@ -214,7 +214,9 @@ internal sealed class ZLinkMessageFlowTracer
         );
 
     internal static ILogger GetLogger(IServiceProvider services) =>
-        services.GetRequiredService<ZLinkMessageFlowLogger>().Logger;
+        services.GetService<ZLinkMessageFlowLogger>()?.Logger
+        ?? services.GetService<ILoggerFactory>()?.CreateLogger(LoggerCategory)
+        ?? NullLogger.Instance;
 
     private static ZLinkDiagnosticsLevel RequiredLevel(ZLinkMessageFlowOutcome outcome)
     {
