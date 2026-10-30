@@ -369,7 +369,10 @@ final class ZLinkChannelSubmissionFailureTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         ZLinkMessageFlowTracer flow =
                 new ZLinkMessageFlowTracer(
-                        options.registration().dispatchOptions(), null, Runnable::run);
+                        options.registration().dispatchOptions(),
+                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                .reflection(),
+                        Runnable::run);
         return new ZLinkChannelCallRuntime(flow, null, null, null);
     }
 

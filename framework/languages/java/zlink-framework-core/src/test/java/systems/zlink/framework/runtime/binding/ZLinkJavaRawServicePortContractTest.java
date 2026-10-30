@@ -312,18 +312,14 @@ final class ZLinkJavaRawServicePortContractTest {
     @Test
     void concurrentMeshCloseWaitsForFirstLogicalCleanup() throws Exception {
         var fixture = meshWithSocketClose(false);
-        var registrationEntered = new CountDownLatch(1);
-        var releaseRegistration = new CountDownLatch(1);
-        var registration = ZLinkJavaRawMeshNode.class.getDeclaredField("receiveFlowRegistration");
-        registration.setAccessible(true);
-        registration.set(
-                fixture.mesh(),
-                (systems.zlink.framework.runtime.internal.dispatch
-                                .ZLinkApplicationJobReceiveFlowController.Registration)
+        var cleanupEntered = new CountDownLatch(1);
+        var releaseCleanup = new CountDownLatch(1);
+        fixture.afterLogicalCleanupTurn()
+                .set(
                         () -> {
-                            registrationEntered.countDown();
+                            cleanupEntered.countDown();
                             try {
-                                releaseRegistration.await();
+                                releaseCleanup.await();
                             } catch (InterruptedException failure) {
                                 Thread.currentThread().interrupt();
                                 throw new IllegalStateException(failure);
@@ -333,7 +329,7 @@ final class ZLinkJavaRawServicePortContractTest {
                 var callers = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory())) {
             try {
                 var first = callers.submit(fixture.mesh()::close);
-                assertTrue(registrationEntered.await(2, TimeUnit.SECONDS));
+                assertTrue(cleanupEntered.await(2, TimeUnit.SECONDS));
                 var secondStarted = new CountDownLatch(1);
                 var second =
                         callers.submit(
@@ -346,12 +342,12 @@ final class ZLinkJavaRawServicePortContractTest {
                 assertThrows(
                         java.util.concurrent.TimeoutException.class,
                         () -> second.get(100, TimeUnit.MILLISECONDS));
-                releaseRegistration.countDown();
+                releaseCleanup.countDown();
                 first.get(2, TimeUnit.SECONDS);
                 second.get(2, TimeUnit.SECONDS);
                 assertEquals(1, fixture.attempts().get());
             } finally {
-                releaseRegistration.countDown();
+                releaseCleanup.countDown();
             }
         }
     }
@@ -360,12 +356,8 @@ final class ZLinkJavaRawServicePortContractTest {
     void closeCallbackOnLogicalOwnerCanReenterClose() throws Exception {
         var fixture = meshWithSocketClose(false);
         var callbackReturned = new CountDownLatch(1);
-        var registration = ZLinkJavaRawMeshNode.class.getDeclaredField("receiveFlowRegistration");
-        registration.setAccessible(true);
-        registration.set(
-                fixture.mesh(),
-                (systems.zlink.framework.runtime.internal.dispatch
-                                .ZLinkApplicationJobReceiveFlowController.Registration)
+        fixture.afterLogicalCleanupTurn()
+                .set(
                         () -> {
                             fixture.mesh().close();
                             callbackReturned.countDown();
@@ -392,6 +384,7 @@ final class ZLinkJavaRawServicePortContractTest {
     private static MeshCloseFixture meshWithSocketClose(boolean failFirst) {
         var attempts = new AtomicInteger();
         var onSocketClose = new AtomicReference<Runnable>();
+        var afterLogicalCleanupTurn = new AtomicReference<Runnable>();
         var failure =
                 new systems.zlink.contracts.errors.ZlinkCloseException(
                         systems.zlink.contracts.errors.CloseResult.BUSY, 16);
@@ -423,7 +416,16 @@ final class ZLinkJavaRawServicePortContractTest {
                                     assertEquals("createRouterSocket", method.getName());
                                     return router;
                                 });
-        var port = new ZLinkJavaRawServicePort(context);
+        var lane =
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
+                        command -> {
+                            command.run();
+                            // Run after the lane is free, while its submitting close still owns
+                            // cleanup.
+                            var callback = afterLogicalCleanupTurn.getAndSet(null);
+                            if (callback != null) callback.run();
+                        });
+        var port = new ZLinkJavaRawServicePort(context, lane);
         port.openRouter(RoutingId.from("mesh-close-busy"));
         var mesh =
                 new ZLinkJavaRawMeshNode(
@@ -438,7 +440,8 @@ final class ZLinkJavaRawServicePortContractTest {
                         null,
                         null,
                         Map.of());
-        return new MeshCloseFixture(port, mesh, attempts, failure, onSocketClose);
+        return new MeshCloseFixture(
+                port, mesh, attempts, failure, onSocketClose, afterLogicalCleanupTurn);
     }
 
     private record MeshCloseFixture(
@@ -446,7 +449,8 @@ final class ZLinkJavaRawServicePortContractTest {
             ZLinkJavaRawMeshNode mesh,
             AtomicInteger attempts,
             systems.zlink.contracts.errors.ZlinkCloseException failure,
-            AtomicReference<Runnable> onSocketClose) {}
+            AtomicReference<Runnable> onSocketClose,
+            AtomicReference<Runnable> afterLogicalCleanupTurn) {}
 
     @Test
     void oneOrderedRegistryOwnsSocketsAndRejectsForeignSockets() throws Exception {

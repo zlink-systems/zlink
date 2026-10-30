@@ -3518,15 +3518,14 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             const auto forced = liveness->forced ();
             const bool stopping = _stop->load (std::memory_order_acquire);
             auto dispatch_disconnect = [self = shared_from_this (), connection_state,
-                                        session_transport_error, forced, stopping] (
-                                         std::function<void ()> retired) {
+                                        session_transport_error, forced,
+                                        stopping] (std::function<void ()> retired) {
                 if (!stopping) {
                     trace_stream_host ("dispatch-disconnected-begin", self->_stream);
                 }
                 auto disconnected = [self, connection_state,
                                      retired = std::move (retired)] (const result_t<void> &) {
-                    auto completed = [self, connection_state,
-                                      retired] (const result_t<void> &) {
+                    auto completed = [self, connection_state, retired] (const result_t<void> &) {
                         trace_stream_host ("dispatch-disconnected-end", self->_stream);
                         retired ();
                     };

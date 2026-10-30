@@ -965,10 +965,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
-    private bool TryScheduleTerminal(
-        ZlinkStreamCloseReason reason,
-        Func<ValueTask> finalWork
-    )
+    private bool TryScheduleTerminal(ZlinkStreamCloseReason reason, Func<ValueTask> finalWork)
     {
         var (scheduled, rejected) = AwaitStateLane(
             _lane.RunAsync(() =>

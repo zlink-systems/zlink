@@ -598,8 +598,8 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.True(entries.Sum(entry => entry.LinkReads) <= 2 * entries.Length);
         // Control input: traversing the old entries for each registration must exceed the linear bound.
         for (var i = 0; i < entries.Length; i++)
-            for (var at = 0; at < i; at++)
-                _ = entries[at].DeadlineNext;
+        for (var at = 0; at < i; at++)
+            _ = entries[at].DeadlineNext;
         Assert.True(entries.Sum(entry => entry.LinkReads) > 2 * entries.Length);
         output.WriteLine(
             "concurrent_pending=1000 registration_index_traversals=0 traversal_control_rejected=true"
@@ -1569,7 +1569,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         internal void ReceiveChunks()
         {
             using var chunk = Received.Create();
-            for (var ordinal = 0; ordinal < _payload.ChunkCount;)
+            for (var ordinal = 0; ordinal < _payload.ChunkCount; )
             {
                 Assert.True(_server.Recv(chunk));
                 if (
@@ -1721,9 +1721,9 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     ) : IPoller
     {
         private IZlinkSocket Native(IZlinkSocket socket) =>
-            mapSocket is not null
-                ? mapSocket(socket)
-                : socket is CanonicalRequestContext.CountingRouter router ? router.Native : socket;
+            mapSocket is not null ? mapSocket(socket)
+            : socket is CanonicalRequestContext.CountingRouter router ? router.Native
+            : socket;
 
         public int Size => inner.Size;
 
@@ -2057,7 +2057,10 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             peer.Bind(EphemeralTcpEndpoint);
             var endpoint = peer.Options.LastEndpoint;
             intent = node.ConnectPeer(endpoint, rid);
-            Assert.Equal(ServiceWireConstants.Command.Hello, await ReceiveAdmissionCommandAsync(peer));
+            Assert.Equal(
+                ServiceWireConstants.Command.Hello,
+                await ReceiveAdmissionCommandAsync(peer)
+            );
             await SendAsync(
                 peer,
                 ZLinkServiceWireCodec.EncodeRouteAdmission(
