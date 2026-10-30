@@ -94,10 +94,11 @@ async function createOwner(given) {
   const diagnostics = [];
   const counters = { onClosing: 0, handler: 0, creationIntent: 0, join: 0 };
   const live = new Set([OWNER_LIVENESS]);
+  const ownerLive = (token) =>
+    [...live].some((value) => value.endsWith(`:${token.ownerId}:${token.leaseGeneration}`));
   const base = new ZLinkInMemoryAuthorityStore(
     {
-      isOwnerLive: (token) =>
-        [...live].some((value) => value.endsWith(`:${token.ownerId}:${token.leaseGeneration}`)),
+      isOwnerLive: ownerLive,
       isTargetLive(descriptor, lifecycle, token) {
         return live.has(
           `${descriptor.meshName}:${descriptor.rid}:${lifecycle}:${token.ownerId}:${token.leaseGeneration}`
@@ -173,6 +174,7 @@ async function createOwner(given) {
   });
   coordinator = new ZLinkUserSpotCreationCoordinator({
     store,
+    leaseTracker: { isOwnerTokenLive: async (token) => ownerLive(token) },
     target: async () => ({
       meshName: MESH,
       nodeRid: NODE_RID,
