@@ -6,9 +6,11 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const MODULE_ALLOCATION_FLAG = '--jitless';
-const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
+const {
+  ZLinkBufferMessage
+} = require('../../packages/framework/dist/runtime/backend/runtime-message');
 
-test('messaging encode stays within the final Message allocation budget', async t => {
+test('messaging encode stays within the final Message allocation budget', async (t) => {
   if (runAllocationTest(t)) return;
   const codec = require('../../packages/framework/dist/runtime/messaging/payload-codec');
   const payload = { body: 'payload' };
@@ -30,7 +32,7 @@ test('messaging encode stays within the final Message allocation budget', async 
   encoded.message.close();
 });
 
-test('JSON decode stays within the parsed value allocation budget', async t => {
+test('JSON decode stays within the parsed value allocation budget', async (t) => {
   if (runAllocationTest(t)) return;
   const codec = require('../../packages/framework/dist/runtime/messaging/payload-codec');
   const message = ZLinkBufferMessage.fromOwned(Buffer.from('{"body":"payload"}'));
@@ -43,35 +45,62 @@ test('JSON decode stays within the parsed value allocation budget', async t => {
   assert.deepEqual(decode(), { body: 'payload' });
   assert.throws(
     () => codec.decodeFrameworkPayloadMessage(ZLinkBufferMessage.fromOwned(Buffer.from('{'))),
-    error => error.message.includes('PayloadDecodeFailed') && error.cause instanceof SyntaxError
+    (error) => error.message.includes('PayloadDecodeFailed') && error.cause instanceof SyntaxError
   );
   const configurationFailure = new Error('schema metadata unavailable');
   const declaredType = new Proxy(class Payload {}, {
-    getOwnPropertyDescriptor() { throw configurationFailure; }
+    getOwnPropertyDescriptor() {
+      throw configurationFailure;
+    }
   });
   assert.throws(
     () => codec.decodeFrameworkPayloadMessage(message, undefined, declaredType),
-    error => error === configurationFailure
+    (error) => error === configurationFailure
   );
 });
 
-test('channel request and reply stay within the final parts allocation budget', async t => {
+test('channel request and reply stay within the final parts allocation budget', async (t) => {
   if (runAllocationTest(t)) return;
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
   const codecs = { serializers: new Map() };
   const data = { body: 'x'.repeat(1024) };
   const roundtrip = () => {
     const parts = codec.encodeChannelEnvelopePartsAtDeadline(
-      1, 'codec', 'Packet', data, 2000000000000, undefined, codecs,
-      '00112233445566778899aabbccddeeff', false
+      1,
+      'codec',
+      'Packet',
+      data,
+      2000000000000,
+      undefined,
+      codecs,
+      '00112233445566778899aabbccddeeff',
+      false
     );
-    const request = codec.decodeChannelHeader(parts.map(part => typeof part === 'string' ? ZLinkBufferMessage.from(part) : ZLinkBufferMessage.fromOwned(part)), false);
+    const request = codec.decodeChannelHeader(
+      parts.map((part) =>
+        typeof part === 'string'
+          ? ZLinkBufferMessage.from(part)
+          : ZLinkBufferMessage.fromOwned(part)
+      ),
+      false
+    );
     const reply = codec.encodeChannelReplyParts(request, data, codecs);
-    const response = codec.decodeChannelEnvelope(reply.map(part => typeof part === 'string' ? ZLinkBufferMessage.from(part) : ZLinkBufferMessage.fromOwned(part)), undefined, false);
+    const response = codec.decodeChannelEnvelope(
+      reply.map((part) =>
+        typeof part === 'string'
+          ? ZLinkBufferMessage.from(part)
+          : ZLinkBufferMessage.fromOwned(part)
+      ),
+      undefined,
+      false
+    );
     return codec.decodeChannelPayload(response);
   };
   for (let index = 0; index < 1000; index++) roundtrip();
-  const allocations = await trackedCodecAllocations('/runtime/channels/channel-envelope.js', roundtrip);
+  const allocations = await trackedCodecAllocations(
+    '/runtime/channels/channel-envelope.js',
+    roundtrip
+  );
   // Node 20/22: module-owned final parts and header work stay below 13.5
   // objects / 1100 bytes per roundtrip. Descendant Buffer/JSON allocations
   // are runtime-dependent and are not part of this module's budget.
@@ -79,7 +108,7 @@ test('channel request and reply stay within the final parts allocation budget', 
   assert.deepEqual(roundtrip(), data);
 });
 
-test('correlation validation accepts the full ASCII contract within a near-zero allocation budget', async t => {
+test('correlation validation accepts the full ASCII contract within a near-zero allocation budget', async (t) => {
   if (runAllocationTest(t)) return;
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
   const valid = ['a'.repeat(64), '\0\x7f'];
@@ -91,7 +120,10 @@ test('correlation validation accepts the full ASCII contract within a near-zero 
     for (const value of invalid) codec.isValidChannelCorrelationId(value);
   };
   for (let index = 0; index < 1000; index++) validate();
-  const allocations = await trackedCodecAllocations('/runtime/channels/channel-envelope.js', validate);
+  const allocations = await trackedCodecAllocations(
+    '/runtime/channels/channel-envelope.js',
+    validate
+  );
   // Node 20/22: 1000 six-string batches allocate no module-owned objects.
   // The unchanged near-zero budget remains far below one per-call RegExp.
   // Input strings are prepared before tracking.
@@ -100,7 +132,9 @@ test('correlation validation accepts the full ASCII contract within a near-zero 
 
 test('raw service reply transfers owned bytes directly to the binding reply capability', async () => {
   const { fixture } = require('./fixtures/raw-mesh-close');
-  const { ReadyDomain } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
+  const {
+    ReadyDomain
+  } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
   const f = fixture();
   let captured;
   let replySource;
@@ -112,9 +146,14 @@ test('raw service reply transfers owned bytes directly to the binding reply capa
   const payload = Buffer.alloc(1024, 7);
   try {
     const input = {
-      owner: 'local', domain: 'application', sourceRoutingId: 'source',
-      requestSequence: 1n, parts: [Buffer.from('service request')],
-      reply(parts) { captured = parts; }
+      owner: 'local',
+      domain: 'application',
+      sourceRoutingId: 'source',
+      requestSequence: 1n,
+      parts: [Buffer.from('service request')],
+      reply(parts) {
+        captured = parts;
+      }
     };
     f.runtime.mailbox.tryEnqueue(input);
     const ready = f.backend.createReadyBatch(1);
@@ -123,7 +162,11 @@ test('raw service reply transfers owned bytes directly to the binding reply capa
     const result = claim.recvBatch(f.backend.createReceiveBatch(1, 1));
     try {
       result.records[0].reply([ZLinkBufferMessage.fromOwned(payload)]);
-      assert.equal(captured[0], payload, 'Framework must not snapshot before the synchronous binding reply.');
+      assert.equal(
+        captured[0],
+        payload,
+        'Framework must not snapshot before the synchronous binding reply.'
+      );
       assert.equal(captured[0].length, 1024);
       assert.equal(replySource, input, 'Reply routing uses the owning record without a snapshot.');
     } finally {
@@ -141,18 +184,39 @@ test('raw service reply transfers owned bytes directly to the binding reply capa
 
 test('reply decode borrows its body once for JSON, registered codecs and raw bytes', () => {
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
-  for (const contentType of ['application/json', 'application/x-test', 'application/octet-stream']) {
+  for (const contentType of [
+    'application/json',
+    'application/x-test',
+    'application/octet-stream'
+  ]) {
     const body = Buffer.from(contentType === 'application/json' ? '{"body":"reply"}' : 'reply');
-    const header = Buffer.from(JSON.stringify({
-      formatMarker: 242, kind: 2, channelName: 'codec', messageName: 'Packet',
-      contentType, correlationId: 'request', deadline: null, topic: null, metadata: {}
-    }));
+    const header = Buffer.from(
+      JSON.stringify({
+        formatMarker: 242,
+        kind: 2,
+        channelName: 'codec',
+        messageName: 'Packet',
+        contentType,
+        correlationId: 'request',
+        deadline: null,
+        topic: null,
+        metadata: {}
+      })
+    );
     let reads = 0;
-    const serializer = { deserialize: payload => payload.getString() };
-    const result = codec.decodeChannelReply([
-      ZLinkBufferMessage.fromOwned(header),
-      { data() { reads++; return body; } }
-    ], { serializers: new Map([['application/x-test', serializer]]) });
+    const serializer = { deserialize: (payload) => payload.getString() };
+    const result = codec.decodeChannelReply(
+      [
+        ZLinkBufferMessage.fromOwned(header),
+        {
+          data() {
+            reads++;
+            return body;
+          }
+        }
+      ],
+      { serializers: new Map([['application/x-test', serializer]]) }
+    );
     assert.equal(reads, 1);
     if (contentType === 'application/json') assert.deepEqual(result, { body: 'reply' });
     else if (contentType === 'application/octet-stream') assert.equal(result, body);
@@ -166,10 +230,17 @@ test('reply decode borrows its body once for JSON, registered codecs and raw byt
 // supported runtime. Product source and the normal runtime are unchanged.
 function runAllocationTest(t) {
   if (process.execArgv.includes(MODULE_ALLOCATION_FLAG)) return false;
-  const result = spawnSync(process.execPath, [
-    MODULE_ALLOCATION_FLAG, '--test', '--test-reporter=tap',
-    `--test-name-pattern=^${t.name}$`, __filename
-  ], { encoding: 'utf8', env: { ...process.env, NODE_TEST_CONTEXT: undefined } });
+  const result = spawnSync(
+    process.execPath,
+    [
+      MODULE_ALLOCATION_FLAG,
+      '--test',
+      '--test-reporter=tap',
+      `--test-name-pattern=^${t.name}$`,
+      __filename
+    ],
+    { encoding: 'utf8', env: { ...process.env, NODE_TEST_CONTEXT: undefined } }
+  );
   assert.ifError(result.error);
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   // A nested runner can exit successfully without executing the selected test.
@@ -188,9 +259,10 @@ async function trackedCodecAllocations(filename, action) {
   const inspector = require('node:inspector');
   const session = new inspector.Session();
   session.connect();
-  const post = (method, params = {}) => new Promise((resolve, reject) => {
-    session.post(method, params, (error, result) => error ? reject(error) : resolve(result));
-  });
+  const post = (method, params = {}) =>
+    new Promise((resolve, reject) => {
+      session.post(method, params, (error, result) => (error ? reject(error) : resolve(result)));
+    });
   const chunks = [];
   try {
     await post('HeapProfiler.enable');
@@ -224,18 +296,25 @@ async function trackedCodecAllocations(filename, action) {
 }
 
 function assertAllocationBudget(t, allocations, objectsPerCall, bytesPerCall) {
-  const total = [...allocations.values()].reduce((sum, entry) => ({
-    objects: sum.objects + entry.objects,
-    bytes: sum.bytes + entry.bytes
-  }), { objects: 0, bytes: 0 });
+  const total = [...allocations.values()].reduce(
+    (sum, entry) => ({
+      objects: sum.objects + entry.objects,
+      bytes: sum.bytes + entry.bytes
+    }),
+    { objects: 0, bytes: 0 }
+  );
   t.diagnostic(`1000 calls: ${total.objects} objects, ${total.bytes} bytes`);
-  assert.ok(total.objects <= 1000 * objectsPerCall,
-    `${total.objects / 1000} objects/call exceeds ${objectsPerCall}`);
-  assert.ok(total.bytes <= 1000 * bytesPerCall,
-    `${total.bytes / 1000} bytes/call exceeds ${bytesPerCall}`);
+  assert.ok(
+    total.objects <= 1000 * objectsPerCall,
+    `${total.objects / 1000} objects/call exceeds ${objectsPerCall}`
+  );
+  assert.ok(
+    total.bytes <= 1000 * bytesPerCall,
+    `${total.bytes / 1000} bytes/call exceeds ${bytesPerCall}`
+  );
 }
 
-test('warmed serializer lookup does not allocate preparation closure contexts', async t => {
+test('warmed serializer lookup does not allocate preparation closure contexts', async (t) => {
   if (runAllocationTest(t)) return;
   const codec = require('../../packages/framework/dist/runtime/messaging/payload-codec');
   class Payload {}
@@ -249,14 +328,19 @@ test('warmed serializer lookup does not allocate preparation closure contexts', 
 
 // A canonical header has a fixed final shape. Adding fields after parsing
 // otherwise grows V8 property storage twice on every received header.
-test('canonical header validation does not allocate property growth storage', async t => {
+test('canonical header validation does not allocate property growth storage', async (t) => {
   if (runAllocationTest(t)) return;
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
-  const bytes = Buffer.from('{"formatMarker":242,"kind":1,"channelName":"codec","messageName":"Packet","contentType":"application/json","correlationId":"request","deadline":null,"topic":null,"metadata":{}}');
+  const bytes = Buffer.from(
+    '{"formatMarker":242,"kind":1,"channelName":"codec","messageName":"Packet","contentType":"application/json","correlationId":"request","deadline":null,"topic":null,"metadata":{}}'
+  );
   const parts = [ZLinkBufferMessage.fromOwned(bytes)];
   const decode = () => codec.decodeChannelHeader(parts, false);
   for (let index = 0; index < 1000; index++) decode();
-  const allocations = await trackedCodecAllocations('/runtime/channels/channel-envelope.js', decode);
+  const allocations = await trackedCodecAllocations(
+    '/runtime/channels/channel-envelope.js',
+    decode
+  );
   // The reader and final header account for two module-owned objects.
   // Property growth must not add storage in any helper in this module.
   assertAllocationBudget(t, allocations, 2.25, 240);
@@ -264,7 +348,7 @@ test('canonical header validation does not allocate property growth storage', as
   assert.deepEqual(decode().metadata, {});
 });
 
-test('correlation IDs use the fixed zero prefix without constructing padStart intermediates', t => {
+test('correlation IDs use the fixed zero prefix without constructing padStart intermediates', (t) => {
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
   const padStart = t.mock.method(String.prototype, 'padStart');
   const ids = new Set();
@@ -277,7 +361,7 @@ test('correlation IDs use the fixed zero prefix without constructing padStart in
   assert.equal(padStart.mock.callCount(), 0);
 });
 
-test('creation payload decode borrows the encoded body without intermediate byte copies', t => {
+test('creation payload decode borrows the encoded body without intermediate byte copies', (t) => {
   const codec = require('../../packages/framework/dist/runtime/messaging/creation-payload-codec');
   const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
   const value = { body: 'x'.repeat(1024) };
@@ -292,11 +376,14 @@ test('creation payload decode borrows the encoded body without intermediate byte
   for (let index = 0; index < 1000; index++) {
     assert.deepEqual(codec.decodeFrameworkCreationPayload(frame), value);
   }
-  assert.equal(copiedBytes, 0, `Avoid copying the ${bodyBytes}-byte encoded body twice per decode.`);
+  assert.equal(
+    copiedBytes,
+    0,
+    `Avoid copying the ${bodyBytes}-byte encoded body twice per decode.`
+  );
 });
 
-
-test('JSON parser policies are immutable and reused without per-decode option objects', t => {
+test('JSON parser policies are immutable and reused without per-decode option objects', (t) => {
   const profilePath = require.resolve('@zlink-systems/stream-wire/internal/json');
   const implementation = require(path.join(path.dirname(profilePath), 'framework-json-v1.js'));
   const parse = implementation.parseFrameworkJsonV1;
@@ -307,10 +394,13 @@ test('JSON parser policies are immutable and reused without per-decode option ob
   });
   // main exports the profile function directly, so load after installing the
   // spy rather than observing a previously cached function reference.
-  const jsonPath = require.resolve('../../packages/framework/dist/runtime/messaging/framework-json-v1');
+  const jsonPath =
+    require.resolve('../../packages/framework/dist/runtime/messaging/framework-json-v1');
   const cachedJson = require.cache[jsonPath];
   delete require.cache[jsonPath];
-  t.after(() => { require.cache[jsonPath] = cachedJson; });
+  t.after(() => {
+    require.cache[jsonPath] = cachedJson;
+  });
   const json = require(jsonPath);
   assert.deepEqual(json.parseFrameworkJsonV1('{"body":1}'), { body: 1 });
   assert.deepEqual(json.parseFrameworkJsonV1('{"body":2}'), { body: 2 });
@@ -318,7 +408,7 @@ test('JSON parser policies are immutable and reused without per-decode option ob
   assert.equal(policies[0], policies[1]);
   assert.equal(typeof policies[0], 'object');
   assert.equal(Object.isFrozen(policies[0]), true);
-  const explicit = { rejectPropertyName: name => name === 'blocked' };
+  const explicit = { rejectPropertyName: (name) => name === 'blocked' };
   assert.throws(() => json.parseFrameworkJsonV1('{"blocked":1}', explicit));
   assert.equal(policies.length, 3);
   assert.equal(policies[2], explicit);
@@ -330,20 +420,27 @@ test('JSON parser policies are immutable and reused without per-decode option ob
     channelPolicies.push(options);
     return parseFramework(text, options, ...args);
   });
-  const channelPath = require.resolve('../../packages/framework/dist/runtime/channels/channel-envelope');
+  const channelPath =
+    require.resolve('../../packages/framework/dist/runtime/channels/channel-envelope');
   const cachedChannel = require.cache[channelPath];
   delete require.cache[channelPath];
-  t.after(() => { require.cache[channelPath] = cachedChannel; });
+  t.after(() => {
+    require.cache[channelPath] = cachedChannel;
+  });
   const channel = require(channelPath);
   const header = { contentType: 'application/json', kind: 1, messageName: 'Packet' };
   for (let index = 0; index < 2; index++) {
-    assert.deepEqual(channel.decodeChannelPayload({ header, payload: Buffer.from('{"body":1}') }), { body: 1 });
+    assert.deepEqual(channel.decodeChannelPayload({ header, payload: Buffer.from('{"body":1}') }), {
+      body: 1
+    });
   }
   assert.equal(channelPolicies.length, 2);
   assert.equal(channelPolicies[0], channelPolicies[1]);
   assert.equal(typeof channelPolicies[0], 'object');
   assert.equal(Object.isFrozen(channelPolicies[0]), true);
-  assert.throws(() => channel.decodeChannelPayload({ header, payload: Buffer.from('{"__proto__":1}') }));
+  assert.throws(() =>
+    channel.decodeChannelPayload({ header, payload: Buffer.from('{"__proto__":1}') })
+  );
 });
 
 // Compare against V8's own stringify allocations in the same process so the
@@ -351,36 +448,53 @@ test('JSON parser policies are immutable and reused without per-decode option ob
 function nativeJsonEncoding(value) {
   return JSON.stringify(value, identityJsonValue);
 }
-function identityJsonValue(_key, value) { return value; }
+function identityJsonValue(_key, value) {
+  return value;
+}
 function allocationTotal(allocations) {
   return [...allocations.values()].reduce((sum, entry) => sum + entry.objects, 0);
 }
 
-test('default JSON encoding adds no unused custom-replacer context', async t => {
+test('default JSON encoding adds no unused custom-replacer context', async (t) => {
   if (runAllocationTest(t)) return;
   const json = require('../../packages/stream-wire/dist/internal/framework-json-v1');
   const value = { body: 'x'.repeat(1024) };
   const encode = () => json.stringifyFrameworkJsonV1(value);
   const control = () => nativeJsonEncoding(value);
-  for (let index = 0; index < 1000; index++) { encode(); control(); }
+  for (let index = 0; index < 1000; index++) {
+    encode();
+    control();
+  }
   const baseline = await trackedCodecAllocations('/node-envelope-codec-cost.test.js', control);
   const allocations = await trackedCodecAllocations('/internal/framework-json-v1.js', encode);
-  const expected = baseline.get('nativeJsonEncoding').objects;
+  // No attributed baseline objects means a zero budget, including an omitted
+  // function entry. Absence must never relax the allocation comparison.
+  const expected = baseline.get('nativeJsonEncoding')?.objects ?? 0;
   const actual = allocationTotal(allocations);
   t.diagnostic(`1000 calls: native=${expected}, strict=${actual} objects`);
   assert.equal(encode(), control());
-  assert.ok(actual <= expected, `${actual} strict allocations exceed ${expected} native allocations`);
+  assert.ok(
+    actual <= expected,
+    `${actual} strict allocations exceed ${expected} native allocations`
+  );
 });
 
-test('custom JSON validation adds no carrier per property', async t => {
+test('custom JSON validation adds no carrier per property', async (t) => {
   if (runAllocationTest(t)) return;
   const json = require('../../packages/stream-wire/dist/internal/framework-json-v1');
   const small = { body: 1 };
   const large = Object.fromEntries(Array.from({ length: 32 }, (_, index) => [`p${index}`, index]));
-  const encode = value => json.stringifyFrameworkJsonV1(value, undefined, identityJsonValue);
-  for (let index = 0; index < 1000; index++) { encode(small); encode(large); }
-  const smallAllocations = await trackedCodecAllocations('/internal/framework-json-v1.js', () => encode(small));
-  const largeAllocations = await trackedCodecAllocations('/internal/framework-json-v1.js', () => encode(large));
+  const encode = (value) => json.stringifyFrameworkJsonV1(value, undefined, identityJsonValue);
+  for (let index = 0; index < 1000; index++) {
+    encode(small);
+    encode(large);
+  }
+  const smallAllocations = await trackedCodecAllocations('/internal/framework-json-v1.js', () =>
+    encode(small)
+  );
+  const largeAllocations = await trackedCodecAllocations('/internal/framework-json-v1.js', () =>
+    encode(large)
+  );
   const smaller = allocationTotal(smallAllocations);
   const larger = allocationTotal(largeAllocations);
   t.diagnostic(`1000 calls: one-property=${smaller}, 32-properties=${larger} objects`);
@@ -399,18 +513,33 @@ test('custom JSON replacement preserves holder, key order and strict value valid
   });
   assert.deepEqual(keys, ['', 'finite', 'integer', 'bytes']);
   assert.equal(encoded, '{"finite":3,"integer":"7","bytes":"AP8="}');
-  for (const invalid of [Infinity, new Date(0), { toJSON() { return 1; } }]) {
+  for (const invalid of [
+    Infinity,
+    new Date(0),
+    {
+      toJSON() {
+        return 1;
+      }
+    }
+  ]) {
     assert.throws(() => json.stringifyFrameworkJsonV1(0, undefined, () => invalid), TypeError);
   }
   assert.throws(() => json.stringifyFrameworkJsonV1(0, undefined, () => 1n << 64n), RangeError);
   const failure = new Error('custom replacer failed');
-  assert.throws(() => json.stringifyFrameworkJsonV1(0, undefined, () => { throw failure; }),
-    error => error === failure);
+  assert.throws(
+    () =>
+      json.stringifyFrameworkJsonV1(0, undefined, () => {
+        throw failure;
+      }),
+    (error) => error === failure
+  );
 });
 
-function nativeReplyParts(header, payload) { return [header, payload]; }
+function nativeReplyParts(header, payload) {
+  return [header, payload];
+}
 
-test('service reply allocates only its final multipart array', async t => {
+test('service reply allocates only its final multipart array', async (t) => {
   if (runAllocationTest(t)) return;
   const { fixture } = require('./fixtures/raw-mesh-close');
   const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
@@ -418,23 +547,45 @@ test('service reply allocates only its final multipart array', async t => {
   const payload = Buffer.alloc(1024, 7);
   const header = wire.encodeReplyHeader(1n, 0, 0);
   let captured;
-  const request = { correlation: 1n, reply(parts) { captured = parts; } };
+  const request = {
+    correlation: 1n,
+    reply(parts) {
+      captured = parts;
+    }
+  };
   const reply = () => f.runtime.reply(request, payload);
   const control = () => nativeReplyParts(header, payload);
   try {
-    for (let index = 0; index < 1000; index++) { reply(); control(); }
+    for (let index = 0; index < 1000; index++) {
+      reply();
+      control();
+    }
     const baseline = await trackedCodecAllocations('/node-envelope-codec-cost.test.js', control);
-    const allocations = await trackedCodecAllocations('/runtime/foundation/raw-service-mesh-runtime.js', reply);
+    const allocations = await trackedCodecAllocations(
+      '/runtime/foundation/raw-service-mesh-runtime.js',
+      reply
+    );
     const actual = allocationTotal(allocations);
-    const expected = baseline.get('nativeReplyParts').objects;
+    const expected = baseline.get('nativeReplyParts')?.objects ?? 0;
     t.diagnostic(`1000 calls: final-array=${expected}, reply=${actual} objects`);
     assert.deepEqual(captured[0], header);
     assert.equal(captured[1], payload);
     assert.ok(actual <= expected, `${actual} allocations exceed the final array's ${expected}`);
-    const unreadablePayload = new Proxy({}, { get() { assert.fail('error reply must not encode a payload'); } });
-    const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+    const unreadablePayload = new Proxy(
+      {},
+      {
+        get() {
+          assert.fail('error reply must not encode a payload');
+        }
+      }
+    );
+    const {
+      RequestResult
+    } = require('../../packages/framework/dist/runtime/backend/runtime-values');
     f.runtime.reply(request, unreadablePayload, RequestResult.TimedOut, 0);
     assert.equal(captured.length, 1);
     assert.deepEqual(captured[0], wire.encodeReplyHeader(1n, RequestResult.TimedOut, 0));
-  } finally { await f.backend.close(); }
+  } finally {
+    await f.backend.close();
+  }
 });
