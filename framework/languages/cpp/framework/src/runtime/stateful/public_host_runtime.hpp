@@ -786,7 +786,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                       actor_create_operation_completion_t completion);
     task_t<bool> close_user_spot_remote (const zlink::routing_id_t &target_node,
                                          protocol::user_spot_close_header_t request,
-                                         std::chrono::milliseconds timeout,
+                                         std::chrono::steady_clock::time_point deadline,
                                          user_spot_close_completion_t completion);
 
     spot_handle_t entry_spot ();

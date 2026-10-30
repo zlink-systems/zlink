@@ -146,7 +146,8 @@ class spot_node_builder_state_t
                                                 std::chrono::milliseconds)>
       create_user_spot;
     std::function<task_t<std::optional<spot_ref_t>> (spot_id_t)> find_user_spot;
-    std::function<task_t<bool> (spot_ref_t)> close_user_spot;
+    std::function<task_t<bool> (spot_ref_t, std::chrono::steady_clock::time_point, std::uint64_t)>
+      close_user_spot;
     instance_spot_idle_eviction_callback_t admit_instance_spot_idle_eviction;
     instance_spot_close_begin_callback_t begin_instance_spot_close;
     std::function<task_t<result_t<runtime::protocol::instance_spot_activation_header_t>> (

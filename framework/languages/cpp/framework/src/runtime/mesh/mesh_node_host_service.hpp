@@ -116,8 +116,10 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                       std::optional<message_t> request,
                       std::chrono::milliseconds timeout);
     task_t<std::optional<spot_ref_t>> find_user_spot (spot_id_t spot_id);
-    task_t<bool> close_user_spot (const std::shared_ptr<detail::mesh_node_runtime_t> &source,
-                                  spot_ref_t spot);
+    task_t<bool> close_user_spot (std::shared_ptr<detail::mesh_node_runtime_t> source,
+                                  spot_ref_t spot,
+                                  std::chrono::steady_clock::time_point deadline,
+                                  std::uint64_t wire_deadline);
     task_t<actor_create_result_t> create_actor (bool exclusive,
                                                 actor_id_t actor_id,
                                                 std::string stable_type,
