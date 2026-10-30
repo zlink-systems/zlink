@@ -2698,6 +2698,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_message_flow
     tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp
     "framework-unit;framework-regression;framework-observability;diagnostics")
+  add_zlink_framework_test(
+    test_cpp_framework_telemetry_process_exit
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_telemetry_process_exit.cpp
+    "framework-unit;framework-regression;framework-observability;diagnostics")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_telemetry_blocked_process_exit
+    COMMAND test_cpp_framework_telemetry_process_exit --blocked-provider
+    LABELS "framework-unit;framework-regression;framework-observability;diagnostics"
+    TIMEOUT 30)
   target_sources(test_cpp_framework_message_flow PRIVATE tests/support/allocation_counter.cpp)
   target_link_libraries(test_cpp_framework_message_flow PRIVATE opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_message_flow PRIVATE

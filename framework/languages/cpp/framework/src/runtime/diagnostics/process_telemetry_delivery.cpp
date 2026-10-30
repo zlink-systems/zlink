@@ -389,14 +389,15 @@ class process_telemetry_delivery_t
     std::shared_ptr<overflow_instrument_t> _overflow;
     std::uint64_t _exported_overflow = 0;
     std::array<bool, static_cast<std::size_t> (provider_role_t::count)> _failed{};
-    // Declared last so ordinary process destruction joins before state destruction.
+    // The process-lifetime owner keeps executor state alive until process exit.
     runtime::offload_executor_t _executor{1, "zlink-telemetry"};
 };
 
 process_telemetry_delivery_t &delivery ()
 {
-    static process_telemetry_delivery_t owner;
-    return owner;
+    // Never destroy the owner: static hosts may retire late, and providers may remain blocked.
+    static process_telemetry_delivery_t *owner = new process_telemetry_delivery_t;
+    return *owner;
 }
 void logger_failure () noexcept
 {
