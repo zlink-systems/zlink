@@ -653,7 +653,7 @@ public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelpe
             packet
         );
 
-    private static void WaitForDelivery() =>
+    internal static void WaitForDelivery() =>
         Assert.True(
             SpinWait.SpinUntil(
                 () => ZLinkMessageFlowDelivery.Shared.State is { Pending: 0, Executing: false },

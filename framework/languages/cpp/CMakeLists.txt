@@ -2596,7 +2596,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_durable_head_supply
     tests/Zlink.Framework.UnitTests/test_cpp_framework_durable_head_supply.cpp
-    "framework-unit;framework-regression;execution;dispatch;admission"
+    "framework-unit;framework-regression;execution;admission"
     unit)
   target_use_zlink_gtest_main(test_cpp_framework_durable_head_supply)
   target_include_directories(test_cpp_framework_durable_head_supply PRIVATE
