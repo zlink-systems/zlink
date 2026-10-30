@@ -1,6 +1,9 @@
 'use strict';
 
-const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const {
+  prepareZLinkRequestReply,
+  identityRequestReply
+} = require('../../packages/framework/dist/runtime/messaging/request-result');
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -21,27 +24,34 @@ const REQUEST_BUDGET_MS = 50;
 
 function deferred() {
   let resolve;
-  const promise = new Promise(yes => { resolve = yes; });
+  const promise = new Promise((yes) => {
+    resolve = yes;
+  });
   return { promise, resolve };
 }
 
 function requestFixture(t, submission) {
-  const clock = performance.now();
+  // An integer fake epoch keeps ceil(deadline - now) equal to the mock tick.
+  const clock = 0;
   t.mock.method(performance, 'now', () => clock);
   const requests = new RequestRuntime();
   t.after(() => requests.close());
   const operation = {
-    message() { return this; },
+    message() {
+      return this;
+    },
     timeout(value) {
       assert.equal(value, REQUEST_BUDGET_MS);
       return this;
     },
-    submit() { return submission; }
+    submit() {
+      return submission;
+    }
   };
   const context = zlink.createContext();
   for (const factory of ['createRouterSocket', 'createDealerSocket']) {
     const createSocket = zlink[factory];
-    t.mock.method(zlink, factory, value => {
+    t.mock.method(zlink, factory, (value) => {
       const socket = createSocket(value);
       t.mock.method(socket, 'request', () => operation);
       return socket;
@@ -50,11 +60,13 @@ function requestFixture(t, submission) {
   const host = new ZLinkNodeRawBindingPort(context).createHost();
   const router = host.createRouter();
   const dealer = host.createDealer();
-  t.after(() => { host.close(); context.close(); });
+  t.after(() => {
+    host.close();
+    context.close();
+  });
   const parts = [Buffer.from('request')];
   return {
-    adapter: (onAdmitted) =>
-      {
+    adapter: (onAdmitted) => {
       const entry = requests.begin(REQUEST_BUDGET_MS);
       return requests.run(
         entry,
@@ -76,7 +88,10 @@ function requestFixture(t, submission) {
         (error) => error
       );
     },
-    router: () => new Promise((resolve, reject) => router.request('target', parts, REQUEST_BUDGET_MS, resolve, reject)),
+    router: () =>
+      new Promise((resolve, reject) =>
+        router.request('target', parts, REQUEST_BUDGET_MS, resolve, reject)
+      ),
     dealer: () => dealer.request(parts, REQUEST_BUDGET_MS)
   };
 }
@@ -112,8 +127,10 @@ for (const path of ['adapter', 'router', 'dealer']) {
       t.mock.method(performance, 'now', () => now);
       const timer = t.mock.method(globalThis, 'setTimeout');
       const pending = fixture[path]();
-      const terminal = assert.rejects(pending,
-        error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+      const terminal = assert.rejects(
+        pending,
+        (error) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+      );
       assert.equal(timer.mock.callCount(), 1);
       if (admitBeforeDeadline) {
         admitted.resolve();
@@ -124,16 +141,22 @@ for (const path of ['adapter', 'router', 'dealer']) {
       await terminal;
       assert.equal(timer.mock.callCount(), 1);
       let closes = 0;
-      reply.resolve([{ close() { closes += 1; } }]);
+      reply.resolve([
+        {
+          close() {
+            closes += 1;
+          }
+        }
+      ]);
       admitted.resolve();
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(closes, 1);
     });
   }
 }
 
 for (const backpressured of [false, true]) {
-  test(`public binding request observes physical admission before reply (pending=${backpressured})`, async t => {
+  test(`public binding request observes physical admission before reply (pending=${backpressured})`, async (t) => {
     const admitted = deferred();
     const reply = deferred();
     const fixture = requestFixture(t, {
@@ -144,14 +167,22 @@ for (const backpressured of [false, true]) {
     const registration = framework.createFrameworkRegistration({
       spotNodes: { mesh: { router: { bind: 'inproc://binding-admission' } } }
     });
-    const client = new framework.DefaultZLinkRouteClient(registration, { request(_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) { return prepareZLinkRequestReply(fixture.adapter(onAdmitted), identityRequestReply); } });
+    const client = new framework.DefaultZLinkRouteClient(registration, {
+      request(_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) {
+        return prepareZLinkRequestReply(fixture.adapter(onAdmitted), identityRequestReply);
+      }
+    });
     const pending = client.requestToNode('mesh', 'peer', {}).submit();
     assert.ok(pending.admitted instanceof Promise);
     let accepted = false;
     let replied = false;
-    void pending.admitted.then(() => { accepted = true; });
-    void pending.then(() => { replied = true; });
-    await new Promise(resolve => setImmediate(resolve));
+    void pending.admitted.then(() => {
+      accepted = true;
+    });
+    void pending.then(() => {
+      replied = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(accepted, !backpressured);
     assert.equal(replied, false);
     admitted.resolve();
@@ -178,7 +209,10 @@ for (const terminal of ['timeout', 'cancellation']) {
     const controller = new AbortController();
     const client = new framework.DefaultZLinkRouteClient(registration, {
       request(_mesh, _rid, _packet, _request, _timeout, signal, _metadata, onAdmitted) {
-        return prepareZLinkRequestReply(awaitWithAbort(fixture.adapter(onAdmitted), signal), identityRequestReply);
+        return prepareZLinkRequestReply(
+          awaitWithAbort(fixture.adapter(onAdmitted), signal),
+          identityRequestReply
+        );
       }
     });
     t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -206,14 +240,19 @@ for (const terminal of ['timeout', 'cancellation']) {
 }
 
 for (const failReading of [false, true]) {
-  test(`binding reply retention closes indexed parts without iterators (read failure=${failReading})`, async t => {
+  test(`binding reply retention closes indexed parts without iterators (read failure=${failReading})`, async (t) => {
     let iterations = 0;
     const closed = [];
     const failure = new Error('payload read failed');
     const bytes = [Buffer.from('header'), Buffer.alloc(1024, 7)];
     const messages = bytes.map((body, index) => ({
-      data() { if (failReading && index === 0) throw failure; return body; },
-      close() { closed.push(index); }
+      data() {
+        if (failReading && index === 0) throw failure;
+        return body;
+      },
+      close() {
+        closed.push(index);
+      }
     }));
     messages[Symbol.iterator] = function () {
       iterations++;
@@ -224,7 +263,7 @@ for (const failReading of [false, true]) {
       admitted: Promise.resolve(),
       reply: Promise.resolve(messages)
     });
-    if (failReading) await assert.rejects(fixture.router(), error => error === failure);
+    if (failReading) await assert.rejects(fixture.router(), (error) => error === failure);
     else {
       const retained = await fixture.router();
       assert.equal(retained[0], bytes[0]);
@@ -236,10 +275,16 @@ for (const failReading of [false, true]) {
 }
 
 test('completion cleanup closes each indexed part without allocating an iterator', () => {
-  const { closeMeshCompletion } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+  const {
+    closeMeshCompletion
+  } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
   const closed = [];
   let iterations = 0;
-  const parts = [0, 1].map(index => ({ close() { closed.push(index); } }));
+  const parts = [0, 1].map((index) => ({
+    close() {
+      closed.push(index);
+    }
+  }));
   parts[Symbol.iterator] = function () {
     iterations++;
     return Array.prototype[Symbol.iterator].call(this);
