@@ -432,7 +432,7 @@ TEST (CppFrameworkRouteChannelRequest, SpotSendRemovalSurvivesDelayedGenericNoti
 {
     pending_send_fixture_t fixture;
     completion_owner_t owner;
-    auto *dispatcher = detail::borrow_completion_dispatcher ();
+    auto dispatcher = detail::borrow_completion_dispatcher ();
     std::promise<void> entered, release;
     auto released = release.get_future ().share ();
     detail::dispatch_completion (
@@ -473,7 +473,7 @@ TEST (CppFrameworkRouteChannelRequest, SpotSendShutdownSurvivesDelayedResumeAndR
 {
     pending_send_fixture_t fixture;
     completion_owner_t owner;
-    auto *dispatcher = detail::borrow_completion_dispatcher ();
+    auto dispatcher = detail::borrow_completion_dispatcher ();
     std::promise<void> entered, release;
     auto released = release.get_future ().share ();
     detail::dispatch_completion (
