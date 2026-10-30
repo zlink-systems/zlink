@@ -610,9 +610,9 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     (void) source_state;
     (void) new_state;
     old_target->configure_spot_route_fence_resolver (
-      [] (zlink::routing_id_t, std::string,
-          std::uint64_t) -> zlink::framework::task_t<std::optional<host::route_fence_t>> {
-          co_return host::route_fence_t{1, 1};
+      [runtime = old_target.get ()] (zlink::routing_id_t, std::string, std::uint64_t)
+        -> zlink::framework::task_t<std::optional<host::route_fence_t>> {
+          co_return host::route_fence_t{1, 1, runtime->status ().lifecycle_generation ()};
       });
     new_target->configure_stateful_dispatch (
       [] (stateful::accepted_record_authority_query_t query)
@@ -9009,17 +9009,16 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                     std::chrono::system_clock::now ().time_since_epoch () - 1ms)
                                     .count ())};
     std::optional<protocol::user_spot_close_reply_t> expired_close_reply;
-    assert (source
-              ->close_user_spot_remote (target->status ().routing_id (), expired_close,
-                                        std::chrono::steady_clock::now () + 5s,
-                                        [&] (foundation::operation_terminal_t terminal,
-                                             protocol::user_spot_close_reply_t reply) {
-                                            assert (terminal
-                                                    == foundation::operation_terminal_t::completed);
-                                            expired_close_reply = std::move (reply);
-                                        })
-              .result ()
-              .value ());
+    assert (
+      source
+        ->close_user_spot_remote (
+          target->status ().routing_id (), expired_close, std::chrono::steady_clock::now () + 5s,
+          [&] (foundation::operation_terminal_t terminal, protocol::user_spot_close_reply_t reply) {
+              assert (terminal == foundation::operation_terminal_t::completed);
+              expired_close_reply = std::move (reply);
+          })
+        .result ()
+        .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!expired_close_reply && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
@@ -9106,17 +9105,16 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                     std::chrono::system_clock::now ().time_since_epoch () + 5s)
                                     .count ());
     std::optional<protocol::user_spot_close_reply_t> close_reply;
-    assert (source
-              ->close_user_spot_remote (target->status ().routing_id (), close,
-                                        std::chrono::steady_clock::now () + 5s,
-                                        [&] (foundation::operation_terminal_t terminal,
-                                             protocol::user_spot_close_reply_t reply) {
-                                            assert (terminal
-                                                    == foundation::operation_terminal_t::completed);
-                                            close_reply = std::move (reply);
-                                        })
-              .result ()
-              .value ());
+    assert (
+      source
+        ->close_user_spot_remote (
+          target->status ().routing_id (), close, std::chrono::steady_clock::now () + 5s,
+          [&] (foundation::operation_terminal_t terminal, protocol::user_spot_close_reply_t reply) {
+              assert (terminal == foundation::operation_terminal_t::completed);
+              close_reply = std::move (reply);
+          })
+        .result ()
+        .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!close_reply && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);

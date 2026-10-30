@@ -239,21 +239,26 @@ template <class Predicate> bool observe (Predicate predicate)
 TEST (SpotRequestAdmission, NewHostRequestsExistingSpotImmediatelyAfterReady)
 {
     auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     std::atomic<unsigned> requests = 0;
     const auto configure = [&] (host_t &host, const char *rid) {
         auto &options = host.app.add_zlink_framework ();
         options.add_location_store (locations);
+        options.add_relocation_store (relocations);
         options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
         host.app.logging ().use_file (std::string (rid) + "-first-request.flow");
         options.add_route_mesh ("request-admission")
           .set_object_role (fw::object_role_t::server)
           .set_routing_id (zlink::routing_id_t::from (rid))
           .listen ("tcp://127.0.0.1:0")
-          .add_spot_factory<room_t> (room_type, [&] (fw::spot_context_t context) {
-              auto spot = std::make_shared<room_t> (std::move (context));
-              spot->requested = [&] { ++requests; };
-              return spot;
-          });
+          .add_spot_factory<room_t> (
+            room_type,
+            [&] (fw::spot_context_t context) {
+                auto spot = std::make_shared<room_t> (std::move (context));
+                spot->requested = [&] { ++requests; };
+                return spot;
+            },
+            [] (auto &factory) { factory.recreate_on_relocation (); });
     };
     host_t owner, requester;
     configure (owner, "first-request-owner");

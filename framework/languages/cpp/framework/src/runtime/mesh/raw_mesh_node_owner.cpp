@@ -1413,7 +1413,6 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
   std::optional<foundation::operation_registry_t::request_identity_t> request)
 try {
     const auto wait_owner = detail::current_wait_owner ();
-    auto encoded_payload = protocol::encode_application_payload (application_payload);
     struct request_start_t
     {
         foundation::call_id_t operation;
@@ -1423,13 +1422,14 @@ try {
         std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running;
         bool registered = false;
     };
-    auto start = _lane.run_sync (
-      [this, &header, &request_metric, &target_routing_id, request = std::move (request),
-       requested_correlation, target_claimed, deadline, wait_owner, callback = std::move (callback),
-       encoded_payload = std::move (encoded_payload)] () mutable {
+    auto start =
+      _lane.run_sync ([this, &header, &request_metric, &target_routing_id, &application_payload,
+                       request = std::move (request), requested_correlation, target_claimed,
+                       deadline, wait_owner, callback = std::move (callback)] () mutable {
           const auto peer = _topology.peer (target_routing_id);
           if (!target_claimed && !peer && !_expected_peers.contains (target_routing_id))
               return std::optional<request_start_t>{};
+          auto encoded_payload = protocol::encode_application_payload (application_payload);
           std::shared_ptr<detail::backend::raw_route_port_t> port;
           {
               std::lock_guard lifecycle_lock (_lifecycle_mutex);
