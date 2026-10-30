@@ -13,6 +13,7 @@ function joinFixture(request, { canonical = true, entry = false, initiallyReady 
   let ready = initiallyReady;
   const routeObservers = new Set();
   const runtime = new ServiceStatefulRuntime({
+    peerLifecycleGeneration: () => undefined,
     observePeerRoute: () => ({ generation: 1n, ready }),
     observePeerRouteChanged: listener => { routeObservers.add(listener); return () => routeObservers.delete(listener); },
     observePeerConnectionIntentRemoved() { return () => {}; },
