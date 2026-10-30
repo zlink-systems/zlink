@@ -181,7 +181,6 @@ void zlink::socket_base_t::finish_close_reap ()
         for (auto *attempt : attempts)
             attempt->registration = connection_attempt_result_t::removed;
     }
-    stop_inproc_reconnect_scheduler ();
     socket_completion::close (&completion_runtime (),
                               _ctx_terminated ? ETERM : ESHUTDOWN);
     fail_all_blocking_send_waits (_ctx_terminated ? ETERM : ECANCELED);
@@ -1900,12 +1899,9 @@ void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_compl
       pair_generation);
     // pipe_peer_terminated runs under the command owner. Queue the reconnect so
     // connect_internal does not re-enter that owner while handling this pipe.
-    if (reconnect_inproc && !is_terminating ()) {
-        const bool scheduled =
-          schedule_inproc_reconnect (inproc_reconnect_endpoint, endpoint_pair,
-                                     endpoint_runtime ().inprocs.attempt_for_pipe (pipe_));
-        zlink_assert (scheduled || is_terminating () || _ctx_terminated);
-    }
+    if (reconnect_inproc && !is_terminating ())
+        schedule_inproc_reconnect (inproc_reconnect_endpoint, endpoint_pair,
+                                   endpoint_runtime ().inprocs.attempt_for_pipe (pipe_));
 }
 
 void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
