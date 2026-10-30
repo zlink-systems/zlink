@@ -7898,7 +7898,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
       spot_route_fixture_t{source.status ().routing_id (),
                            source_spot_reserved->fence.object_generation,
                            {source_spot_reserved->fence.authority_owner_generation,
-                            static_cast<std::uint64_t> (source_owner.lease_generation)}});
+                            static_cast<std::uint64_t> (source_owner.lease_generation),
+                            source.status ().lifecycle_generation ()}});
 
     const object_reserve_request_t target_spot_reserve{
       .key = {placement_object_kind_t::user_spot, std::string (target_spot_id)},
@@ -7940,7 +7941,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
       spot_route_fixture_t{target.status ().routing_id (),
                            target_spot_reserved->fence.object_generation,
                            {target_spot_reserved->fence.authority_owner_generation,
-                            static_cast<std::uint64_t> (target_owner.lease_generation)}});
+                            static_cast<std::uint64_t> (target_owner.lease_generation),
+                            target.status ().lifecycle_generation ()}});
 
     source.connect_peer (target.status ().routing_id (), target.status ().local_endpoint ());
     const auto discard = [] (const auto &, const auto &, auto) {};
