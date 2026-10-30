@@ -22,6 +22,10 @@ import java.util.function.BiPredicate;
 public interface ZLinkHandlerActivator {
     Object create(Class<?> handlerType);
 
+    default systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.Host messageFlowHost() {
+        return null;
+    }
+
     default Object findService(Class<?> serviceType) {
         return create(serviceType);
     }
@@ -151,6 +155,14 @@ public interface ZLinkHandlerActivator {
 
         private MutableServices(ZLinkHandlerActivator fallback) {
             this.fallback = fallback;
+        }
+
+        @Override
+        public systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.Host
+                messageFlowHost() {
+            var type = systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.Host.class;
+            var host = serviceIndex.get(type);
+            return host == null ? fallback.messageFlowHost() : type.cast(host);
         }
 
         public synchronized MutableServices add(Class<?> serviceType, Object service) {

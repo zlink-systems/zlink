@@ -1753,7 +1753,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Rejected_terminal_work_starts_disposal_and_releases_the_session_scope()
+    public async Task Rejected_close_request_starts_disposal_and_releases_the_session_scope()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new RejectedTerminalLifetime();
@@ -1778,9 +1778,7 @@ public sealed class StreamSessionForcedCleanupTests
         );
 
         session.RequestStop();
-        session.EnqueueDisconnected(
-            new ZLinkStreamError(ZLinkStreamSessionError.TransportError, "transport closed")
-        );
+        await session.CloseAsync();
 
         await lifetime.CleanupCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await session.DisposeAsync();
@@ -2048,7 +2046,7 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Rejected_terminal_disposal_and_force_close_share_one_transport_close()
+    public async Task Rejected_close_request_and_force_close_share_one_transport_close()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new RejectedTerminalLifetime();
@@ -2073,18 +2071,14 @@ public sealed class StreamSessionForcedCleanupTests
         );
 
         session.RequestStop();
-        var rejectedTerminal = Task.Run(() =>
-            session.EnqueueDisconnected(
-                new ZLinkStreamError(ZLinkStreamSessionError.TransportError, "transport closed")
-            )
-        );
+        var rejectedClose = Task.Run(async () => await session.CloseAsync());
         await socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         var forcedClose = session.ForceCloseForShutdownAsync().AsTask();
         await AssertStillRunningAsync(forcedClose);
         socket.AllowDisconnect.TrySetResult();
 
-        await rejectedTerminal.WaitAsync(TimeSpan.FromSeconds(2));
+        await rejectedClose.WaitAsync(TimeSpan.FromSeconds(2));
         await forcedClose.WaitAsync(TimeSpan.FromSeconds(2));
         await lifetime.CleanupCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await session.DisposeAsync();

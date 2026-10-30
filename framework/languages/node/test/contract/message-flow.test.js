@@ -524,6 +524,170 @@ test('spec 26 flow-less sampling does not create a flow context and backpressure
   assert.equal(telemetryRecords[0].attributes.flow_id, undefined);
 });
 
+function assertFlowPublication(index, eventId, fields) {
+  const log = telemetryRecords[index];
+  const span = traceRecords[index];
+  assert.equal(log.eventName, eventId);
+  assert.equal(span.eventName, eventId);
+  for (const attrs of [log.attributes, span.attributes]) {
+    assert.equal(attrs.event_id, eventId);
+    for (const [name, value] of Object.entries(fields)) assert.equal(attrs[name], value, name);
+  }
+  if (fields.flow_id === undefined) assert.doesNotMatch(log.body, /(?:^| )flow=|(?:^| )origin=/);
+}
+
+test('Errors reporter omits foreign ambient Flow and session while retaining error', () => {
+  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+    diagnostics: diagnostics('errors'), liveMode: { mode: 'errors' }
+  });
+  flowContext.runWithFlow({
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound', streamSessionId: 'foreign-normal-session'
+  }, () => reporter.report({
+    surface: 'channel', messageKind: 'send', reason: 'handler_exception',
+    action: 'drop', correlationId: 'report-corr', error: new Error('handler failed')
+  }));
+  assert.equal(reporter.reportedCount, 1);
+  assert.equal(telemetryRecords.length, 1);
+  assert.equal(traceRecords.length, 1);
+  assertFlowPublication(0, 'zlink.dispatch_error', {
+    phase: undefined, outcome: 'failed', reason: 'handler_exception',
+    correlation_id: 'report-corr', flow_id: undefined, flow_origin: undefined,
+    stream_session_id: undefined, error_message: 'handler failed'
+  });
+});
+
+test('Errors reporter removes explicit Flow while retaining correlation', () => {
+  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+    diagnostics: diagnostics('errors'), liveMode: { mode: 'errors' }
+  });
+  flowContext.runWithFlow({
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound', streamSessionId: 'foreign-normal-session'
+  }, () => reporter.report({
+    surface: 'channel', messageKind: 'send', reason: 'handler_exception',
+    action: 'drop', correlationId: 'explicit-corr',
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ac', flowOrigin: 'Application',
+    error: new Error('explicit failure')
+  }));
+  assert.equal(reporter.reportedCount, 1);
+  assert.equal(telemetryRecords.length, 1);
+  assert.equal(traceRecords.length, 1);
+  assertFlowPublication(0, 'zlink.dispatch_error', {
+    phase: undefined, outcome: 'failed', reason: 'handler_exception',
+    correlation_id: 'explicit-corr', flow_id: undefined, flow_origin: undefined,
+    stream_session_id: undefined, error_message: 'explicit failure'
+  });
+});
+
+test('Errors direct drops retain explicit session without borrowing ambient Flow or session', () => {
+  const { tracer } = makeTracer(diagnostics('errors'));
+  flowContext.runWithFlow({
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound', streamSessionId: 'foreign-normal-session'
+  }, () => {
+    tracer.trace({
+      ...receivedEvent(), outcome: ZLinkMessageFlowOutcome.Dropped,
+      correlationId: 'explicit-drop', errorReason: 'queue_full',
+      flowId: '018f2b63-9d4a-7abc-8def-0123456789ac', flowOrigin: 'Application',
+      streamSessionId: 'explicit-session'
+    });
+    tracer.trace({
+      ...receivedEvent(), outcome: ZLinkMessageFlowOutcome.Dropped,
+      correlationId: 'ambient-drop', errorReason: 'queue_full'
+    });
+  });
+  assert.equal(tracer.tracedCount, 2);
+  assert.equal(telemetryRecords.length, 2);
+  assert.equal(traceRecords.length, 2);
+  for (const [index, corr, session] of [
+    [0, 'explicit-drop', 'explicit-session'], [1, 'ambient-drop', undefined]
+  ]) {
+    assertFlowPublication(index, 'zlink.message_flow', {
+      phase: 'dropped', outcome: 'dropped', reason: 'queue_full',
+      correlation_id: corr, flow_id: undefined, flow_origin: undefined,
+      stream_session_id: session
+    });
+  }
+});
+
+test('Normal explicit Flow wins over ambient Flow and absent Flow inherits it', () => {
+  const { tracer } = makeTracer(diagnostics('normal'));
+  const ambient = {
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound', streamSessionId: 'ambient-session'
+  };
+  flowContext.runWithFlow(ambient, () => {
+    tracer.trace({
+      ...receivedEvent(), correlationId: 'normal-explicit',
+      flowId: '018f2b63-9d4a-7abc-8def-0123456789ac', flowOrigin: 'Application'
+    });
+    tracer.trace({ ...receivedEvent(), correlationId: 'normal-ambient' });
+  });
+  assert.equal(telemetryRecords.length, 2);
+  assert.equal(traceRecords.length, 2);
+  for (const [index, corr, id, origin] of [
+    [0, 'normal-explicit', '018f2b63-9d4a-7abc-8def-0123456789ac', 'application'],
+    [1, 'normal-ambient', ambient.flowId, 'inbound']
+  ]) {
+    assertFlowPublication(index, 'zlink.message_flow', {
+      phase: 'received', outcome: 'succeeded', reason: undefined,
+      correlation_id: corr, stream_session_id: 'ambient-session',
+      flow_id: id, flow_origin: origin
+    });
+  }
+});
+
+test('reporter reads live Errors at begin inside existing Normal Flow scope', () => {
+  const cell = { mode: 'normal' };
+  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+    diagnostics: diagnostics('normal'), liveMode: cell
+  });
+  flowContext.runWithFlow({
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound', streamSessionId: 'foreign-normal-session'
+  }, () => {
+    cell.mode = 'errors';
+    reporter.report({
+      surface: 'channel', messageKind: 'send', reason: 'handler_exception',
+      action: 'drop', correlationId: 'live-corr', error: new Error('live failure')
+    });
+  });
+  assert.equal(reporter.reportedCount, 1);
+  assert.equal(telemetryRecords.length, 1);
+  assert.equal(traceRecords.length, 1);
+  assertFlowPublication(0, 'zlink.dispatch_error', {
+    phase: undefined, outcome: 'failed', reason: 'handler_exception',
+    correlation_id: 'live-corr', flow_id: undefined, flow_origin: undefined,
+    stream_session_id: undefined, error_message: 'live failure'
+  });
+});
+
+test('begin keeps Normal snapshot when live mode changes before trace-point trace', () => {
+  const { tracer, cell } = makeTracer(diagnostics('normal'));
+  const ambient = {
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound', streamSessionId: 'ambient-session'
+  };
+  flowContext.runWithFlow(ambient, () => {
+    const point = tracer.begin(ZLinkMessageFlowOutcome.Dropped);
+    assert.ok(point);
+    cell.mode = 'errors';
+    point.trace({
+      ...receivedEvent(), outcome: ZLinkMessageFlowOutcome.Dropped,
+      correlationId: 'snapshot-corr', errorReason: 'queue_full'
+    });
+  });
+  assert.equal(tracer.tracedCount, 1);
+  assert.equal(telemetryRecords.length, 1);
+  assert.equal(traceRecords.length, 1);
+  assertFlowPublication(0, 'zlink.message_flow', {
+    phase: 'dropped', outcome: 'dropped', reason: 'queue_full',
+    correlation_id: 'snapshot-corr', stream_session_id: 'ambient-session',
+    flow_id: ambient.flowId, flow_origin: 'inbound'
+  });
+});
+
 test('dispatch reporter Off gate skips trace formatting and trace-only counters', () => {
   const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
     diagnostics: diagnostics('off'),
@@ -546,6 +710,7 @@ test('dispatch reporter Off gate skips trace formatting and trace-only counters'
   );
   assert.equal(reporter.reportedCount, 0);
   assert.equal(telemetryRecords.length, 0);
+  assert.equal(traceRecords.length, 0);
 });
 
 test('channel request completion owner records one terminal for failure, cancellation, and shutdown', async () => {

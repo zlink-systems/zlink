@@ -603,9 +603,9 @@ task_t<void> route_channel_runtime_t::await_readiness (
         std::shared_ptr<runtime::foundation::operation_registry_t> operations;
         runtime::call_id_t id;
         ~registration_t () { operations->unregister (id); }
-    } registration{state->readiness_operations,
-                   {0, state->_lane.run_sync (
-                         [&] { return state->_pending_requests.next_request_seq (); })}};
+    } registration{
+      state->readiness_operations,
+      {0, state->_lane.run_sync ([&] { return state->_pending_requests.next_request_seq (); })}};
     auto bounded = [&] {
         auto context = detail::capture_ambient_context ();
         context.wait_owner = lifetime.cancellation.get_token ();

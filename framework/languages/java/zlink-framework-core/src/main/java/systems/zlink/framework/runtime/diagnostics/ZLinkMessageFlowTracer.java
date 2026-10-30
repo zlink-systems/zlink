@@ -127,7 +127,7 @@ public final class ZLinkMessageFlowTracer {
     private static final AtomicLong NEXT_SOURCE_GENERATION = new AtomicLong();
 
     private final ZLinkDispatchOptionsRegistration options;
-    private final ZLinkRuntimeEventDispatcher eventDispatcher;
+    private final ZLinkTelemetryOwner.Host telemetryHost;
     private final long sourceMeshGeneration = NEXT_SOURCE_GENERATION.incrementAndGet();
     private final AtomicLong localSamplingSequence = new AtomicLong();
     private final AtomicLong tracedCount = new AtomicLong();
@@ -146,7 +146,8 @@ public final class ZLinkMessageFlowTracer {
             Executor executor,
             ZLinkRuntimeEventDispatcher eventDispatcher) {
         this.options = options;
-        this.eventDispatcher = eventDispatcher;
+        ZLinkTelemetryOwner.Host supplied = handlerFactory.messageFlowHost();
+        this.telemetryHost = supplied == null ? ZLinkTelemetryOwner.openHost() : supplied;
     }
 
     /** Compatibility query. Processing points should use begin so mode is read once. */
@@ -163,8 +164,11 @@ public final class ZLinkMessageFlowTracer {
      * backpressure and drops through {@link #dispatchErrorsEnabled()}).
      */
     public boolean captureEnabled() {
-        return options.diagnostics().effectiveMessageFlow().value()
-                >= ZLinkMessageFlowLogMode.NORMAL.value();
+        return captureEnabled(options.diagnostics().effectiveMessageFlow());
+    }
+
+    private static boolean captureEnabled(ZLinkMessageFlowLogMode mode) {
+        return mode.value() >= ZLinkMessageFlowLogMode.NORMAL.value();
     }
 
     /** Whether dispatch error, backpressure and drop records are written (every level but Off). */
@@ -223,17 +227,26 @@ public final class ZLinkMessageFlowTracer {
     }
 
     private void traceAtMode(ZLinkMessageFlowEvent event, ZLinkMessageFlowLogMode mode) {
-        ZLinkMessageFlowEvent tracedFlow = attachAmbientFlow(event);
+        ZLinkMessageFlowEvent tracedFlow =
+                captureEnabled(mode) ? attachAmbientFlow(event) : event.withFlow(null, null);
         if (sampled(tracedFlow)
                 && !sample(tracedFlow.flowId(), tracedFlow.sourceMeshGeneration())) {
             return;
         }
         tracedCount.incrementAndGet();
-        try {
-            logDefault(tracedFlow, mode);
-        } catch (Throwable ex) {
-            reportProviderFailure(ex);
-        }
+        Long size =
+                mode == ZLinkMessageFlowLogMode.DETAILED
+                                && options.diagnostics().includeMessageSizes()
+                        ? tracedFlow.messageSize()
+                        : null;
+        ZLinkTelemetryOwner.submit(
+                telemetryHost,
+                tracedFlow,
+                size,
+                logLevel(tracedFlow),
+                java.time.Instant.now(),
+                LOGGER,
+                providerFailureCount);
     }
 
     private static ZLinkMessageFlowEvent attachAmbientFlow(ZLinkMessageFlowEvent event) {
@@ -384,24 +397,6 @@ public final class ZLinkMessageFlowTracer {
 
     private static int fnv1aByte(int hash, int value) {
         return (hash ^ value) * FNV_PRIME;
-    }
-
-    private void reportProviderFailure(Throwable error) {
-        providerFailureCount.incrementAndGet();
-        if (eventDispatcher == null) {
-            return;
-        }
-        eventDispatcher.publishObserverFailure("message-flow", "standard-logger", error);
-    }
-
-    private void logDefault(ZLinkMessageFlowEvent flow, ZLinkMessageFlowLogMode mode) {
-        Long size = null;
-        if (flow.messageSize() != null
-                && mode.value() >= ZLinkMessageFlowLogMode.DETAILED.value()
-                && options.diagnostics().includeMessageSizes()) {
-            size = flow.messageSize();
-        }
-        LOGGER.log(logLevel(flow), ZLinkTraceFormat.flowLine(flow, size));
     }
 
     Level logLevel(ZLinkMessageFlowEvent flow) {

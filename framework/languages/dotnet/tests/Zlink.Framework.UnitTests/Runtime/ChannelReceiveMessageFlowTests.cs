@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
@@ -146,12 +147,14 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
                         }.Contains((string?)activity.GetTagItem("phase"))
                     )
                     .ToArray();
+            TelemetryReceipt.Wait(() => Incoming().Length == 3);
             Assert.Equal(
                 new[] { "received", "admitted", "dispatched" },
                 Incoming().Select(activity => activity.GetTagItem("phase"))
             );
             probe.Release.TrySetResult();
             await operation;
+            TelemetryReceipt.Wait(() => Incoming().Length == 4);
             await runtime.StopAsync(CancellationToken.None);
             var incoming = Incoming();
             Assert.Equal(
@@ -186,7 +189,12 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
     {
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(level);
-        var reporter = new ZLinkDispatchErrorReporter(options);
+        using var submission = new ZLinkTelemetrySubmission();
+        var reporter = new ZLinkDispatchErrorReporter(
+            options,
+            new AllocationPresenceLogger(),
+            submission: submission
+        );
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.Channel,
             false,
@@ -220,6 +228,22 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
             scope.Trace(reporter, ZLinkMessageFlowOutcome.Completed);
             scope.Trace(reporter, ZLinkMessageFlowOutcome.Replied);
         }
+    }
+
+    private sealed class AllocationPresenceLogger : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel level) => false;
+
+        public void Log<TState>(
+            LogLevel level,
+            EventId id,
+            TState state,
+            Exception? error,
+            Func<TState, Exception?, string> formatter
+        ) { }
     }
 
     [Theory]

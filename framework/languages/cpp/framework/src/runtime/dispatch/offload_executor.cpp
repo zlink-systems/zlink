@@ -95,15 +95,15 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
         if (_stopping && _active == _role_active && _queue.empty ()) {
             return false;
         }
+        if (_idle_workers == 0 && _live_workers < _max_worker_count) {
+            start_worker_locked ();
+        }
         _queue.push (work_item_t{[work = std::move (work)] (std::stop_token) mutable {
                                      if (work) {
                                          work ();
                                      }
                                  },
                                  std::nullopt});
-        if (_idle_workers == 0 && _live_workers < _max_worker_count) {
-            start_worker_locked ();
-        }
     }
     _ready.notify_one ();
     return true;
@@ -135,10 +135,10 @@ bool offload_executor_t::try_submit_cancellable (std::function<void (std::stop_t
         if (_stopping) {
             return false;
         }
-        _queue.push (work_item_t{std::move (work), std::stop_source{}});
         if (_idle_workers == 0 && _live_workers < _max_worker_count) {
             start_worker_locked ();
         }
+        _queue.push (work_item_t{std::move (work), std::stop_source{}});
     }
     _ready.notify_one ();
     return true;
@@ -261,8 +261,8 @@ std::size_t offload_executor_t::owned_thread_count () const
 void offload_executor_t::start_worker_locked ()
 {
     join_retired_workers_locked ();
-    ++_live_workers;
     _workers.emplace_back ([this] { worker_loop (); });
+    ++_live_workers;
 }
 
 // A returning worker leaves the running range. It no longer needs the mutex,

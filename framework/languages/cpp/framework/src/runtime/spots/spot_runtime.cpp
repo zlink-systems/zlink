@@ -24,9 +24,11 @@
 #include "runtime/locations/sha256.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
+#include "runtime/configuration/request_defaults.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
@@ -4566,11 +4568,16 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
   std::function<std::optional<bool> (std::function<bool ()>)> admit_actor_queue,
   std::shared_ptr<const void> retained_message,
   std::shared_ptr<runtime::serial_application_record_t> application_record,
-  std::function<void ()> on_application_export) const
+  std::function<void ()> on_application_export,
+  std::string_view actor_execution_id) const
 {
     const auto selected = find_handler (
       kind, packet_name, topic, actor_type,
       metadata.channel_name ? std::string_view (*metadata.channel_name) : std::string_view{});
+    const auto retained_trace_owner = _state->node
+                                        ? std::shared_ptr<detail::spot_node_builder_state_t>{}
+                                        : _state->state_lane_owner ();
+    const auto &trace_owner = _state->node ? _state->node : retained_trace_owner;
     if (selected) {
         const auto handler_index = *selected;
         const auto trace_message_kind = kind == spot_handler_kind_t::actor_send
@@ -4579,18 +4586,11 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
         std::string trace_packet_name;
         std::string trace_actor_id;
         std::string trace_spot_id;
-        const auto retained_trace_owner = _state->node
-                                            ? std::shared_ptr<detail::spot_node_builder_state_t>{}
-                                            : _state->state_lane_owner ();
-        const auto &trace_owner = _state->node ? _state->node : retained_trace_owner;
         if (trace_owner) {
             detail::message_flow_tracer_t (trace_owner->dispatch)
               .trace (message_flow_log_mode_t::detailed, message_flow_outcome_t::received, [&] {
                   trace_packet_name = packet_name;
-                  const auto actor_key_separator = actor_execution_key.rfind (':');
-                  trace_actor_id = actor_key_separator == std::string::npos
-                                     ? actor_execution_key
-                                     : actor_execution_key.substr (actor_key_separator + 1);
+                  trace_actor_id = actor_execution_id;
                   trace_spot_id = actor_execution_spot_id;
                   return message_flow_event_t{
                     .outcome = message_flow_outcome_t::received,
@@ -5050,6 +5050,29 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
         if (after_application_admission)
             after_application_admission ();
         return task;
+    }
+    if (kind == spot_handler_kind_t::actor_send && trace_owner) {
+        detail::dispatch_error_reporter_t (trace_owner->dispatch).report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::spot_actor,
+              .message_kind = dispatch_message_kind_t::actor_send,
+              .reason = dispatch_error_reason_t::handler_missing,
+              .action = dispatch_error_action_t::drop,
+              .packet_name = std::string (packet_name),
+              .spot_id = actor_execution_spot_id,
+              .actor_id = actor_execution_id.empty ()
+                            ? std::nullopt
+                            : std::make_optional (std::string (actor_execution_id)),
+              .correlation_id = metadata.correlation_id,
+              .mesh_name = trace_owner->snapshot.name};
+        });
+        runtime::runtime_metrics_t metrics (trace_owner->monitoring);
+        if (metrics.enabled ())
+            metrics.counter ("zlink.mesh_node.messages.dropped", "{message}", 1,
+                             {{"mesh_name", trace_owner->snapshot.name},
+                              {"surface", "actor"},
+                              {"message_kind", "send"},
+                              {"reason", "no_handler"}});
     }
     std::ostringstream error_message;
     error_message << "spot handler is not registered: packet='" << packet_name << "', topic='"
@@ -5538,6 +5561,7 @@ task_t<std::optional<spot_ref_t>> spot_manager_t::find (spot_id_t spot_id) const
 
 task_t<bool> spot_manager_t::close (spot_ref_t spot)
 {
+    const auto entered = std::chrono::steady_clock::now ();
     if (const auto source = _source.lock ()) {
         try {
             source->ensure_relocation_turn_open ();
@@ -5550,12 +5574,14 @@ task_t<bool> spot_manager_t::close (spot_ref_t spot)
         return task_t<bool> (
           result_t<bool>::failure (framework_error_kind_t::not_configured,
                                    "Spot manager is not connected to a Location runtime"));
+    const auto deadline = entered + runtime::configuration::default_request_timeout;
+    const auto wire_deadline = runtime::messaging::request_deadline_unix_ms (deadline);
     const auto close_user_spot = _state->lane.run ([&] { return _state->close_user_spot; }).get ();
     if (!close_user_spot)
         return task_t<bool> (
           result_t<bool>::failure (framework_error_kind_t::not_configured,
                                    "Spot manager is not connected to a Location runtime"));
-    return close_user_spot (std::move (spot));
+    return close_user_spot (std::move (spot), deadline, wire_deadline);
 }
 
 std::optional<actor_ref_t> spot_manager_t::current_actor_ref (const actor_ref_t &actor_ref) const
@@ -6367,6 +6393,36 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
     if (!context_state || !location || !context_state->channel_runtime
         || !context_state->channel_runtime->serializers) {
         for (auto &packet : backlog) {
+            if (!packet.is_request) {
+                detail::dispatch_error_reporter_t (_state->dispatch).report_lazy ([&] {
+                    auto event = message_dispatch_error_event_t{
+                      .surface = dispatch_error_surface_t::spot_actor,
+                      .message_kind = dispatch_message_kind_t::actor_send,
+                      .reason = dispatch_error_reason_t::stale_target,
+                      .action = dispatch_error_action_t::drop,
+                      .packet_name = packet.packet_name,
+                      .actor_id = std::string (actor_ref.actor_id ().value ()),
+                      .mesh_name = _state->snapshot.name};
+                    if (runtime::flow_context_t::tracing (
+                          detail::message_flow_tracer_t (_state->dispatch).mode ())
+                        && packet.application_record) {
+                        const auto decoded = detail::decode_actor_packet_header (
+                          packet.application_record->application_header (),
+                          stream_message_kind_t::send, true);
+                        const auto &header = decoded.value ();
+                        event.flow_id = header.flow_id;
+                        event.flow_origin = header.flow_origin;
+                    }
+                    return event;
+                });
+                runtime::runtime_metrics_t metrics (_state->monitoring);
+                if (metrics.enabled ())
+                    metrics.counter ("zlink.mesh_node.messages.dropped", "{message}", 1,
+                                     {{"mesh_name", _state->snapshot.name},
+                                      {"surface", "actor"},
+                                      {"message_kind", "send"},
+                                      {"reason", "stale_target"}});
+            }
             co_await terminal_failure (packet, framework_error_kind_t::unavailable,
                                        "target Actor handoff replay owner is unavailable");
         }
@@ -6404,7 +6460,18 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
         result_t<zlink::message_t> result = result_t<zlink::message_t>::failure (
           framework_error_kind_t::internal_failure, "Actor handoff replay did not complete");
         std::exception_ptr replay_exception;
+        std::optional<runtime::flow_context_t::scope_t> flow_scope;
         try {
+            const auto mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
+            if (runtime::flow_context_t::tracing (mode) && packet.application_record) {
+                const auto decoded = detail::decode_actor_packet_header (
+                  packet.application_record->application_header (),
+                  packet.is_request ? stream_message_kind_t::request : stream_message_kind_t::send,
+                  true);
+                const auto &header = decoded.value ();
+                flow_scope.emplace (runtime::flow_context_t::enter (
+                  header.flow_id, header.flow_origin, mode, flow_origin_t::inbound, std::nullopt));
+            }
             if (packet.application_record && !packet.application_record->invocation ()) {
                 runtime::stateful::with_accepted_application (
                   *packet.application_record->payload (), [&] (auto, const auto &application) {
@@ -6430,7 +6497,8 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
                   reuse_active_actor_queue
                     ? spot_handler_registry_t::actor_queue_dispatch_t::current_turn
                     : spot_handler_registry_t::actor_queue_dispatch_t::acquire,
-                  {}, {}, {}, 0, {}, {}, {}, packet.application_record));
+                  {}, {}, {}, 0, {}, {}, {}, packet.application_record, {},
+                  actor_ref.actor_id ().value ()));
         }
         catch (const framework_exception_t &error) {
             replay_exception = std::current_exception ();
@@ -12635,9 +12703,41 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         std::string mesh_name;
         bool dispatch_on_spot_serial = true;
     };
+    const auto dispatch_flow = message_kind == stream_message_kind_t::send
+                                   && runtime::flow_context_t::tracing (
+                                     detail::message_flow_tracer_t (state_owner->dispatch).mode ())
+                                 ? runtime::flow_context_t::current ()
+                                 : std::optional<runtime::flow_value_t>{};
+    const auto report_missing_actor_target = [&] {
+        if (message_kind != stream_message_kind_t::send)
+            return;
+        detail::dispatch_error_reporter_t (state_owner->dispatch).report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::spot_actor,
+              .message_kind = dispatch_message_kind_t::actor_send,
+              .reason = dispatch_error_reason_t::stale_target,
+              .action = dispatch_error_action_t::drop,
+              .packet_name = std::string (packet_name),
+              .actor_id = std::string (actor_ref.actor_id ().value ()),
+              .source_rid = inbound_source_node_rid.to_hex (),
+              .correlation_id = metadata.correlation_id,
+              .flow_id = dispatch_flow ? std::make_optional (dispatch_flow->flow_id) : std::nullopt,
+              .flow_origin =
+                dispatch_flow ? std::make_optional (dispatch_flow->origin) : std::nullopt,
+              .mesh_name = state_owner->snapshot.name};
+        });
+        runtime::runtime_metrics_t metrics (state_owner->monitoring);
+        if (metrics.enabled ())
+            metrics.counter ("zlink.mesh_node.messages.dropped", "{message}", 1,
+                             {{"mesh_name", state_owner->snapshot.name},
+                              {"surface", "actor"},
+                              {"message_kind", "send"},
+                              {"reason", "stale_target"}});
+    };
     auto project_actor_dispatch_state =
       [&] (const std::optional<spot_id_t> &found_location) -> result_t<actor_dispatch_plan_t> {
         if (!found_location) {
+            report_missing_actor_target ();
             return result_t<actor_dispatch_plan_t>::failure (
               framework_error_kind_t::not_found, "actor spot route disappeared before dispatch");
         }
@@ -12663,6 +12763,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         const auto context = _state->spot_contexts_by_id.find (std::string (plan.current_spot_id));
         if (context == _state->spot_contexts_by_id.end () || !context->second._state
             || !context->second._state->spot_instance) {
+            report_missing_actor_target ();
             return result_t<actor_dispatch_plan_t>::failure (
               framework_error_kind_t::not_found,
               "actor spot context is not registered. node="
@@ -13002,10 +13103,12 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
               std::move (before_application_handler), after_application_admission,
               std::move (transfer_owner_reservation), transferred_owner_byte_cost,
               admission_token ? admission_token->handler_terminal () : std::function<void ()>{},
-              admit_queue, {}, application_record, [&final_admission] {
+              admit_queue, {}, application_record,
+              [&final_admission] {
                   final_admission.emplace ();
                   final_admission->append_result = detail::handoff_append_result_t::appended;
-              }));
+              },
+              actor_ref.actor_id ().value ()));
     }
     catch (const framework_exception_t &error) {
         invoked = detail::result_access_t::failure<zlink::message_t> (error);
@@ -13833,6 +13936,7 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id,
 
 void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
                                                  std::uint64_t object_generation,
+                                                 std::chrono::system_clock::time_point deadline,
                                                  service::spot_close_begin_t begin,
                                                  service::spot_close_done_t done)
 {
@@ -13846,7 +13950,8 @@ void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
                    })
                    .get ();
     if (state) {
-        state->request_close (std::move (begin), std::move (done));
+        state->request_close (std::move (begin), std::move (done),
+                              spot_close_reason_t::explicit_close, deadline);
         return;
     }
     // 해당 generation의 local activation이 없으면 기존 authority owner가
@@ -15501,6 +15606,14 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         runtime::messaging::message_parts_t encoded (std::move (parts));
         runtime::messaging::envelope_codec_t codec;
         const auto &header = *decoded_header;
+        const auto flow_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
+        std::optional<runtime::flow_context_t::scope_t> flow_scope;
+        if (runtime::flow_context_t::tracing (flow_mode))
+            flow_scope.emplace (runtime::flow_context_t::enter (
+              header.flow_id, header.flow_origin, flow_mode, flow_origin_t::inbound,
+              record.source_session_rid
+                ? std::optional<std::string> (record.source_session_rid->to_hex ())
+                : std::nullopt));
         detail::channel_reply_writer_t replies;
         auto reply_error = [&] (const framework_exception_t &error) {
             if (record.kind != service::record_kind_t::actor_request)

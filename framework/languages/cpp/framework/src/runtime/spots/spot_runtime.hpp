@@ -146,7 +146,8 @@ class spot_node_builder_state_t
                                                 std::chrono::milliseconds)>
       create_user_spot;
     std::function<task_t<std::optional<spot_ref_t>> (spot_id_t)> find_user_spot;
-    std::function<task_t<bool> (spot_ref_t)> close_user_spot;
+    std::function<task_t<bool> (spot_ref_t, std::chrono::steady_clock::time_point, std::uint64_t)>
+      close_user_spot;
     instance_spot_idle_eviction_callback_t admit_instance_spot_idle_eviction;
     instance_spot_close_begin_callback_t begin_instance_spot_close;
     std::function<task_t<result_t<runtime::protocol::instance_spot_activation_header_t>> (
@@ -1880,6 +1881,7 @@ class spot_node_runtime_t
     // Runs a remote User Spot Close (command 48) for the local owner activation.
     void close_user_spot_owner (const std::string &spot_id,
                                 std::uint64_t object_generation,
+                                std::chrono::system_clock::time_point deadline,
                                 service::spot_close_begin_t begin,
                                 service::spot_close_done_t done);
     bool close_all_user_spots (std::chrono::steady_clock::time_point deadline_at,

@@ -2789,13 +2789,13 @@ public_host_runtime_t::create_actor_remote (const zlink::routing_id_t &target_no
 task_t<bool>
 public_host_runtime_t::close_user_spot_remote (const zlink::routing_id_t &target_node,
                                                protocol::user_spot_close_header_t request,
-                                               std::chrono::milliseconds timeout,
+                                               std::chrono::steady_clock::time_point deadline,
                                                user_spot_close_completion_t completion)
 {
     if (!completion)
         throw std::invalid_argument ("User Spot close completion is required");
     co_return co_await _transport->request_user_spot_close (
-      target_node.to_bytes (), std::move (request), timeout,
+      target_node.to_bytes (), std::move (request), deadline,
       [completion = std::move (completion)] (foundation::operation_terminal_t terminal,
                                              zlink::message_t packed) mutable {
           protocol::user_spot_close_reply_t reply;
@@ -7139,8 +7139,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                 // when the Close cannot be scheduled.
                 try {
                     if (user_spot_closer)
-                        user_spot_closer (request.target.spot_id, request.target.object_generation,
-                                          begin, done);
+                        user_spot_closer (
+                          request.target.spot_id, request.target.object_generation,
+                          messaging::request_deadline_utc_from_unix_ms (request.deadline_unix_ms),
+                          begin, done);
                     else
                         run_authority_close (begin, done, {});
                 }

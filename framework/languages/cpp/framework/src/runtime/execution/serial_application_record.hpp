@@ -57,15 +57,19 @@ struct serial_application_admission_t
                 release ();
         }
     }
-    void take_over ()
+    void take_over (initial_t *detached = nullptr)
     {
+        initial_t release;
         if (durable ()) {
-            release_initial ();
-            return;
+            if (auto *initial = std::get_if<initial_t> (&std::get<durable_t> (reservation).supply))
+                release = std::exchange (*initial, {});
+        } else {
+            release = std::move (std::get<initial_t> (reservation));
+            reservation.emplace<durable_t> ();
         }
-        auto release = std::move (std::get<initial_t> (reservation));
-        reservation.emplace<durable_t> ();
-        if (release)
+        if (detached)
+            *detached = std::move (release);
+        else if (release)
             release ();
     }
     void discard ()

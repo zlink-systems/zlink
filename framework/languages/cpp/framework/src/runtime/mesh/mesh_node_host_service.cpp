@@ -1861,8 +1861,10 @@ task_t<std::optional<spot_ref_t>> mesh_node_host_service_t::find_user_spot (spot
 }
 
 task_t<bool>
-mesh_node_host_service_t::close_user_spot (const std::shared_ptr<detail::mesh_node_runtime_t> &,
-                                           spot_ref_t spot)
+mesh_node_host_service_t::close_user_spot (std::shared_ptr<detail::mesh_node_runtime_t>,
+                                           spot_ref_t spot,
+                                           std::chrono::steady_clock::time_point deadline,
+                                           std::uint64_t wire_deadline)
 {
     if (!_location_store)
         co_return result_t<bool>::failure (framework_error_kind_t::not_configured,
@@ -1893,15 +1895,12 @@ mesh_node_host_service_t::close_user_spot (const std::shared_ptr<detail::mesh_no
          .to_bytes (),
        snapshot->allocation.target.node_lifecycle_generation, snapshot->authority_owner_generation,
        snapshot->store_version},
-      static_cast<std::uint64_t> (
-        std::chrono::duration_cast<std::chrono::milliseconds> (
-          std::chrono::system_clock::now ().time_since_epoch () + std::chrono::seconds (30))
-          .count ())};
+      wire_deadline};
     auto completion = std::make_shared<task_completion_source_t<bool>> ();
     auto output = completion->task ();
     auto accepted = source->native_node ().close_user_spot_remote (
       zlink::routing_id_t::from (std::string (snapshot->allocation.target.node_rid.value ())),
-      std::move (command), std::chrono::seconds (30),
+      std::move (command), deadline,
       [completion] (foundation::operation_terminal_t terminal,
                     protocol::user_spot_close_reply_t reply) {
           if (terminal != foundation::operation_terminal_t::completed
@@ -2553,10 +2552,12 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                 return find_user_spot (std::move (spot_id));
             };
             registration->spot_state->close_user_spot =
-              [this, weak_source = std::weak_ptr (source)] (spot_ref_t spot) -> task_t<bool> {
-                const auto source = detail::lock_runtime_owner (weak_source);
-                co_return co_await close_user_spot (source, std::move (spot));
-            };
+              [this, weak_source = std::weak_ptr (source)] (
+                spot_ref_t spot, std::chrono::steady_clock::time_point deadline,
+                std::uint64_t wire_deadline) {
+                  return close_user_spot (detail::lock_runtime_owner (weak_source),
+                                          std::move (spot), deadline, wire_deadline);
+              };
             registration->spot_state->begin_user_spot_close =
               [weak_source = std::weak_ptr (source)] (const spot_id_t &spot_id,
                                                       std::uint64_t object_generation,
@@ -2632,7 +2633,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               },
               [weak_registration = std::weak_ptr (registration)] (
                 const std::string &spot_id, std::uint64_t object_generation,
-                host::spot_close_begin_t begin, host::spot_close_done_t done) {
+                std::chrono::system_clock::time_point deadline, host::spot_close_begin_t begin,
+                host::spot_close_done_t done) {
                   const auto registration = detail::lock_runtime_owner (weak_registration);
                   // The materializer registers the activation under this local id.
                   std::vector<std::uint8_t> rid_bytes;
@@ -2642,7 +2644,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         static_cast<std::uint8_t> (static_cast<unsigned char> (value)));
                   detail::spot_node_runtime_t (registration->spot_state)
                     .close_user_spot_owner (zlink::routing_id_t::from (rid_bytes).to_string (),
-                                            object_generation, std::move (begin), std::move (done));
+                                            object_generation, deadline, std::move (begin),
+                                            std::move (done));
               });
             if (!registration->spot_state->snapshot.instance_spot_names.empty ()) {
                 if (!instance_relocations)

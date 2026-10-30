@@ -2792,12 +2792,11 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_user_spot_close (
-  const std::vector<std::uint8_t> &target_routing_id,
+  std::vector<std::uint8_t> target_routing_id,
   protocol::user_spot_close_header_t request,
-  std::chrono::milliseconds timeout,
+  std::chrono::steady_clock::time_point deadline,
   foundation::operation_registry_t::callback_t callback)
 {
-    const auto deadline = capture_request_deadline (timeout);
     const auto local = _topology.local_descriptor ();
     if (request.source_node_routing_id != local.node_routing_id
         || request.source_node_generation != local.lifecycle_generation

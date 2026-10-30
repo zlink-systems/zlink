@@ -9,6 +9,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/manual_internal_scheduler.hpp"
@@ -25,6 +26,7 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -1040,6 +1042,24 @@ class close_fault_store_t final : public zf::location_store_t
     std::size_t hold_prepared_authority_put = 0;
     std::atomic_bool owner_lease_released{false};
     std::promise<void> commit_held;
+    std::atomic_bool hold_read_once{false};
+    std::promise<void> read_held;
+
+    void release_held_read ()
+    {
+        std::optional<zf::store_key_t> key;
+        std::optional<zf::task_completion_source_t<zf::store_read_result_t>> completion;
+        {
+            std::lock_guard lock (_held_mutex);
+            hold_read_once.store (false);
+            key = std::move (_held_read_key);
+            completion = std::move (_held_read_completion);
+            _held_read_key.reset ();
+            _held_read_completion.reset ();
+        }
+        if (completion)
+            completion->complete (_inner->read (std::move (*key)).result ());
+    }
 
     // Completes the held Closing commit: applied, or an authority version conflict.
     void release_held_commit (bool conflict)
@@ -1064,6 +1084,17 @@ class close_fault_store_t final : public zf::location_store_t
 
     zf::task_t<zf::store_read_result_t> read (zf::store_key_t key) override
     {
+        if (is_watched (key)) {
+            std::lock_guard lock (_held_mutex);
+            if (hold_read_once.exchange (false)) {
+                zf::task_completion_source_t<zf::store_read_result_t> completion;
+                auto pending = completion.task ();
+                _held_read_key = std::move (key);
+                _held_read_completion = std::move (completion);
+                read_held.set_value ();
+                return pending;
+            }
+        }
         return _inner->read (std::move (key));
     }
 
@@ -1159,6 +1190,8 @@ class close_fault_store_t final : public zf::location_store_t
 
     std::shared_ptr<zf::runtime::in_memory_location_store_t> _inner;
     std::mutex _held_mutex;
+    std::optional<zf::store_key_t> _held_read_key;
+    std::optional<zf::task_completion_source_t<zf::store_read_result_t>> _held_read_completion;
     std::optional<zf::store_write_request_t> _held_request;
     std::optional<zf::task_completion_source_t<zf::store_write_result_t>> _held_completion;
 };
@@ -1456,6 +1489,183 @@ class scenario_client_t final : public zf::hosted_service_t
         std::optional<zf::spot_ref_t> ref;
         if (authority != "Missing")
             ref = create_room (services, spot_id);
+        if (act == "observeManagerCloseDeadline") {
+            auto entered = current ().closing_entered.get_future ();
+            auto held = store.read_held.get_future ();
+            std::promise<void> submitted;
+            auto submission = submitted.get_future ();
+            const bool hold_read = given.value ("holdRead", false);
+            store.hold_read_once.store (hold_read);
+            std::chrono::system_clock::time_point before, after;
+            std::chrono::steady_clock::time_point steady_before, steady_after;
+            auto closing = std::async (std::launch::async, [&] {
+                steady_before = std::chrono::steady_clock::now ();
+                before = std::chrono::system_clock::now ();
+                auto pending = services.get_required<zf::spot_manager_t> ().close (*ref);
+                after = std::chrono::system_clock::now ();
+                steady_after = std::chrono::steady_clock::now ();
+                submitted.set_value ();
+                return pending.result ();
+            });
+            // Release every fixture barrier before the async future can join on an exception.
+            const std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) {
+                store.release_held_read ();
+                current ().closing_released.complete (zf::result_t<void>::success ());
+            });
+            if (submission.wait_for (3s) != std::future_status::ready)
+                throw std::runtime_error ("public Close did not return its task");
+            if (hold_read) {
+                if (held.wait_for (3s) != std::future_status::ready)
+                    throw std::runtime_error ("source Close did not reach Store read");
+                actual["callbackBeforeReadRelease"] =
+                  entered.wait_for (0ms) == std::future_status::ready;
+                actual["entryReturnedWhileReadHeld"] = true;
+                // Controlled Store latency exceeds clock conversion precision; no caller expiry
+                // or callback ordering is inferred from this interval.
+                std::mutex hold_mutex;
+                std::condition_variable hold_duration;
+                std::unique_lock hold_lock (hold_mutex);
+                hold_duration.wait_until (hold_lock, steady_after + 25ms, [] { return false; });
+                actual["readReleasedSteadyNs"] =
+                  std::chrono::steady_clock::now ().time_since_epoch ().count ();
+                store.release_held_read ();
+            }
+            if (entered.wait_for (3s) != std::future_status::ready)
+                throw std::runtime_error ("Close did not invoke OnClosing");
+            {
+                std::lock_guard lock (current ().mutex);
+                const auto context = current ().closing_context;
+                actual["finiteDeadline"] =
+                  context && context->deadline != std::chrono::system_clock::time_point::max ();
+                const auto callback_ms = context
+                                           ? std::chrono::duration_cast<std::chrono::milliseconds> (
+                                               context->deadline.time_since_epoch ())
+                                               .count ()
+                                           : 0;
+                const auto callback_at = zf::runtime::messaging::request_deadline_from_unix_ms (
+                  static_cast<std::uint64_t> (callback_ms));
+                actual["deadlinePreserved"] = context && callback_at >= steady_before + 30s - 1ms
+                                              && callback_at <= steady_after + 30s + 1ms;
+                actual["callbackSteadyNs"] = callback_at.time_since_epoch ().count ();
+                actual["entryLowerSteadyNs"] = steady_before.time_since_epoch ().count ();
+                actual["entryUpperSteadyNs"] = steady_after.time_since_epoch ().count ();
+                actual["explicitReason"] =
+                  context && context->reason == zf::spot_close_reason_t::explicit_close;
+                actual["stoppedAtInvocation"] = current ().cleanup_stopped_at_invocation;
+                actual["callbackDeadlineMs"] =
+                  context ? std::chrono::duration_cast<std::chrono::milliseconds> (
+                              context->deadline.time_since_epoch ())
+                              .count ()
+                          : 0;
+                actual["entryLowerMs"] =
+                  std::chrono::duration_cast<std::chrono::milliseconds> (before.time_since_epoch ())
+                    .count ();
+                actual["entryUpperMs"] =
+                  std::chrono::duration_cast<std::chrono::milliseconds> (after.time_since_epoch ())
+                    .count ();
+            }
+            current ().closing_released.complete (zf::result_t<void>::success ());
+            const auto closed = closing.get ();
+            actual["closeSucceeded"] = closed && closed.value ();
+            actual["authority"] = authority_state (services, spot_id);
+            return;
+        }
+        if (act == "observeRemoteCloseDeadline") {
+            const auto entered = current ().closing_entered.get_future ();
+            const auto before = std::chrono::system_clock::now ();
+            const bool native = given.value ("nativeCommand", false);
+            const auto wire_ms = static_cast<std::uint64_t> (
+              std::chrono::duration_cast<std::chrono::milliseconds> (
+                before.time_since_epoch () + 57s + 123ms).count ());
+            std::atomic_bool replay_preserved{false};
+            auto closing = std::async (std::launch::async, [&] {
+                if (!native)
+                    return manager_close (services, *ref);
+                auto runtime = zf::detail::spot_node_runtime_t::from (
+                  _app->advanced ().zlink (), mesh_name);
+                const auto node = runtime->native_node ();
+                if (!node)
+                    throw std::runtime_error ("Spot owner has no native node");
+                auto &host = *node;
+                const auto status = host.status ();
+                const auto read = services.get_required<zf::location_repository_t> ()
+                  .read_authority (zf::runtime::spot_authority_key (spot_id)).result ().value ();
+                const auto &snapshot = std::get<zf::authority_snapshot_t> (read);
+                zf::runtime::protocol::user_spot_close_header_t command{
+                  0, {status.lifecycle_generation (), 7139},
+                  status.routing_id ().to_bytes (), status.lifecycle_generation (),
+                  {ref->spot_id (), ref->object_generation (), status.routing_id ().to_bytes (),
+                   status.lifecycle_generation (), snapshot.authority_owner_generation,
+                   snapshot.store_version}, wire_ms};
+                const auto submit = [&] (const auto &request) {
+                    zf::task_completion_source_t<bool> completed;
+                    auto terminal = completed.task ();
+                    const auto submitted =
+                      host
+                        .close_user_spot_remote (
+                          status.routing_id (), request, std::chrono::steady_clock::now () + 3s,
+                          [&] (zf::runtime::foundation::operation_terminal_t outcome,
+                               zf::runtime::protocol::user_spot_close_reply_t reply) {
+                              completed.complete (zf::result_t<bool>::success (
+                                outcome == zf::runtime::foundation::operation_terminal_t::completed
+                                && reply.header.correlation != 0
+                                && reply.header.terminal_result == 0 && reply.closed));
+                          })
+                        .result ();
+                    if (!submitted || !submitted.value ())
+                        throw std::runtime_error ("command 48 was not admitted");
+                    return terminal.result ();
+                };
+                const auto closed = submit (command);
+                // Reuse the original source generation, operation ID and deadline.
+                const auto replay = submit (command);
+                replay_preserved.store (replay && replay.value ());
+                return closed;
+            });
+            // Release before the async future joins, including setup failures.
+            const std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) {
+                current ().closing_released.complete (zf::result_t<void>::success ());
+            });
+            if (entered.wait_for (3s) != std::future_status::ready) {
+                current ().closing_released.complete (zf::result_t<void>::success ());
+                (void) closing.get ();
+                throw std::runtime_error ("OnClosing did not start");
+            }
+            const auto after = std::chrono::system_clock::now ();
+            {
+                std::lock_guard lock (current ().mutex);
+                const auto context = current ().closing_context;
+                actual["finiteDeadline"] = context
+                  && context->deadline != std::chrono::system_clock::time_point::max ();
+                actual["explicitReason"] = context
+                  && context->reason == zf::spot_close_reason_t::explicit_close;
+                actual["stoppedAtInvocation"] = current ().cleanup_stopped_at_invocation;
+                const auto callback_ms = context
+                  ? std::chrono::duration_cast<std::chrono::milliseconds> (
+                      context->deadline.time_since_epoch ()).count () : 0;
+                actual["callbackDeadlineMs"] = callback_ms;
+                actual["wireDeadlineMs"] = native ? nlohmann::json (wire_ms) : nullptr;
+                actual["deadlinePreserved"] =
+                  native ? callback_ms >= 0 && static_cast<std::uint64_t> (callback_ms) == wire_ms
+                         : context && context->deadline >= before + 30s - 1ms
+                             && context->deadline
+                                  <= std::chrono::ceil<std::chrono::milliseconds> (after + 30s);
+            }
+            actual["authorityDuringClose"] = authority_state (services, spot_id);
+            current ().closing_released.complete (zf::result_t<void>::success ());
+            const auto closed = closing.get ();
+            actual["closeSucceeded"] = closed && closed.value ();
+            actual["terminalReplayPreserved"] = !native || replay_preserved.load ();
+            actual["authority"] = authority_state (services, spot_id);
+            // The original ref has no incarnation left to close; callback stays once.
+            actual["secondClose"] = close_result (manager_close (services, *ref));
+            {
+                std::lock_guard lock (current ().mutex);
+                actual["authorityReleaseCalls"] = std::count (
+                  current ().order.begin (), current ().order.end (), "authorityReleased");
+            }
+            return;
+        }
         if (act == "preCancelledClose") {
             std::stop_source cancelled;
             cancelled.request_stop ();
@@ -2226,6 +2436,84 @@ void run_and_check (const nlohmann::json &scenario)
         }
         EXPECT_EQ (value, actual.at (key)) << key << ": " << actual.dump ();
     }
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, ManagerCloseUsesExistingEntryDeadline)
+{
+    run_and_check (nlohmann::json{
+      {"name", "ManagerCloseUsesExistingEntryDeadline"},
+      {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}, {"holdRead", false}}},
+      {"act", "observeManagerCloseDeadline"},
+      {"expect",
+       {{"finiteDeadline", true},
+        {"deadlinePreserved", true},
+        {"explicitReason", true},
+        {"stoppedAtInvocation", false},
+        {"closeSucceeded", true},
+        {"authority", "Missing"},
+        {"onClosingCalls", 1}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, ManagerClosePreservesDeadlineAcrossHeldRead)
+{
+    run_and_check (nlohmann::json{
+      {"name", "ManagerClosePreservesDeadlineAcrossHeldRead"},
+      {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}, {"holdRead", true}}},
+      {"act", "observeManagerCloseDeadline"},
+      {"expect",
+       {{"finiteDeadline", true},
+        {"deadlinePreserved", true},
+        {"explicitReason", true},
+        {"stoppedAtInvocation", false},
+        {"closeSucceeded", true},
+        {"authority", "Missing"},
+        {"onClosingCalls", 1},
+        {"entryReturnedWhileReadHeld", true},
+        {"callbackBeforeReadRelease", false}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, CommandDeadlineUtcConversionPreservesRange)
+{
+    using clock_t = std::chrono::system_clock;
+    using zf::runtime::messaging::request_deadline_utc_from_unix_ms;
+    constexpr std::uint64_t wire_ms = 1793310579123;
+    EXPECT_EQ (request_deadline_utc_from_unix_ms (wire_ms),
+               clock_t::time_point{std::chrono::milliseconds{wire_ms}});
+    EXPECT_EQ (request_deadline_utc_from_unix_ms (0), clock_t::time_point{});
+    const auto max_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
+      clock_t::time_point::max ().time_since_epoch ()).count ();
+    EXPECT_EQ (request_deadline_utc_from_unix_ms (static_cast<std::uint64_t> (max_ms)),
+               clock_t::time_point{std::chrono::milliseconds{max_ms}});
+    EXPECT_EQ (request_deadline_utc_from_unix_ms (static_cast<std::uint64_t> (max_ms) + 1),
+               clock_t::time_point::max ());
+    EXPECT_EQ (request_deadline_utc_from_unix_ms (std::numeric_limits<std::uint64_t>::max ()),
+               clock_t::time_point::max ());
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, RemoteClosingPreservesDefaultOperationDeadline)
+{
+    run_and_check (nlohmann::json{
+      {"name", "remote-close-default-deadline"},
+      {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}}},
+      {"act", "observeRemoteCloseDeadline"},
+      {"expect", {{"finiteDeadline", true}, {"deadlinePreserved", true},
+                  {"explicitReason", true}, {"stoppedAtInvocation", false},
+                  {"authorityDuringClose", "Closing"}, {"closeSucceeded", true},
+                  {"authority", "Missing"}, {"secondClose", false}, {"onClosingCalls", 1},
+                  {"authorityReleaseCalls", 1}, {"terminalReplayPreserved", true}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, RemoteClosingPreservesExactCommandDeadline)
+{
+    run_and_check (nlohmann::json{
+      {"name", "remote-close-exact-command-deadline"},
+      {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}, {"nativeCommand", true}}},
+      {"act", "observeRemoteCloseDeadline"},
+      {"expect", {{"finiteDeadline", true}, {"deadlinePreserved", true},
+                  {"explicitReason", true}, {"stoppedAtInvocation", false},
+                  {"authorityDuringClose", "Closing"}, {"closeSucceeded", true},
+                  {"authority", "Missing"}, {"secondClose", false}, {"onClosingCalls", 1},
+                  {"authorityReleaseCalls", 1}, {"terminalReplayPreserved", true}}}});
 }
 
 TEST (ZLinkFrameworkSpotCloseConformance, ExistingThenClosingRequestAndJoinReturnNotFound)

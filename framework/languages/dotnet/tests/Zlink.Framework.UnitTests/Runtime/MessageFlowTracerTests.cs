@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -146,6 +147,7 @@ public sealed class MessageFlowTracerTests
                     FlowOrigin = ZLinkFlowOrigin.Application,
                 }
             );
+            TelemetryReceipt.Wait(() => activities.Count == 1);
         }
 
         var activity = Assert.Single(activities);
@@ -187,6 +189,7 @@ public sealed class MessageFlowTracerTests
                 TargetRid: "target"
             )
         );
+        TelemetryReceipt.Wait(() => logger.CallCount == 1);
 
         Assert.StartsWith("zlink flow: ", logger.Message);
         Assert.Equal(
@@ -250,6 +253,7 @@ public sealed class MessageFlowTracerTests
                     Exception: exception
                 )
             );
+            TelemetryReceipt.Wait(() => activities.Count == 1);
 
             Assert.Contains(
                 logger.Fields,
@@ -302,6 +306,7 @@ public sealed class MessageFlowTracerTests
                     Exception: new InvalidOperationException(string.Empty)
                 )
             );
+            TelemetryReceipt.Wait(() => activities.Count == 1);
         }
 
         Assert.Contains(
@@ -337,6 +342,7 @@ public sealed class MessageFlowTracerTests
                     ZLinkDispatchMessageKind.Send
                 )
             );
+        WaitForSamplingDelivery();
 
         Assert.InRange(logger.CallCount, 1, 63);
     }
@@ -375,6 +381,7 @@ public sealed class MessageFlowTracerTests
             using var message = new TopicMessage();
 
             await pipeline.DispatchAsync("channel", message, header, CancellationToken.None);
+            TelemetryReceipt.Wait(() => activities.Count == 1);
         }
 
         var activity = Assert.Single(activities);
@@ -422,6 +429,7 @@ public sealed class MessageFlowTracerTests
                         ErrorMessage = error.Message,
                     }
                 );
+                TelemetryReceipt.Wait(() => activities.Count == 1);
             }
         }
         if (!expected)
@@ -448,15 +456,302 @@ public sealed class MessageFlowTracerTests
         );
     }
 
-    private static List<Activity> CaptureActivities(out ActivityListener listener)
+    [Theory]
+    [InlineData(ZLinkDiagnosticsLevel.Errors, false, false)]
+    [InlineData(ZLinkDiagnosticsLevel.Errors, true, false)]
+    [InlineData(ZLinkDiagnosticsLevel.Normal, false, false)]
+    [InlineData(ZLinkDiagnosticsLevel.Normal, true, false)]
+    [InlineData(ZLinkDiagnosticsLevel.Errors, false, true)]
+    [InlineData(ZLinkDiagnosticsLevel.Errors, true, true)]
+    public void DispatchErrorFlowUsesProcessingLevel(
+        ZLinkDiagnosticsLevel level,
+        bool explicitFlow,
+        bool changeLevelAfterGate
+    )
     {
-        var activities = new List<Activity>();
+        var activities = CaptureActivities(out var listener);
+        using (listener)
+        {
+            var outerOptions = new ZLinkDispatchOptionsModel();
+            outerOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            var outerTracer = new ZLinkMessageFlowTracer(outerOptions);
+            using var scope = ZLinkFlowContext.Enter(
+                null,
+                null,
+                outerTracer.CaptureEnabled,
+                ZLinkFlowOrigin.Inbound
+            );
+            var ambient = Assert.IsType<ZLinkFlowValue>(ZLinkFlowContext.Current);
+            const string explicitFlowId = "018f2b63-9d4a-7abc-8def-0123456789ab";
+            Assert.NotEqual(explicitFlowId, ambient.FlowId);
+            var options = new ZLinkDispatchOptionsModel();
+            options.Diagnostics.SetLevel(
+                changeLevelAfterGate ? ZLinkDiagnosticsLevel.Normal : level
+            );
+            options.Diagnostics.SetSampleRate(0);
+            var logger = new CapturingLogger();
+            var reporter = new ZLinkDispatchErrorReporter(options, logger);
+            Assert.True(reporter.Enabled);
+            if (changeLevelAfterGate)
+                options.Diagnostics.SetLevel(level);
+
+            reporter.Report(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.SpotActor,
+                    ZLinkDispatchMessageKind.Request,
+                    ZLinkDispatchErrorReason.HandlerException,
+                    ZLinkDispatchErrorAction.Drop,
+                    "packet",
+                    CorrelationId: "corr",
+                    Exception: new InvalidOperationException("failed"),
+                    FlowId: explicitFlow ? explicitFlowId : null,
+                    FlowOrigin: explicitFlow ? ZLinkFlowOrigin.Application : null,
+                    StreamSessionId: "session"
+                )
+            );
+            TelemetryReceipt.Wait(() => activities.Count == 1);
+
+            Assert.Equal(1, logger.CallCount);
+            var activity = Assert.Single(activities);
+            Assert.Equal("zlink.dispatch_error", activity.GetTagItem("event_id"));
+            Assert.Equal("drop", activity.GetTagItem("action"));
+            Assert.Equal("corr", activity.GetTagItem("correlation_id"));
+            Assert.Equal("session", activity.GetTagItem("stream_session_id"));
+            Assert.Equal("InvalidOperationException", activity.GetTagItem("error_type"));
+            Assert.Equal("failed", activity.GetTagItem("error_message"));
+            Assert.Contains(
+                logger.Fields,
+                field => field.Key == "corr" && Equals(field.Value, "corr")
+            );
+            Assert.Contains(
+                logger.Fields,
+                field => field.Key == "session" && Equals(field.Value, "session")
+            );
+            Assert.Contains(
+                logger.Fields,
+                field =>
+                    field.Key == "error_type" && Equals(field.Value, "InvalidOperationException")
+            );
+            Assert.Contains(
+                logger.Fields,
+                field => field.Key == "error_message" && Equals(field.Value, "failed")
+            );
+            AssertObservedFlow(
+                logger,
+                activity,
+                level == ZLinkDiagnosticsLevel.Normal
+                    ? explicitFlow
+                        ? explicitFlowId
+                        : ambient.FlowId
+                    : null,
+                explicitFlow ? "application" : "inbound"
+            );
+        }
+    }
+
+    [Theory]
+    [InlineData(ZLinkDiagnosticsLevel.Errors, false, false)]
+    [InlineData(ZLinkDiagnosticsLevel.Errors, true, false)]
+    [InlineData(ZLinkDiagnosticsLevel.Normal, false, false)]
+    [InlineData(ZLinkDiagnosticsLevel.Normal, true, false)]
+    [InlineData(ZLinkDiagnosticsLevel.Errors, false, true)]
+    [InlineData(ZLinkDiagnosticsLevel.Errors, true, true)]
+    public void FailedAndDroppedFlowUseProcessingLevel(
+        ZLinkDiagnosticsLevel level,
+        bool explicitFlow,
+        bool changeLevelAfterGate
+    )
+    {
+        var outerOptions = new ZLinkDispatchOptionsModel();
+        outerOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        var outerTracer = new ZLinkMessageFlowTracer(outerOptions);
+        using var scope = ZLinkFlowContext.Enter(
+            null,
+            null,
+            outerTracer.CaptureEnabled,
+            ZLinkFlowOrigin.Inbound
+        );
+        var ambient = Assert.IsType<ZLinkFlowValue>(ZLinkFlowContext.Current);
+        const string explicitFlowId = "018f2b63-9d4a-7abc-8def-0123456789ab";
+        Assert.NotEqual(explicitFlowId, ambient.FlowId);
+        foreach (
+            var outcome in new[]
+            {
+                ZLinkMessageFlowOutcome.Completed,
+                ZLinkMessageFlowOutcome.Dropped,
+            }
+        )
+        {
+            var activities = CaptureActivities(out var listener);
+            using (listener)
+            {
+                var options = new ZLinkDispatchOptionsModel();
+                options.Diagnostics.SetLevel(
+                    changeLevelAfterGate ? ZLinkDiagnosticsLevel.Normal : level
+                );
+                options.Diagnostics.SetSampleRate(0);
+                var logger = new CapturingLogger();
+                var tracer = new ZLinkMessageFlowTracer(options, logger);
+                Assert.True(tracer.Enabled(outcome, ZLinkMessageFlowResult.Failed));
+                if (changeLevelAfterGate)
+                    options.Diagnostics.SetLevel(level);
+                tracer.Trace(
+                    new ZLinkMessageFlowEvent(
+                        outcome,
+                        ZLinkDispatchErrorSurface.SpotActor,
+                        ZLinkDispatchMessageKind.Request,
+                        PacketName: "packet",
+                        CorrelationId: "corr",
+                        Result: ZLinkMessageFlowResult.Failed
+                    )
+                    {
+                        FlowId = explicitFlow ? explicitFlowId : string.Empty,
+                        FlowOrigin = explicitFlow ? ZLinkFlowOrigin.Application : null,
+                        Detail = "target_prepare_failed",
+                        ErrorType = "InvalidOperationException",
+                        ErrorMessage = "failed",
+                        StreamSessionId = "session",
+                    }
+                );
+                TelemetryReceipt.Wait(() => activities.Count == 1);
+
+                Assert.Equal(1, logger.CallCount);
+                var activity = Assert.Single(activities);
+                Assert.Equal("zlink.message_flow", activity.GetTagItem("event_id"));
+                Assert.Equal(ZLinkTraceFormat.OutcomeKey(outcome), activity.GetTagItem("phase"));
+                Assert.Equal("failed", activity.GetTagItem("outcome"));
+                Assert.Equal("corr", activity.GetTagItem("correlation_id"));
+                Assert.Equal("session", activity.GetTagItem("stream_session_id"));
+                Assert.Equal("target_prepare_failed", activity.GetTagItem("detail"));
+                Assert.Equal("InvalidOperationException", activity.GetTagItem("error_type"));
+                Assert.Equal("failed", activity.GetTagItem("error_message"));
+                Assert.Contains(
+                    logger.Fields,
+                    field => field.Key == "corr" && Equals(field.Value, "corr")
+                );
+                Assert.Contains(
+                    logger.Fields,
+                    field => field.Key == "session" && Equals(field.Value, "session")
+                );
+                Assert.Contains(
+                    logger.Fields,
+                    field => field.Key == "detail" && Equals(field.Value, "target_prepare_failed")
+                );
+                Assert.Contains(
+                    logger.Fields,
+                    field =>
+                        field.Key == "error_type"
+                        && Equals(field.Value, "InvalidOperationException")
+                );
+                Assert.Contains(
+                    logger.Fields,
+                    field => field.Key == "error_message" && Equals(field.Value, "failed")
+                );
+                AssertObservedFlow(
+                    logger,
+                    activity,
+                    level == ZLinkDiagnosticsLevel.Normal
+                        ? explicitFlow
+                            ? explicitFlowId
+                            : ambient.FlowId
+                        : null,
+                    explicitFlow ? "application" : "inbound"
+                );
+            }
+        }
+    }
+
+    [Fact]
+    public void OffPreservesCallSiteConstructionGuardsInsideAmbientFlow()
+    {
+        using var scope = ZLinkFlowContext.Enter(null, null, true, ZLinkFlowOrigin.Inbound);
+        var activities = CaptureActivities(out var listener);
+        using (listener)
+        {
+            var options = new ZLinkDispatchOptionsModel();
+            options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Off);
+            var logger = new CapturingLogger();
+            var reporter = new ZLinkDispatchErrorReporter(options, logger);
+            var constructed = 0;
+            if (reporter.Enabled)
+            {
+                constructed++;
+                reporter.Report(
+                    new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.SpotActor,
+                        ZLinkDispatchMessageKind.Request,
+                        ZLinkDispatchErrorReason.HandlerException,
+                        ZLinkDispatchErrorAction.Drop,
+                        "packet"
+                    )
+                );
+            }
+            if (
+                reporter.Flow.Enabled(
+                    ZLinkMessageFlowOutcome.Completed,
+                    ZLinkMessageFlowResult.Failed
+                )
+            )
+            {
+                constructed++;
+                reporter.Flow.Trace(
+                    new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.Completed,
+                        ZLinkDispatchErrorSurface.SpotActor,
+                        ZLinkDispatchMessageKind.Request,
+                        Result: ZLinkMessageFlowResult.Failed
+                    )
+                );
+            }
+            Assert.Equal(0, constructed);
+            Assert.Equal(0, logger.CallCount);
+            Assert.Empty(activities);
+        }
+    }
+
+    private static void AssertObservedFlow(
+        CapturingLogger logger,
+        Activity activity,
+        string? expectedFlowId,
+        string expectedOrigin
+    )
+    {
+        if (expectedFlowId is null)
+        {
+            Assert.DoesNotContain(logger.Fields, field => field.Key is "flow" or "origin");
+            Assert.Null(activity.GetTagItem("flow_id"));
+            Assert.Null(activity.GetTagItem("flow_origin"));
+            return;
+        }
+        Assert.Equal(
+            expectedFlowId,
+            Assert.Single(logger.Fields, field => field.Key == "flow").Value
+        );
+        Assert.Equal(
+            expectedOrigin,
+            Assert.Single(logger.Fields, field => field.Key == "origin").Value
+        );
+        Assert.Equal(expectedFlowId, activity.GetTagItem("flow_id"));
+        Assert.Equal(expectedOrigin, activity.GetTagItem("flow_origin"));
+    }
+
+    private static void WaitForSamplingDelivery() =>
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => ZLinkMessageFlowDelivery.Shared.State is { Pending: 0, Executing: false },
+                TimeSpan.FromSeconds(5)
+            )
+        );
+
+    private static ConcurrentQueue<Activity> CaptureActivities(out ActivityListener listener)
+    {
+        var activities = new ConcurrentQueue<Activity>();
         listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activities.Add,
+            ActivityStopped = activities.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
         return activities;
@@ -464,7 +759,8 @@ public sealed class MessageFlowTracerTests
 
     private sealed class CapturingLogger : ILogger
     {
-        public int CallCount { get; private set; }
+        private int _callCount;
+        public int CallCount => Volatile.Read(ref _callCount);
         public string Message { get; private set; } = string.Empty;
         public IReadOnlyList<KeyValuePair<string, object?>> Fields { get; private set; } = [];
 
@@ -481,11 +777,11 @@ public sealed class MessageFlowTracerTests
             Func<TState, Exception?, string> formatter
         )
         {
-            CallCount++;
             Message = formatter(state, exception);
             Fields = state is IEnumerable<KeyValuePair<string, object?>> fields
                 ? fields.ToArray()
                 : [];
+            Interlocked.Increment(ref _callCount);
         }
     }
 }

@@ -50,17 +50,22 @@ class dispatch_error_reporter_t
             event.error_type = std::move (error.type);
             event.error_message = std::move (error.message);
         }
-        if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
-            event.flow_id.reset ();
-            event.flow_origin.reset ();
-        }
-        if (!event.flow_id) {
-            if (const auto &flow = runtime::flow_context_t::current ()) {
-                if (!flow->flow_id.empty ()) {
-                    event.flow_id = flow->flow_id;
-                    event.flow_origin = flow->origin;
+        if (runtime::flow_context_t::tracing (effective_mode)) {
+            if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
+                event.flow_id.reset ();
+                event.flow_origin.reset ();
+            }
+            if (!event.flow_id) {
+                if (const auto &flow = runtime::flow_context_t::current ()) {
+                    if (!flow->flow_id.empty ()) {
+                        event.flow_id = flow->flow_id;
+                        event.flow_origin = flow->origin;
+                    }
                 }
             }
+        } else {
+            event.flow_id.reset ();
+            event.flow_origin.reset ();
         }
         if (dispatch_options_access_t::logger (*_options))
             log_default (event);
@@ -68,7 +73,7 @@ class dispatch_error_reporter_t
             dispatch_options_access_t::observe_dispatch_error (*_options, event);
         }
         catch (...) {
-            (void) observer_failures ();
+            message_flow_tracer_t::record_observer_failure ();
         }
     }
 
@@ -83,7 +88,7 @@ class dispatch_error_reporter_t
             report (std::forward<Fn> (build_event) ());
         }
         catch (...) {
-            (void) observer_failures ();
+            message_flow_tracer_t::record_observer_failure ();
         }
     }
 
@@ -190,12 +195,13 @@ class dispatch_error_reporter_t
                 add (dispatch_event_field::error_message, *event.error_message);
             }
             // Structured fields through the configured framework logger.
-            diagnostic_event_sink_t::log_if_configured (
-              dispatch_options_access_t::logger (*_options), default_log_level (event),
-              "dispatch error", std::move (fields));
+            if (!diagnostic_event_sink_t::log_if_configured (
+                  dispatch_options_access_t::logger (*_options), default_log_level (event),
+                  "dispatch error", std::move (fields)))
+                message_flow_tracer_t::record_observer_failure ();
         }
         catch (...) {
-            (void) observer_failures ();
+            message_flow_tracer_t::record_observer_failure ();
         }
     }
 

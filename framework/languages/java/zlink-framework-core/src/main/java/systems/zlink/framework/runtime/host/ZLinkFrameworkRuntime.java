@@ -187,12 +187,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             status -> status.state() == ZLinkFrameworkRuntimeState.RELOCATED);
     private final ZLinkRouteMeshRuntimeView routeMeshRuntime = new ZLinkRouteMeshRuntimeView(this);
 
+    private final systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.Host
+            telemetryHost;
+
     private ZLinkFrameworkRuntime(
             DefaultZLinkFrameworkOptions options, ZLinkRuntimeEventDispatcher eventDispatcher) {
         eventDispatcher =
                 eventDispatcher == null ? new ZLinkRuntimeEventDispatcher() : eventDispatcher;
         this.eventDispatcher = eventDispatcher;
         this.registration = options.registration();
+        this.telemetryHost =
+                systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.openHost();
         this.applicationJobQueue = this.registration.applicationJobQueue();
         this.meshDrains =
                 new systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator(
@@ -216,6 +221,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         ZLinkStreamCodec defaultStreamCodec = defaultStreamCodec(options);
         ZLinkHandlerActivator.MutableServices runtimeHandlers =
                 ZLinkHandlerActivator.services(handlerFactory);
+        runtimeHandlers.add(
+                systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.Host.class,
+                telemetryHost);
         runtimeHandlers.add(ZLinkFrameworkRegistration.class, this.registration);
         runtimeHandlers.add(ZLinkFrameworkRuntime.class, this);
         var relocationAdapters =
@@ -286,7 +294,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                     mesh,
                                     serializer,
                                     this.registration,
-                                    handlerFactory,
+                                    runtimeHandlers,
                                     this.meshDrains),
                     true,
                     this.applicationJobQueue);
@@ -392,7 +400,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         this.registration,
                         serializer,
                         runtimeHandlers,
-                        handlerFactory,
+                        runtimeHandlers,
                         eventDispatcher,
                         defaultStreamCodec,
                         this.channels,
@@ -2191,6 +2199,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     CompletionStage<Void> closeAsync() {
+        telemetryHost.close();
         return closeGate.close(this::closeCoreAsync);
     }
 

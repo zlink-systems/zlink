@@ -118,6 +118,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     )
     {
         Services = services;
+        TelemetrySubmission =
+            services.GetService<ZLinkTelemetrySubmission>() ?? new ZLinkTelemetrySubmission();
         handlerRegistry.PrepareInstances(services, registration);
         ZLinkScopedHandlerInstanceOwner.Validate(services, registration.Filters);
         _actorHandoffAdmissions = new ZLinkActorHandoffAdmissions(diagnostic: LogActorHandoff);
@@ -211,6 +213,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             throw new InvalidOperationException("ZLink framework runtime is not started.");
         state.Capacity.ResetMetrics();
     }
+
+    internal ZLinkTelemetrySubmission TelemetrySubmission { get; }
 
     public ZLinkFrameworkRegistration Registration { get; }
 
@@ -1295,6 +1299,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             if (Volatile.Read(ref _lifecyclePhase) == (int)ZLinkRuntimeLifecyclePhase.Running)
                 return;
 
+            TelemetrySubmission.Renew();
             Registration.Codecs.Freeze();
             Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Starting);
             try
@@ -1315,6 +1320,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             catch (Exception startFailure)
             {
                 Volatile.Write(ref _lifecyclePhase, (int)ZLinkRuntimeLifecyclePhase.Stopping);
+                TelemetrySubmission.Dispose();
                 var operationsDrained = await StopAcceptingOperationsAsync().ConfigureAwait(false);
                 await operationsDrained.ConfigureAwait(false);
                 var failures = await CleanupRuntimeGenerationAsync(
@@ -1351,6 +1357,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         try
         {
             ThrowIfStopRequestedFromOwnedWork();
+            TelemetrySubmission.Dispose();
             if (
                 (ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase)
                 == ZLinkRuntimeLifecyclePhase.Stopped
@@ -1398,6 +1405,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         try
         {
             ThrowIfStopRequestedFromOwnedWork();
+            TelemetrySubmission.Dispose();
             if (
                 (ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase)
                 == ZLinkRuntimeLifecyclePhase.Stopped
