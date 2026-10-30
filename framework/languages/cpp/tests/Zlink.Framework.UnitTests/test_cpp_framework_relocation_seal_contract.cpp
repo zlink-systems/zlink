@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/telemetry_observation.hpp"
+
 #include "../support/stateful_object_sync.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/manual_internal_scheduler.hpp"
@@ -3501,9 +3503,10 @@ TEST (FrameworkRelocationSealContract, malformed_command_42_records_invalid_fram
 {
     dispatch_options_t dispatch;
     dispatch.message_flow (message_flow_log_mode_t::normal);
-    std::vector<message_dispatch_error_event_t> errors;
+    auto observations = std::make_shared<
+      zlink::framework::test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      dispatch, [&] (const auto &event) { errors.push_back (event); });
+      dispatch, [observations] (const auto &event) { observations->record (event); });
 
     auto owner = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
@@ -3526,6 +3529,8 @@ TEST (FrameworkRelocationSealContract, malformed_command_42_records_invalid_fram
     catch (const protocol::service_wire_error_t &) {
     }
 
+    zlink::framework::test::acknowledge_delivery ();
+    const auto errors = observations->snapshot ();
     ASSERT_EQ (errors.size (), 1u);
     const auto &error = errors.front ();
     EXPECT_EQ (error.surface, dispatch_error_surface_t::stream_session);
