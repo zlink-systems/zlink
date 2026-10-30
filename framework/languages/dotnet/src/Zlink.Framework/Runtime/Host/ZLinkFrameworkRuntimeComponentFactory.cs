@@ -1,6 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -29,11 +28,9 @@ internal static class ZLinkFrameworkRuntimeComponentFactory
     )
     {
         var loggerFactory = services.GetService<ILoggerFactory>();
-        var channelLogger =
-            loggerFactory?.CreateLogger("Zlink.Framework.ClientServer") ?? NullLogger.Instance;
         var channelDispatchErrors = new ZLinkDispatchErrorReporter(
             registration.DispatchOptions,
-            ZLinkMessageFlowTracer.CreateLogger(loggerFactory, channelLogger),
+            ZLinkMessageFlowTracer.GetLogger(services),
             runtime
         );
         IReadOnlySet<string> ResolveHandlerGroups(string channelName) =>

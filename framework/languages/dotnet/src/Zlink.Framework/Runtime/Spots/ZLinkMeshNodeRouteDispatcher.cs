@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Dispatch;
@@ -160,13 +159,9 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                 .Concat(channelEndpoints.Select(static endpoint => endpoint.DeclaringType))
         );
 
-        var loggerFactory = runtime.Services.GetService<ILoggerFactory>();
-        var logger =
-            loggerFactory?.CreateLogger(typeof(ZLinkMeshNodeRouteDispatcher).FullName!)
-            ?? (ILogger)NullLogger.Instance;
         var dispatchErrors = new ZLinkDispatchErrorReporter(
             registration.DispatchOptions,
-            ZLinkMessageFlowTracer.CreateLogger(loggerFactory, logger),
+            ZLinkMessageFlowTracer.GetLogger(runtime.Services),
             runtime
         );
 
