@@ -80,18 +80,14 @@ test('canonical Join public error kinds retain their exact wire terminals', () =
 });
 
 test('canonical Join rejects missing targets as Unavailable and closing targets as NotFound', async () => {
-  const { ZLinkSpotRelocationCoordinationMode } = await import(
-    '../../packages/framework/src/contracts/Configuration/ObjectRoles'
-  );
-  const { ZLinkRuntimeTaskErrorSink, ZLinkRuntimeTaskRunner } = await import(
-    '../../packages/framework/src/runtime/execution'
-  );
-  const { ZLinkSpotActivation } = await import(
-    '../../packages/framework/src/runtime/spots/spot-activation-state'
-  );
-  const { ZLinkSpotTimerRegistry } = await import(
-    '../../packages/framework/src/runtime/spots/spot-timer'
-  );
+  const { ZLinkSpotRelocationCoordinationMode } =
+    await import('../../packages/framework/src/contracts/Configuration/ObjectRoles');
+  const { ZLinkRuntimeTaskErrorSink, ZLinkRuntimeTaskRunner } =
+    await import('../../packages/framework/src/runtime/execution');
+  const { ZLinkSpotActivation } =
+    await import('../../packages/framework/src/runtime/spots/spot-activation-state');
+  const { ZLinkSpotTimerRegistry } =
+    await import('../../packages/framework/src/runtime/spots/spot-timer');
   let releaseClosing!: () => void;
   const closingCleanup = new Promise<void>((resolve) => {
     releaseClosing = resolve;
@@ -135,17 +131,15 @@ test('canonical Join rejects missing targets as Unavailable and closing targets 
   ).activations;
   closingActivations.register(closingActivation);
   let closeFinished = false;
-  const closing = closingManager.closeUserWithAuthority(
-    MESH_NAME,
-    SPOT_ID,
-    async (onCommitted) => {
+  const closing = closingManager
+    .closeUserWithAuthority(MESH_NAME, SPOT_ID, async (onCommitted) => {
       onCommitted();
       return { release: async () => undefined };
-    }
-  ).then((result) => {
-    closeFinished = true;
-    return result;
-  });
+    })
+    .then((result) => {
+      closeFinished = true;
+      return result;
+    });
 
   try {
     await closingStarted;
@@ -188,7 +182,9 @@ test('canonical Join rejects missing targets as Unavailable and closing targets 
         state === 'closing-user'
           ? {
               terminal:
-                ServiceWireExactTerminalByFailureCode[ServiceWireFrameworkErrorCode.requestTargetNotFound],
+                ServiceWireExactTerminalByFailureCode[
+                  ServiceWireFrameworkErrorCode.requestTargetNotFound
+                ],
               code: ServiceWireFrameworkErrorCode.requestTargetNotFound,
               kind: ZLinkFrameworkErrorKind.NotFound
             }

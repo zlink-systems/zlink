@@ -19,40 +19,54 @@ public sealed class StreamDisconnectProgressTests
         builder.Services.AddSingleton(state);
         // This backend integration test uses the existing friend assembly and
         // DI port. Resource creation remains in the default native backend.
-        builder.Services.AddSingleton<IZLinkBackendAdapterFactory>(services =>
-            new ObservingBackendFactory(
-                new ZLinkDotNetBackendAdapterFactory(services.GetService<ILoggerFactory>()), state));
+        builder.Services.AddSingleton<IZLinkBackendAdapterFactory>(
+            services => new ObservingBackendFactory(
+                new ZLinkDotNetBackendAdapterFactory(services.GetService<ILoggerFactory>()),
+                state
+            )
+        );
         builder.Services.AddZLinkFramework(options =>
         {
             options.DisableImplicitHandlerAutoRegistration();
             options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             options.AddLocationStore(new ZLinkInMemoryProviderLocationStore());
-            var objects = options.AddRouteMesh("disconnect-progress")
-                .Listen("tcp://127.0.0.1:0").Objects().Server();
+            var objects = options
+                .AddRouteMesh("disconnect-progress")
+                .Listen("tcp://127.0.0.1:0")
+                .Objects()
+                .Server();
             objects.AddEntrySpot<ProgressEntry>();
             objects.AddActorFactory<ProgressActor, ProgressFactory>(
-                "progress-actor", factory => factory.DisableRelocation());
-            options.AddStreamNode("progress-stream")
+                "progress-actor",
+                factory => factory.DisableRelocation()
+            );
+            options
+                .AddStreamNode("progress-stream")
                 .Bind("tcp://127.0.0.1:0")
                 .EnableActorDispatch()
                 .AddSession<ProgressSession>();
         });
         using var host = builder.Build();
         await host.StartAsync();
-        var endpoint = host.Services.GetRequiredService<IZLinkFrameworkRuntime>()
-            .GetListenerStatus(ZLinkListenerKind.Stream, "progress-stream").Endpoint;
-        await using var client = ZlinkStreamConnectorFactory.Create(new()
-        {
-            Endpoint = new(endpoint),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            Reconnect = new() { Enabled = false },
-            Heartbeat = new() { Enabled = false },
-        });
+        var endpoint = host
+            .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+            .GetListenerStatus(ZLinkListenerKind.Stream, "progress-stream")
+            .Endpoint;
+        await using var client = ZlinkStreamConnectorFactory.Create(
+            new()
+            {
+                Endpoint = new(endpoint),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                Reconnect = new() { Enabled = false },
+                Heartbeat = new() { Enabled = false },
+            }
+        );
         var actorBeforeRelease = false;
         try
         {
             await client.Connect.Async();
-            await client.Request(new ProgressLogin("progress:" + Guid.NewGuid()))
+            await client
+                .Request(new ProgressLogin("progress:" + Guid.NewGuid()))
                 .Async<ProgressReply>();
             await client.Send(new ProgressHold()).Async();
             await state.HandlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -62,7 +76,9 @@ public sealed class StreamDisconnectProgressTests
             Assert.False(state.HandlerExited.Task.IsCompleted);
             Assert.False(state.SessionDisconnected.Task.IsCompleted);
             var winner = await Task.WhenAny(
-                state.ActorDisconnected.Task, Task.Delay(TimeSpan.FromSeconds(1)));
+                state.ActorDisconnected.Task,
+                Task.Delay(TimeSpan.FromSeconds(1))
+            );
             actorBeforeRelease = ReferenceEquals(winner, state.ActorDisconnected.Task);
             Assert.False(state.HandlerExited.Task.IsCompleted);
             Assert.False(state.SessionDisconnected.Task.IsCompleted);
@@ -88,8 +104,10 @@ public sealed class StreamDisconnectProgressTests
         Assert.Equal(1, Volatile.Read(ref state.StreamMonitorOpenCount));
         Assert.Equal(1, Volatile.Read(ref state.PhysicalDisconnectCount));
         Assert.Equal(1, Volatile.Read(ref state.SessionDisconnectCount));
-        Assert.True(actorBeforeRelease,
-            "Automatic Actor disconnect must progress while the Session handler awaits.");
+        Assert.True(
+            actorBeforeRelease,
+            "Automatic Actor disconnect must progress while the Session handler awaits."
+        );
     }
 }
 
@@ -111,7 +129,9 @@ public sealed class ProgressState
 }
 
 internal sealed class ObservingBackendFactory(
-    IZLinkBackendAdapterFactory original, ProgressState state) : IZLinkBackendAdapterFactory
+    IZLinkBackendAdapterFactory original,
+    ProgressState state
+) : IZLinkBackendAdapterFactory
 {
     public IZLinkBackendRuntimeContext CreateRuntimeContext() => original.CreateRuntimeContext();
 
@@ -120,7 +140,9 @@ internal sealed class ObservingBackendFactory(
 }
 
 internal sealed class ObservingMonitoringAdapter(
-    IZLinkMonitoringBackendAdapter original, ProgressState state) : IZLinkMonitoringBackendAdapter
+    IZLinkMonitoringBackendAdapter original,
+    ProgressState state
+) : IZLinkMonitoringBackendAdapter
 {
     public IZLinkBackendSocketMonitor OpenSocketMonitor(IAsyncDisposable socket)
     {
@@ -133,7 +155,9 @@ internal sealed class ObservingMonitoringAdapter(
 }
 
 internal sealed class ObservingStreamMonitor(
-    IZLinkBackendSocketMonitor original, ProgressState state) : IZLinkBackendSocketMonitor
+    IZLinkBackendSocketMonitor original,
+    ProgressState state
+) : IZLinkBackendSocketMonitor
 {
     public IZLinkBackendSocketPoller CreateReceivePoller() => original.CreateReceivePoller();
 
@@ -154,33 +178,48 @@ internal sealed class ObservingStreamMonitor(
 }
 
 public sealed record ProgressLogin(string ActorId);
+
 public sealed record ProgressHold;
+
 public sealed record ProgressReply;
 
 public sealed class ProgressSession(
-    IZLinkSessionContext context, IZLinkActorManager actors, ProgressState state) : IZLinkSession
+    IZLinkSessionContext context,
+    IZLinkActorManager actors,
+    ProgressState state
+) : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
-    public ValueTask OnConnectedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
+    public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
+        ValueTask.CompletedTask;
+
     public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
+
     public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken)
     {
-        Assert.True(state.HandlerExited.Task.IsCompletedSuccessfully,
-            "Session disconnect callback must run after the accepted Session handler exits.");
+        Assert.True(
+            state.HandlerExited.Task.IsCompletedSuccessfully,
+            "Session disconnect callback must run after the accepted Session handler exits."
+        );
         Interlocked.Increment(ref state.SessionDisconnectCount);
         state.SessionDisconnected.TrySetResult();
         return ValueTask.CompletedTask;
     }
 
     public async ValueTask OnDispatchAsync(
-        ZLinkSessionDispatchContext dispatch, ZLinkMessage message, CancellationToken cancellationToken)
+        ZLinkSessionDispatchContext dispatch,
+        ZLinkMessage message,
+        CancellationToken cancellationToken
+    )
     {
         if (dispatch.PacketName == nameof(ProgressLogin))
         {
-            var result = await actors.GetOrCreate(
-                message.Decode<ProgressLogin>().ActorId, "progress-actor")
-                .InMesh("disconnect-progress").Async(cancellationToken);
+            var result = await actors
+                .GetOrCreate(message.Decode<ProgressLogin>().ActorId, "progress-actor")
+                .InMesh("disconnect-progress")
+                .Async(cancellationToken);
             var actor = result switch
             {
                 ZLinkActorCreateResult.Created created => created.Actor,
@@ -213,24 +252,33 @@ public sealed class ProgressActor(IZLinkActorContext context) : IZLinkActor
 public sealed class ProgressFactory : IZLinkActorFactory<ProgressActor>
 {
     public ValueTask<ProgressActor> CreateAsync(
-        IZLinkActorContext context, CancellationToken cancellationToken = default) =>
-        ValueTask.FromResult(new ProgressActor(context));
+        IZLinkActorContext context,
+        CancellationToken cancellationToken = default
+    ) => ValueTask.FromResult(new ProgressActor(context));
 
     async ValueTask<IZLinkActor> IZLinkActorFactory.CreateAsync(
-        IZLinkActorContext context, CancellationToken cancellationToken) =>
-        await CreateAsync(context, cancellationToken);
+        IZLinkActorContext context,
+        CancellationToken cancellationToken
+    ) => await CreateAsync(context, cancellationToken);
 }
 
 public sealed class ProgressEntry(IZLinkEntrySpotContext context, ProgressState state)
     : IZLinkEntrySpot<ProgressActor>
 {
     public IZLinkEntrySpotContext Context { get; } = context;
+
     public void Configure() { }
+
     public ValueTask OnJoinedActorAsync(ProgressActor actor, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
+
     public ValueTask OnLeaveActorAsync(ProgressActor actor, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
-    public ValueTask OnDisconnectActorAsync(ProgressActor actor, CancellationToken cancellationToken)
+
+    public ValueTask OnDisconnectActorAsync(
+        ProgressActor actor,
+        CancellationToken cancellationToken
+    )
     {
         Interlocked.Increment(ref state.ActorDisconnectCount);
         state.ActorDisconnected.TrySetResult();
