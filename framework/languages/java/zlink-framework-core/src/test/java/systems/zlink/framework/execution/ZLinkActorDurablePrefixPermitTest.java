@@ -7,6 +7,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueueTesting;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -532,14 +533,8 @@ final class ZLinkActorDurablePrefixPermitTest {
                     }
                     return 1;
                 };
-        var constructor =
-                ZLinkApplicationJobQueue.class.getDeclaredConstructor(
-                        ZLinkApplicationJobQueueProfile.class, OptionalLong.class,
-                        ZLinkApplicationJobQueue.ProcessorCandidates.class,
-                                java.util.function.LongSupplier.class);
-        constructor.setAccessible(true);
         try (var jobs =
-                constructor.newInstance(
+                ZLinkApplicationJobQueueTesting.withClock(
                         ZLinkApplicationJobQueueProfile.BALANCED,
                         OptionalLong.of(1),
                         new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null),

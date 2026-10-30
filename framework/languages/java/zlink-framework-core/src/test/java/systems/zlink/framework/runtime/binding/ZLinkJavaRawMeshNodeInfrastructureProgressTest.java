@@ -125,15 +125,13 @@ final class ZLinkJavaRawMeshNodeInfrastructureProgressTest {
                     ZLinkJavaRawMeshNode.class.getDeclaredMethod(
                             "drainIngressBatch", RouterSocket.class);
             drain.setAccessible(true);
-            Method tick = ZLinkJavaRawMeshNode.class.getDeclaredMethod("tickLiveness", long.class);
-            tick.setAccessible(true);
             var ticks = new AtomicInteger();
             // No socket is needed: a pre-receive permit must prevent native receive.
             var round =
                     executor.submit(
                             () -> {
                                 drain.invoke(node, new Object[] {null});
-                                tick.invoke(node, System.nanoTime());
+                                node.tickLiveness(System.nanoTime());
                                 ticks.incrementAndGet();
                                 return null;
                             });

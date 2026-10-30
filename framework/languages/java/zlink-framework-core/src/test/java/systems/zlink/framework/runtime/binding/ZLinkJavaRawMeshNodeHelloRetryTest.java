@@ -339,9 +339,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
             }
             invoke(node, "observeSelectedRoutes");
             if (pausePublication) {
-                var lane =
-                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                                field(node, "descriptorStateLane");
+                var lane = node.descriptorStateLaneForTest();
                 var entered = new java.util.concurrent.CompletableFuture<Void>();
                 var release = new java.util.concurrent.CompletableFuture<Void>();
                 lane.runAsync(
@@ -424,9 +422,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                     ZLinkJavaRawMeshNode.class.getDeclaredMethod(
                             "publishLocalDescriptor", ZLinkServiceNodeDescriptor.class);
             publish.setAccessible(true);
-            var lane =
-                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                            field(node, "descriptorStateLane");
+            var lane = node.descriptorStateLaneForTest();
             lane.runAsync(
                             () -> {
                                 try {

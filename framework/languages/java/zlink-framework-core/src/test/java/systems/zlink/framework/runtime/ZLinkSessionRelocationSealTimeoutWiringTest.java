@@ -25,11 +25,7 @@ final class ZLinkSessionRelocationSealTimeoutWiringTest {
     @Test
     void configuredRootLocationValueReachesTheActualSessionSealOwner() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        Object locations = options.configureLocations();
-        locations
-                .getClass()
-                .getMethod("setSessionRelocationSealTimeout", Duration.class)
-                .invoke(locations, Duration.ofMillis(17));
+        options.configureLocations().setSessionRelocationSealTimeout(Duration.ofMillis(17));
         options.addLocationStore(
                 new systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore());
         options.addRouteMesh("game").listen("tcp://127.0.0.1:0").objects().client();
@@ -41,10 +37,7 @@ final class ZLinkSessionRelocationSealTimeoutWiringTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
-            locations
-                    .getClass()
-                    .getMethod("setSessionRelocationSealTimeout", Duration.class)
-                    .invoke(locations, Duration.ofMillis(29));
+            options.configureLocations().setSessionRelocationSealTimeout(Duration.ofMillis(29));
             Object sessionOwner =
                     runtime.sessionActors("gateway", RoutingId.from("session-timeout"));
             Field timeout =
@@ -119,10 +112,9 @@ final class ZLinkSessionRelocationSealTimeoutWiringTest {
 
     private static long currentBindingGeneration(Object sessionOwner, String actorId)
             throws Exception {
-        var lookup =
-                sessionOwner.getClass().getDeclaredMethod("currentBindingGeneration", String.class);
-        lookup.setAccessible(true);
-        return (long) lookup.invoke(sessionOwner, actorId);
+        return ((systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime) sessionOwner)
+                .boundBindingGeneration(actorId)
+                .orElseThrow();
     }
 
     public record TestActor(systems.zlink.framework.actors.ZLinkActorContext context)
