@@ -555,7 +555,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                     .ReleaseEndedReservationAsync(
                         key,
                         current.StoreVersion,
-                        creationRelocationPolicy,
+                        new ZLinkCreationAuthorityRecovery(creationRelocationPolicy),
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -682,7 +682,8 @@ internal sealed class ZLinkSpotRuntimeManager(
                     .ReleaseEndedReservationAsync(
                         ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId),
                         current.StoreVersion,
-                        cancellationToken
+                        creationRecovery: null,
+                        cancellationToken: cancellationToken
                     )
                     .ConfigureAwait(false)
             )

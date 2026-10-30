@@ -685,21 +685,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
     public ValueTask<bool> ReleaseEndedReservationAsync(
         ZLinkAuthorityKey key,
         string expectedStoreVersion,
-        CancellationToken cancellationToken = default
-    )
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return _lane.RunAsync(() =>
-            _authorities.TryGetValue(key.Value, out var current)
-            && current.StoreVersion == expectedStoreVersion
-            && TryReleaseEndedReservation(key, current, _time.GetUtcNow())
-        );
-    }
-
-    public ValueTask<bool> ReleaseEndedReservationAsync(
-        ZLinkAuthorityKey key,
-        string expectedStoreVersion,
-        byte? creationRelocationPolicy,
+        ZLinkCreationAuthorityRecovery? creationRecovery = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -711,8 +697,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 key,
                 current,
                 _time.GetUtcNow(),
-                key,
-                creationRelocationPolicy
+                creationRecovery is null ? null : key,
+                creationRecovery?.RelocationPolicy
             )
         );
     }

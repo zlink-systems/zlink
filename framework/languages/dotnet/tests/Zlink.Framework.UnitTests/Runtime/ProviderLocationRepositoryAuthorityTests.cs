@@ -94,7 +94,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             await repository.ReleaseEndedReservationAsync(
                 request.Key,
                 committed.StoreVersion,
-                ZLinkObjectRelocationRegistration.DisabledPolicy
+                new ZLinkCreationAuthorityRecovery(ZLinkObjectRelocationRegistration.DisabledPolicy)
             )
         );
         Assert.Equal(inMemory ? 0 : 1, conflicts);

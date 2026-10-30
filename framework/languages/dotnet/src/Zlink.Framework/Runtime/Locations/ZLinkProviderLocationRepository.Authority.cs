@@ -1011,20 +1011,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     public async ValueTask<bool> ReleaseEndedReservationAsync(
         ZLinkAuthorityKey key,
         string expectedStoreVersion,
-        CancellationToken cancellationToken = default
-    )
-    {
-        var current = await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false);
-        if (current is null || current.Snapshot.StoreVersion != expectedStoreVersion)
-            return false;
-        return await TryReclaimStaleAuthorityAsync(current, cancellationToken).ConfigureAwait(false)
-            == StaleAuthorityReclaimResult.Reclaimed;
-    }
-
-    public async ValueTask<bool> ReleaseEndedReservationAsync(
-        ZLinkAuthorityKey key,
-        string expectedStoreVersion,
-        byte? creationRelocationPolicy,
+        ZLinkCreationAuthorityRecovery? creationRecovery = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -1038,8 +1025,8 @@ internal sealed partial class ZLinkProviderLocationRepository
             var result = await TryReclaimStaleAuthorityAsync(
                     current,
                     cancellationToken,
-                    key,
-                    creationRelocationPolicy
+                    creationRecovery is null ? null : key,
+                    creationRecovery?.RelocationPolicy
                 )
                 .ConfigureAwait(false);
             if (result != StaleAuthorityReclaimResult.Conflict)

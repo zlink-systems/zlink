@@ -111,15 +111,14 @@ internal interface IZLinkLocationRepository
     ValueTask<bool> ReleaseEndedReservationAsync(
         ZLinkAuthorityKey key,
         string expectedStoreVersion,
+        ZLinkCreationAuthorityRecovery? creationRecovery = null,
         CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException("Reservation lifecycle recovery is not supported.");
-
-    ValueTask<bool> ReleaseEndedReservationAsync(
-        ZLinkAuthorityKey key,
-        string expectedStoreVersion,
-        byte? creationRelocationPolicy,
-        CancellationToken cancellationToken = default
-    ) => throw new NotSupportedException("Creation authority recovery is not supported.");
+    ) =>
+        throw new NotSupportedException(
+            creationRecovery is null
+                ? "Reservation lifecycle recovery is not supported."
+                : "Creation authority recovery is not supported."
+        );
 
     ValueTask<ZLinkObjectCommitResult> CommitAsync(
         ZLinkObjectReservation reservation,

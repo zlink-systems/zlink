@@ -1386,7 +1386,9 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
     const bool retained = scenario == user_spot_authority_case_t::expired_retained;
     auto inner = std::make_shared<in_memory_location_store_t> ();
     provider_location_repository_t original (*inner);
-    const auto claimed = original.claim_owner_lease ("expired-ready-owner", 60s).result ();
+    constexpr auto owner_lease_ttl = 60s;
+    const auto claimed =
+      original.claim_owner_lease ("expired-ready-owner", owner_lease_ttl).result ();
     ASSERT_TRUE (claimed);
     const auto owner = std::get<fw::owner_lease_claimed_t> (claimed.value ()).token;
     fw::mesh_node_descriptor_t descriptor;
@@ -1443,9 +1445,20 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
         ASSERT_TRUE (std::holds_alternative<fw::object_committed_t> (committed.value ()));
     }
     std::shared_ptr<fw::location_store_t> view = inner;
-    if (!creating)
-        view = std::make_shared<fw::tests::owner_lease_time_store_t> (
-          *inner, owner.owner_id, fw::tests::owner_lease_time_store_t::lease_view_t::expired);
+    if (!creating) {
+        auto clock = std::make_shared<fw::tests::owner_lease_time_store_t> (
+          *inner, owner.owner_id,
+          fw::tests::owner_lease_time_store_t::lease_view_t::clock_advanced);
+        clock->advance_store_clock (owner_lease_ttl + 1s);
+        const auto lease_key = std::string ("owner-lease") + '\0' + owner.owner_id;
+        const auto lease_read = clock->read ({lease_key}).result ();
+        ASSERT_TRUE (lease_read);
+        const auto *lease = std::get_if<fw::store_found_t> (&lease_read.value ());
+        ASSERT_NE (lease, nullptr);
+        ASSERT_TRUE (lease->value.expires_at);
+        EXPECT_LT (*lease->value.expires_at, lease->value.store_now);
+        view = std::move (clock);
+    }
     auto evidence = std::make_shared<observations_t> ();
     host_t host;
     // The source remains healthy but accepts no new placements. The ended
