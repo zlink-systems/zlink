@@ -2,9 +2,13 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createHook } = require('node:async_hooks');
+const path = require('node:path');
 const { frameworkPair } = require('../../perf/request-backpressure.cjs');
 
 // Attribute to modules, rather than names that disappear when code is removed.
+// Resolve the installed binding, including file-tarball and symlink installs.
+const bindingDirectory =
+  path.dirname(require.resolve('@zlink-systems/zlink')).replaceAll('\\', '/') + '/';
 const OWNERS = [
   '/runtime/backend/mesh-completion-table.js',
   '/runtime/backend/node/node-raw-binding-port.js',
@@ -29,7 +33,7 @@ test('typed remote requests use one Framework binding-observation Promise per re
           framework++;
           sites.set(owner, (sites.get(owner) ?? 0) + 1);
         }
-        const bindingOwner = stack.find((line) => line.includes('/zlink/'));
+        const bindingOwner = stack.find((line) => line.includes(bindingDirectory));
         if (bindingOwner?.includes('/completion_owner.js')) binding++;
       } finally {
         inspecting = false;
@@ -49,7 +53,9 @@ test('typed remote requests use one Framework binding-observation Promise per re
     }
     active = false;
     hook.disable();
-    t.diagnostic(JSON.stringify({ framework, binding, count, sites: [...sites] }));
+    t.diagnostic(
+      JSON.stringify({ framework, binding, count, bindingDirectory, sites: [...sites] })
+    );
     // This positive control catches a disabled sampler or an invalid path filter.
     assert.ok(binding >= 4 * count, 'binding completion allocation control');
     assert.equal(
