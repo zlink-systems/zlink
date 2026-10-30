@@ -246,8 +246,6 @@ class mesh_node_runtime_t
     void disconnect_peer (const zlink::routing_id_t &expected_routing_id,
                           const std::string &endpoint,
                           bool automatic = false) noexcept;
-    bool wait_for_peer_ready (const zlink::routing_id_t &target,
-                              std::chrono::milliseconds timeout) const;
 
     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
                                                  const std::vector<zlink::message_t> &parts,
