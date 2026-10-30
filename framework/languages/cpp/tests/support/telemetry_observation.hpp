@@ -43,8 +43,8 @@ template <typename Event> struct telemetry_observations_t
 // The independent registration bounds preceding FIFO deliveries without adding
 // the acknowledgment to the collector under test or retiring its registration.
 inline void acknowledge_delivery (
-  std::chrono::steady_clock::time_point deadline =
-    std::chrono::steady_clock::now () + std::chrono::milliseconds (500))
+  std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now ()
+                                                   + std::chrono::milliseconds (500))
 {
     struct acknowledgment_t
     {
@@ -61,10 +61,10 @@ inline void acknowledge_delivery (
           ack->acknowledged = true;
           ack->changed.notify_all ();
       });
-    detail::message_flow_tracer_t (barrier).trace (message_flow_event_t{
-      .outcome = message_flow_outcome_t::received,
-      .surface = dispatch_error_surface_t::channel,
-      .message_kind = dispatch_message_kind_t::send});
+    detail::message_flow_tracer_t (barrier).trace (
+      message_flow_event_t{.outcome = message_flow_outcome_t::received,
+                           .surface = dispatch_error_surface_t::channel,
+                           .message_kind = dispatch_message_kind_t::send});
     std::unique_lock lock (ack->mutex);
     if (!ack->changed.wait_until (lock, deadline, [&] { return ack->acknowledged; }))
         throw std::runtime_error ("telemetry record acknowledgment timed out");

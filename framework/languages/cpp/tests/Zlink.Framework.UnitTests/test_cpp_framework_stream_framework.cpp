@@ -1522,7 +1522,7 @@ int transport_bound_close (bool tls, bool remote = false)
     const stateful::stream_connection_t connection{rid.to_hex (), 1, mesh->routing_id (),
                                                    status.lifecycle_generation ()};
     const stateful::object_ref_t actor{
-      stateful::object_kind_t::actor, "close-actor", 7, 11, "player",
+      stateful::object_kind_t::actor,   "close-actor", 7, 11, "player",
       status.routing_id ().to_string ()};
     const auto [retired_error, retired_binding] = sessions.bind_remote (connection, actor, 1, 13);
     if (retired_error != stateful::stateful_error_t::none)
@@ -1602,8 +1602,7 @@ int transport_bound_close (bool tls, bool remote = false)
     // Physical close removes the canonical binding even while the Session's
     // disconnected callback remains pending.
     const auto cleanup_deadline = std::chrono::steady_clock::now () + 2s;
-    while (sessions.is_current (binding)
-           && std::chrono::steady_clock::now () < cleanup_deadline)
+    while (sessions.is_current (binding) && std::chrono::steady_clock::now () < cleanup_deadline)
         std::this_thread::yield ();
     if (sessions.is_current (binding))
         return 348;
@@ -2321,11 +2320,12 @@ int main (int argc, char **argv)
       stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none, std::nullopt,
       "move", {});
     stale_send_header.with_actor_slot (2);
-    const auto stale_send_result = runtime.dispatch_packet (actor_session, actor_stream, stale_send_header,
-                                  zlink::message_t::from (std::string ("stale-send")));
+    const auto stale_send_result =
+      runtime.dispatch_packet (actor_session, actor_stream, stale_send_header,
+                               zlink::message_t::from (std::string ("stale-send")));
     zlink::framework::test::acknowledge_delivery ();
-    if (!stale_send_result
-        || actor_session.events.size () != 1 || flow_state->none_of ([] (const auto &event) {
+    if (!stale_send_result || actor_session.events.size () != 1
+        || flow_state->none_of ([] (const auto &event) {
                return event.outcome == zlink::framework::message_flow_outcome_t::dropped
                       && event.message_kind == zlink::framework::dispatch_message_kind_t::send
                       && event.reason == zlink::framework::message_flow_reason_t::stale_target;
@@ -2993,18 +2993,16 @@ int main (int argc, char **argv)
     zlink::framework::detail::bind_stream_serializers (transport_zlink, transport_serializers);
     const auto stale_errors = std::make_shared<zlink::framework::test::telemetry_observations_t<
       zlink::framework::message_dispatch_error_event_t>> ();
-    const auto stale_flows = std::make_shared<zlink::framework::test::telemetry_observations_t<
-      zlink::framework::message_flow_event_t>> ();
+    const auto stale_flows = std::make_shared<
+      zlink::framework::test::telemetry_observations_t<zlink::framework::message_flow_event_t>> ();
     zlink::framework::dispatch_options_t transport_dispatch_options;
     transport_dispatch_options.message_flow (zlink::framework::message_flow_log_mode_t::errors);
     zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      transport_dispatch_options, [stale_errors] (const auto &event) {
-          stale_errors->record (event);
-      });
+      transport_dispatch_options,
+      [stale_errors] (const auto &event) { stale_errors->record (event); });
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-      transport_dispatch_options, [stale_flows] (const auto &event) {
-          stale_flows->record (event);
-      });
+      transport_dispatch_options,
+      [stale_flows] (const auto &event) { stale_flows->record (event); });
     zlink::framework::detail::apply_dispatch_options (transport_zlink, transport_dispatch_options);
     auto transport_provider = transport_services.build_provider ();
     transport_error_session_t transport_session;

@@ -6253,17 +6253,19 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     node->worker_executor->drain ();
     test::acknowledge_delivery (std::chrono::steady_clock::now () + std::chrono::seconds (2));
     const auto source_logs = leave_logs->snapshot ();
-    const bool source_cause = std::any_of (source_logs.begin (), source_logs.end (), [transfer_id] (const auto &record) {
-        const auto has = [&] (std::string_view key, std::string_view value) {
-            return std::any_of (record.fields.begin (), record.fields.end (), [&] (const auto &field) {
-                return field.key == key && field.value == value;
-            });
-        };
-        return has (dispatch_event_field::packet, spot_actor_leave_route_command_t::packet_name)
-          && has (dispatch_event_field::corr, transfer_id)
-          && has (dispatch_event_field::error_type, typeid (framework_exception_t).name ())
-          && has (dispatch_event_field::error_message, "Actor OnLeave node notification transport is not configured");
-    });
+    const bool source_cause =
+      std::any_of (source_logs.begin (), source_logs.end (), [transfer_id] (const auto &record) {
+          const auto has = [&] (std::string_view key, std::string_view value) {
+              return std::any_of (
+                record.fields.begin (), record.fields.end (),
+                [&] (const auto &field) { return field.key == key && field.value == value; });
+          };
+          return has (dispatch_event_field::packet, spot_actor_leave_route_command_t::packet_name)
+                 && has (dispatch_event_field::corr, transfer_id)
+                 && has (dispatch_event_field::error_type, typeid (framework_exception_t).name ())
+                 && has (dispatch_event_field::error_message,
+                         "Actor OnLeave node notification transport is not configured");
+      });
     const bool failure_preserved =
       completions.load () == 1 && completion_identity.load () && commit_failures.load () == 1
       && commit_identity.load () && source_leave_failures.load () == 0
@@ -6825,18 +6827,21 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         std::this_thread::yield ();
     test::acknowledge_delivery (leave_submit_observation_deadline);
     const auto submit_logs = leave_submit_logs->snapshot ();
-    const bool submit_cause = std::any_of (submit_logs.begin (), submit_logs.end (), [] (const auto &record) {
-        const auto has = [&] (std::string_view key, std::string_view value) {
-            return std::any_of (record.fields.begin (), record.fields.end (), [&] (const auto &field) {
-                return field.key == key && field.value == value;
-            });
-        };
-        return has (dispatch_event_field::packet, "spot_actor_leave_submit")
-          && has (dispatch_event_field::error_type, typeid (framework_exception_t).name ())
-          && std::any_of (record.fields.begin (), record.fields.end (), [] (const auto &field) {
-              return field.key == dispatch_event_field::error_message && !field.value.empty ();
-          });
-    });
+    const bool submit_cause =
+      std::any_of (submit_logs.begin (), submit_logs.end (), [] (const auto &record) {
+          const auto has = [&] (std::string_view key, std::string_view value) {
+              return std::any_of (
+                record.fields.begin (), record.fields.end (),
+                [&] (const auto &field) { return field.key == key && field.value == value; });
+          };
+          return has (dispatch_event_field::packet, "spot_actor_leave_submit")
+                 && has (dispatch_event_field::error_type, typeid (framework_exception_t).name ())
+                 && std::any_of (record.fields.begin (), record.fields.end (),
+                                 [] (const auto &field) {
+                                     return field.key == dispatch_event_field::error_message
+                                            && !field.value.empty ();
+                                 });
+      });
     if (!submit_cause || leave_submit_unavailable_events->load (std::memory_order_acquire) != 1)
         return false;
     {
@@ -11393,11 +11398,14 @@ int verify_actor_join_completion_observations ()
         std::lock_guard lock (completion_failure_log->mutex);
         return completion_failure_log->events;
     };
-    auto completion_logs = std::make_shared<zlink::framework::test::telemetry_observations_t<zlink::framework::log_record_t>> ();
+    auto completion_logs = std::make_shared<
+      zlink::framework::test::telemetry_observations_t<zlink::framework::log_record_t>> ();
     zlink::framework::logging_builder_t completion_logging;
-    completion_logging.use_provider ("completion-cause", [completion_logs] (const auto &record) { completion_logs->record (record); });
-    zlink::framework::detail::dispatch_options_access_t::set_logger (completion_state->dispatch,
-      completion_logging.create_logger ("completion-cause"));
+    completion_logging.use_provider ("completion-cause", [completion_logs] (const auto &record) {
+        completion_logs->record (record);
+    });
+    zlink::framework::detail::dispatch_options_access_t::set_logger (
+      completion_state->dispatch, completion_logging.create_logger ("completion-cause"));
     completion_state->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
       completion_state->dispatch,
@@ -11410,8 +11418,8 @@ int verify_actor_join_completion_observations ()
     zlink::framework::detail::spot_node_runtime_t completion_runtime (completion_state);
     const zlink::framework::actor_ref_t completion_actor =
       zlink::framework::detail::actor_ref_access_t::make (
-        zlink::framework::node_rid_t::from_string ("completion-node"), "player",
-        "completion-actor", 7);
+        zlink::framework::node_rid_t::from_string ("completion-node"), "player", "completion-actor",
+        7);
     const std::string completion_key = "player:completion-actor";
     auto completion_instance = std::make_shared<int> (42);
     completion_state->actor_instances.emplace (completion_key, completion_instance);
@@ -11500,8 +11508,7 @@ int verify_actor_join_completion_observations ()
               .value ()
         || completion_callback_count != 1
         || completion_outcomes
-             != std::vector{
-               zlink::framework::detail::actor_join_completion_outcome_t::rejected}) {
+             != std::vector{zlink::framework::detail::actor_join_completion_outcome_t::rejected}) {
         return 71;
     }
 
@@ -11510,16 +11517,18 @@ int verify_actor_join_completion_observations ()
       zlink::framework::actor_join_failed_t{
         second_operation.first, second_operation.second,
         zlink::framework::framework_error_kind_t::internal_failure};
-    const auto first_failed_delivery = completion_runtime
-          .deliver_actor_join_completion (completion_actor, failed_completion,
-                                          zlink::framework::spot_id_t ("source-spot"))
-          .result ()
-          .value ();
-    const auto repeated_failed_delivery = completion_runtime
-              .deliver_actor_join_completion (completion_actor, failed_completion,
-                                              zlink::framework::spot_id_t ("source-spot"))
-              .result ()
-              .value ();
+    const auto first_failed_delivery =
+      completion_runtime
+        .deliver_actor_join_completion (completion_actor, failed_completion,
+                                        zlink::framework::spot_id_t ("source-spot"))
+        .result ()
+        .value ();
+    const auto repeated_failed_delivery =
+      completion_runtime
+        .deliver_actor_join_completion (completion_actor, failed_completion,
+                                        zlink::framework::spot_id_t ("source-spot"))
+        .result ()
+        .value ();
     zlink::framework::test::acknowledge_delivery ();
     if (first_failed_delivery || !repeated_failed_delivery || completion_callback_count != 3
         || completion_outcomes.back ()
@@ -11543,23 +11552,26 @@ int verify_actor_join_completion_observations ()
     }
 
     const auto completion_records = completion_logs->snapshot ();
-    if (std::none_of (completion_records.begin (), completion_records.end (), [] (const auto &record) {
-            const auto has = [&] (std::string_view key, std::string_view value) {
-                return std::any_of (record.fields.begin (), record.fields.end (), [&] (const auto &field) {
-                    return field.key == key && field.value == value;
-                });
-            };
-            return has (zlink::framework::detail::dispatch_event_field::packet, "JoinSpot")
-              && has (zlink::framework::detail::dispatch_event_field::actor, "completion-actor")
-              && has (zlink::framework::detail::dispatch_event_field::error_type, typeid (zlink::framework::framework_exception_t).name ())
-              && has (zlink::framework::detail::dispatch_event_field::error_message, "deferred Actor Join failed");
-        }))
+    if (std::none_of (
+          completion_records.begin (), completion_records.end (), [] (const auto &record) {
+              const auto has = [&] (std::string_view key, std::string_view value) {
+                  return std::any_of (
+                    record.fields.begin (), record.fields.end (),
+                    [&] (const auto &field) { return field.key == key && field.value == value; });
+              };
+              return has (zlink::framework::detail::dispatch_event_field::packet, "JoinSpot")
+                     && has (zlink::framework::detail::dispatch_event_field::actor,
+                             "completion-actor")
+                     && has (zlink::framework::detail::dispatch_event_field::error_type,
+                             typeid (zlink::framework::framework_exception_t).name ())
+                     && has (zlink::framework::detail::dispatch_event_field::error_message,
+                             "deferred Actor Join failed");
+          }))
         return 73;
 
     const auto successor_operation =
       completion_runtime.actor_join_operation_id ("transfer-successor");
-    completion_state->actor_generations[completion_key] =
-      completion_actor.object_generation () + 1;
+    completion_state->actor_generations[completion_key] = completion_actor.object_generation () + 1;
     const zlink::framework::actor_join_completion_t successor_completion =
       zlink::framework::actor_join_rejected_t{
         successor_operation.first, successor_operation.second,
@@ -12085,7 +12097,8 @@ int main (int argc, char **argv)
           zlink::framework::detail::spot_node_builder_state_t> ("logical-multicast-observation");
         auto observed = std::make_shared<std::atomic_bool> (false);
         zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-          state->dispatch, [observed] (const zlink::framework::message_dispatch_error_event_t &event) {
+          state->dispatch,
+          [observed] (const zlink::framework::message_dispatch_error_event_t &event) {
               if (event.surface == zlink::framework::dispatch_error_surface_t::spot_route
                   && event.message_kind == zlink::framework::dispatch_message_kind_t::send
                   && event.reason == zlink::framework::dispatch_error_reason_t::stale_target

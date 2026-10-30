@@ -255,8 +255,7 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingClientServerSendOwnsCallArgu
     using namespace zlink::framework;
     serializer_registry_t serializers;
     add_int_serializer<route_event_t> (serializers, "application/x-route-event");
-    auto observations =
-      std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
+    auto observations = std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_observer_for_tests (
@@ -309,8 +308,7 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingClientServerRequestOwnsCallA
     serializer_registry_t serializers;
     add_int_serializer<route_request_t> (serializers, "application/x-route-request");
     add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
-    auto observations =
-      std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
+    auto observations = std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_observer_for_tests (

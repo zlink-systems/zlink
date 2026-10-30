@@ -1077,8 +1077,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     const auto observation_deadline = std::chrono::steady_clock::now () + 3s;
     {
         std::unique_lock lock (errors->mutex);
-        ASSERT_TRUE (errors->changed.wait_until (
-          lock, observation_deadline, [&] { return !errors->events.empty (); }));
+        ASSERT_TRUE (errors->changed.wait_until (lock, observation_deadline,
+                                                 [&] { return !errors->events.empty (); }));
     }
     // Activation records its dropped flow before reporting this terminal error.
     fw::test::acknowledge_delivery (observation_deadline);
@@ -2994,8 +2994,8 @@ static void verify_activation_failure_terminal (bool local,
         auto run = [&] {
             auto activation = host::public_host_runtime_test_access_t::activate (
               *target, {header, std::nullopt, payload},
-              [terminals, accepted_terminals, terminal_ready, failure, expected_kind,
-               hold_delivery, delivery_release, delivery_completed] (const auto &result) {
+              [terminals, accepted_terminals, terminal_ready, failure, expected_kind, hold_delivery,
+               delivery_release, delivery_completed] (const auto &result) {
                   ++*terminals;
                   terminal_ready->set_value ();
                   // This is the actual local operation result, before telemetry projection.
@@ -3080,8 +3080,7 @@ static void verify_activation_failure_terminal (bool local,
         } else
             run ();
         EXPECT_EQ (1, *terminals);
-        EXPECT_EQ (failure == activation_failure_t::accepted_handler ? 1 : 0,
-                   *accepted_terminals);
+        EXPECT_EQ (failure == activation_failure_t::accepted_handler ? 1 : 0, *accepted_terminals);
         observation_deadline = std::chrono::steady_clock::now () + 3s;
     } else {
         ASSERT_TRUE (
@@ -3195,10 +3194,11 @@ static void verify_activation_failure_terminal (bool local,
     EXPECT_EQ (fw::dispatch_error_action_t::drop, error.action);
     EXPECT_EQ (flow_id, error.flow_id);
     EXPECT_EQ (fw::flow_origin_t::application, error.flow_origin);
-    EXPECT_EQ (failure == activation_failure_t::factory ? typeid (std::runtime_error).name ()
+    EXPECT_EQ (failure == activation_failure_t::factory     ? typeid (std::runtime_error).name ()
                : failure == activation_failure_t::cancelled ? typeid (std::system_error).name ()
-               : failure == activation_failure_t::non_std_factory ? "non-standard exception"
-                                                                  : typeid (fw::framework_exception_t).name (),
+               : failure == activation_failure_t::non_std_factory
+                 ? "non-standard exception"
+                 : typeid (fw::framework_exception_t).name (),
                error.error_type);
     if (failure == activation_failure_t::factory)
         EXPECT_EQ ("factory terminal failure", error.error_message);

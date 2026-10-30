@@ -428,8 +428,7 @@ void verify_accepted_activation_shutdown ()
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     bool retained = false;
     node->dispatch.message_flow (message_flow_log_mode_t::normal);
-    auto observations = std::make_shared<
-      test::telemetry_observations_t<message_flow_event_t>> ();
+    auto observations = std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
     detail::dispatch_options_access_t::set_observer_for_tests (
       node->dispatch, [observations] (const message_flow_event_t &event) {
           if (event.outcome == message_flow_outcome_t::received)
@@ -456,8 +455,7 @@ void verify_accepted_activation_shutdown ()
     if (!state->admit (true))
         std::_Exit (3);
     serial_work_options_t options;
-    options.completion = [state, &handler_terminals,
-                          &handler_succeeded] (result_t<void> terminal) {
+    options.completion = [state, &handler_terminals, &handler_succeeded] (result_t<void> terminal) {
         if (!terminal) {
             ++handler_terminals;
             handler_succeeded = false;
@@ -476,15 +474,14 @@ void verify_accepted_activation_shutdown ()
           },
           std::move (options)))
         std::_Exit (4);
-    stopped = std::async (std::launch::async,
-                          [&] { detail::drain_spot_node_executors (*node, deadline); });
+    stopped =
+      std::async (std::launch::async, [&] { detail::drain_spot_node_executors (*node, deadline); });
     const bool drained_early =
       stopped.wait_for (std::chrono::milliseconds (100)) == std::future_status::ready;
-    retained =
-      !drained_early && worker->try_submit_internal ([] {}) && handler_terminals == 0;
+    retained = !drained_early && worker->try_submit_internal ([] {}) && handler_terminals == 0;
     release_worker.set_value ();
-    std::cerr << "accepted_activation drained_early=" << drained_early
-              << " retained=" << retained << std::endl;
+    std::cerr << "accepted_activation drained_early=" << drained_early << " retained=" << retained
+              << std::endl;
     accepted_terminal ();
     const bool drained = stopped.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool released =

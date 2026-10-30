@@ -618,8 +618,8 @@ std::vector<zlink::framework::message_dispatch_error_event_t>
 wait_dispatch_errors (std::vector<zlink::framework::message_dispatch_error_event_t> &events,
                       std::mutex &mutex)
 {
-    zlink::framework::test::acknowledge_delivery (
-      std::chrono::steady_clock::now () + std::chrono::milliseconds (100));
+    zlink::framework::test::acknowledge_delivery (std::chrono::steady_clock::now ()
+                                                  + std::chrono::milliseconds (100));
     std::lock_guard lock (mutex);
     return events;
 }
@@ -1596,8 +1596,7 @@ int main ()
         || request_deserialize_count.load (std::memory_order_relaxed) != 0) {
         return 21;
     }
-    auto observed_dispatch_errors =
-      wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
+    auto observed_dispatch_errors = wait_dispatch_errors (dispatch_errors, dispatch_errors_mutex);
     if (observed_dispatch_errors.size () != 1
         || observed_dispatch_errors[0].surface
              != zlink::framework::dispatch_error_surface_t::channel

@@ -935,7 +935,8 @@ struct copy_counting_permit_t
     const route_boundary_handler_t *handler;
     std::array<std::byte, 1024> storage{};
 
-    copy_counting_permit_t (int &copy_count, int &call_count,
+    copy_counting_permit_t (int &copy_count,
+                            int &call_count,
                             const route_boundary_handler_t &owner) :
         copies (&copy_count), calls (&call_count), handler (&owner)
     {
@@ -973,8 +974,8 @@ TEST (RouteHandlerBoundary, DispatcherOwnsPermitCallbackForSuspension)
             detail::no_route_internal_packet_dispatcher_t internal;
             int copies = 0;
             int calls = 0;
-            auto observations = std::make_shared<
-              test::telemetry_observations_t<message_flow_event_t>> ();
+            auto observations =
+              std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
             std::function<void ()> permit = copy_counting_permit_t (copies, calls, owner);
             dispatch_options_t options;
             options.message_flow (mode);
@@ -1419,8 +1420,8 @@ TEST (RoutePayloadOwnership, MeshIngressRepliesToInvalidRequestHeadersForEveryOw
     msg::envelope_codec_t codec;
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
-    auto observations = std::make_shared<
-      test::telemetry_observations_t<message_dispatch_error_event_t>> ();
+    auto observations =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     std::vector<message_dispatch_error_event_t> errors;
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
       options, [observations] (const message_dispatch_error_event_t &event) {
@@ -1512,8 +1513,8 @@ TEST (RoutePayloadOwnership, MeshIngressDropsInvalidSendsAndReportsOnceForEveryO
     namespace msg = runtime::messaging;
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
-    auto observations = std::make_shared<
-      test::telemetry_observations_t<message_dispatch_error_event_t>> ();
+    auto observations =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     std::vector<message_dispatch_error_event_t> errors;
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
       options, [observations] (const message_dispatch_error_event_t &event) {
@@ -1625,12 +1626,11 @@ TEST (RoutePayloadOwnership, MalformedReplyRouteMatchesSharedFourLanguageContrac
             }
             dispatch_options_t options;
             options.message_flow (message_flow_log_mode_t::normal);
-            auto observations = std::make_shared<
-              test::telemetry_observations_t<message_dispatch_error_event_t>> ();
+            auto observations =
+              std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
             std::vector<message_dispatch_error_event_t> errors;
             detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-              options,
-              [observations] (const message_dispatch_error_event_t &event) {
+              options, [observations] (const message_dispatch_error_event_t &event) {
                   observations->record (event);
               });
             auto parts = std::vector<zlink::message_t>{zlink::message_t::from (json),

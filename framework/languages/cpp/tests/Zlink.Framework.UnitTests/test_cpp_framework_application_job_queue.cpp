@@ -513,8 +513,8 @@ TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOrigina
     for (const unsigned failure_mode : {0u, 1u, 2u}) {
         const bool invalid_reply = failure_mode != 0;
         SCOPED_TRACE (failure_mode);
-        auto observations = std::make_shared<framework::test::telemetry_observations_t<
-          framework::message_dispatch_error_event_t>> ();
+        auto observations = std::make_shared<
+          framework::test::telemetry_observations_t<framework::message_dispatch_error_event_t>> ();
         host::host_options_t options{
           .mesh = {.descriptor = {.mesh_name = "stateful-dispatch-errors",
                                   .node_routing_id =
@@ -527,7 +527,8 @@ TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOrigina
           .object_stable_types = {"player"}};
         options.mesh.dispatch.message_flow (framework::message_flow_log_mode_t::normal);
         detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-          options.mesh.dispatch, [observations] (const auto &event) { observations->record (event); });
+          options.mesh.dispatch,
+          [observations] (const auto &event) { observations->record (event); });
         auto native = std::make_shared<host::public_host_runtime_t> (std::move (options));
         native->configure_stateful_dispatch (
           [] (const stateful::accepted_record_authority_query_t &query)

@@ -283,8 +283,8 @@ TEST (ChannelHostReplyAdmission, MissingRouteReportsOneTerminalAndReleasesOrdina
       [&] {
           return context->core_hwm_budget_snapshot ().outstanding_application_lease_count () == 0u;
       },
-      std::chrono::duration_cast<std::chrono::milliseconds> (
-        terminal_deadline - std::chrono::steady_clock::now ())));
+      std::chrono::duration_cast<std::chrono::milliseconds> (terminal_deadline
+                                                             - std::chrono::steady_clock::now ())));
     zlink::framework::test::acknowledge_delivery (terminal_deadline);
     {
         const auto errors = observations->snapshot ();
@@ -321,8 +321,8 @@ TEST_P (ChannelMessageFlow, ClientServerRequestAndSendRecordAllReceiverStages)
     const auto server_rid = zlink::routing_id_t::from ("framework-channel-reply-server");
     const auto source_rid = zlink::routing_id_t::from ("framework-channel-reply-source");
 
-    auto observations = std::make_shared<zlink::framework::test::telemetry_observations_t<
-      zlink::framework::message_flow_event_t>> ();
+    auto observations = std::make_shared<
+      zlink::framework::test::telemetry_observations_t<zlink::framework::message_flow_event_t>> ();
     zlink::framework::dispatch_options_t options;
     options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
@@ -420,11 +420,7 @@ TEST_P (ChannelMessageFlow, ClientServerRequestAndSendRecordAllReceiverStages)
         EXPECT_EQ (phase_t::dispatched, events[2].outcome);
     }
     handler.release ();
-    ASSERT_TRUE (wait_until (
-      [&] {
-          return observations->snapshot ().size () == 4;
-      },
-      2s));
+    ASSERT_TRUE (wait_until ([&] { return observations->snapshot ().size () == 4; }, 2s));
     zlink::framework::test::acknowledge_delivery (std::chrono::steady_clock::now () + 2s);
     const auto events = observations->snapshot ();
     EXPECT_EQ (request ? phase_t::replied : phase_t::completed, events.back ().outcome);

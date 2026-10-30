@@ -235,10 +235,7 @@ class message_flow_tracer_t
         return observer_failure_count ().load (std::memory_order_relaxed);
     }
 
-    static std::uint64_t observer_dropped () noexcept
-    {
-        return telemetry_dropped ();
-    }
+    static std::uint64_t observer_dropped () noexcept { return telemetry_dropped (); }
 
   private:
     static int rank (message_flow_log_mode_t mode) noexcept { return static_cast<int> (mode); }

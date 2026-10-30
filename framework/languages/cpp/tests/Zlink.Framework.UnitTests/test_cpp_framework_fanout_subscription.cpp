@@ -603,8 +603,8 @@ TEST (CppFrameworkFanoutSubscription, AsyncHandlersStartInFifoAndOwnTheirTermina
         };
         std::unique_ptr<gate_state_t, decltype (release_destructor)> release_guard (
           state.get (), release_destructor);
-        const bool entered = destructor_entered.wait_until (state->destructor_deadline)
-                             == std::future_status::ready;
+        const bool entered =
+          destructor_entered.wait_until (state->destructor_deadline) == std::future_status::ready;
         EXPECT_TRUE (entered);
         if (entered) {
             zlink::framework::test::acknowledge_delivery (state->destructor_deadline);

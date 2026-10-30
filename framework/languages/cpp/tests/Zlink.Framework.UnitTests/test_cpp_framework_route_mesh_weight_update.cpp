@@ -661,8 +661,7 @@ class ChannelMessageFlow : public ::testing::TestWithParam<bool>
 TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
 {
     using namespace zlink::framework;
-    auto observations =
-      std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
+    auto observations = std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_observer_for_tests (

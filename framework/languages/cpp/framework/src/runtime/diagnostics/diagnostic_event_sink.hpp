@@ -89,7 +89,6 @@ class diagnostic_event_sink_t
             return false;
         }
     }
-
 };
 
 } // namespace zlink::framework::detail

@@ -95,7 +95,8 @@ class dispatch_options_access_t
     {
         options._dispatch_error_observer = {};
         if (observer) {
-            options._dispatch_error_observer = [observer = std::move (observer)] (const void *event) {
+            options._dispatch_error_observer = [observer =
+                                                  std::move (observer)] (const void *event) {
                 observer (*static_cast<const message_dispatch_error_event_t *> (event));
             };
         }
@@ -106,9 +107,10 @@ class dispatch_options_access_t
     {
         return static_cast<bool> (options._dispatch_error_observer);
     }
-    static void bind_telemetry (dispatch_options_t &options,
-                                runtime::metric_provider_t provider,
-                                opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> meter)
+    static void
+    bind_telemetry (dispatch_options_t &options,
+                    runtime::metric_provider_t provider,
+                    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::Meter> meter)
     {
         ensure_registration (options);
         if (options._telemetry_registration)
@@ -123,8 +125,8 @@ class dispatch_options_access_t
     }
 
     template <typename Event>
-    static void submit (const dispatch_options_t &options, Event event,
-                        message_flow_log_mode_t mode) noexcept
+    static void
+    submit (const dispatch_options_t &options, Event event, message_flow_log_mode_t mode) noexcept
     {
         try {
             telemetry_record_t record;
@@ -162,7 +164,6 @@ class dispatch_options_access_t
             && process_telemetry_has_provider (options, telemetry_event_kind_t::any))
             options._telemetry_registration = register_process_telemetry ();
     }
-
 };
 
 } // namespace zlink::framework::detail

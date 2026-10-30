@@ -1579,29 +1579,35 @@ class scenario_client_t final : public zf::hosted_service_t
             const auto entered = current ().closing_entered.get_future ();
             const auto before = std::chrono::system_clock::now ();
             const bool native = given.value ("nativeCommand", false);
-            const auto wire_ms = static_cast<std::uint64_t> (
-              std::chrono::duration_cast<std::chrono::milliseconds> (
-                before.time_since_epoch () + 57s + 123ms).count ());
+            const auto wire_ms =
+              static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                            before.time_since_epoch () + 57s + 123ms)
+                                            .count ());
             std::atomic_bool replay_preserved{false};
             auto closing = std::async (std::launch::async, [&] {
                 if (!native)
                     return manager_close (services, *ref);
-                auto runtime = zf::detail::spot_node_runtime_t::from (
-                  _app->advanced ().zlink (), mesh_name);
+                auto runtime =
+                  zf::detail::spot_node_runtime_t::from (_app->advanced ().zlink (), mesh_name);
                 const auto node = runtime->native_node ();
                 if (!node)
                     throw std::runtime_error ("Spot owner has no native node");
                 auto &host = *node;
                 const auto status = host.status ();
                 const auto read = services.get_required<zf::location_repository_t> ()
-                  .read_authority (zf::runtime::spot_authority_key (spot_id)).result ().value ();
+                                    .read_authority (zf::runtime::spot_authority_key (spot_id))
+                                    .result ()
+                                    .value ();
                 const auto &snapshot = std::get<zf::authority_snapshot_t> (read);
                 zf::runtime::protocol::user_spot_close_header_t command{
-                  0, {status.lifecycle_generation (), 7139},
-                  status.routing_id ().to_bytes (), status.lifecycle_generation (),
+                  0,
+                  {status.lifecycle_generation (), 7139},
+                  status.routing_id ().to_bytes (),
+                  status.lifecycle_generation (),
                   {ref->spot_id (), ref->object_generation (), status.routing_id ().to_bytes (),
                    status.lifecycle_generation (), snapshot.authority_owner_generation,
-                   snapshot.store_version}, wire_ms};
+                   snapshot.store_version},
+                  wire_ms};
                 const auto submit = [&] (const auto &request) {
                     zf::task_completion_source_t<bool> completed;
                     auto terminal = completed.task ();
@@ -1640,14 +1646,16 @@ class scenario_client_t final : public zf::hosted_service_t
             {
                 std::lock_guard lock (current ().mutex);
                 const auto context = current ().closing_context;
-                actual["finiteDeadline"] = context
-                  && context->deadline != std::chrono::system_clock::time_point::max ();
-                actual["explicitReason"] = context
-                  && context->reason == zf::spot_close_reason_t::explicit_close;
+                actual["finiteDeadline"] =
+                  context && context->deadline != std::chrono::system_clock::time_point::max ();
+                actual["explicitReason"] =
+                  context && context->reason == zf::spot_close_reason_t::explicit_close;
                 actual["stoppedAtInvocation"] = current ().cleanup_stopped_at_invocation;
                 const auto callback_ms = context
-                  ? std::chrono::duration_cast<std::chrono::milliseconds> (
-                      context->deadline.time_since_epoch ()).count () : 0;
+                                           ? std::chrono::duration_cast<std::chrono::milliseconds> (
+                                               context->deadline.time_since_epoch ())
+                                               .count ()
+                                           : 0;
                 actual["callbackDeadlineMs"] = callback_ms;
                 actual["wireDeadlineMs"] = native ? nlohmann::json (wire_ms) : nullptr;
                 actual["deadlinePreserved"] =
@@ -2486,7 +2494,8 @@ TEST (ZLinkFrameworkSpotCloseConformance, CommandDeadlineUtcConversionPreservesR
                clock_t::time_point{std::chrono::milliseconds{wire_ms}});
     EXPECT_EQ (request_deadline_utc_from_unix_ms (0), clock_t::time_point{});
     const auto max_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
-      clock_t::time_point::max ().time_since_epoch ()).count ();
+                          clock_t::time_point::max ().time_since_epoch ())
+                          .count ();
     EXPECT_EQ (request_deadline_utc_from_unix_ms (static_cast<std::uint64_t> (max_ms)),
                clock_t::time_point{std::chrono::milliseconds{max_ms}});
     EXPECT_EQ (request_deadline_utc_from_unix_ms (static_cast<std::uint64_t> (max_ms) + 1),
@@ -2497,15 +2506,21 @@ TEST (ZLinkFrameworkSpotCloseConformance, CommandDeadlineUtcConversionPreservesR
 
 TEST (ZLinkFrameworkSpotCloseConformance, RemoteClosingPreservesDefaultOperationDeadline)
 {
-    run_and_check (nlohmann::json{
-      {"name", "remote-close-default-deadline"},
-      {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}}},
-      {"act", "observeRemoteCloseDeadline"},
-      {"expect", {{"finiteDeadline", true}, {"deadlinePreserved", true},
-                  {"explicitReason", true}, {"stoppedAtInvocation", false},
-                  {"authorityDuringClose", "Closing"}, {"closeSucceeded", true},
-                  {"authority", "Missing"}, {"secondClose", false}, {"onClosingCalls", 1},
-                  {"authorityReleaseCalls", 1}, {"terminalReplayPreserved", true}}}});
+    run_and_check (nlohmann::json{{"name", "remote-close-default-deadline"},
+                                  {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}}},
+                                  {"act", "observeRemoteCloseDeadline"},
+                                  {"expect",
+                                   {{"finiteDeadline", true},
+                                    {"deadlinePreserved", true},
+                                    {"explicitReason", true},
+                                    {"stoppedAtInvocation", false},
+                                    {"authorityDuringClose", "Closing"},
+                                    {"closeSucceeded", true},
+                                    {"authority", "Missing"},
+                                    {"secondClose", false},
+                                    {"onClosingCalls", 1},
+                                    {"authorityReleaseCalls", 1},
+                                    {"terminalReplayPreserved", true}}}});
 }
 
 TEST (ZLinkFrameworkSpotCloseConformance, RemoteClosingPreservesExactCommandDeadline)
@@ -2514,11 +2529,18 @@ TEST (ZLinkFrameworkSpotCloseConformance, RemoteClosingPreservesExactCommandDead
       {"name", "remote-close-exact-command-deadline"},
       {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}, {"nativeCommand", true}}},
       {"act", "observeRemoteCloseDeadline"},
-      {"expect", {{"finiteDeadline", true}, {"deadlinePreserved", true},
-                  {"explicitReason", true}, {"stoppedAtInvocation", false},
-                  {"authorityDuringClose", "Closing"}, {"closeSucceeded", true},
-                  {"authority", "Missing"}, {"secondClose", false}, {"onClosingCalls", 1},
-                  {"authorityReleaseCalls", 1}, {"terminalReplayPreserved", true}}}});
+      {"expect",
+       {{"finiteDeadline", true},
+        {"deadlinePreserved", true},
+        {"explicitReason", true},
+        {"stoppedAtInvocation", false},
+        {"authorityDuringClose", "Closing"},
+        {"closeSucceeded", true},
+        {"authority", "Missing"},
+        {"secondClose", false},
+        {"onClosingCalls", 1},
+        {"authorityReleaseCalls", 1},
+        {"terminalReplayPreserved", true}}}});
 }
 
 TEST (ZLinkFrameworkSpotCloseConformance, ExistingThenClosingRequestAndJoinReturnNotFound)

@@ -2732,8 +2732,8 @@ void verify_raw_owner_node_send_and_liveness (
   bool framework_multipart = false)
 {
     namespace fw = zlink::framework;
-    auto observations = std::make_shared<fw::test::telemetry_observations_t<
-      std::map<std::string, std::string>>> ();
+    auto observations =
+      std::make_shared<fw::test::telemetry_observations_t<std::map<std::string, std::string>>> ();
     fw::logging_builder_t logging;
     logging.use_provider ("owner-rejection-test", [observations] (const fw::log_record_t &record) {
         std::map<std::string, std::string> fields;

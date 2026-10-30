@@ -24,7 +24,13 @@ bool process_telemetry_has_provider (const dispatch_options_t &options,
 namespace
 {
 std::atomic<std::uint64_t> dropped_count{0};
-enum class provider_role_t { logger, trace, fallback, count };
+enum class provider_role_t
+{
+    logger,
+    trace,
+    fallback,
+    count
+};
 struct overflow_instrument_t
 {
     runtime::metric_provider_t provider;
@@ -59,9 +65,8 @@ void log_flow (const telemetry_record_t &record)
         };
         add (dispatch_event_field::event_id, "zlink.message_flow");
         add (dispatch_event_field::phase, std::string (enum_name (event.outcome)));
-        add (dispatch_event_field::outcome, event.result
-                                              ? std::string (enum_name (*event.result))
-                                              : terminal_outcome_name (event.outcome));
+        add (dispatch_event_field::outcome, event.result ? std::string (enum_name (*event.result))
+                                                         : terminal_outcome_name (event.outcome));
         add (dispatch_event_field::surface, std::string (enum_name (event.surface)));
         add (dispatch_event_field::kind, std::string (enum_name (event.message_kind)));
         if (event.packet_name) {
@@ -137,8 +142,7 @@ void log_flow (const telemetry_record_t &record)
         // Emit structured fields only through an explicitly configured
         // framework logger; observer-only and no-sink paths stay silent.
         diagnostic_event_sink_t::log_if_configured (
-          record.logger, log_level_t::info, "message flow",
-          std::move (fields), logger_failure);
+          record.logger, log_level_t::info, "message flow", std::move (fields), logger_failure);
     }
 }
 void log_error (const telemetry_record_t &record)
@@ -210,8 +214,8 @@ void log_error (const telemetry_record_t &record)
             add (dispatch_event_field::error_message, *event.error_message);
         }
         diagnostic_event_sink_t::log_if_configured (
-          record.logger, dispatch_error_reporter_t::default_log_level (event),
-          "dispatch error", std::move (fields), logger_failure);
+          record.logger, dispatch_error_reporter_t::default_log_level (event), "dispatch error",
+          std::move (fields), logger_failure);
     }
 }
 
@@ -298,7 +302,8 @@ class process_telemetry_delivery_t
         if (_failed[index])
             return;
         _failed[index] = true;
-        if (role == provider_role_t::fallback || _failed[static_cast<std::size_t> (provider_role_t::fallback)])
+        if (role == provider_role_t::fallback
+            || _failed[static_cast<std::size_t> (provider_role_t::fallback)])
             return;
         const auto message = role == provider_role_t::logger
                                ? "zlink telemetry logger provider failed\n"
@@ -363,7 +368,8 @@ class process_telemetry_delivery_t
             }
             if (record.observer) {
                 try {
-                    std::visit ([&] (const auto &event) { record.observer (&event); }, record.event);
+                    std::visit ([&] (const auto &event) { record.observer (&event); },
+                                record.event);
                 }
                 catch (...) {
                     failure (provider_role_t::trace);
@@ -392,7 +398,10 @@ process_telemetry_delivery_t &delivery ()
     static process_telemetry_delivery_t owner;
     return owner;
 }
-void logger_failure () noexcept { delivery ().failure (provider_role_t::logger); }
+void logger_failure () noexcept
+{
+    delivery ().failure (provider_role_t::logger);
+}
 } // namespace
 
 std::shared_ptr<telemetry_registration_t> register_process_telemetry ()
@@ -406,9 +415,18 @@ void bind_process_telemetry_metrics (
 {
     delivery ().bind_metrics (registration, std::move (provider), std::move (meter));
 }
-telemetry_registration_t::~telemetry_registration_t () { retire_process_telemetry (id); }
-void retire_process_telemetry (std::uint64_t registration) noexcept { delivery ().retire (registration); }
-void submit_process_telemetry (telemetry_record_t record) noexcept { delivery ().submit (std::move (record)); }
+telemetry_registration_t::~telemetry_registration_t ()
+{
+    retire_process_telemetry (id);
+}
+void retire_process_telemetry (std::uint64_t registration) noexcept
+{
+    delivery ().retire (registration);
+}
+void submit_process_telemetry (telemetry_record_t record) noexcept
+{
+    delivery ().submit (std::move (record));
+}
 std::atomic<std::uint64_t> &telemetry_traced_count () noexcept
 {
     static std::atomic<std::uint64_t> value{0};
@@ -424,5 +442,8 @@ std::atomic<std::uint64_t> &telemetry_failure_count () noexcept
     static std::atomic<std::uint64_t> value{0};
     return value;
 }
-std::uint64_t telemetry_dropped () noexcept { return dropped_count.load (std::memory_order_relaxed); }
+std::uint64_t telemetry_dropped () noexcept
+{
+    return dropped_count.load (std::memory_order_relaxed);
+}
 } // namespace zlink::framework::detail

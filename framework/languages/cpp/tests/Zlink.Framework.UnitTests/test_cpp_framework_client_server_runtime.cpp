@@ -712,8 +712,8 @@ void verify_client_server_owner_gate_and_budget ()
     budget_owner_send_handler_t::calls.store (0);
     owner_gate_request_handler_t::first =
       std::make_shared<zlink::framework::task_completion_source_t<std::string>> ();
-    auto flows = std::make_shared<zlink::framework::test::telemetry_observations_t<
-      zlink::framework::message_flow_event_t>> ();
+    auto flows = std::make_shared<
+      zlink::framework::test::telemetry_observations_t<zlink::framework::message_flow_event_t>> ();
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([flows] (zlink::framework::zlink_framework_options_t &options) {
         options.configure_dispatch ().message_flow (
@@ -780,14 +780,10 @@ void verify_client_server_owner_gate_and_budget ()
     zlink::framework::test::acknowledge_delivery (deadline);
     const auto observed_events = flows->snapshot ();
     assert (std::count_if (observed_events.begin (), observed_events.end (),
-                           [] (const auto &event) {
-                               return event.outcome == phase_t::admitted;
-                           })
+                           [] (const auto &event) { return event.outcome == phase_t::admitted; })
             == 3);
     assert (std::count_if (observed_events.begin (), observed_events.end (),
-                           [] (const auto &event) {
-                               return event.outcome == phase_t::dispatched;
-                           })
+                           [] (const auto &event) { return event.outcome == phase_t::dispatched; })
             == 3);
 
     constexpr int budget_records = 24;

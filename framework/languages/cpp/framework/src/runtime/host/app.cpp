@@ -1217,9 +1217,9 @@ void app_t::_apply_zlink_framework ()
           options.configure_dispatch (),
           _state->logging.factory ().create ("zlink.framework.dispatch"));
     }
-    detail::dispatch_options_access_t::bind_telemetry (
-      options.configure_dispatch (), _state->monitoring->metric_provider,
-      _state->monitoring->metric_meter);
+    detail::dispatch_options_access_t::bind_telemetry (options.configure_dispatch (),
+                                                       _state->monitoring->metric_provider,
+                                                       _state->monitoring->metric_meter);
     const auto http_snapshot = options.http ().snapshot ();
     const auto job_queue_configuration = runtime::resolve_application_job_queue_configuration (
       options.application_job_queue_profile (), options.max_queued_application_jobs (),

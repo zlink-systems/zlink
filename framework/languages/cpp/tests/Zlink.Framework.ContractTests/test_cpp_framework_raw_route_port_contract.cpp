@@ -406,8 +406,8 @@ void verify_deferred_send_trace_owns_its_context ()
     }
     assert (monitor.status ().flow_paused_connections == 1);
 
-    auto observations = std::make_shared<zlink::framework::test::telemetry_observations_t<
-      zlink::framework::message_flow_event_t>> ();
+    auto observations = std::make_shared<
+      zlink::framework::test::telemetry_observations_t<zlink::framework::message_flow_event_t>> ();
     zlink::framework::dispatch_options_t trace_options;
     trace_options.message_flow (zlink::framework::message_flow_log_mode_t::detailed);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (

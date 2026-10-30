@@ -1916,7 +1916,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
     trace_options.message_flow (message_flow_log_mode_t::detailed);
     dispatch_options_access_t::set_live_mode (trace_options, live_mode);
     dispatch_options_access_t::set_observer_for_tests (
-      trace_options, [observations] (const message_flow_event_t &event) { observations->record (event); });
+      trace_options,
+      [observations] (const message_flow_event_t &event) { observations->record (event); });
     gateway.set_dispatch (std::move (trace_options));
 
     const auto original_route =
@@ -3365,7 +3366,8 @@ int common_session_disconnect_uses_actor_packet_route ()
         if (!empty_success (deliver (stale)) || callbacks != 2)
             return 3;
     }
-    auto errors_owner = std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
+    auto errors_owner =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     node->dispatch.message_flow (message_flow_log_mode_t::normal);
     dispatch_options_access_t::set_dispatch_error_observer_for_tests (
       node->dispatch, [errors_owner] (const auto &event) { errors_owner->record (event); });
@@ -8119,7 +8121,8 @@ int join_completion_callback_failure_is_reported ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
     auto state = std::make_shared<actor_gateway_state_t> ();
-    auto observations = std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
+    auto observations =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     state->dispatch.message_flow (message_flow_log_mode_t::normal);
     dispatch_options_access_t::set_dispatch_error_observer_for_tests (
       state->dispatch, [observations] (const auto &event) { observations->record (event); });
@@ -8496,15 +8499,15 @@ int actor_native_terminal_cause (std::string_view cause,
       });
     dispatch_options_t diagnostics;
     diagnostics.message_flow (mode);
-    auto error_observations = std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
-    auto flow_observations = std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
-    dispatch_options_access_t::set_observer_for_tests (diagnostics, [flow_observations] (const auto &event) {
-        flow_observations->record (event);
-    });
+    auto error_observations =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
+    auto flow_observations =
+      std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
+    dispatch_options_access_t::set_observer_for_tests (
+      diagnostics, [flow_observations] (const auto &event) { flow_observations->record (event); });
     dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      diagnostics, [error_observations] (const auto &event) {
-          error_observations->record (event);
-      });
+      diagnostics,
+      [error_observations] (const auto &event) { error_observations->record (event); });
     node->dispatch = diagnostics;
     service_collection_t services;
     services.add_singleton<actor_gateway_runtime_t> ();
@@ -8756,8 +8759,7 @@ int actor_native_terminal_cause (std::string_view cause,
         ? 1
         : 0;
     if (malformed)
-        assert (observer_failure_delta
-                == (stale && mode != message_flow_log_mode_t::off ? 1 : 0));
+        assert (observer_failure_delta == (stale && mode != message_flow_log_mode_t::off ? 1 : 0));
     return handler_calls == (application_failure ? 1 : 0) && reported == expected_reports
                && opposite_cause == 0 && errors.size () == expected_reports
                && drops == expected_drops
@@ -8770,12 +8772,13 @@ int main (int argc, char **argv)
 {
     if (argc == 2 && std::string_view (argv[1]) == "--telemetry-consumers") {
         zlink::framework::completion_owner_t completion_owner;
-        for (const auto run : {
-               relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_atomically,
-               bound_session_push_detaches_before_direct_sink_entry,
-               admitted_bound_session_delivery_keeps_original_session_after_rebind,
-               common_session_disconnect_uses_actor_packet_route,
-               join_completion_callback_failure_is_reported}) {
+        for (
+          const auto run :
+          {relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_atomically,
+           bound_session_push_detaches_before_direct_sink_entry,
+           admitted_bound_session_delivery_keeps_original_session_after_rebind,
+           common_session_disconnect_uses_actor_packet_route,
+           join_completion_callback_failure_is_reported}) {
             if (const auto result = run (); result != 0)
                 return result;
         }
