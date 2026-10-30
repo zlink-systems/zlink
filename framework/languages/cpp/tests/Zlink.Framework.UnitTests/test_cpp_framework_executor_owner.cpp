@@ -6,14 +6,25 @@
 #include <memory>
 #include <future>
 #include <cassert>
+#include <optional>
 
 namespace
 {
 
+zlink::framework::task_t<int> await_late_child (zlink::framework::task_t<int> child)
+{
+    co_return co_await child;
+}
+
 class stop_on_start_t final : public zlink::framework::hosted_service_t
 {
   public:
-    explicit stop_on_start_t (zlink::framework::app_t &app) : _app (app) {}
+    stop_on_start_t (zlink::framework::app_t &app,
+                     zlink::framework::task_completion_source_t<int> &child,
+                     std::optional<zlink::framework::task_t<int>> &waiter) :
+        _app (app), _child (child), _waiter (waiter)
+    {
+    }
 
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
     {
@@ -23,6 +34,10 @@ class stop_on_start_t final : public zlink::framework::hosted_service_t
         assert (detail::capture_runtime_native_continuation_scheduler (&second));
         assert (first && second);
         assert (first == second);
+        // This wait has no application owner to cancel it during run shutdown.
+        const auto previous = detail::exchange_wait_owner ({});
+        _waiter.emplace (await_late_child (_child.task ()));
+        detail::exchange_wait_owner (previous);
         _app.stop ();
         co_return;
     }
@@ -31,6 +46,8 @@ class stop_on_start_t final : public zlink::framework::hosted_service_t
 
   private:
     zlink::framework::app_t &_app;
+    zlink::framework::task_completion_source_t<int> &_child;
+    std::optional<zlink::framework::task_t<int>> &_waiter;
 };
 
 } // namespace
@@ -48,11 +65,20 @@ int main ()
 
     auto running = zlink::framework::app_t::create ();
     running.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &) {});
-    running.add_hosted_service (std::make_unique<stop_on_start_t> (running));
+    zlink::framework::task_completion_source_t<int> child;
+    std::optional<zlink::framework::task_t<int>> waiter;
+    running.add_hosted_service (std::make_unique<stop_on_start_t> (running, child, waiter));
 
     if (running.run (0, nullptr) != 0) {
         return 1;
     }
+    child.complete (zlink::framework::result_t<int>::success (42));
+    if (!waiter || !waiter->await_ready ())
+        return 4;
+    const auto rejected = waiter->result ();
+    if (rejected
+        || rejected.error_kind () != zlink::framework::framework_error_kind_t::shutting_down)
+        return 5;
     zlink::framework::detail::completion_dispatcher_borrow_t dispatcher{};
     if (zlink::framework::detail::capture_runtime_native_continuation_scheduler (&dispatcher))
         return 2;

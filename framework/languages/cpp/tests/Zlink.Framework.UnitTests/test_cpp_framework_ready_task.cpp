@@ -47,6 +47,39 @@ template <typename T> task_t<T> make_ready (result_t<T> result, const char *name
     return task;
 }
 
+void check_completion_delivery_lock ()
+{
+    completion_owner_t owner;
+    for (const bool ready : {false, true}) {
+        bool invoked = false;
+        // Scheduler entry marks the end of state preparation; invocation must
+        // also be able to read the result without retaining the state mutex.
+        auto state = std::make_shared<detail::task_shared_state_t<int>> ();
+        auto registration = std::make_shared<detail::task_wait_registration_t> (
+          [&] (bool, const detail::ambient_context_snapshot_t &) {
+              invoked = state->result ().value () == 42;
+          },
+          [] (std::function<void ()> work) {
+              const auto locks = mutex_locks;
+              end_count ();
+              require (locks == 1, "completion reacquired its result mutex before delivery");
+              work ();
+          });
+        if (ready)
+            state->complete (result_t<int>::success (42));
+        else
+            state->set_continuation (registration);
+        begin_count ();
+        if (ready)
+            state->set_continuation (registration);
+        else
+            require (state->complete (result_t<int>::success (42)), "completion rejected");
+        end_count ();
+        require (invoked, "completion delivery did not run");
+        std::cout << "continuation ready=" << ready << " locks=1\n";
+    }
+}
+
 void check_failure (const result_t<int> &result)
 {
     require (!result.has_value (), "failure became success");
@@ -89,6 +122,8 @@ int main ()
         end_count ();
         require (mutex_locks == 1 && notifications == 1, "synchronization counter calibration");
         std::cout << "counter calibration: locks=1 notifications=1\n";
+
+        check_completion_delivery_lock ();
 
         auto value = make_ready (result_t<int>::success (42), "value success");
         require (value.result ().value () == 42, "ready value changed");
