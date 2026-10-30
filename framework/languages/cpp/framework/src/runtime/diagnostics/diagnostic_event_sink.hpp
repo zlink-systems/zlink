@@ -73,15 +73,19 @@ class diagnostic_event_sink_t
     static bool log_if_configured (const std::optional<logger_t<>> &logger,
                                    log_level_t level,
                                    std::string_view message,
-                                   std::vector<log_field_t> fields) noexcept
+                                   std::vector<log_field_t> fields,
+                                   void (*failure) () noexcept = nullptr) noexcept
     {
         if (!logger)
             return true;
         try {
-            logger->log_with_fields (level, std::string (message), std::move (fields));
+            emit_log (logger->_state, static_cast<int> (level), logger->_category,
+                      std::string (message), std::move (fields), failure);
             return true;
         }
-        catch (const std::exception &) {
+        catch (...) {
+            if (failure)
+                failure ();
             return false;
         }
     }
