@@ -8326,8 +8326,11 @@ for (const remote of [false, true]) {
             sourceNodeGeneration: 7n,
             requestSequence: value.correlation,
             parts: [frame],
-            reply: (parts: readonly Uint8Array[]) =>
-              resolve(decodeStatefulReply(parts[0]!, value.correlation, 'streamUnbind', false))
+            reply: (parts) => {
+              const reply = parts[0];
+              assert.ok(reply instanceof Uint8Array);
+              resolve(decodeStatefulReply(reply, value.correlation, 'streamUnbind', false));
+            }
           })
         ).then((result) => {
           if (result !== 'infrastructure') reject(new Error(`Close ingress rejected: ${result}`));
