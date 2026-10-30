@@ -4,6 +4,7 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "scope_exit.hpp"
+#include <chrono>
 #include <latch>
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <condition_variable>
@@ -35,6 +36,14 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
     {
         std::lock_guard lock (_wake->mutex);
         return _ready.size ();
+    }
+
+    bool wait_for_pending_work (std::size_t count,
+                                std::chrono::steady_clock::duration timeout) const
+    {
+        std::unique_lock lock (_wake->mutex);
+        return _wake->ready_changed.wait_for (lock, timeout,
+                                              [&] { return _ready.size () >= count; });
     }
 
     bool run_one ()

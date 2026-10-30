@@ -624,6 +624,8 @@ TEST (ManualDispatchOwner, NativeFailureMatrixSettlesPermitsScopesAndOriginalRep
     ASSERT_EQ (marker_probe_id, marker_ack.probe_id);
     ASSERT_EQ (6u, fixture.jobs->snapshot ().queued_application_jobs);
     ASSERT_EQ (6u, fixture.server->pending_messages ());
+    ASSERT_TRUE (fixture.held->wait_for_pending_work (1, 2s))
+      << "owner submission did not become pending";
     ASSERT_EQ (1u, fixture.held->pending_work ());
     fixture.held->run_all ();
     EXPECT_EQ ((std::vector<int>{1, 3, 4, 5, 6}), state.pipeline_entries);
