@@ -10,6 +10,7 @@
 #include <exception>
 #include <optional>
 #include <utility>
+#include <memory>
 
 namespace zlink::framework::detail
 {
@@ -163,7 +164,9 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received) co
 
 task_t<std::optional<route_dispatch_reply_t>>
 route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
-                                     runtime::messaging::envelope_header_t header) const
+                                     runtime::messaging::envelope_header_t header,
+                                     runtime::application_dispatch_terminal_owner_t terminal,
+                                     runtime::offload_executor_t *executor) const
 {
     auto flow_scope = runtime::flow_context_t::enter (
       header.flow_id, header.flow_origin, message_flow_tracer_t (_dispatch_options).mode (),
@@ -179,9 +182,9 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
 
     switch (header.kind) {
         case runtime::messaging::message_kind_t::command:
-            return dispatch_send (received, std::move (header));
+            return dispatch_send (received, std::move (header), std::move (terminal), executor);
         case runtime::messaging::message_kind_t::request:
-            return dispatch_request (received, std::move (header));
+            return dispatch_request (received, std::move (header), std::move (terminal), executor);
         default:
             return task_t<std::optional<route_dispatch_reply_t>> (
               result_t<std::optional<route_dispatch_reply_t>>::failure (
@@ -192,7 +195,9 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
 
 task_t<std::optional<route_dispatch_reply_t>>
 route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &received,
-                                          runtime::messaging::envelope_header_t header) const
+                                          runtime::messaging::envelope_header_t header,
+                                          runtime::application_dispatch_terminal_owner_t terminal,
+                                          runtime::offload_executor_t *executor) const
 {
     if (_internal_packets != nullptr && _internal_packets->can_handle_send (header.message_name)) {
         auto dispatched = _internal_packets->dispatch_send (received, header, *_services);
@@ -316,12 +321,14 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
     };
     return _invoker.invoke (*handler, filters, _send_dispatch_kind, *_services, *_serializers,
                             std::move (body.value ()), std::move (context), std::move (before),
-                            std::move (complete));
+                            std::move (complete), std::move (terminal), executor);
 }
 
-task_t<std::optional<route_dispatch_reply_t>>
-route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &received,
-                                             runtime::messaging::envelope_header_t header) const
+task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatch_request (
+  const route_received_packet_t &received,
+  runtime::messaging::envelope_header_t header,
+  runtime::application_dispatch_terminal_owner_t terminal,
+  runtime::offload_executor_t *executor) const
 {
     if (_internal_packets != nullptr
         && _internal_packets->can_handle_request (header.message_name)) {
@@ -413,7 +420,7 @@ route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &rece
     };
     return _invoker.invoke (*handler, filters, _request_dispatch_kind, *_services, *_serializers,
                             std::move (body.value ()), std::move (context), std::move (before),
-                            std::move (complete));
+                            std::move (complete), std::move (terminal), executor);
 }
 
 

@@ -5,6 +5,7 @@
 #include "runtime/channels/route_packet_dispatcher.hpp"
 
 #include <utility>
+#include <memory>
 
 namespace zlink::framework::detail
 {
@@ -30,7 +31,9 @@ mesh_record_dispatcher_t::mesh_record_dispatcher_t (
 task_t<std::optional<route_dispatch_reply_t>>
 mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &record,
                                     std::vector<zlink::message_t> parts,
-                                    runtime::messaging::envelope_header_t header) const
+                                    runtime::messaging::envelope_header_t header,
+                                    runtime::application_dispatch_terminal_owner_t terminal,
+                                    runtime::offload_executor_t *executor) const
 {
     using record_kind_t = runtime::host::record_kind_t;
     if (record.kind != record_kind_t::node_send && record.kind != record_kind_t::node_request
@@ -63,7 +66,7 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
       });
     return dispatcher.dispatch (
       route_received_packet_t{record.source_node_rid, {}, std::move (message_parts), {}},
-      std::move (header));
+      std::move (header), std::move (terminal), executor);
 }
 
 } // namespace zlink::framework::detail

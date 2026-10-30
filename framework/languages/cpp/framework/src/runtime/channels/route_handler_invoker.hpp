@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include "runtime/mesh/application_dispatch_terminal_owner.hpp"
 
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/channels/route_packet.hpp"
@@ -22,6 +23,8 @@ class route_handler_invoker_t
             zlink::message_t message,
             framework::route_message_context_t context,
             std::function<void ()> before_application_handler = {},
-            completion_t complete = {});
+            completion_t complete = {},
+            runtime::application_dispatch_terminal_owner_t terminal = {},
+            runtime::offload_executor_t *executor = nullptr);
 };
 } // namespace zlink::framework::detail

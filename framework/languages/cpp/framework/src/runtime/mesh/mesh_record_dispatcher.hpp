@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include "runtime/mesh/application_dispatch_terminal_owner.hpp"
 
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/channels/route_packet.hpp"
@@ -11,6 +12,7 @@
 
 #include <functional>
 #include <vector>
+#include <memory>
 
 namespace zlink::framework::detail
 {
@@ -29,7 +31,9 @@ class mesh_record_dispatcher_t
     task_t<std::optional<route_dispatch_reply_t>>
     dispatch (const runtime::host::receive_record_t &record,
               std::vector<zlink::message_t> parts,
-              runtime::messaging::envelope_header_t header) const;
+              runtime::messaging::envelope_header_t header,
+              runtime::application_dispatch_terminal_owner_t terminal = {},
+              runtime::offload_executor_t *executor = nullptr) const;
 
   private:
     service_provider_t *_services;

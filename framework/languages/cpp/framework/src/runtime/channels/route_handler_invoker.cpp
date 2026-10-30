@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/channels/route_handler_invoker.hpp"
 #include "runtime/configuration/service_scope.hpp"
+#include <functional>
+#include <utility>
 
 namespace zlink::framework::detail
 {
@@ -10,24 +12,37 @@ route_handler_invoker_t::invoke (const route_handler_registry_t::entry_t &handle
                                  handler_dispatch_kind_t dispatch_kind,
                                  service_provider_t &services,
                                  serializer_registry_t &serializers,
-                                 zlink::message_t message,
-                                 framework::route_message_context_t context,
-                                 std::function<void ()> before_application_handler,
-                                 completion_t complete)
+                                 zlink::message_t incoming_message,
+                                 framework::route_message_context_t incoming_context,
+                                 std::function<void ()> incoming_before,
+                                 completion_t incoming_complete,
+                                 runtime::application_dispatch_terminal_owner_t incoming_terminal,
+                                 runtime::offload_executor_t *executor)
 {
+    auto terminal = std::move (incoming_terminal);
+    auto message = std::move (incoming_message);
+    auto context = std::move (incoming_context);
+    auto before_application_handler = std::move (incoming_before);
+    auto complete = std::move (incoming_complete);
+    incoming_message = zlink::message_t{};
+    incoming_before = {};
+    incoming_complete = {};
     std::optional<service_scope_t> invocation_scope;
     auto result = result_t<zlink::message_t>::success (zlink::message_t{});
     try {
         invocation_scope.emplace (
           service_scope_t::create (services, service_scope_kind_t::handler_invocation));
         auto &invocation_services = invocation_scope->provider ();
-        auto reply = co_await filters.invoke_filters_async (
+        auto pending = filters.invoke_filters_async (
           dispatch_kind, invocation_services, serializers, context,
           [&handler, &invocation_services, &serializers, &message, &context,
            &before_application_handler] {
               return handler.invoker (invocation_services, serializers, message, context,
                                       handler_start_callback_ref_t (before_application_handler));
           });
+        if (!pending.await_ready () && executor)
+            terminal.retain_physical_work (executor->retain_internal_work ());
+        auto reply = co_await pending;
         result = result_t<zlink::message_t>::success (std::move (reply));
     }
     catch (const framework_exception_t &error) {
@@ -42,7 +57,7 @@ route_handler_invoker_t::invoke (const route_handler_registry_t::entry_t &handle
             : current_exception_result<zlink::message_t> ();
     }
     // Reply encoding/submission and scope cleanup belong to this completing turn.
-    // Physical terminal observers may release the App's executor join afterwards.
+    // Frame-local terminal ownership follows scope, payload and callback cleanup.
     auto completed = result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
     try {
         completed = complete ? complete (result)
@@ -58,9 +73,9 @@ route_handler_invoker_t::invoke (const route_handler_registry_t::entry_t &handle
         invocation_scope->close ();
     invocation_scope.reset ();
     before_application_handler = {};
-    complete = {};
     message = zlink::message_t{};
     result = result_t<zlink::message_t>::success (zlink::message_t{});
+    complete = {};
     co_return completed;
 }
 } // namespace zlink::framework::detail

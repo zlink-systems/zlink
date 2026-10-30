@@ -210,8 +210,8 @@ TEST (RouteHandlerBoundary, PendingMeshReplyOwnsNativeStorageAndScopeUntilTermin
             for (const bool fail_reply : {false, true}) {
                 if (!request && fail_reply)
                     continue;
-                SCOPED_TRACE (std::to_string (request) + ":" + std::to_string (fail_handler)
-                              + ":" + std::to_string (fail_reply));
+                SCOPED_TRACE (std::to_string (request) + ":" + std::to_string (fail_handler) + ":"
+                              + std::to_string (fail_reply));
                 suspended_route_state_t state;
                 state.fail_handler = fail_handler;
                 service_collection_t services;
@@ -221,19 +221,19 @@ TEST (RouteHandlerBoundary, PendingMeshReplyOwnsNativeStorageAndScopeUntilTermin
                 auto provider = services.build_provider ();
                 serializer_registry_t serializers;
                 detail::route_handler_registry_t handlers;
-                handlers.on_send<suspended_route_handler_t, int> (
-                  "mesh", "packet", &suspended_route_handler_t::send);
+                handlers.on_send<suspended_route_handler_t, int> ("mesh", "packet",
+                                                                  &suspended_route_handler_t::send);
                 handlers.on_request<suspended_route_handler_t, int, int> (
                   "mesh", "packet", &suspended_route_handler_t::request);
                 handler_registry_t filters;
-                auto reply_host = std::make_shared<host::public_host_runtime_t> (
-                  host::host_options_t{
-                    .mesh = {.descriptor = {
-                               .mesh_name = "mesh",
-                               .node_routing_id = zlink::routing_id_t::from ("reply").to_bytes (),
-                               .lifecycle_generation = 1,
-                               .descriptor_revision = 1,
-                               .advertised_endpoint = "tcp://127.0.0.1:0"},
+                auto reply_host =
+                  std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+                    .mesh = {.descriptor = {.mesh_name = "mesh",
+                                            .node_routing_id =
+                                              zlink::routing_id_t::from ("reply").to_bytes (),
+                                            .lifecycle_generation = 1,
+                                            .descriptor_revision = 1,
+                                            .advertised_endpoint = "tcp://127.0.0.1:0"},
                              .runtime_failures =
                                std::make_shared<runtime::runtime_failure_collector_t> ()}});
                 std::weak_ptr<runtime::mesh::service_mailbox_record_t> request_storage;
@@ -254,8 +254,8 @@ TEST (RouteHandlerBoundary, PendingMeshReplyOwnsNativeStorageAndScopeUntilTermin
                       provider, serializers, handlers, filters, {}, [&] { ++permits; },
                       registration);
                     host::receive_record_t record;
-                    record.kind = request ? host::record_kind_t::node_request
-                                          : host::record_kind_t::node_send;
+                    record.kind =
+                      request ? host::record_kind_t::node_request : host::record_kind_t::node_send;
                     record.channel_name = "mesh";
                     record.source_node_rid = zlink::routing_id_t::from ("source");
                     if (request) {
@@ -273,8 +273,8 @@ TEST (RouteHandlerBoundary, PendingMeshReplyOwnsNativeStorageAndScopeUntilTermin
                         };
                     }
                     msg::envelope_header_t header;
-                    header.kind = request ? msg::message_kind_t::request
-                                          : msg::message_kind_t::command;
+                    header.kind =
+                      request ? msg::message_kind_t::request : msg::message_kind_t::command;
                     header.channel_name = "mesh";
                     header.message_name = "packet";
                     header.content_type = "application/json";
@@ -302,8 +302,8 @@ TEST (RouteHandlerBoundary, PendingMeshReplyOwnsNativeStorageAndScopeUntilTermin
                 EXPECT_TRUE (request_storage.expired ());
                 EXPECT_TRUE (registration_storage.expired ());
                 if (request) {
-                    auto header = msg::envelope_codec_t{}.decode_header (
-                      msg::message_parts_t (reply_parts));
+                    auto header =
+                      msg::envelope_codec_t{}.decode_header (msg::message_parts_t (reply_parts));
                     ASSERT_TRUE (header);
                     EXPECT_EQ ("pending-route-storage", header.value ().correlation_id);
                     EXPECT_EQ (fail_handler ? msg::message_kind_t::error
@@ -312,8 +312,8 @@ TEST (RouteHandlerBoundary, PendingMeshReplyOwnsNativeStorageAndScopeUntilTermin
                     if (fail_handler)
                         EXPECT_EQ ("internal_failure", header.value ().error_code);
                     else {
-                        auto body = msg::envelope_codec_t{}.decode_body (
-                          msg::message_parts_t (reply_parts));
+                        auto body =
+                          msg::envelope_codec_t{}.decode_body (msg::message_parts_t (reply_parts));
                         ASSERT_TRUE (body);
                         EXPECT_EQ ("1", body.value ().to_string ());
                     }
@@ -346,8 +346,8 @@ class route_host_fixture_service_t final : public hosted_service_t,
         registration->core_context =
           detail::zlink_builder_access_t::shared_core_context (app.advanced ().zlink ());
         host = std::make_unique<runtime::mesh_node_host_service_t> (
-          failures, std::vector{registration},
-          services->get_required<serializer_registry_t> (), app.advanced ().handlers ());
+          failures, std::vector{registration}, services->get_required<serializer_registry_t> (),
+          app.advanced ().handlers ());
         host->start (*services).result ().value ();
     }
 
@@ -458,7 +458,8 @@ TEST (RouteHandlerBoundary, HostedOrdinaryHandoffAllowsSameAndSubsequentClaims)
     const bool second = enqueue (2);
     mailbox.end_application_receive_turn ();
     ASSERT_TRUE (first && second);
-    ASSERT_TRUE (wait ([&] { return state.instructions == 2 && state.terminals == 1 && state.destroyed == 1; }, 1s))
+    ASSERT_TRUE (wait (
+      [&] { return state.instructions == 2 && state.terminals == 1 && state.destroyed == 1; }, 1s))
       << "the bounded claim did not enter r2 while r1 was pending";
     EXPECT_EQ (2, permits);
     EXPECT_EQ (1, state.destroyed);
@@ -609,10 +610,9 @@ TEST (RouteHandlerBoundary, HostStopWaitsForPhysicalOrdinaryHandlerTerminal)
     host_stop_route_state_t state;
     auto entered = state.gate.entered.get_future ();
     auto app = app_t::create ();
-    app.advanced ().services ().add_factory<host_stop_route_handler_t> (
-      [&] (service_provider_t &) {
-          return std::unique_ptr<host_stop_route_handler_t> (new host_stop_route_handler_t{state});
-      });
+    app.advanced ().services ().add_factory<host_stop_route_handler_t> ([&] (service_provider_t &) {
+        return std::unique_ptr<host_stop_route_handler_t> (new host_stop_route_handler_t{state});
+    });
     auto &options = app.add_zlink_framework ();
     options.add_location_store (std::make_shared<runtime::in_memory_location_store_t> ());
     options.add_route_mesh ("route-stop-infrastructure")

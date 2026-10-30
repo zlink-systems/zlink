@@ -12,6 +12,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <memory>
 
 namespace zlink::framework::detail
 {
@@ -39,16 +40,22 @@ class route_packet_dispatcher_t
 
     task_t<std::optional<route_dispatch_reply_t>>
     dispatch (const route_received_packet_t &received,
-              runtime::messaging::envelope_header_t header) const;
+              runtime::messaging::envelope_header_t header,
+              runtime::application_dispatch_terminal_owner_t terminal = {},
+              runtime::offload_executor_t *executor = nullptr) const;
 
   private:
     task_t<std::optional<route_dispatch_reply_t>>
     dispatch_send (const route_received_packet_t &received,
-                   runtime::messaging::envelope_header_t header) const;
+                   runtime::messaging::envelope_header_t header,
+                   runtime::application_dispatch_terminal_owner_t terminal = {},
+                   runtime::offload_executor_t *executor = nullptr) const;
 
     task_t<std::optional<route_dispatch_reply_t>>
     dispatch_request (const route_received_packet_t &received,
-                      runtime::messaging::envelope_header_t header) const;
+                      runtime::messaging::envelope_header_t header,
+                      runtime::application_dispatch_terminal_owner_t terminal = {},
+                      runtime::offload_executor_t *executor = nullptr) const;
 
     std::string _router_channel_id;
     service_provider_t *_services = nullptr;
