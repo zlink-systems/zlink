@@ -291,6 +291,11 @@ final class ZLinkJavaRawSubmissionFailureContractTest {
         }
 
         @Override
+        public List<ConnectionAttempt> connectionAttemptsSnapshot() {
+            return nativeSocket.connectionAttemptsSnapshot();
+        }
+
+        @Override
         public SendOperation send(RoutingId v) {
             return nativeSocket.send(v);
         }
