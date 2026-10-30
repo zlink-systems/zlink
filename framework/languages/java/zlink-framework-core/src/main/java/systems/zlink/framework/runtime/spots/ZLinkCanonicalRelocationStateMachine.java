@@ -89,6 +89,13 @@ final class ZLinkCanonicalRelocationStateMachine
     private Runnable sourceQuiescenceChanged = () -> {};
     private final java.util.function.BooleanSupplier targetAdmissionSealed;
 
+    record AttemptCounts(int sources, int targets, int terminalTargets) {}
+
+    AttemptCounts attemptCountsForTest() {
+        return inStateLane(
+                () -> new AttemptCounts(sources.size(), targets.size(), terminalTargets.size()));
+    }
+
     @Override
     public boolean sourceStopped() {
         return node.status().state() == MeshNodeState.STOPPED;

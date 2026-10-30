@@ -846,6 +846,10 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             assert (debugProbe = new AsyncDrainProbe()) != null;
         }
 
+        List<AsyncDrainProbe.Pending> pendingDrainWork() {
+            return inStateLane(this, debugProbe::pending);
+        }
+
         /** The target commit ends the Restore and returns its activation admission. */
         private void markPublished() {
             published = true;
