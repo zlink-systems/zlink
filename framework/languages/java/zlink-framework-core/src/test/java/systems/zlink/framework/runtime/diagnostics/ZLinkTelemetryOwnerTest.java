@@ -215,25 +215,35 @@ class ZLinkTelemetryOwnerTest {
         var options =
                 new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        var target = systems.zlink.contracts.core.RoutingId.from("telemetry-owner");
+        options.addRouteMesh("telemetry")
+                .listen("inproc://telemetry-owner-" + java.util.UUID.randomUUID())
+                .setRoutingId(target);
         var runtime =
                 systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.start(
                         options,
                         new systems.zlink.framework.runtime.binding
                                 .ZLinkJavaBackendAdapterFactory());
-        var field = runtime.getClass().getDeclaredField("telemetryHost");
-        field.setAccessible(true);
-        var host = (ZLinkTelemetryOwner.Host) field.get(runtime);
+        Runnable request =
+                () ->
+                        assertThrows(
+                                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                () ->
+                                        runtime.route()
+                                                .requestToNode("telemetry", target, "probe")
+                                                .timeout(java.time.Duration.ofSeconds(5))
+                                                .submit_sync(String.class));
         try (var provider = new Provider()) {
-            var tracer = tracer(host, options());
-            emit(tracer, 1);
+            request.run();
             provider.awaitEntered();
-            emit(tracer, 2);
+            request.run();
+            assertTrue(ZLinkTelemetryOwner.state().pending() > 0);
             var closed = java.util.concurrent.CompletableFuture.runAsync(runtime::close);
             try {
                 closed.get(5, TimeUnit.SECONDS);
                 assertTrue(ZLinkTelemetryOwner.state().executing());
                 assertEquals(0, ZLinkTelemetryOwner.state().pending());
-                emit(tracer, 3);
+                request.run();
                 assertEquals(0, ZLinkTelemetryOwner.state().pending());
             } finally {
                 provider.release.countDown();

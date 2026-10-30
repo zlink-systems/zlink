@@ -147,12 +147,6 @@
       "d9fd253d7b75e6397973ebb2b1ef0c1ee0fd63676418e2a6439910ff130ecbf4": 1
     }
   },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkInstanceRecoveryDeadlineTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "3f74b21a50c1de8d788007bf0652c54e95adbcd688c8c2f8bae26f3d6ce98078": 1
-    }
-  },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshNodeIsolationTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
