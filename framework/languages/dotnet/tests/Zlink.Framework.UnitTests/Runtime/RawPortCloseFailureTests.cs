@@ -20,11 +20,7 @@ public sealed class RawPortCloseFailureTests
         var proxy = (CloseFailureProxy)(object)router;
         proxy.Inner = socket;
         proxy.BlockClose = true;
-        var node = new ZLinkManagedMeshNode(
-            context,
-            "blocked-mesh",
-            directRequestSocket: router
-        );
+        var node = new ZLinkManagedMeshNode(context, "blocked-mesh", directRequestSocket: router);
         var first = node.DisposeAsync().AsTask();
         await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var second = node.DisposeAsync().AsTask();
@@ -294,10 +290,7 @@ public sealed class RawPortCloseFailureTests
                 new ZLinkLocationRuntimeSnapshot("healthy", null, null)
             );
             Assert.True(
-                SpinWait.SpinUntil(
-                    () => runtime.SocketCreationCount > 0,
-                    TimeSpan.FromSeconds(5)
-                )
+                SpinWait.SpinUntil(() => runtime.SocketCreationCount > 0, TimeSpan.FromSeconds(5))
             );
             first = runtime.DisposeAsync().AsTask();
             await proxy.CloseAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -368,11 +361,7 @@ public sealed class RawPortCloseFailureTests
         var router = DispatchProxy.Create<IRouterSocket, CloseFailureProxy>();
         var proxy = (CloseFailureProxy)(object)router;
         proxy.Inner = socket;
-        var node = new ZLinkManagedMeshNode(
-            context,
-            "close-failure",
-            directRequestSocket: router
-        );
+        var node = new ZLinkManagedMeshNode(context, "close-failure", directRequestSocket: router);
         Assert.Same(
             proxy.Failure,
             await Assert.ThrowsAsync<InvalidOperationException>(async () =>
