@@ -371,6 +371,12 @@ route_channel_runtime_t::request_backend_parts (const std::shared_ptr<state_t> &
     request_backend_t backend;
     auto prepared = _state->_lane.run_sync (
       [&] () -> result_t<request_task_t<runtime::messaging::message_parts_t>> {
+          const auto timeout = remaining_request_timeout (deadline);
+          if (timeout <= std::chrono::milliseconds::zero ()) {
+              return detail::boundary_failure<request_task_t<runtime::messaging::message_parts_t>> (
+                detail::boundary_error_t::timed_out,
+                "route request deadline expired before binding submission");
+          }
           if (auto connected = ensure_ready (_state); !connected) {
               return detail::propagate_failure<
                 request_task_t<runtime::messaging::message_parts_t>> (
@@ -387,12 +393,6 @@ route_channel_runtime_t::request_backend_parts (const std::shared_ptr<state_t> &
           packet->request_seq = _state->_pending_requests.next_request_seq ();
           append_outbound_unlocked (_state, packet->target_node_rid, packet->target_spot_id,
                                     packet->parts, packet->request_seq);
-          const auto timeout = remaining_request_timeout (deadline);
-          if (timeout <= std::chrono::milliseconds::zero ()) {
-              return detail::boundary_failure<request_task_t<runtime::messaging::message_parts_t>> (
-                detail::boundary_error_t::timed_out,
-                "route request deadline expired before binding submission");
-          }
           return result_t<request_task_t<runtime::messaging::message_parts_t>>::success (
             backend (packet->target_node_rid, packet->target_spot_id, packet->parts, timeout));
       });

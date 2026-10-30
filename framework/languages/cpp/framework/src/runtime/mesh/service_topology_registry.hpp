@@ -208,7 +208,8 @@ class service_topology_registry_t
     std::function<void ()>
     publish_connection_attempts_on_lane (std::vector<zlink::connection_attempt_t> attempts);
     struct topology_state_t;
-    std::function<void ()> publish_topology (std::shared_ptr<topology_state_t> next);
+    std::function<void ()> publish_topology (std::shared_ptr<topology_state_t> next,
+                                             std::function<void ()> handler);
 
     runtime::state_lane_t &_lane;
     struct topology_state_t

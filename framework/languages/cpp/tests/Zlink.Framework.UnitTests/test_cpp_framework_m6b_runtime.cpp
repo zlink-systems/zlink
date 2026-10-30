@@ -610,7 +610,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     (void) source_state;
     (void) new_state;
     old_target->configure_spot_route_fence_resolver (
-      [runtime = old_target.get ()] (zlink::routing_id_t, std::string, std::uint64_t)
+      [runtime = new_target.get ()] (zlink::routing_id_t, std::string, std::uint64_t)
         -> zlink::framework::task_t<std::optional<host::route_fence_t>> {
           co_return host::route_fence_t{1, 1, runtime->status ().lifecycle_generation ()};
       });
@@ -6533,15 +6533,21 @@ void verify_node_request_requires_remote_admission ()
     target.expect_peer (source_descriptor);
     assert (source.connect_peer (target.endpoint (), target_descriptor));
 
+    using request_result_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
+    std::promise<request_result_t> promise;
+    auto future = promise.get_future ();
     const auto deadline = mesh::service_liveness_registry_t::clock_t::now () + 5s;
-    // Transport readiness is not service admission. A Node direct request is
-    // rejected until the remote descriptor has completed service admission.
-    assert (!source
-               .request_to_node (target_descriptor.node_routing_id,
-                                 {"DeferredRequest", "application/json", bytes ("request")}, 2s,
-                                 [] (foundation::operation_terminal_t, zlink::message_t) {})
-               .result ()
-               .value ());
+    // Submit §5 keeps this request pending until remote service admission.
+    auto submitted = source.request_to_node (
+      target_descriptor.node_routing_id, {"DeferredRequest", "application/json", bytes ("request")},
+      2s,
+      [&promise] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+          promise.set_value ({terminal, native_payload.to_bytes ()});
+      },
+      4242);
+    assert (!submitted.await_ready ());
+    assert (target.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application) == 0);
+    assert (future.wait_for (0ms) != std::future_status::ready);
 
     while ((!ready_peer (source.topology (), target_descriptor.node_routing_id)
             || !ready_peer (target.topology (), source_descriptor.node_routing_id))
@@ -6558,21 +6564,7 @@ void verify_node_request_requires_remote_admission ()
     assert (source.topology ().peer (target_descriptor.node_routing_id));
     assert (target.topology ().peer (source_descriptor.node_routing_id));
 
-    using request_result_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
-    std::promise<request_result_t> promise;
-    auto future = promise.get_future ();
-    assert (
-      source
-        .request_to_node (
-          target_descriptor.node_routing_id,
-          {"DeferredRequest", "application/json", bytes ("request")}, 2s,
-          [&promise] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
-              auto payload = native_payload.to_bytes ();
-              promise.set_value ({terminal, std::move (payload)});
-          },
-          4242)
-        .result ()
-        .value ());
+    assert (submitted.result ().value ());
 
     std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
