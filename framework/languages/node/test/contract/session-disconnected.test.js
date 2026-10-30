@@ -525,13 +525,10 @@ test('physical disconnect preserves its captured binding while close uses the cu
 });
 
 test('malformed disconnect records a ProtocolError Warning at Errors level', async () => {
+  await telemetry.observed();
   telemetry.reset();
   let callbacks = 0;
-  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, {
-    reportUnhandledCallbackException(error) {
-      throw error;
-    }
-  });
+  const reporter = new ZLinkDispatchErrorReporter();
   const dispatch = new ZLinkSpotActorPacketDispatch({
     spot: {},
     spotId: () => 'spot',
@@ -556,6 +553,7 @@ test('malformed disconnect records a ProtocolError Warning at Errors level', asy
     ]);
   }
   assert.equal(callbacks, 0);
+  await telemetry.observed();
   const errors = telemetry.records.filter((r) => r.eventId === 'zlink.dispatch_error');
   assert.equal(errors.length, fixtures.rejected.length);
   for (const error of errors) {
@@ -563,3 +561,7 @@ test('malformed disconnect records a ProtocolError Warning at Errors level', asy
     assert.match(error.errorMessage, /ProtocolError/);
   }
 });
+
+// Provider bootstrap is test setup; message handling itself never waits for it.
+test.beforeEach(async () => telemetry.observed());
+test.after(() => telemetry.close());

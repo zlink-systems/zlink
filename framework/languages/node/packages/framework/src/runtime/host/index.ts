@@ -128,6 +128,7 @@ import {
 } from '../diagnostics';
 import { METRIC_NAMES, MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { RuntimeEventQueue } from '../diagnostics/runtime-observation-queue';
+import { openTelemetryLease, renewTelemetryLease, retireTelemetryLease } from '../diagnostics/message-flow-delivery';
 import {
   ZLinkClientServerRuntimeProjection,
   ZLinkFanoutRuntimeProjection
@@ -336,7 +337,8 @@ export class ZLinkFrameworkRuntimeHost
   private readonly messageFlowModeCell: ZLinkMessageFlowModeCell = {
     mode: 'errors'
   };
-  private readonly dispatchErrorReporters = new WeakMap<
+  private telemetryLease = openTelemetryLease();
+  private dispatchErrorReporters = new WeakMap<
     ZLinkDispatchErrorSink,
     ZLinkDispatchErrorReporter
   >();
@@ -1490,6 +1492,13 @@ export class ZLinkFrameworkRuntimeHost
       return;
     }
 
+    const previousLease = this.telemetryLease;
+    this.telemetryLease = renewTelemetryLease(previousLease);
+    if (this.telemetryLease !== previousLease) {
+      this.dispatchErrorReporters = new WeakMap();
+      this.cachedDiagnosticsContext = undefined;
+    }
+
     this.setRuntimeState(ZLinkFrameworkRuntimeState.Preparing);
     this.lifecycleSink?.push('framework:start');
     const listenerRecords = new ZLinkListenerRecords();
@@ -1618,6 +1627,7 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   async stop(): Promise<void> {
+    retireTelemetryLease(this.telemetryLease);
     this.requests.close(
       new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ShuttingDown, 'Host stopped.')
     );
@@ -2886,6 +2896,7 @@ export class ZLinkFrameworkRuntimeHost
     return new ZLinkChannelRuntimeOptionsFactory({
       monitoringAdapter: this.backendAdapterFactory.createMonitoringAdapter(),
       messageFlowModeCell: this.messageFlowModeCell,
+      telemetryLease: this.telemetryLease,
       boundSessionRelay: this.boundSessionRelay,
       applicationJobQueue: this.applicationJobQueue,
       spotManager: () => this.spotManager,
@@ -3426,13 +3437,7 @@ export class ZLinkFrameworkRuntimeHost
     if (existing !== undefined) {
       return existing;
     }
-    const reporter = new ZLinkDispatchErrorReporter(
-      undefined,
-      undefined,
-      errorSink,
-      this.diagnosticsContext(),
-      this.metrics
-    );
+    const reporter = new ZLinkDispatchErrorReporter(this.diagnosticsContext(), this.metrics);
     this.dispatchErrorReporters.set(errorSink, reporter);
     return reporter;
   }
@@ -3456,7 +3461,8 @@ export class ZLinkFrameworkRuntimeHost
     this.cachedDiagnosticsContext ??= createDiagnosticsContext(
       this.options.registration.dispatch,
       this.options.providerResolver,
-      this.messageFlowModeCell
+      this.messageFlowModeCell,
+      this.telemetryLease
     );
     return this.cachedDiagnosticsContext;
   }

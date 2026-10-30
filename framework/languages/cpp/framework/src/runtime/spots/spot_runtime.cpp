@@ -24,9 +24,11 @@
 #include "runtime/locations/sha256.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
+#include "runtime/configuration/request_defaults.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
@@ -5559,6 +5561,7 @@ task_t<std::optional<spot_ref_t>> spot_manager_t::find (spot_id_t spot_id) const
 
 task_t<bool> spot_manager_t::close (spot_ref_t spot)
 {
+    const auto entered = std::chrono::steady_clock::now ();
     if (const auto source = _source.lock ()) {
         try {
             source->ensure_relocation_turn_open ();
@@ -5571,12 +5574,14 @@ task_t<bool> spot_manager_t::close (spot_ref_t spot)
         return task_t<bool> (
           result_t<bool>::failure (framework_error_kind_t::not_configured,
                                    "Spot manager is not connected to a Location runtime"));
+    const auto deadline = entered + runtime::configuration::default_request_timeout;
+    const auto wire_deadline = runtime::messaging::request_deadline_unix_ms (deadline);
     const auto close_user_spot = _state->lane.run ([&] { return _state->close_user_spot; }).get ();
     if (!close_user_spot)
         return task_t<bool> (
           result_t<bool>::failure (framework_error_kind_t::not_configured,
                                    "Spot manager is not connected to a Location runtime"));
-    return close_user_spot (std::move (spot));
+    return close_user_spot (std::move (spot), deadline, wire_deadline);
 }
 
 std::optional<actor_ref_t> spot_manager_t::current_actor_ref (const actor_ref_t &actor_ref) const
@@ -13931,6 +13936,7 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id,
 
 void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
                                                  std::uint64_t object_generation,
+                                                 std::chrono::system_clock::time_point deadline,
                                                  service::spot_close_begin_t begin,
                                                  service::spot_close_done_t done)
 {
@@ -13944,7 +13950,8 @@ void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
                    })
                    .get ();
     if (state) {
-        state->request_close (std::move (begin), std::move (done));
+        state->request_close (std::move (begin), std::move (done),
+                              spot_close_reason_t::explicit_close, deadline);
         return;
     }
     // 해당 generation의 local activation이 없으면 기존 authority owner가

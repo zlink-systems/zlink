@@ -7,15 +7,13 @@ import {
   type ZLinkDispatchFailure
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import {
-  type ZLinkRuntimeMetrics,
   DEFAULT_ZLINK_DIAGNOSTICS,
   ZLinkMessageFlowTracer,
   type ZLinkDiagnosticsContext
-} from '../diagnostics';
+} from '../diagnostics/message-flow';
 
 import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
-import type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
-import { METRIC_NAMES } from '../diagnostics/runtime-metrics';
+import { METRIC_NAMES, type ZLinkRuntimeMetrics } from '../diagnostics/runtime-metrics';
 
 export type { ZLinkDispatchErrorSink } from '../diagnostics/dispatch-error-port';
 
@@ -29,14 +27,11 @@ export class ZLinkDispatchErrorReporter {
   /**
    * Success-path tracer companion: every surface already receives a reporter, so
    * exposing the flow tracer here wires all dispatch sites without threading a new
-   * parameter. Shares the same diagnostics context (live mode) and error sink.
+   * parameter. Shares the diagnostics context and host submission lease.
    */
   readonly flow: ZLinkMessageFlowTracer;
 
   constructor(
-    _observerType: undefined,
-    _providerResolver: unknown,
-    errorSink: ZLinkDispatchErrorSink,
     ctx?: ZLinkDiagnosticsContext,
     readonly metrics?: ZLinkRuntimeMetrics
   ) {
@@ -45,7 +40,7 @@ export class ZLinkDispatchErrorReporter {
       liveMode: { mode: 'errors' },
       sourceMeshGeneration: 0n
     };
-    this.flow = new ZLinkMessageFlowTracer(flowCtx, errorSink);
+    this.flow = new ZLinkMessageFlowTracer(flowCtx);
   }
 
   report(event: ZLinkRuntimeDispatchFailure): void {

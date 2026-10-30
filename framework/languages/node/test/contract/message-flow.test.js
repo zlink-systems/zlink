@@ -10,48 +10,18 @@ const { mapZLinkRequestReply, createZLinkRequest } = require('../../packages/fra
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { trace } = require('@opentelemetry/api');
-const { logs } = require('@opentelemetry/api-logs');
-const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 const {
   ZLinkRuntimeTaskErrorSink,
   ZLinkRuntimeTaskRunner
 } = require('../../packages/framework/dist/runtime/execution');
 
-const telemetryRecords = [];
-const traceRecords = [];
-let failTelemetryProvider = false;
 const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
-  new ZLinkRuntimeTaskErrorSink(),
-  new AbortController().signal
+  new ZLinkRuntimeTaskErrorSink(), new AbortController().signal
 );
-const loggerProvider = new LoggerProvider({
-  processors: [
-    {
-      onEmit(record) {
-        if (failTelemetryProvider) throw new Error('logger provider failed');
-        telemetryRecords.push(record);
-      },
-      forceFlush() {
-        return Promise.resolve();
-      },
-      shutdown() {
-        return Promise.resolve();
-      }
-    }
-  ]
-});
-logs.setGlobalLoggerProvider(loggerProvider);
-trace.setGlobalTracerProvider({
-  getTracer() {
-    return {
-      startSpan(eventName, options) {
-        traceRecords.push({ eventName, attributes: options.attributes });
-        return { setStatus() {}, end() {} };
-      }
-    };
-  }
-});
+const delivery = require('../../packages/framework/dist/runtime/diagnostics/message-flow-delivery');
+const observation = require('./fixtures/message-flow-observation.cjs')(delivery);
+const { telemetryRecords, traceRecords } = observation;
+const observeTelemetry = () => observation.observed();
 
 const framework = require('../../packages/framework/dist/internal');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
@@ -91,10 +61,6 @@ const ZLinkMessageFlowOutcome = {
 const ZLinkDispatchErrorSurface = { Channel: 'channel' };
 const ZLinkDispatchMessageKind = { Request: 'request' };
 
-function silentSink() {
-  return { reportRuntimeTaskException() {} };
-}
-
 function diagnostics(messageFlow, overrides = {}) {
   return {
     messageFlow,
@@ -104,20 +70,15 @@ function diagnostics(messageFlow, overrides = {}) {
   };
 }
 
-function makeTracer(diagnosticsOptions, sink = silentSink()) {
+function makeTracer(diagnosticsOptions) {
   const dispatch = { diagnostics: diagnosticsOptions };
   const cell = createMessageFlowModeCell(dispatch);
   const ctx = createDiagnosticsContext(dispatch, undefined, cell);
-  return { tracer: new ZLinkMessageFlowTracer(ctx, sink), cell };
+  return { tracer: new ZLinkMessageFlowTracer(ctx), cell };
 }
 
-test.beforeEach(() => {
-  telemetryRecords.length = 0;
-  traceRecords.length = 0;
-  failTelemetryProvider = false;
-});
-
-test.after(async () => loggerProvider.shutdown());
+test.beforeEach(async () => observation.reset());
+test.after(() => observation.close());
 
 test('message-flow async and sync controls complete before observation', async () => {
   const host = new framework.ZLinkFrameworkRuntimeHost({
@@ -185,10 +146,11 @@ test('message-flow begin rejects a sampled-out event before its trace DTO is bui
   );
 });
 
-test('MFLOW-003/005 standard logger provider receives the structured record', () => {
+test('MFLOW-003/005 standard logger provider receives the structured record', async () => {
   const { tracer } = makeTracer(diagnostics('normal'));
   tracer.trace(receivedEvent());
   assert.equal(tracer.tracedCount, 1);
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 1);
   const record = telemetryRecords[0];
   assert.equal(record.eventName, 'zlink.message_flow');
@@ -202,23 +164,18 @@ test('MFLOW-003/005 standard logger provider receives the structured record', ()
   assert.equal(record.attributes.correlation_id, 'corr-1');
 });
 
-test('MFLOW-004 provider failures do not change the message operation', () => {
-  const failures = [];
-  const { tracer } = makeTracer(diagnostics('normal'), {
-    reportRuntimeTaskException(taskName, error) {
-      failures.push({ taskName, error });
-    }
-  });
-  failTelemetryProvider = true;
+test('MFLOW-004 provider failures do not change the message operation', async () => {
+  const { tracer } = makeTracer(diagnostics('normal'));
+  const beforeFailures = tracer.providerFailureCount;
+  await observation.fail();
   assert.doesNotThrow(() => tracer.trace(receivedEvent()));
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].taskName, 'logger-provider');
-  assert.equal(failures[0].error.message, 'logger provider failed');
-  assert.equal(tracer.providerFailureCount, 1);
+  await observeTelemetry();
+  assert.match(observation.fallbackRecords[0], /logger.*Error: logger provider failed/);
+  assert.equal(tracer.providerFailureCount - beforeFailures, 1);
 });
 
-test('dispatch errors record service-wire command and deepest handler cause', () => {
-  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+test('dispatch errors record service-wire command and deepest handler cause', async () => {
+  const reporter = new ZLinkDispatchErrorReporter({
     diagnostics: diagnostics('errors'),
     liveMode: { mode: 'errors' }
   });
@@ -234,6 +191,7 @@ test('dispatch errors record service-wire command and deepest handler cause', ()
     })
   });
 
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 1);
   const attributes = traceRecords[0].attributes;
   assert.equal(attributes.command_id, 34);
@@ -249,7 +207,7 @@ test('dispatch errors record service-wire command and deepest handler cause', ()
   );
 });
 
-test('dispatch trace and log share bounded redacted handler details', () => {
+test('dispatch trace and log share bounded redacted handler details', async () => {
   const errorMessage = `Authorization: Bearer auth Bearer standalone password=p token=t ${'x'.repeat(513)}\n at Secret.Handler`;
   const expectedMessage =
     `Authorization: <redacted> Bearer <redacted> password=<redacted> token=<redacted> ${'x'.repeat(513)}`.slice(
@@ -258,7 +216,7 @@ test('dispatch trace and log share bounded redacted handler details', () => {
     );
   const error = new Error(errorMessage);
   error.stack = 'Error: stack trace must not be recorded';
-  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+  const reporter = new ZLinkDispatchErrorReporter({
     diagnostics: diagnostics('errors'),
     liveMode: { mode: 'errors' }
   });
@@ -272,6 +230,7 @@ test('dispatch trace and log share bounded redacted handler details', () => {
     error
   });
 
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 1);
   const record = telemetryRecords[0];
   const attributes = traceRecords[0].attributes;
@@ -289,8 +248,8 @@ test('dispatch trace and log share bounded redacted handler details', () => {
   assert.doesNotMatch(record.body, /Secret\.Handler/);
 });
 
-test('dispatch trace and log keep an empty error message', () => {
-  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+test('dispatch trace and log keep an empty error message', async () => {
+  const reporter = new ZLinkDispatchErrorReporter({
     diagnostics: diagnostics('errors'),
     liveMode: { mode: 'errors' }
   });
@@ -302,6 +261,7 @@ test('dispatch trace and log keep an empty error message', () => {
     error: new Error('')
   });
 
+  await observeTelemetry();
   assert.equal(traceRecords[0].attributes.error_type, 'Error');
   assert.equal(traceRecords[0].attributes.error_message, '');
   assert.equal(telemetryRecords[0].attributes.error_type, 'Error');
@@ -336,7 +296,7 @@ test('MFLOW-009 reads live mode independently at every transition in one ambient
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Dispatched), false);
 });
 
-test('spec 26 phases and outcomes use the closed vocabulary', () => {
+test('spec 26 phases and outcomes use the closed vocabulary', async () => {
   const { tracer } = makeTracer(diagnostics('normal', { sampleRate: 0 }));
   const phases = [
     ZLinkMessageFlowOutcome.Admitted,
@@ -347,6 +307,7 @@ test('spec 26 phases and outcomes use the closed vocabulary', () => {
     tracer.trace({ ...receivedEvent(), outcome });
   }
 
+  await observeTelemetry();
   assert.deepEqual(
     telemetryRecords.map((record) => record.attributes.phase),
     ['backpressured']
@@ -355,13 +316,14 @@ test('spec 26 phases and outcomes use the closed vocabulary', () => {
   assert.equal(traceRecords[0].attributes.outcome, 'backpressured');
 });
 
-test('request failure terminals remain visible at Errors level', () => {
+test('request failure terminals remain visible at Errors level', async () => {
   const { tracer } = makeTracer(diagnostics('errors', { sampleRate: 0 }));
   tracer.trace({
     ...receivedEvent(),
     outcome: 'replyReceived',
     result: 'failed'
   });
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 1);
   assert.equal(telemetryRecords[0].attributes.phase, 'reply_received');
   assert.equal(telemetryRecords[0].attributes.outcome, 'failed');
@@ -394,6 +356,7 @@ test(`node direct request records one source flow with sent and reply terminal (
   );
 
   assert.deepEqual(await deliver(transport.request('mesh', 'target', 'Probe', { value: 1 }, 1000)), { ok: true });
+  await observeTelemetry();
   assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
   assert.match(telemetryRecords[0].attributes.flow_id, /^[0-9a-f-]{36}$/i);
   assert.match(telemetryRecords[0].attributes.correlation_id, /^[0-9a-f]{32}$/i);
@@ -405,6 +368,7 @@ test(`node direct request records one source flow with sent and reply terminal (
   telemetryRecords.length = 0;
   failure = true;
   await assert.rejects(() => deliver(transport.request('mesh', 'target', 'Probe', { value: 2 }, 1000)));
+  await observeTelemetry();
   assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
   assert.equal(telemetryRecords[1].attributes.outcome, 'failed');
   assert.equal(telemetryRecords[0].attributes.flow_id, telemetryRecords[1].attributes.flow_id);
@@ -415,7 +379,7 @@ test(`node direct request records one source flow with sent and reply terminal (
 
 }
 
-test('spec 26 maps every added surface and control without admitting publish as a flow kind', () => {
+test('spec 26 maps every added surface and control without admitting publish as a flow kind', async () => {
   const { tracer } = makeTracer(diagnostics('normal'));
   for (const surface of ['node', 'actorRelocation', 'classicFanout']) {
     tracer.trace({
@@ -424,6 +388,7 @@ test('spec 26 maps every added surface and control without admitting publish as 
       messageKind: surface === 'actorRelocation' ? 'control' : 'send'
     });
   }
+  await observeTelemetry();
   assert.deepEqual(
     telemetryRecords.map((record) => [record.attributes.surface, record.attributes.message_kind]),
     [
@@ -438,7 +403,7 @@ test('spec 26 maps every added surface and control without admitting publish as 
   );
 });
 
-test('spec 26 structured log projection uses only the exact keys', () => {
+test('spec 26 structured log projection uses only the exact keys', async () => {
   const { tracer } = makeTracer(diagnostics('detailed', { includeMessageSizes: true }));
   tracer.trace({
     ...receivedEvent(),
@@ -448,6 +413,7 @@ test('spec 26 structured log projection uses only the exact keys', () => {
     messageSize: 42,
     durationSeconds: 0.125
   });
+  await observeTelemetry();
   const keys = Object.keys(telemetryRecords[0].attributes).sort();
   //  기록의 attribute 이름은 Message flow tracing 3.2가 고정한다. `zlink flow:` 본문의
   //  축약 key(`kind`, `mesh` …)는 별도 집합이며 본문 문자열에만 쓴다.
@@ -479,13 +445,15 @@ test('spec 26 structured log projection uses only the exact keys', () => {
     'topic'
   ];
   assert.deepEqual(keys, allowed.filter((key) => keys.includes(key)).sort());
+  await observeTelemetry();
   assert.equal(telemetryRecords[0].attributes.server_rid, 'server-1');
   assert.equal(traceRecords[0].attributes.duration_seconds, 0.125);
 });
 
-test('STREAM flow records carry the server session id through dispatch and reply', () => {
+test('STREAM flow records carry the server session id through dispatch and reply', async () => {
   const { tracer } = makeTracer(diagnostics('normal'));
   tracer.trace({ ...receivedEvent(), surface: 'streamSession' });
+  await observeTelemetry();
   assert.equal(telemetryRecords[0].attributes.stream_session_id, undefined);
   telemetryRecords.length = 0;
   traceRecords.length = 0;
@@ -501,6 +469,7 @@ test('STREAM flow records carry the server session id through dispatch and reply
       surface: 'streamSession'
     });
   });
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 2);
   for (const record of telemetryRecords) {
     assert.equal(record.attributes.stream_session_id, 'session-42');
@@ -509,7 +478,7 @@ test('STREAM flow records carry the server session id through dispatch and reply
   assert.equal(traceRecords[0].attributes.stream_session_id, 'session-42');
 });
 
-test('spec 26 flow-less sampling does not create a flow context and backpressure bypasses sampling', () => {
+test('spec 26 flow-less sampling does not create a flow context and backpressure bypasses sampling', async () => {
   const { tracer } = makeTracer(diagnostics('normal', { sampleRate: 0 }));
   assert.equal(flowContext.currentFlowContext(), undefined);
   tracer.trace({ ...receivedEvent(), sourceMeshGeneration: 17n });
@@ -520,6 +489,7 @@ test('spec 26 flow-less sampling does not create a flow context and backpressure
     result: 'backpressured',
     sourceMeshGeneration: 17n
   });
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 1);
   assert.equal(telemetryRecords[0].attributes.flow_id, undefined);
 });
@@ -536,8 +506,8 @@ function assertFlowPublication(index, eventId, fields) {
   if (fields.flow_id === undefined) assert.doesNotMatch(log.body, /(?:^| )flow=|(?:^| )origin=/);
 }
 
-test('Errors reporter omits foreign ambient Flow and session while retaining error', () => {
-  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+test('Errors reporter omits foreign ambient Flow and session while retaining error', async () => {
+  const reporter = new ZLinkDispatchErrorReporter({
     diagnostics: diagnostics('errors'), liveMode: { mode: 'errors' }
   });
   flowContext.runWithFlow({
@@ -548,6 +518,7 @@ test('Errors reporter omits foreign ambient Flow and session while retaining err
     action: 'drop', correlationId: 'report-corr', error: new Error('handler failed')
   }));
   assert.equal(reporter.reportedCount, 1);
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 1);
   assert.equal(traceRecords.length, 1);
   assertFlowPublication(0, 'zlink.dispatch_error', {
@@ -557,8 +528,8 @@ test('Errors reporter omits foreign ambient Flow and session while retaining err
   });
 });
 
-test('Errors reporter removes explicit Flow while retaining correlation', () => {
-  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+test('Errors reporter removes explicit Flow while retaining correlation', async () => {
+  const reporter = new ZLinkDispatchErrorReporter({
     diagnostics: diagnostics('errors'), liveMode: { mode: 'errors' }
   });
   flowContext.runWithFlow({
@@ -571,6 +542,7 @@ test('Errors reporter removes explicit Flow while retaining correlation', () => 
     error: new Error('explicit failure')
   }));
   assert.equal(reporter.reportedCount, 1);
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 1);
   assert.equal(traceRecords.length, 1);
   assertFlowPublication(0, 'zlink.dispatch_error', {
@@ -580,7 +552,7 @@ test('Errors reporter removes explicit Flow while retaining correlation', () => 
   });
 });
 
-test('Errors direct drops retain explicit session without borrowing ambient Flow or session', () => {
+test('Errors direct drops retain explicit session without borrowing ambient Flow or session', async () => {
   const { tracer } = makeTracer(diagnostics('errors'));
   flowContext.runWithFlow({
     flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
@@ -598,6 +570,7 @@ test('Errors direct drops retain explicit session without borrowing ambient Flow
     });
   });
   assert.equal(tracer.tracedCount, 2);
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 2);
   assert.equal(traceRecords.length, 2);
   for (const [index, corr, session] of [
@@ -611,7 +584,7 @@ test('Errors direct drops retain explicit session without borrowing ambient Flow
   }
 });
 
-test('Normal explicit Flow wins over ambient Flow and absent Flow inherits it', () => {
+test('Normal explicit Flow wins over ambient Flow and absent Flow inherits it', async () => {
   const { tracer } = makeTracer(diagnostics('normal'));
   const ambient = {
     flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
@@ -624,6 +597,7 @@ test('Normal explicit Flow wins over ambient Flow and absent Flow inherits it', 
     });
     tracer.trace({ ...receivedEvent(), correlationId: 'normal-ambient' });
   });
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 2);
   assert.equal(traceRecords.length, 2);
   for (const [index, corr, id, origin] of [
@@ -638,9 +612,9 @@ test('Normal explicit Flow wins over ambient Flow and absent Flow inherits it', 
   }
 });
 
-test('reporter reads live Errors at begin inside existing Normal Flow scope', () => {
+test('reporter reads live Errors at begin inside existing Normal Flow scope', async () => {
   const cell = { mode: 'normal' };
-  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+  const reporter = new ZLinkDispatchErrorReporter({
     diagnostics: diagnostics('normal'), liveMode: cell
   });
   flowContext.runWithFlow({
@@ -654,6 +628,7 @@ test('reporter reads live Errors at begin inside existing Normal Flow scope', ()
     });
   });
   assert.equal(reporter.reportedCount, 1);
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 1);
   assert.equal(traceRecords.length, 1);
   assertFlowPublication(0, 'zlink.dispatch_error', {
@@ -663,7 +638,7 @@ test('reporter reads live Errors at begin inside existing Normal Flow scope', ()
   });
 });
 
-test('begin keeps Normal snapshot when live mode changes before trace-point trace', () => {
+test('begin keeps Normal snapshot when live mode changes before trace-point trace', async () => {
   const { tracer, cell } = makeTracer(diagnostics('normal'));
   const ambient = {
     flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
@@ -679,6 +654,7 @@ test('begin keeps Normal snapshot when live mode changes before trace-point trac
     });
   });
   assert.equal(tracer.tracedCount, 1);
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 1);
   assert.equal(traceRecords.length, 1);
   assertFlowPublication(0, 'zlink.message_flow', {
@@ -688,8 +664,8 @@ test('begin keeps Normal snapshot when live mode changes before trace-point trac
   });
 });
 
-test('dispatch reporter Off gate skips trace formatting and trace-only counters', () => {
-  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+test('dispatch reporter Off gate skips trace formatting and trace-only counters', async () => {
+  const reporter = new ZLinkDispatchErrorReporter({
     diagnostics: diagnostics('off'),
     liveMode: { mode: 'off' }
   });
@@ -709,6 +685,7 @@ test('dispatch reporter Off gate skips trace formatting and trace-only counters'
     })
   );
   assert.equal(reporter.reportedCount, 0);
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 0);
   assert.equal(traceRecords.length, 0);
 });
@@ -978,6 +955,7 @@ test('classic fanout omits normal delivery flow and reports only subscriber-loca
 });
 
 test('logical multicast target submission failure reports stale target without changing publish terminal', async () => {
+  await observeTelemetry();
   telemetryRecords.length = 0;
   traceRecords.length = 0;
   let readyChecks = 0;
@@ -1034,6 +1012,7 @@ test('logical multicast target submission failure reports stale target without c
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(result.status, 'submitted');
+  await observeTelemetry();
   assert.equal(telemetryRecords.length, 1, 'expected one emitted dispatch-error record');
   const attributes = telemetryRecords.at(-1).attributes;
   assert.equal(attributes.event_id, 'zlink.dispatch_error');
@@ -1099,7 +1078,7 @@ test('channel one-way flow records queue admission, handler start, and terminal 
   assert.deepEqual(phases, ['received', 'admitted', 'dispatched', 'completed']);
 });
 
-test('MFLOW-EXT flow sampling keeps or drops every event in one flow together', () => {
+test('MFLOW-EXT flow sampling keeps or drops every event in one flow together', async () => {
   const { tracer } = makeTracer(diagnostics('normal', { sampleRate: 0.5 }));
   const flow = {
     flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
@@ -1112,6 +1091,7 @@ test('MFLOW-EXT flow sampling keeps or drops every event in one flow together', 
     ...flow,
     outcome: ZLinkMessageFlowOutcome.Dispatched
   });
+  await observeTelemetry();
   assert.ok(
     telemetryRecords.length === 0 || telemetryRecords.length === 2,
     `sampled ${telemetryRecords.length} of 2 events`
@@ -1164,6 +1144,7 @@ test('MFLOW-EXT channel wire and outbound trace use the same created flow', asyn
           const { tracer } = makeTracer(diagnostics('normal'));
           tracer.trace(receivedEvent());
         });
+        await observeTelemetry();
         assert.equal(telemetryRecords[0].attributes.flow_id, header.flowId);
         assert.equal(header.flowOrigin, 3);
         // Spec 27 §3 value set: telemetry emits lowercase origins in every
@@ -1649,7 +1630,7 @@ const {
 const boundSessionWire = require('../../packages/framework/dist/runtime/actors/bound-session-wire');
 
 function makeDispatchErrorReporter(mode = 'errors') {
-  return new ZLinkDispatchErrorReporter(undefined, undefined, silentSink(), {
+  return new ZLinkDispatchErrorReporter({
     diagnostics: diagnostics(mode),
     liveMode: { mode },
     sourceMeshGeneration: 1n
@@ -1716,6 +1697,7 @@ test('MFLOW-MAL malformed request envelope replies protocol error and records in
   assert.equal(replyHeader.errorCode, 'protocol_error'); // ProtocolError
   assert.equal(replyHeader.correlationId, 'corr-malformed');
 
+  await observeTelemetry();
   assert.equal(traceRecords.length, 1);
   const attributes = traceRecords[0].attributes;
   assert.equal(attributes.event_id, 'zlink.dispatch_error');
@@ -1763,6 +1745,7 @@ test('MFLOW-MAL malformed one-way envelope drops and records invalid_frame/drop'
   );
 
   assert.equal(replied, false);
+  await observeTelemetry();
   assert.equal(traceRecords.length, 1);
   const attributes = traceRecords[0].attributes;
   assert.equal(attributes.event_id, 'zlink.dispatch_error');

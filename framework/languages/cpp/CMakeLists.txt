@@ -2441,6 +2441,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)
   target_use_zlink_gtest_main(test_cpp_framework_spot_close_conformance)
   target_link_libraries(test_cpp_framework_spot_close_conformance PRIVATE
+    opentelemetry-cpp::metrics
     zlink::framework
     zlink::stream_connector
     nlohmann_json::nlohmann_json)

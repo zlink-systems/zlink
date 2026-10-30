@@ -286,7 +286,8 @@ using spot_close_done_t = std::function<void (result_t<bool>)>;
 /* The owner runtime runs a Close for one local User Spot on that Spot's
  * lifecycle lane and reports its result through `done`. */
 using user_spot_closer_t =
-  std::function<void (const std::string &, std::uint64_t, spot_close_begin_t, spot_close_done_t)>;
+  std::function<void (const std::string &, std::uint64_t, std::chrono::system_clock::time_point,
+                       spot_close_begin_t, spot_close_done_t)>;
 
 /* Continues a Close step when `task` completes. `resume` returns the
  * continuation to the Spot lifecycle turn that waits for the step, which
@@ -785,7 +786,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                       actor_create_operation_completion_t completion);
     task_t<bool> close_user_spot_remote (const zlink::routing_id_t &target_node,
                                          protocol::user_spot_close_header_t request,
-                                         std::chrono::milliseconds timeout,
+                                         std::chrono::steady_clock::time_point deadline,
                                          user_spot_close_completion_t completion);
 
     spot_handle_t entry_spot ();

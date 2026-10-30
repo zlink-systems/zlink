@@ -670,8 +670,11 @@ export class ZLinkStreamSessionRuntime {
     this.closeReason = closeReason;
     this.stopLivenessChecks();
     await this.stream.closeForReason(reason, diagnostic);
-    void this.serial
-      .executeFinal(async () => this.complete(undefined, true))
+    const bindingsCleanup = this.context.cleanupBindings();
+    void Promise.all([
+      bindingsCleanup,
+      this.serial.executeFinal(async () => this.complete(undefined, true, bindingsCleanup))
+    ])
       .catch((error) => this.options.onError?.(error));
   }
 
@@ -740,7 +743,11 @@ export class ZLinkStreamSessionRuntime {
     });
   }
 
-  private async complete(error: unknown, notifyDisconnected: boolean): Promise<void> {
+  private async complete(
+    error: unknown,
+    notifyDisconnected: boolean,
+    bindingsCleanup?: Promise<void>
+  ): Promise<void> {
     try {
       if (error !== undefined && this.closeReason !== 'server_drain') {
         this.closeReason = 'transport_error';
@@ -757,7 +764,7 @@ export class ZLinkStreamSessionRuntime {
         await session.onDisconnected?.(this.context);
       }
     } finally {
-      await this.cleanup();
+      await this.cleanup(bindingsCleanup);
     }
   }
 
@@ -765,20 +772,20 @@ export class ZLinkStreamSessionRuntime {
     if (this.disconnected || this.disconnectQueued) return;
     this.disconnectQueued = true;
     this.stopLivenessChecks();
-    void this.serial
-      .executeFinal(async () => {
+    this.stream.markTransportClosed();
+    const bindingsCleanup = this.context.cleanupBindings();
+    void Promise.all([
+      bindingsCleanup,
+      this.serial.executeFinal(async () => {
         this.disconnectQueued = false;
         if (this.disconnected) return;
-        this.stream.markTransportClosed();
         this.disconnected = true;
-        await this.complete(error, true);
+        await this.complete(error, true, bindingsCleanup);
       })
-      .catch(() => {
-        this.disconnectQueued = false;
-      });
+    ]).catch((failure) => this.options.onError?.(failure));
   }
 
-  private async cleanup(): Promise<void> {
+  private async cleanup(bindingsCleanup?: Promise<void>): Promise<void> {
     if (this.connected && !this.metricsClosed) {
       this.metricsClosed = true;
       this.options.metrics?.change(METRIC_NAMES.StreamConnectionsActive, -1, { transport: 'tcp' });
@@ -787,7 +794,7 @@ export class ZLinkStreamSessionRuntime {
         close_reason: normalizeStreamCloseReason(this.closeReason)
       });
     }
-    await this.context.cleanupBindings();
+    await (bindingsCleanup ?? this.context.cleanupBindings());
     this.removeSession(this.stream.sessionId, this);
   }
 

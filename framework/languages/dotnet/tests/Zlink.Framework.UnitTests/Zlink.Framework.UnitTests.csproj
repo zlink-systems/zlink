@@ -219,6 +219,7 @@
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
         <Compile Include="Runtime/ProviderRelocationRepositoryTests.cs"/>
         <Compile Include="Runtime/MessageFlowTracerTests.cs"/>
+        <Compile Include="Runtime/MessageFlowDeliveryTests.cs"/>
         <Compile Include="Runtime/MessageFollowSuppressionRegistryTests.cs"/>
         <Compile Include="Runtime/MessagePayloadOwnershipConvergenceTests.cs"/>
         <Compile Include="Runtime/MeshCompletionTableConvergenceTests.cs"/>
@@ -254,6 +255,7 @@
         <Compile Include="Runtime/StreamWireInteropTests.cs"/>
         <Compile Include="Runtime/StreamSessionLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
+        <Compile Include="Runtime/StreamDisconnectProgressTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
         <Compile Include="Runtime/StreamFrameWriteTests.cs"/>

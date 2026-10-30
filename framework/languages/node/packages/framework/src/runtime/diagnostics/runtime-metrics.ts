@@ -148,7 +148,7 @@ export const METRIC_NAMES = Object.freeze({
     'zlink.host.application_job_queue.flow_state_config_failures'
 } as const);
 
-const COUNTERS = Object.freeze({
+export const COUNTER_UNITS = Object.freeze({
   [METRIC_NAMES.StreamConnectionsOpened]: '{connection}',
   [METRIC_NAMES.StreamConnectionsClosed]: '{connection}',
   [METRIC_NAMES.MeshNodeChannelSelectionFailures]: '{failure}',
@@ -222,7 +222,7 @@ const OBSERVABLE_COUNTERS = Object.freeze({
   [METRIC_NAMES.HostApplicationJobQueueFlowStateConfigFailures]: '{failure}'
 } as const);
 
-type CounterName = keyof typeof COUNTERS;
+type CounterName = keyof typeof COUNTER_UNITS;
 type UpDownName = keyof typeof UP_DOWN_COUNTERS;
 type HistogramName = keyof typeof HISTOGRAMS;
 
@@ -238,7 +238,7 @@ class MetricRegistry {
   >();
 
   constructor(meter: ZLinkObservableMeter) {
-    for (const [name, unit] of Object.entries(COUNTERS)) {
+    for (const [name, unit] of Object.entries(COUNTER_UNITS)) {
       this.counters.set(name, meter.createCounter(name, { unit }));
     }
     for (const [name, unit] of Object.entries(UP_DOWN_COUNTERS)) {

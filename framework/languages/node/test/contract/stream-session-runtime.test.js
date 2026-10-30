@@ -2,17 +2,11 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const net = require('node:net');
 const test = require('node:test');
-const { logs } = require('@opentelemetry/api-logs');
-const { LoggerProvider } = require('@opentelemetry/sdk-logs');
-
-const telemetryRecords = [];
-logs.setGlobalLoggerProvider(new LoggerProvider({
-  processors: [{
-    onEmit(record) { telemetryRecords.push(record); },
-    forceFlush() { return Promise.resolve(); },
-    shutdown() { return Promise.resolve(); }
-  }]
-}));
+const observation = require('./fixtures/message-flow-observation.cjs')(
+  require('../../packages/framework/dist/runtime/diagnostics/message-flow-delivery'));
+const telemetryRecords = observation.telemetryRecords;
+test.beforeEach(async () => observation.observed());
+test.after(() => observation.close());
 
 const zlink = require('@zlink-systems/zlink');
 const connector = require('../../packages/stream-connector/dist');
@@ -415,15 +409,14 @@ test('session error and disconnect follow accepted packet callbacks', async () =
 test('stream session dispatch resolves only current Actor slots for sends and requests', async (t) => {
   const socket = new FakeStreamSocket();
   const dispatches = [];
+  await observation.observed();
   telemetryRecords.length = 0;
   const dispatch = {
     diagnostics: { messageFlow: 'normal', sampleRate: 1, includeMessageSizes: false }
   };
   const cell = framework.createMessageFlowModeCell(dispatch);
   const diagnostics = framework.createDiagnosticsContext(dispatch, undefined, cell);
-  const reporter = new ZLinkDispatchErrorReporter(
-    undefined, undefined, { reportRuntimeTaskException() {} }, diagnostics
-  );
+  const reporter = new ZLinkDispatchErrorReporter(diagnostics);
   let boundActor;
   let bindingReady;
   const bindingReadyPromise = new Promise((resolve) => { bindingReady = resolve; });
@@ -516,6 +509,7 @@ test('stream session dispatch resolves only current Actor slots for sends and re
   assert.equal(staleReply.header.kind, connector.ZlinkStreamMessageKind.Error);
   assert.equal(staleReply.header.requestSeq, 2n);
   assert.equal(JSON.parse(new TextDecoder().decode(staleReply.payload)).code, 'invalid_operation');
+  await observation.observed();
   const staleRecords = telemetryRecords.filter((record) =>
     (record.attributes.packet_name === 'StaleRequest' ||
       record.attributes.packet_name === 'StaleSend') &&
@@ -953,12 +947,7 @@ test('stream request dispatch emits exactly one replied terminal record (spec 26
   };
   const cell = framework.createMessageFlowModeCell(dispatch);
   const ctx = framework.createDiagnosticsContext(dispatch, undefined, cell);
-  const reporter = new ZLinkDispatchErrorReporter(
-    undefined,
-    undefined,
-    { reportRuntimeTaskException() {} },
-    ctx
-  );
+  const reporter = new ZLinkDispatchErrorReporter(ctx);
   let repliedResolve;
   const replied = new Promise((resolve) => { repliedResolve = resolve; });
   const runtime = createStreamRuntime({
@@ -2175,9 +2164,12 @@ test('stream session cleanup removes actor bindings without closing the stream a
   assert.equal(socket.disconnects.length, 0);
 });
 
-test('stream session onDisconnected can explicitly notify bound actors before cleanup', async () => {
+test('logical Actor disconnect before physical Session disconnect notifies once', async () => {
   const socket = new FakeStreamSocket();
   const events = [];
+  let boundActor;
+  let finishConnected;
+  const connected = new Promise((resolve) => { finishConnected = resolve; });
   const bindingRuntime = new framework.ZLinkStreamBindingRuntime({
     async notifyDisconnected(actor) {
       events.push(['actor-disconnected', actor.actorId]);
@@ -2190,10 +2182,10 @@ test('stream session onDisconnected can explicitly notify bound actors before cl
       return {
         context,
         async onConnected(ctx) {
-          await ctx.actors.bind({ nodeRid: 'node-a', actorId: 'actor-a', generation: 1 });
+          boundActor = await ctx.actors.bind({ nodeRid: 'node-a', actorId: 'actor-a', generation: 1 });
+          finishConnected();
         },
-        async onDisconnected(ctx) {
-          await ctx.actors.bound[0].notifyDisconnected();
+        async onDisconnected() {
           events.push(['session-disconnected']);
         }
       };
@@ -2201,6 +2193,10 @@ test('stream session onDisconnected can explicitly notify bound actors before cl
   }, 'session-disconnect');
 
   runtime.enqueueConnected();
+  await connected;
+  assert.notEqual(await bindingRuntime.find('actor-a'), undefined);
+  await boundActor.notifyDisconnected();
+  assert.equal(socket.disconnects.length, 0);
   runtime.enqueueDisconnected();
   await runtime.dispose();
 
@@ -2278,6 +2274,8 @@ for (const termination of ['logical', 'physical', 'disconnect-then-shutdown']) {
 test('physical stream disconnect automatically notifies every captured actor and always cleans up', async () => {
   const socket = new FakeStreamSocket();
   const events = [];
+  let finishConnected;
+  const connected = new Promise((resolve) => { finishConnected = resolve; });
   const bindingRuntime = new framework.ZLinkStreamBindingRuntime({
     async notifyDisconnected(actor) {
       events.push(actor.actorId);
@@ -2305,6 +2303,7 @@ test('physical stream disconnect automatically notifies every captured actor and
             objectGeneration: 1n,
             meshName: 'session-test'
           });
+          finishConnected();
         },
         async onDisconnected() {}
       };
@@ -2312,6 +2311,9 @@ test('physical stream disconnect automatically notifies every captured actor and
   }, 'session-auto-disconnect');
 
   runtime.enqueueConnected();
+  await connected;
+  assert.notEqual(await bindingRuntime.find('actor-a'), undefined);
+  assert.notEqual(await bindingRuntime.find('actor-b'), undefined);
   runtime.enqueueDisconnected();
   await runtime.dispose();
 
@@ -2322,9 +2324,13 @@ test('physical stream disconnect automatically notifies every captured actor and
 
 test('physical stream disconnect bounds a stalled actor callback by the lifecycle deadline', async () => {
   const socket = new FakeStreamSocket();
+  let callbacks = 0;
+  let finishConnected;
+  const connected = new Promise((resolve) => { finishConnected = resolve; });
   const bindingRuntime = new framework.ZLinkStreamBindingRuntime({
     actorBindTimeoutMs: 5,
     async notifyDisconnected() {
+      callbacks++;
       await new Promise(() => {});
     }
   });
@@ -2341,6 +2347,7 @@ test('physical stream disconnect bounds a stalled actor callback by the lifecycl
             objectGeneration: 1n,
             meshName: 'session-test'
           });
+          finishConnected();
         },
         async onDisconnected() {}
       };
@@ -2348,10 +2355,13 @@ test('physical stream disconnect bounds a stalled actor callback by the lifecycl
   }, 'session-stalled-disconnect');
 
   runtime.enqueueConnected();
+  await connected;
+  assert.notEqual(await bindingRuntime.find('actor-stalled'), undefined);
   runtime.enqueueDisconnected();
   await runtime.dispose();
 
   assert.equal(await bindingRuntime.find('actor-stalled'), undefined);
+  assert.equal(callbacks, 1);
 });
 
 test('stream session node runtime does not pull packets after dispose', async () => {
@@ -3078,12 +3088,7 @@ test('stream session runtime records a shutdown drop for frames the closed seria
   };
   const cell = framework.createMessageFlowModeCell(dispatch);
   const ctx = framework.createDiagnosticsContext(dispatch, undefined, cell);
-  const reporter = new ZLinkDispatchErrorReporter(
-    undefined,
-    undefined,
-    { reportRuntimeTaskException() {} },
-    ctx
-  );
+  const reporter = new ZLinkDispatchErrorReporter(ctx);
   const runtime = new framework.ZLinkStreamSessionRuntime({
     socket: new FakeStreamSocket(),
     dispatchErrors: reporter,

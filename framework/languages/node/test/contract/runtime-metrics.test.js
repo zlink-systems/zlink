@@ -392,16 +392,10 @@ test('RMETRIC Instance Spot population is one after creation and zero after rele
 test('RMETRIC-009 classic fanout drops are excluded from mesh-node drop metrics', async () => {
   const { provider, records } = collector();
   const metrics = new framework.ZLinkRuntimeMetrics(provider);
-  const reporter = new framework.ZLinkDispatchErrorReporter(
-    undefined,
-    undefined,
-    { reportRuntimeTaskException() {} },
-    {
+  const reporter = new framework.ZLinkDispatchErrorReporter({
       diagnostics: { messageFlow: 'off', sampleRate: 1, includeMessageSizes: false },
       liveMode: { mode: 'off' }
-    },
-    metrics
-  );
+    }, metrics);
   const dispatcher = new framework.ZLinkChannelPublishDispatcher({
     channelName: 'events',
     dispatchErrors: reporter,
@@ -424,12 +418,11 @@ test('RMETRIC-009 classic fanout drops are excluded from mesh-node drop metrics'
 });
 
 test('RMETRIC-015 off diagnostics do not emit flow records or overflow metrics', () => {
-  const { provider, records } = collector();
-  const metrics = new framework.ZLinkRuntimeMetrics(provider);
+  const { records } = collector();
   const tracer = new framework.ZLinkMessageFlowTracer({
     diagnostics: { messageFlow: 'off', sampleRate: 1, includeMessageSizes: false },
     liveMode: { mode: 'off' }
-  }, { reportRuntimeTaskException() {} }, metrics);
+  });
 
   assert.equal(framework.flowIfEnabled(tracer, 'received'), undefined);
   assert.equal(records.filter((record) => record.name === 'zlink.observability.events.overflow').length, 0);

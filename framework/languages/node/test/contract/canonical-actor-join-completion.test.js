@@ -1,12 +1,13 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
-const { trace } = require('@opentelemetry/api');
 const traceRecords = [];
-trace.setGlobalTracerProvider({ getTracer: () => ({ startSpan(_name, options) {
-  traceRecords.push(options.attributes);
-  return { setStatus() {}, end() {} };
-} }) });
+const observation = require('./fixtures/message-flow-observation.cjs')(
+  require('../../packages/framework/dist/runtime/diagnostics/message-flow-delivery'), {
+    onSpan(record) { traceRecords.push(record.attributes); }
+  });
+test.beforeEach(async () => observation.observed());
+test.after(() => observation.close());
 const { ZLinkDispatchErrorReporter } = require('../../packages/framework/dist/runtime/channels/dispatch-error-reporter');
 const { runWithFlow, currentOrCreateFlow } = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const { DefaultZLinkSpotManager } = require('../../packages/framework/dist/runtime/spots');
@@ -16,8 +17,7 @@ function fixture({ entry, lifecycleFailure, completionFailure, sourceLeaveFailur
   const completions = [];
   const notificationErrors = [];
   const dispatchFailures = [];
-  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined,
-    { reportRuntimeTaskException() {} }, {
+  const reporter = new ZLinkDispatchErrorReporter({
       diagnostics: { messageFlow: 'normal', sampleRate: 1, includeMessageSizes: false },
       liveMode: { mode: 'normal' }
     });
@@ -91,6 +91,7 @@ for (const entry of [false, true]) {
     const flow = currentOrCreateFlow('Lifecycle');
     const previousRecords = traceRecords.length;
     await assert.rejects(runWithFlow(flow, () => f.run()), error => error === failure);
+    await observation.observed();
     const recorded = traceRecords.slice(previousRecords).find(record => record.error_message === 'restore failed');
     assert.ok(recorded);
     assert.equal(recorded.flow_id, flow.flowId);

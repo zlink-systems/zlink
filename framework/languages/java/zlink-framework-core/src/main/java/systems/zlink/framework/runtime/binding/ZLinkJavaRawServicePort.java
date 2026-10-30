@@ -54,7 +54,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             new LinkedHashMap<>();
     private final ZLinkStateLane stateLane;
     private final ZLinkServiceOperationRegistry operations;
-    private CompletableFuture<Void> closeCompletion;
+    private CloseAttempt closeAttempt;
 
     private Function<
                     RoutingId,
@@ -593,7 +593,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         if ((ready & ZLinkJavaSocketReceivePoller.OWNER_WAKE) != 0) {
             inStateLane(
                     () -> {
-                        if (closeCompletion == null) owner.consumeOwnerWake();
+                        if (closeAttempt == null) owner.consumeOwnerWake();
                         return null;
                     });
         }
@@ -606,7 +606,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 () -> {
                     // The close claim seals producers before resource disposal outside the lane.
                     // An in-flight signal has left this lane before close can claim disposal.
-                    if (closeCompletion == null) {
+                    if (closeAttempt == null) {
                         var receivePoller = receivePollers.get(router);
                         if (receivePoller != null) receivePoller.signal();
                     }
@@ -656,14 +656,14 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
 
     @Override
     public void close() {
-        var attempt = new CompletableFuture<Void>();
+        var attempt = new CloseAttempt();
         var completion =
                 inStateLane(
                         () -> {
-                            if (closeCompletion == null) {
-                                closeCompletion = attempt;
+                            if (closeAttempt == null) {
+                                closeAttempt = attempt;
                             }
-                            return closeCompletion;
+                            return closeAttempt;
                         });
         if (completion == attempt) {
             try {
@@ -678,18 +678,38 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                     inStateLane(() -> receivePollers.remove(entry.getKey()));
                 }
                 if (ownsContext) context.close();
-                attempt.complete(null);
+                attempt.complete();
             } catch (RuntimeException | Error failure) {
                 // Retain resources whose disposal failed for the caller's next close.
                 inStateLane(
                         () -> {
-                            closeCompletion = null;
+                            closeAttempt = null;
                             return null;
                         });
                 attempt.completeExceptionally(failure);
             }
         }
-        ZLinkCompletionBridge.await(completion);
+        if (completion != attempt && completion.isExecutingOnCurrentThread()) return;
+        ZLinkCompletionBridge.await(completion.completed);
+    }
+
+    private static final class CloseAttempt {
+        private volatile Thread owner = Thread.currentThread();
+        private final CompletableFuture<Void> completed = new CompletableFuture<>();
+
+        private boolean isExecutingOnCurrentThread() {
+            return owner == Thread.currentThread();
+        }
+
+        private void complete() {
+            owner = null;
+            completed.complete(null);
+        }
+
+        private void completeExceptionally(Throwable failure) {
+            owner = null;
+            completed.completeExceptionally(failure);
+        }
     }
 
     private void ensureOwnedOnLane(RouterSocket router) {
@@ -709,7 +729,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     private void ensureOpen() {
-        if (closeCompletion != null) {
+        if (closeAttempt != null) {
             throw new IllegalStateException("service port is closed");
         }
     }

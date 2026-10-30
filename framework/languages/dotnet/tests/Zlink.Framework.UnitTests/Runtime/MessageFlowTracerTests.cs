@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -146,6 +147,7 @@ public sealed class MessageFlowTracerTests
                     FlowOrigin = ZLinkFlowOrigin.Application,
                 }
             );
+            TelemetryReceipt.Wait(() => activities.Count == 1);
         }
 
         var activity = Assert.Single(activities);
@@ -187,6 +189,7 @@ public sealed class MessageFlowTracerTests
                 TargetRid: "target"
             )
         );
+        TelemetryReceipt.Wait(() => logger.CallCount == 1);
 
         Assert.StartsWith("zlink flow: ", logger.Message);
         Assert.Equal(
@@ -250,6 +253,7 @@ public sealed class MessageFlowTracerTests
                     Exception: exception
                 )
             );
+            TelemetryReceipt.Wait(() => activities.Count == 1);
 
             Assert.Contains(
                 logger.Fields,
@@ -302,6 +306,7 @@ public sealed class MessageFlowTracerTests
                     Exception: new InvalidOperationException(string.Empty)
                 )
             );
+            TelemetryReceipt.Wait(() => activities.Count == 1);
         }
 
         Assert.Contains(
@@ -337,6 +342,7 @@ public sealed class MessageFlowTracerTests
                     ZLinkDispatchMessageKind.Send
                 )
             );
+        WaitForSamplingDelivery();
 
         Assert.InRange(logger.CallCount, 1, 63);
     }
@@ -375,6 +381,7 @@ public sealed class MessageFlowTracerTests
             using var message = new TopicMessage();
 
             await pipeline.DispatchAsync("channel", message, header, CancellationToken.None);
+            TelemetryReceipt.Wait(() => activities.Count == 1);
         }
 
         var activity = Assert.Single(activities);
@@ -422,6 +429,7 @@ public sealed class MessageFlowTracerTests
                         ErrorMessage = error.Message,
                     }
                 );
+                TelemetryReceipt.Wait(() => activities.Count == 1);
             }
         }
         if (!expected)
@@ -501,6 +509,7 @@ public sealed class MessageFlowTracerTests
                     StreamSessionId: "session"
                 )
             );
+            TelemetryReceipt.Wait(() => activities.Count == 1);
 
             Assert.Equal(1, logger.CallCount);
             var activity = Assert.Single(activities);
@@ -604,6 +613,7 @@ public sealed class MessageFlowTracerTests
                         StreamSessionId = "session",
                     }
                 );
+                TelemetryReceipt.Wait(() => activities.Count == 1);
 
                 Assert.Equal(1, logger.CallCount);
                 var activity = Assert.Single(activities);
@@ -725,15 +735,23 @@ public sealed class MessageFlowTracerTests
         Assert.Equal(expectedOrigin, activity.GetTagItem("flow_origin"));
     }
 
-    private static List<Activity> CaptureActivities(out ActivityListener listener)
+    private static void WaitForSamplingDelivery() =>
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => ZLinkMessageFlowDelivery.Shared.State is { Pending: 0, Executing: false },
+                TimeSpan.FromSeconds(5)
+            )
+        );
+
+    private static ConcurrentQueue<Activity> CaptureActivities(out ActivityListener listener)
     {
-        var activities = new List<Activity>();
+        var activities = new ConcurrentQueue<Activity>();
         listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activities.Add,
+            ActivityStopped = activities.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
         return activities;
@@ -741,7 +759,8 @@ public sealed class MessageFlowTracerTests
 
     private sealed class CapturingLogger : ILogger
     {
-        public int CallCount { get; private set; }
+        private int _callCount;
+        public int CallCount => Volatile.Read(ref _callCount);
         public string Message { get; private set; } = string.Empty;
         public IReadOnlyList<KeyValuePair<string, object?>> Fields { get; private set; } = [];
 
@@ -758,11 +777,11 @@ public sealed class MessageFlowTracerTests
             Func<TState, Exception?, string> formatter
         )
         {
-            CallCount++;
             Message = formatter(state, exception);
             Fields = state is IEnumerable<KeyValuePair<string, object?>> fields
                 ? fields.ToArray()
                 : [];
+            Interlocked.Increment(ref _callCount);
         }
     }
 }

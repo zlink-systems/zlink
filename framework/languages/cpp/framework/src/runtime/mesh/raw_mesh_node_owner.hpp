@@ -368,9 +368,9 @@ class raw_mesh_node_owner_t
                                    protocol::instance_spot_activation_header_t request,
                                    std::optional<std::vector<std::uint8_t>> metadata,
                                    protocol::application_payload_t application_payload);
-    task_t<bool> request_user_spot_close (const std::vector<std::uint8_t> &target_routing_id,
+    task_t<bool> request_user_spot_close (std::vector<std::uint8_t> target_routing_id,
                                           protocol::user_spot_close_header_t request,
-                                          std::chrono::milliseconds timeout,
+                                          std::chrono::steady_clock::time_point deadline,
                                           foundation::operation_registry_t::callback_t callback);
     bool reply_user_spot_create (
       const service_mailbox_record_t &request,

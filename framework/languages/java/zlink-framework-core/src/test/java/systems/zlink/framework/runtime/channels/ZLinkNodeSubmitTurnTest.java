@@ -54,6 +54,78 @@ final class ZLinkNodeSubmitTurnTest {
     }
 
     @Test
+    void blockedLoggerDoesNotDelayPublicSendCompletion() throws Exception {
+        var logger =
+                java.util.logging.Logger.getLogger(
+                        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                .getName());
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var completed = new CountDownLatch(1);
+        var failure = new AtomicReference<Throwable>();
+        var providerThread = new AtomicReference<Thread>();
+        boolean parents = logger.getUseParentHandlers();
+        var level = logger.getLevel();
+        var handler =
+                new java.util.logging.Handler() {
+                    public void publish(java.util.logging.LogRecord record) {
+                        providerThread.set(Thread.currentThread());
+                        entered.countDown();
+                        try {
+                            release.await();
+                        } catch (InterruptedException error) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError(error);
+                        }
+                    }
+
+                    public void flush() {}
+
+                    public void close() {}
+                };
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+        logger.setUseParentHandlers(false);
+        logger.setLevel(java.util.logging.Level.ALL);
+        logger.addHandler(handler);
+        try (Fixture f = new Fixture(null, true)) {
+            f.register(DEFAULT_TIMEOUT);
+            NodeProbe node = new NodeProbe(f.lane);
+            f.runtime.registerSpotRouterNode(CHANNEL, node.node);
+            Thread producer =
+                    new Thread(
+                            () -> {
+                                try {
+                                    f.send().submit().toCompletableFuture().join();
+                                } catch (Throwable error) {
+                                    failure.set(error);
+                                } finally {
+                                    completed.countDown();
+                                }
+                            },
+                            "public-send-producer");
+            try {
+                producer.start();
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                assertTrue(
+                        completed.await(1, TimeUnit.SECONDS),
+                        "public send must complete before provider release");
+                assertNull(failure.get());
+                assertEquals(1, node.nodeSends.get());
+                assertNotSame(producer, providerThread.get());
+            } finally {
+                release.countDown();
+                producer.join(5000);
+            }
+        } finally {
+            release.countDown();
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(parents);
+            logger.setLevel(level);
+        }
+    }
+
+    @Test
     void buildersResolveTheNodeAndTimeoutAtSubmitAndPreserveCallOptions() throws Exception {
         try (Fixture f = new Fixture()) {
             NodeProbe oldNode = new NodeProbe(f.lane);
@@ -659,7 +731,16 @@ final class ZLinkNodeSubmitTurnTest {
         }
 
         Fixture(Executor laneExecutor) throws Exception {
+            this(laneExecutor, false);
+        }
+
+        Fixture(Executor laneExecutor, boolean trace) throws Exception {
             DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+            if (trace)
+                options.configureDispatch()
+                        .messageFlow(
+                                systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
+                                        .NORMAL);
             options.setDefaultRequestTimeout(DEFAULT_TIMEOUT);
             runtime =
                     new ZLinkChannelRuntime(

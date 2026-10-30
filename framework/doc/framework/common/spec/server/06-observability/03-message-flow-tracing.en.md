@@ -339,8 +339,9 @@ boundary. Calls to a logger, span, observer, exporter, and telemetry
 provider, and provider-failure handling, run only on this boundary's
 execution resource. That execution resource isn't an application worker,
 completion processing, the deadline scheduler, or the resource that
-delivers runtime status. Without a provider, no allocation is made just for
-the trace.
+delivers runtime status. The telemetry delivery boundary alone determines
+whether a provider is present. Without a provider, no allocation is made just
+for the trace.
 
 | Situation | Rule |
 |---|---|
@@ -350,13 +351,21 @@ the trace.
 | Host shutdown | Record submission for that host closes and records not yet delivered are dropped. Records dropped at shutdown aren't counted as overflow. A provider call in progress isn't awaited or forcibly ended. That call references only the immutable snapshot and the provider, not the host runtime. |
 
 In this document, recording a trace or dispatch error exactly once means
-submitting one record to this boundary exactly once. That record can still be dropped
-under the saturation and host-shutdown rules.
+submitting one record that satisfies this document's record-creation conditions
+to this boundary exactly once. That record can still be dropped under the
+saturation and host-shutdown rules.
 
 In Node, this boundary's execution resource is a worker thread, and the boundary may hand several records to the worker at once. When
 creating this worker, the Framework preserves the inherited preload
 settings (`--require` and `--import`) for the standard telemetry bootstrap
-and delivers records only to the provider installed in that worker. The C++
+and delivers records only to the provider installed in that worker. This
+boundary uses the provider presence published after the worker completes its
+bootstrap. Before that result is published, trace records are neither created
+nor submitted, and records not created during this interval do not count as
+overflow. Record submission, message processing, and host lifecycle do not wait
+for this result.
+
+The C++
 application logging async setting (capacity and the overflow policy,
 including `block`) doesn't apply to this boundary.
 

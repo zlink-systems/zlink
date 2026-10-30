@@ -1239,7 +1239,7 @@ class socket_base_t : public own_t,
     void stop_monitor (bool send_monitor_stopped_event_ = true);
 
     static void inproc_reconnect_task_main (void *arg_);
-    bool schedule_inproc_reconnect (const std::string &endpoint_,
+    void schedule_inproc_reconnect (const std::string &endpoint_,
                                     const endpoint_uri_pair_t &endpoint_pair_,
                                     const std::shared_ptr<connection_attempt_result_t> &attempt_);
     void process_scheduled_inproc_reconnects ();

@@ -1,6 +1,7 @@
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -47,7 +48,7 @@ public sealed class MonitoringTests : RegistrationValidationSupport
     }
 
     [Fact]
-    public void SessionRelocationSealTimeout_IsSnapshottedAtStartup_AndReachesSessionOwner()
+    public async Task SessionRelocationSealTimeout_IsSnapshottedAtStartup_AndReachesSessionOwner()
     {
         var services = new ServiceCollection();
         ZLinkLocationOptions? locations = null;
@@ -61,6 +62,8 @@ public sealed class MonitoringTests : RegistrationValidationSupport
         SetSessionRelocationSealTimeout(locations, TimeSpan.FromMilliseconds(29));
         using var provider = services.BuildServiceProvider();
         var registration = provider.GetRequiredService<ZLinkFrameworkRegistration>();
+        var time = new ControllableTimeProvider();
+        registration.TimeProvider = time;
         var coordinator = new ZLinkActorBoundSessionCoordinator(
             static _ => throw new NotSupportedException(),
             static () => null,
@@ -68,20 +71,74 @@ public sealed class MonitoringTests : RegistrationValidationSupport
             registration,
             static () => CancellationToken.None
         );
-        var bindings = Assert.IsType<ZLinkSessionActorBindingTable>(
-            typeof(ZLinkActorBoundSessionCoordinator)
-                .GetField("_sessionBindings", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(coordinator)
-        );
-        Assert.Equal(
-            TimeSpan.FromMilliseconds(17),
-            typeof(ZLinkSessionActorBindingTable)
-                .GetField(
-                    "_canonicalRelocationSealTimeout",
-                    BindingFlags.Instance | BindingFlags.NonPublic
-                )!
-                .GetValue(bindings)
-        );
+        try
+        {
+            var seal = new ZLinkServiceWireCodec.SessionRelocationSealRecord(
+                new ZLinkServiceWireCodec.RelocationWireId(7, 9),
+                new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                    "coordinator",
+                    3,
+                    RoutingId.From("source"),
+                    2,
+                    "store-v17"
+                ),
+                1,
+                new ZLinkServiceWireCodec.SessionActorRouteFenceRecord(
+                    new ZLinkServiceWireCodec.SessionActorIdentityRecord("snapshot-seal", 5),
+                    RoutingId.From("source"),
+                    2,
+                    11,
+                    13
+                ),
+                new ZLinkServiceWireCodec.SessionOwnerFenceRecord(
+                    RoutingId.From("source"),
+                    2,
+                    "session-owner",
+                    8,
+                    RoutingId.From("session"),
+                    6
+                ),
+                RoutingId.From("target"),
+                3
+            );
+            var absent = await coordinator.SealCanonicalSessionRouteAsync(
+                seal,
+                CancellationToken.None
+            );
+            Assert.NotNull(absent);
+            Assert.Equal(
+                ServiceWirePilotCodec.SessionSealResult.BindingAbsent,
+                absent.Value.SealResult
+            );
+            var changed = seal with { Coordinator = seal.Coordinator with { OwnerId = "changed" } };
+            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+                await coordinator.SealCanonicalSessionRouteAsync(changed, CancellationToken.None)
+            );
+            Assert.Equal(
+                absent,
+                await coordinator.SealCanonicalSessionRouteAsync(seal, CancellationToken.None)
+            );
+
+            time.AdvanceMonotonic(TimeSpan.FromMilliseconds(17) - TimeSpan.FromTicks(1));
+            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+                await coordinator.SealCanonicalSessionRouteAsync(changed, CancellationToken.None)
+            );
+            time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+            var expired = await coordinator.SealCanonicalSessionRouteAsync(
+                changed,
+                CancellationToken.None
+            );
+            Assert.NotNull(expired);
+            Assert.Equal(
+                ServiceWirePilotCodec.SessionSealResult.BindingAbsent,
+                expired.Value.SealResult
+            );
+            Assert.Equal(changed.Coordinator, expired.Value.Coordinator);
+        }
+        finally
+        {
+            coordinator.ResetGeneration();
+        }
     }
 
     private static void SetSessionRelocationSealTimeout(

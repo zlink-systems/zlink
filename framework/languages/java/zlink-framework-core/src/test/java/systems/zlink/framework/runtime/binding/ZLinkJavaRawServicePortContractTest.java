@@ -22,12 +22,15 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkJavaRawServicePortContractTest {
     @Test
@@ -254,6 +257,196 @@ final class ZLinkJavaRawServicePortContractTest {
             assertEquals(2, attempts.get());
         }
     }
+
+    @Test
+    void meshExplicitCloseReachesRetainedSocketOwner() throws Exception {
+        var fixture = meshWithSocketClose(true);
+        var reentrantCalls = new AtomicInteger();
+        fixture.onSocketClose()
+                .set(
+                        () -> {
+                            reentrantCalls.incrementAndGet();
+                            fixture.mesh().close();
+                        });
+        var lastClose = closeOnDaemon(fixture.mesh());
+        try {
+            assertSame(fixture.failure(), lastClose.get(2, TimeUnit.SECONDS));
+            assertEquals(
+                    systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState.STOPPED,
+                    fixture.mesh().status().state());
+            assertThrows(IllegalStateException.class, fixture.mesh()::start);
+            assertEquals(1, fixture.attempts().get());
+            assertEquals(1, reentrantCalls.get());
+
+            lastClose = closeOnDaemon(fixture.mesh());
+            assertNull(lastClose.get(2, TimeUnit.SECONDS));
+            assertEquals(2, fixture.attempts().get());
+            assertEquals(2, reentrantCalls.get());
+            lastClose = closeOnDaemon(fixture.mesh());
+            assertNull(lastClose.get(2, TimeUnit.SECONDS));
+            assertEquals(2, fixture.attempts().get());
+            assertEquals(2, reentrantCalls.get());
+        } finally {
+            // A timed-out daemon is still inside close; avoid joining its in-flight port attempt.
+            if (lastClose.isDone()) fixture.port().close();
+        }
+    }
+
+    private static java.util.concurrent.CompletableFuture<Throwable> closeOnDaemon(
+            ZLinkJavaRawMeshNode mesh) {
+        var result = new java.util.concurrent.CompletableFuture<Throwable>();
+        Thread.ofPlatform()
+                .daemon()
+                .start(
+                        () -> {
+                            try {
+                                mesh.close();
+                                result.complete(null);
+                            } catch (Throwable failure) {
+                                result.complete(failure);
+                            }
+                        });
+        return result;
+    }
+
+    @Test
+    void concurrentMeshCloseWaitsForFirstLogicalCleanup() throws Exception {
+        var fixture = meshWithSocketClose(false);
+        var registrationEntered = new CountDownLatch(1);
+        var releaseRegistration = new CountDownLatch(1);
+        var registration = ZLinkJavaRawMeshNode.class.getDeclaredField("receiveFlowRegistration");
+        registration.setAccessible(true);
+        registration.set(
+                fixture.mesh(),
+                (systems.zlink.framework.runtime.internal.dispatch
+                                .ZLinkApplicationJobReceiveFlowController.Registration)
+                        () -> {
+                            registrationEntered.countDown();
+                            try {
+                                releaseRegistration.await();
+                            } catch (InterruptedException failure) {
+                                Thread.currentThread().interrupt();
+                                throw new IllegalStateException(failure);
+                            }
+                        });
+        try (var port = fixture.port();
+                var callers = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory())) {
+            try {
+                var first = callers.submit(fixture.mesh()::close);
+                assertTrue(registrationEntered.await(2, TimeUnit.SECONDS));
+                var secondStarted = new CountDownLatch(1);
+                var second =
+                        callers.submit(
+                                () -> {
+                                    secondStarted.countDown();
+                                    fixture.mesh().close();
+                                });
+                assertTrue(secondStarted.await(2, TimeUnit.SECONDS));
+                assertEquals(0, fixture.attempts().get());
+                assertThrows(
+                        java.util.concurrent.TimeoutException.class,
+                        () -> second.get(100, TimeUnit.MILLISECONDS));
+                releaseRegistration.countDown();
+                first.get(2, TimeUnit.SECONDS);
+                second.get(2, TimeUnit.SECONDS);
+                assertEquals(1, fixture.attempts().get());
+            } finally {
+                releaseRegistration.countDown();
+            }
+        }
+    }
+
+    @Test
+    void closeCallbackOnLogicalOwnerCanReenterClose() throws Exception {
+        var fixture = meshWithSocketClose(false);
+        var callbackReturned = new CountDownLatch(1);
+        var registration = ZLinkJavaRawMeshNode.class.getDeclaredField("receiveFlowRegistration");
+        registration.setAccessible(true);
+        registration.set(
+                fixture.mesh(),
+                (systems.zlink.framework.runtime.internal.dispatch
+                                .ZLinkApplicationJobReceiveFlowController.Registration)
+                        () -> {
+                            fixture.mesh().close();
+                            callbackReturned.countDown();
+                        });
+        var outerClose = new java.util.concurrent.CompletableFuture<Void>();
+        try (var port = fixture.port()) {
+            Thread.ofPlatform()
+                    .daemon()
+                    .start(
+                            () -> {
+                                try {
+                                    fixture.mesh().close();
+                                    outerClose.complete(null);
+                                } catch (Throwable failure) {
+                                    outerClose.completeExceptionally(failure);
+                                }
+                            });
+            assertTrue(callbackReturned.await(2, TimeUnit.SECONDS));
+            outerClose.get(2, TimeUnit.SECONDS);
+            assertEquals(1, fixture.attempts().get());
+        }
+    }
+
+    private static MeshCloseFixture meshWithSocketClose(boolean failFirst) {
+        var attempts = new AtomicInteger();
+        var onSocketClose = new AtomicReference<Runnable>();
+        var failure =
+                new systems.zlink.contracts.errors.ZlinkCloseException(
+                        systems.zlink.contracts.errors.CloseResult.BUSY, 16);
+        RouterSocket router =
+                (RouterSocket)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                RouterSocket.class.getClassLoader(),
+                                new Class<?>[] {RouterSocket.class},
+                                (proxy, method, args) ->
+                                        switch (method.getName()) {
+                                            case "hashCode" -> System.identityHashCode(proxy);
+                                            case "equals" -> proxy == args[0];
+                                            case "setRoutingId" -> null;
+                                            case "close" -> {
+                                                int attempt = attempts.incrementAndGet();
+                                                var callback = onSocketClose.get();
+                                                if (callback != null) callback.run();
+                                                if (attempt == 1 && failFirst) throw failure;
+                                                yield null;
+                                            }
+                                            default -> throw new AssertionError(method.getName());
+                                        });
+        var context =
+                (systems.zlink.contracts.core.Context)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                systems.zlink.contracts.core.Context.class.getClassLoader(),
+                                new Class<?>[] {systems.zlink.contracts.core.Context.class},
+                                (proxy, method, args) -> {
+                                    assertEquals("createRouterSocket", method.getName());
+                                    return router;
+                                });
+        var port = new ZLinkJavaRawServicePort(context);
+        port.openRouter(RoutingId.from("mesh-close-busy"));
+        var mesh =
+                new ZLinkJavaRawMeshNode(
+                        "mesh",
+                        System::currentTimeMillis,
+                        System::nanoTime,
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(5),
+                        port,
+                        Runnable::run,
+                        null,
+                        null,
+                        null,
+                        Map.of());
+        return new MeshCloseFixture(port, mesh, attempts, failure, onSocketClose);
+    }
+
+    private record MeshCloseFixture(
+            ZLinkJavaRawServicePort port,
+            ZLinkJavaRawMeshNode mesh,
+            AtomicInteger attempts,
+            systems.zlink.contracts.errors.ZlinkCloseException failure,
+            AtomicReference<Runnable> onSocketClose) {}
 
     @Test
     void oneOrderedRegistryOwnsSocketsAndRejectsForeignSockets() throws Exception {

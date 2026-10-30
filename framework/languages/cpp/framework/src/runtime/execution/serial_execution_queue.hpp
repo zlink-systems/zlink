@@ -332,12 +332,15 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     };
     active_turn_t *current_turn_locked () noexcept;
     bool schedule_drain_locked ();
-    bool publish_locked (std::unique_ptr<publication_node_t> node);
+    bool publish_locked (std::unique_ptr<publication_node_t> node,
+                         std::function<void ()> *continuation = nullptr,
+                         work_item_t *rejected = nullptr);
     void import_publications ();
     void import_publications_until (publication_node_t *cut);
     void run_shared_gate ();
     void release_shared_gate ();
-    bool submit_control (std::function<void ()> control);
+    bool submit_control (std::function<void ()> control,
+                         std::function<void ()> *continuation = nullptr);
     template <typename T, typename TControl> task_t<T> control_async (TControl control)
     {
         auto completion = std::make_shared<task_completion_source_t<T>> ();
@@ -375,8 +378,9 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void schedule_after_settle_owned ();
     bool resume_suspended_owned (const std::shared_ptr<serial_turn_handle_impl_t> &turn,
                                  std::function<void ()> work);
-    void prepare_application_head_locked ();
-    void accept_application_owned (work_item_t &item);
+    bool prepare_application_head_owned ();
+    std::pair<std::function<void ()>, std::function<void ()>> accept_application_locked (
+      work_item_t &item, const std::shared_ptr<serial_application_record_t> &preceding) noexcept;
     template <typename Mutation>
     void mutate_fifo_locked (lane_state_t &lane,
                              Mutation &&mutation,
@@ -403,7 +407,9 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                                        std::function<void ()> work);
     lane_state_t &lane_locked (serial_work_lane_t lane) noexcept;
     const lane_state_t &lane_locked (serial_work_lane_t lane) const noexcept;
-    bool enqueue_locked (std::string name,
+    // Shared Actor admission settles callbacks after releasing producer.
+    bool enqueue_locked (std::unique_lock<std::mutex> &producer,
+                         std::string name,
                          async_work_t work,
                          serial_work_options_t options,
                          serial_submission_id_t submission_id = 0,
@@ -440,6 +446,10 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     application_selection_t next_application_locked () noexcept;
     work_item_t take_next_locked (std::optional<serial_work_lane_t> forced_lane = {});
     serial_work_lane_t select_next_lane_locked () noexcept;
+    template <typename Callback>
+    void settle_application_owned (const std::string &name,
+                                   std::exception_ptr &primary,
+                                   Callback callback) noexcept;
     void report_deferred_error (const std::string &name,
                                 const std::exception_ptr &error) const noexcept;
 
@@ -452,6 +462,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     std::condition_variable _empty;
     lane_state_t _application;
     lane_state_t _lifecycle;
+    // Actor pending membership and these indexes share the producer mutex;
+    // Spot pending membership remains exclusive to its execution gate.
     // Derived FIFO membership indexes; mutable barrier phases are read by
     // the readiness decision and never copied here.
     std::weak_ptr<serial_application_record_t> _application_tail_record;

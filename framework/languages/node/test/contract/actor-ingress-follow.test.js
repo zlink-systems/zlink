@@ -71,15 +71,10 @@ class Player {
 }
 function fixture() {
   const calls = [];
-  const reporter = new ZLinkDispatchErrorReporter(
-    undefined,
-    undefined,
-    { reportRuntimeTaskException() {} },
-    {
+  const reporter = new ZLinkDispatchErrorReporter({
       diagnostics: { messageFlow: 'normal', sampleRate: 1, includeMessageSizes: false },
       liveMode: { mode: 'normal' }
-    }
-  );
+    });
   const actor = new Player();
   class Handler {
     async handle(spot, _actor, _context, packet) {
@@ -322,6 +317,7 @@ test('Actor packet dispatch is reused for messages in one activation', async () 
 
 for (const updated of [false, true]) {
   test(`physical disconnect after relocation reaches the current Spot once (binding route updated=${updated})`, async () => {
+    await telemetry.observed();
     telemetry.reset();
     const f = fixture();
     const state = new ZLinkActorRuntimeState('alice');
@@ -452,6 +448,7 @@ for (const updated of [false, true]) {
     await sender.notifyPhysicalDisconnect(context);
     await sender.notifyPhysicalDisconnect(context);
     assert.deepEqual(callbacks, ['target-spot']);
+    await telemetry.observed();
     assert.equal(
       telemetry.records.filter((record) => record.eventId === 'zlink.dispatch_error').length,
       0
@@ -472,6 +469,7 @@ for (const request of [false, true]) {
     `Actor ${request ? 'request' : 'send'} follows ownership committed while waiting for its mailbox`,
     { timeout: 3000 },
     async () => {
+      await telemetry.observed();
       telemetry.reset();
       const f = fixture();
       const entered = deferred();
@@ -507,6 +505,7 @@ for (const request of [false, true]) {
         if (result.error) throw result.error;
         if (request) assert.deepEqual(result.value, { value: 'boundary' });
         assert.deepEqual(f.calls, [['target-spot', 'boundary']]);
+        await telemetry.observed();
         assert.equal(
           telemetry.records.filter((record) => record.reason === 'no_handler').length,
           0
@@ -527,6 +526,7 @@ for (const request of [false, true]) {
 }
 for (const present of [false, true]) {
   test(`Actor ${present ? 'handler absence is no_handler' : 'target absence is stale_target'}`, async () => {
+    await telemetry.observed();
     telemetry.reset();
     const f = fixture();
     if (!present) f.source.commitActorDeparture('alice');
@@ -546,6 +546,7 @@ for (const present of [false, true]) {
       const pending = f.admission.dispatchActorPacket('remote', f.source, 'alice', parts);
       if (present) await assert.rejects(pending);
       else await pending;
+      await telemetry.observed();
       const failures = telemetry.records.filter(
         (record) => record.eventId === 'zlink.dispatch_error'
       );
@@ -622,3 +623,7 @@ function deliverFixtureCompletion(work, operation, receiver) {
     error => receiver.operationFailed(operation.id, error, undefined)
   );
 }
+
+// Provider bootstrap is test setup; message handling itself never waits for it.
+test.beforeEach(async () => telemetry.observed());
+test.after(() => telemetry.close());

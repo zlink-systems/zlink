@@ -13,6 +13,7 @@ import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProvider
 import type { ZLinkSubmitResult } from '../messaging/submission-result';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type { ZLinkMessageFlowModeCell } from '../diagnostics';
+import type { ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
 import type { Message } from '../../contracts/Common/Message';
 import type { ReceiveRecord } from '../foundation/service-runtime-contracts';
 import { ZLinkConfigurationException, type ZLinkFrameworkRegistration } from '../configuration';
@@ -82,7 +83,8 @@ export class ZLinkChannelRuntimeManager {
     const dispatchServices = new ZLinkChannelDispatchServices(
       registration,
       providerResolver,
-      options.messageFlowModeCell
+      options.messageFlowModeCell,
+      options.telemetryLease
     );
     const spotRouteBridges = new Map<string, ZLinkBackendSpotRouteBridge>();
     this.spotRoutes = new ZLinkSpotRouteDispatchStrategy({
@@ -504,6 +506,7 @@ export interface ZLinkChannelRuntimeManagerOptions {
     ): Promise<TReply>;
   };
   readonly messageFlowModeCell?: ZLinkMessageFlowModeCell;
+  readonly telemetryLease?: ZLinkTelemetryLease;
   readonly oneWayFailureSink?: (error: unknown) => void;
   readonly applicationJobQueue?: ApplicationJobQueue;
 }

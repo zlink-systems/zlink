@@ -130,8 +130,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         _flow = new ZLinkMessageFlowTracer(
             _runtime.Registration.DispatchOptions,
             ZLinkMessageFlowTracer.CreateLogger(scope.ServiceProvider.GetService<ILoggerFactory>()),
-            _runtime,
-            errorSink: _runtime.ErrorSink
+            _runtime
         );
         _liveness = new ZLinkStreamSessionLiveness(timeProvider, livenessOptions);
         var handlers = new ZLinkSessionHandlerRegistry(_handlerInstances);
@@ -211,6 +210,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private async Task DisposeCoreAsync()
     {
         var disposeOwnsDisconnect = ClaimCloseForDisposal();
+        var cleanup = CleanupAfterTransportClosedAsync();
         var failures = new List<Exception>();
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
         if (disposeOwnsDisconnect)
@@ -223,8 +223,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 await CaptureAsync(InvokeDisconnectedLifecycleAsync).ConfigureAwait(false);
         }
         await CaptureAsync(DisposeTerminalCallbackStopAsync).ConfigureAwait(false);
-        await CaptureAsync(() => _context.CleanupAsync(CancellationToken.None))
-            .ConfigureAwait(false);
+        await CaptureAsync(() => new ValueTask(cleanup)).ConfigureAwait(false);
         Capture(() => _removeSession(Stream.SessionId));
         await CaptureAsync(_handlerInstances.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_scope.DisposeAsync).ConfigureAwait(false);
@@ -236,6 +235,12 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         if (failures.Count > 1)
             throw new AggregateException(failures);
         return;
+
+        async Task CleanupAfterTransportClosedAsync()
+        {
+            await _transportClosed.Task.ConfigureAwait(false);
+            await _context.CleanupAsync(CancellationToken.None).ConfigureAwait(false);
+        }
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)
         {
@@ -438,10 +443,15 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     public void EnqueueDisconnected(ZLinkStreamError error)
     {
+        _transportClosed.TrySetResult(true);
         TryScheduleTerminal(
             ZlinkStreamCloseReason.TransportError,
-            () => MarkDisconnectedAsync(error),
-            recordTransportClosedOnTerminalCollision: true
+            () => CompleteSessionAsync(error, notifyDisconnected: true)
+        );
+        ZLinkUnawaitedSubmit.Observe(
+            DisposeAsync(),
+            $"stream-session-disconnected-dispose:{Stream.SessionId}",
+            _runtime.ErrorSink
         );
     }
 
@@ -713,12 +723,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         }
     }
 
-    private async ValueTask MarkDisconnectedAsync(ZLinkStreamError error)
-    {
-        _transportClosed.TrySetResult(true);
-        await CompleteSessionAsync(error, true);
-    }
-
     private async ValueTask CloseForProtocolErrorAsync(Exception error)
     {
         TryScheduleTerminal(
@@ -963,23 +967,14 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private bool TryScheduleTerminal(
         ZlinkStreamCloseReason reason,
-        Func<ValueTask> finalWork,
-        bool recordTransportClosedOnTerminalCollision = false
+        Func<ValueTask> finalWork
     )
     {
         var (scheduled, rejected) = AwaitStateLane(
             _lane.RunAsync(() =>
             {
                 if (_terminalClose is not null)
-                {
-                    // A monitor disconnect remains authoritative transport evidence
-                    // when another terminal path already owns finalization. Record it
-                    // in the same state-lane turn that observes the collision so the
-                    // owner does not race a redundant transport disconnect.
-                    if (recordTransportClosedOnTerminalCollision)
-                        _transportClosed.TrySetResult(true);
                     return (Scheduled: false, Rejected: false);
-                }
 
                 _terminalClose = new TerminalClose(reason, DisposeOwnsClose: false);
                 if (EnqueueTerminalOutsideStateLane(finalWork))

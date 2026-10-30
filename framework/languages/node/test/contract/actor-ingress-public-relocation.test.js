@@ -233,6 +233,7 @@ test(
       apps.push(app);
       return app;
     }
+    await telemetry.observed();
     telemetry.reset();
     try {
       const source = await start('source');
@@ -361,6 +362,7 @@ test(
           disconnected: ['target-room']
         }
       );
+      await telemetry.observed();
       const boundary = telemetry.records.filter((record) =>
         ['Notice', 'Ask', 'zlink.framework.actor.session_disconnected'].includes(record.packetName)
       );
@@ -380,6 +382,7 @@ test(
           1
         );
       await targetClient.sendToActor(actorId, new Unregistered()).submit();
+      await telemetry.observed();
       await until(
         () =>
           telemetry.records.some(
@@ -405,6 +408,7 @@ test(
       await sendEntered.promise;
       assert.equal(await target.get(n.ZLINK_ACTOR_MANAGER).destroy(ref), true);
       releaseSend.resolve();
+      await telemetry.observed();
       await until(
         () =>
           telemetry.records.some(
@@ -431,3 +435,7 @@ test(
     }
   }
 );
+
+// Provider bootstrap is test setup; message handling itself never waits for it.
+test.beforeEach(async () => telemetry.observed());
+test.after(() => telemetry.close());

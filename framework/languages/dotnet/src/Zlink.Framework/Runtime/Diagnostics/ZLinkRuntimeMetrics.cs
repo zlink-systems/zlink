@@ -641,6 +641,16 @@ internal static class ZLinkRuntimeMetrics
         );
     }
 
+    // Message-flow delivery owns provider failures and invokes this only on its worker.
+    internal static void RecordMessageFlowOverflow(long count)
+    {
+        if (ObserverOverflow.Enabled)
+            ObserverOverflow.Add(
+                count,
+                new KeyValuePair<string, object?>(SourceTag, "message_flow")
+            );
+    }
+
     public static void RecordObserverOverflow(string eventName)
     {
         if (!ObserverOverflow.Enabled)

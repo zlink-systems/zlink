@@ -10,10 +10,8 @@ const flowFile = flowDirectory === undefined ? undefined
 if (flowDirectory !== undefined) fs.mkdirSync(flowDirectory, { recursive: true });
 
 const records = [];
-const provider = new LoggerProvider({
-  processors: [{
-    onEmit(record) {
-      if (flowFile !== undefined) {
+function captureRecord(record, writeFile) {
+      if (writeFile && flowFile !== undefined) {
         fs.appendFileSync(flowFile, JSON.stringify({
           pid: process.pid, timestamp: new Date().toISOString(),
           eventName: record.eventName, body: record.body, attributes: record.attributes
@@ -28,14 +26,24 @@ const provider = new LoggerProvider({
         normalized[name.replace(/_([a-z])/g, (_match, letter) => letter.toUpperCase())] = value;
       }
       records.push(normalized);
-    },
-    forceFlush() { return Promise.resolve(); },
-    shutdown() { return Promise.resolve(); }
-  }]
-});
+}
+const provider = new LoggerProvider({ processors: [{
+  onEmit(record) { captureRecord(record, true); },
+  forceFlush() { return Promise.resolve(); },
+  shutdown() { return Promise.resolve(); }
+}] });
 logs.setGlobalLoggerProvider(provider);
 
+const deliveryPath = process.env.ZLINK_TEST_TELEMETRY_MODULE_DIR
+  ? path.join(process.env.ZLINK_TEST_TELEMETRY_MODULE_DIR, 'message-flow-delivery.js')
+  : '../../../packages/framework/dist/runtime/diagnostics/message-flow-delivery';
+const observation = require('../fixtures/message-flow-observation.cjs')(require(deliveryPath), {
+  onLog(record) { captureRecord(record, false); }
+});
+
 module.exports = {
+  observed: observation.observed,
+  close: observation.close,
   records,
   reset() { records.length = 0; }
 };

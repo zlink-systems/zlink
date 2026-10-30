@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
@@ -40,13 +41,13 @@ public sealed class ExactMessageFlowRuntimeTests
     [Fact]
     public void OffLevelSkipsDispatchLoggerAndActivityBeforeEventConstruction()
     {
-        var activities = new List<Activity>();
+        var activities = new ConcurrentQueue<Activity>();
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activities.Add,
+            ActivityStopped = activities.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
         var options = new ZLinkDispatchOptionsModel();
@@ -70,13 +71,13 @@ public sealed class ExactMessageFlowRuntimeTests
     [Fact]
     public void DispatchTerminalTraceKeepsTheFlowCapturedAtReceiveBoundary()
     {
-        var activities = new List<Activity>();
+        var activities = new ConcurrentQueue<Activity>();
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activities.Add,
+            ActivityStopped = activities.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
         var options = new ZLinkDispatchOptionsModel();
@@ -117,6 +118,7 @@ public sealed class ExactMessageFlowRuntimeTests
         )
             scope.Trace(reporter, ZLinkMessageFlowOutcome.Replied);
 
+        TelemetryReceipt.Wait(() => activities.Count == 2);
         var traces = activities
             .Where(activity => activity.OperationName == "zlink.message_flow")
             .ToArray();
