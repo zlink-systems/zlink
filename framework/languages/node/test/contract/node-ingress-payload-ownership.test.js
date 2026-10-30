@@ -1,10 +1,19 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
-const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
-const { ZLinkMeshCompletionTable, closeMeshCompletion } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
-const { ZLinkBufferMessage } = require('../../packages/framework/dist/runtime/backend/runtime-message');
-const { RawServiceMeshRuntime } = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
+const {
+  ZLinkNodeRawMeshBackend
+} = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+const {
+  ZLinkMeshCompletionTable,
+  closeMeshCompletion
+} = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+const {
+  ZLinkBufferMessage
+} = require('../../packages/framework/dist/runtime/backend/runtime-message');
+const {
+  RawServiceMeshRuntime
+} = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
 const {
   decodeApplicationPayloadView,
   decodeNodeRequestHeader,
@@ -12,25 +21,45 @@ const {
   encodeMultipartApplicationPayload,
   encodeReplyHeader
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
-const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../packages/framework/dist/runtime/host/application-job-queue');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
-const { SERVICE_WIRE_REQUIRED_CAPABILITY, ServiceWireCommand } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
+const {
+  SERVICE_WIRE_REQUIRED_CAPABILITY,
+  ServiceWireCommand
+} = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
 
 function descriptor(nodeRoutingId, channels = []) {
   return {
-    meshName: 'payload-ownership', nodeRoutingId, lifecycleGeneration: 1n,
-    descriptorRevision: 1n, advertisedEndpoint: `inproc://${nodeRoutingId}`,
-    channels, state: 'serving', securityIdentity: 'test', applicationVersion: 1n,
-    protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY], objectRole: 'server',
-    placementWeight: 100, activeCapacityLimit: 100, pendingCapacityLimit: 10,
-    activeCapacityUsed: 0, pendingCapacityUsed: 0
+    meshName: 'payload-ownership',
+    nodeRoutingId,
+    lifecycleGeneration: 1n,
+    descriptorRevision: 1n,
+    advertisedEndpoint: `inproc://${nodeRoutingId}`,
+    channels,
+    state: 'serving',
+    securityIdentity: 'test',
+    applicationVersion: 1n,
+    protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY],
+    objectRole: 'server',
+    placementWeight: 100,
+    activeCapacityLimit: 100,
+    pendingCapacityLimit: 10,
+    activeCapacityUsed: 0,
+    pendingCapacityUsed: 0
   };
 }
 
 function completionRecord(low, parts) {
   return {
-    operationId: { high: 1n, low }, terminalResult: 0, failureErrno: 0,
-    operationKind: 1, kindData: null, parts
+    operationId: { high: 1n, low },
+    terminalResult: 0,
+    failureErrno: 0,
+    operationKind: 1,
+    kindData: null,
+    parts
   };
 }
 
@@ -53,7 +82,7 @@ test('completion retention keeps managed and binding payload views after source 
   const table = new ZLinkMeshCompletionTable();
   const ownedBytes = Buffer.from('managed completion');
   const owned = ZLinkBufferMessage.fromOwned(ownedBytes);
-  const ownedCompletion = table.submit(() => ({ high: 1n, low: 1n })).pending;
+  const ownedCompletion = table.submit(() => ({ high: 1n, low: 1n }));
   table.complete(completionRecord(1n, [owned]));
   owned.close();
   const retainedOwned = await ownedCompletion;
@@ -66,7 +95,7 @@ test('completion retention keeps managed and binding payload views after source 
 
   const native = zlink.Message.from(Buffer.from('native completion'));
   const nativeView = native.data();
-  const nativeCompletion = table.submit(() => ({ high: 1n, low: 2n })).pending;
+  const nativeCompletion = table.submit(() => ({ high: 1n, low: 2n }));
   try {
     table.complete(completionRecord(2n, [native]));
   } finally {
@@ -84,7 +113,10 @@ test('completion retention keeps managed and binding payload views after source 
 });
 
 test('native received binary payload has one retained view across completion and reply decoding', async () => {
-  const { encodeChannelReplyParts, decodeChannelReply } = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+  const {
+    encodeChannelReplyParts,
+    decodeChannelReply
+  } = require('../../packages/framework/dist/runtime/channels/channel-envelope');
   const context = zlink.createContext();
   const router = zlink.createRouterSocket(context);
   const dealer = zlink.createDealerSocket(context);
@@ -102,7 +134,7 @@ test('native received binary payload has one retained view across completion and
     dealer.send().message(parts[0]).message(parts[1]).submit_sync();
     assert.equal(router.recv(received), true);
     const nativeView = received.parts[1].data();
-    const pending = table.submit(() => ({ high: 1n, low: 3n })).pending;
+    const pending = table.submit(() => ({ high: 1n, low: 3n }));
     table.complete(completionRecord(3n, received.parts));
     const directReply = decodeChannelReply(received.parts);
     received.close();
@@ -128,17 +160,30 @@ test('generic channel send writes one valid multipart application frame before s
   let replyFrame;
   let sentParts;
   const router = {
-    setRoutingId() {}, setReceiveFlowState() {}, bind() {}, unbind() {}, connect() {}, disconnect() {},
-    connectToRoutingId() {}, disconnectRid() {}, close() {}, localEndpoint: () => 'inproc://source-node',
+    setRoutingId() {},
+    setReceiveFlowState() {},
+    bind() {},
+    unbind() {},
+    connect() {},
+    disconnect() {},
+    connectToRoutingId() {},
+    disconnectRid() {},
+    close() {},
+    localEndpoint: () => 'inproc://source-node',
     monitor: () => ({ statusReady: () => true, drain: () => 0, close() {} }),
-    receive: () => undefined, send: async (_target, parts) => { sentParts = parts; },
+    receive: () => undefined,
+    send: async (_target, parts) => {
+      sentParts = parts;
+    },
     submitSend: (_target, parts) => {
       sentParts = parts;
       return { result: SubmitResult.Ok, admitted: Promise.resolve() };
     },
-    request: (_target, parts, _timeout, onReply, onFailed) => Promise.resolve([
-      encodeReplyHeader(decodeNodeRequestHeader(parts[0])), replyFrame
-    ]).then(onReply, onFailed)
+    request: (_target, parts, _timeout, onReply, onFailed) =>
+      Promise.resolve([encodeReplyHeader(decodeNodeRequestHeader(parts[0])), replyFrame]).then(
+        onReply,
+        onFailed
+      )
   };
   const raw = new RawServiceMeshRuntime({
     descriptor: descriptor('source-node', [{ name: 'orders', weight: 100 }]),
@@ -153,7 +198,14 @@ test('generic channel send writes one valid multipart application frame before s
   const probe = raw.liveness.tick(0).probes[0];
   raw.liveness.acknowledge(target.nodeRoutingId, 'connection', probe.probeId, 0);
   const backend = new ZLinkNodeRawMeshBackend(
-    'payload-ownership', 'source-node', {}, undefined, undefined, undefined, undefined, { raw }
+    'payload-ownership',
+    'source-node',
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { raw }
   );
   const source = zlink.Message.from(Buffer.from('first'));
   try {
@@ -170,14 +222,23 @@ test('generic channel send writes one valid multipart application frame before s
     const application = decodeApplicationPayloadView(frame);
     assert.equal(application.packetName, 'ZLinkFrameworkMultipart');
     assert.equal(application.contentType, 'application/x-zlink-multipart');
-    assert.deepEqual(multipartParts(application.payload).map(part => part.toString()), ['first', 'second']);
+    assert.deepEqual(
+      multipartParts(application.payload).map((part) => part.toString()),
+      ['first', 'second']
+    );
 
     replyFrame = encodeApplicationPayload({
-      packetName: 'reply', contentType: 'application/octet-stream', payload: Buffer.from('view')
+      packetName: 'reply',
+      contentType: 'application/octet-stream',
+      payload: Buffer.from('view')
     });
     const request = raw.requestToNode(
       target.nodeRoutingId,
-      encodeMultipartApplicationPayload([Buffer.from('request')], 'ZLinkFrameworkMultipart', 'application/x-zlink-multipart'),
+      encodeMultipartApplicationPayload(
+        [Buffer.from('request')],
+        'ZLinkFrameworkMultipart',
+        'application/x-zlink-multipart'
+      ),
       100
     );
     const reply = await request.promise;
@@ -189,7 +250,9 @@ test('generic channel send writes one valid multipart application frame before s
 });
 
 test('raw router receive retains binding payload storage and replies on the delivered route after close', async () => {
-  const { ZLinkNodeRawBindingPort } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
+  const {
+    ZLinkNodeRawBindingPort
+  } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
   const context = zlink.createContext();
   const host = new ZLinkNodeRawBindingPort(context).createHost();
   const router = host.createRouter();
