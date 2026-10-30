@@ -318,13 +318,28 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
-        return await ListCompleteSnapshotPageAsync(
+        var result = await ListCompleteSnapshotPageAsync(
                 MeshPrefix(meshName),
                 page,
                 static bytes => DecodeDescriptor<ZLinkMeshNodeDescriptor>(bytes).Descriptor,
                 cancellationToken
             )
             .ConfigureAwait(false);
+        var items = new ZLinkMeshNodeDescriptor[result.Items.Count];
+        for (var index = 0; index < items.Length; index++)
+        {
+            var descriptor = result.Items[index];
+            var capacity = await ReadCapacityAsync(
+                    new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            items[index] = descriptor with
+            {
+                Capacity = ProjectCapacity(capacity.Record, descriptor.Capacity),
+            };
+        }
+        return result with { Items = items };
     }
 
     public ValueTask<ZLinkLocationWriteResult> UpdateClientServerAsync(
@@ -968,7 +983,14 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
         var record = _provider.ConfirmedCapacity(CapacityKey(descriptor));
         if (record is null)
             return null;
-        return new(
+        return ProjectCapacity(record, limits);
+    }
+
+    private static ZLinkPlacementCapacity ProjectCapacity(
+        CapacityRecord record,
+        ZLinkPlacementCapacity limits
+    ) =>
+        new(
             new(record.ActorsActive, record.ActorsPending, limits.Actors.Limit),
             new(record.SpotsActive, record.SpotsPending, limits.Spots.Limit),
             limits
@@ -982,7 +1004,6 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
                 })
                 .ToArray()
         );
-    }
 
     // Canonical opaque-record envelope shared by the mesh-node/
     // client-server/fanout-publisher descriptors (21-location-runtime.md
