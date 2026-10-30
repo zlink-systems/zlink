@@ -2169,11 +2169,11 @@ void physical_disconnect_progresses_while_session_handler_waits (bool websocket)
             if (metric.instrument_descriptor.name_ != "zlink.stream.connections.closed")
                 continue;
             for (const auto &point : metric.point_data_attr_) {
-                if (opentelemetry::nostd::get<std::string> (
-                      point.attributes.at ("close_reason")) != "client_close")
+                if (opentelemetry::nostd::get<std::string> (point.attributes.at ("close_reason"))
+                    != "client_close")
                     continue;
-                const auto &sum = opentelemetry::nostd::get<metric_test::sdk::SumPointData> (
-                  point.point_data);
+                const auto &sum =
+                  opentelemetry::nostd::get<metric_test::sdk::SumPointData> (point.point_data);
                 total += opentelemetry::nostd::get<double> (sum.value_);
             }
         }
@@ -2193,8 +2193,10 @@ void physical_disconnect_progresses_while_session_handler_waits (bool websocket)
       [evidence, probe] (fw::service_provider_t &provider) {
           return std::make_unique<held_bound_session_t> (
             provider.get_required<fw::actor_manager_t> (), evidence, probe);
-      }, fw::service_lifetime_t::scoped);
-    owner.app.add_zlink_framework ().add_stream_node (stream_name)
+      },
+      fw::service_lifetime_t::scoped);
+    owner.app.add_zlink_framework ()
+      .add_stream_node (stream_name)
       .bind (websocket ? "ws://127.0.0.1:0/disconnect" : "tcp://127.0.0.1:0")
       .register_session<held_bound_session_t> ();
     owner.start ();
@@ -2212,11 +2214,12 @@ void physical_disconnect_progresses_while_session_handler_waits (bool websocket)
     auto services = owner.app.advanced ().services ().build_provider ();
     zlink::stream_connector::connector_options_t options;
     options.endpoint = services.get_required<fw::framework_runtime_t> ()
-                         .listener_status (fw::listener_kind_t::stream, stream_name).endpoint;
+                         .listener_status (fw::listener_kind_t::stream, stream_name)
+                         .endpoint;
     // The reader listener status reports its TCP acceptor address.
     if (websocket)
-        options.endpoint = "ws://" + options.endpoint.substr (std::string ("tcp://").size ())
-                           + "/disconnect";
+        options.endpoint =
+          "ws://" + options.endpoint.substr (std::string ("tcp://").size ()) + "/disconnect";
     options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
     options.reconnect.enabled = false;
     auto client = zlink::stream_connector::connector_factory_t::create (options);
@@ -2255,7 +2258,8 @@ void physical_disconnect_progresses_while_session_handler_waits (bool websocket)
     EXPECT_FALSE (shutdown.await_ready ());
     EXPECT_EQ (probe->destroyed.load (), 0);
     std::cout << "cleanup_pending_session_scope_retained=1 shutdown_draining_observed=1"
-                 " public_shutdown_pending=1" << std::endl;
+                 " public_shutdown_pending=1"
+              << std::endl;
     evidence->disconnect_release->complete (fw::result_t<void>::success ());
     auto &gateway = services.get_required<fw::detail::actor_gateway_runtime_t> ();
     const auto terminal_deadline = std::chrono::steady_clock::now () + wait_budget;
