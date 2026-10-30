@@ -31,6 +31,10 @@ int zlink::socket_base_t::begin_close_handoff ()
 {
     if (!lifecycle_coordinator ().begin_close_or_fail_busy ())
         return -1;
+    // Close now owns the socket. Join a running inproc reconnect callback and
+    // reject later ones before monitor cleanup, async quiescence or reap. The
+    // caller holds no socket lock here, so the join cannot wait on itself.
+    stop_inproc_reconnect_scheduler ();
     // A blocking complete-record submit deliberately drops its public
     // admission while parked so close remains admissible. Publish the close
     // edge to both progress-owner forms: the async owner sleeps on the

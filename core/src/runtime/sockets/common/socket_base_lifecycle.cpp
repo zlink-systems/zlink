@@ -1465,21 +1465,26 @@ void zlink::socket_base_t::inproc_reconnect_task_main (void *arg_)
       ->process_scheduled_inproc_reconnects ();
 }
 
-bool zlink::socket_base_t::schedule_inproc_reconnect (
+void zlink::socket_base_t::schedule_inproc_reconnect (
   const std::string &endpoint_,
   const endpoint_uri_pair_t &endpoint_pair_,
   const std::shared_ptr<connection_attempt_result_t> &attempt_)
 {
+    //  This scheduler owns whether a detached intent may still be queued: a
+    //  terminating socket or an accepted close (stopping below) refuses it.
+    //  Any other failure would silently drop a live intent and is fatal.
     if (options.reconnect_ivl <= 0 || is_terminating () || _ctx_terminated)
-        return false;
+        return;
 
     int current_reconnect_ivl = -1;
     const int interval =
       next_asio_reconnect_interval (options, &current_reconnect_ivl);
 
     control_runtime_t *const control = get_ctx ()->control_runtime ();
-    if (!control)
-        return false;
+    if (!control) {
+        zlink_assert (is_terminating () || _ctx_terminated);
+        return;
+    }
 
     socket_inproc_reconnect_runtime_t &runtime =
       inproc_reconnect_runtime ();
@@ -1487,8 +1492,10 @@ bool zlink::socket_base_t::schedule_inproc_reconnect (
       _clock.now_ms () + static_cast<uint64_t> (interval);
     {
         scoped_lock_t lock (runtime.sync);
+        //  Close stops the scheduler as soon as it is accepted, before async
+        //  command processing quiesces, so a peer detach may still arrive.
         if (runtime.stopping)
-            return false;
+            return;
 
         socket_inproc_reconnect_runtime_t::pending_t::iterator inserted;
         try {
@@ -1499,7 +1506,7 @@ bool zlink::socket_base_t::schedule_inproc_reconnect (
             // The asynchronous disconnect path has no caller to which it can
             // return ENOMEM. Do not silently discard a live connect intent.
             alloc_assert (false);
-            return false;
+            return;
         }
         if (runtime.task_id == 0) {
             runtime.task_id = control->add_periodic_task (
@@ -1509,7 +1516,8 @@ bool zlink::socket_base_t::schedule_inproc_reconnect (
                 runtime.pending.erase (inserted);
                 if (errno == ENOMEM)
                     alloc_assert (false);
-                return false;
+                zlink_assert (is_terminating () || _ctx_terminated);
+                return;
             }
         } else if (inserted == runtime.pending.begin ()) {
             const int rc = control->schedule_task_after (
@@ -1519,14 +1527,15 @@ bool zlink::socket_base_t::schedule_inproc_reconnect (
     }
 
     event_connect_retried (endpoint_pair_, interval);
-    return true;
 }
 
 void zlink::socket_base_t::process_scheduled_inproc_reconnects ()
 {
-    socket_public_api_scope_t admission (lifecycle_coordinator ());
-    if (!admission.acquired ())
-        return;
+    // This control task is private Core work, not a public API call on the
+    // handle, so it takes no public admission and cannot make close BUSY.
+    // Its lifetime is owned by stop_inproc_reconnect_scheduler(): close joins
+    // this task right after accepting, and the stopping check below rejects
+    // every later turn.
     socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
 
     socket_inproc_reconnect_runtime_t &runtime =
