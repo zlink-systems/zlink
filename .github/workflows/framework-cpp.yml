@@ -1,8 +1,7 @@
 name: Framework C++ Verify
 
 # Framework C++ has a heavier bootstrap than the checks in pr-verify.yml, so it
-# is kept separate. The workflow-level filter prevents unrelated PRs from
-# allocating a runner at all.
+# is kept separate. Its job guard requires a ready-for-queue same-repository PR.
 on:
 # Verification moved to local unit tests before merge; CI runs on request
 # (user decision 2026-09-17). Uncomment the blocks below to restore the
@@ -41,6 +40,11 @@ on:
 #      - "scripts/local-package/sync-version.py"
   workflow_dispatch:
   workflow_call:
+  # Job guards limit PR verification to ready-for-queue labels on same-repository branches.
+  pull_request:
+    types:
+      - labeled
+      - synchronize
   schedule:
     - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only;
@@ -70,6 +74,15 @@ env:
 
 jobs:
   framework-cpp:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'ready-for-queue') ||
+          (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-for-queue'))
+        )
+      )
     name: Framework C++ unit and contract tests
     # A repository variable holding a JSON label list (for example
     # ["self-hosted","linux","x64"]) moves this job to a self-hosted runner;
@@ -196,7 +209,18 @@ jobs:
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
     # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
-    if: ${{ !startsWith(github.ref_name, 'mergify/merge-queue/') }}
+    if: >-
+      !startsWith(github.ref_name, 'mergify/merge-queue/') &&
+      (
+        github.event_name != 'pull_request' ||
+        (
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          (
+            (github.event.action == 'labeled' && github.event.label.name == 'ready-for-queue') ||
+            (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-for-queue'))
+          )
+        )
+      )
     # Same rule as the Linux job, with its own variable.
     runs-on: ${{ vars.ZLINK_CPP_WINDOWS_RUNNER && fromJSON(vars.ZLINK_CPP_WINDOWS_RUNNER) || 'windows-2022' }}
     env:

@@ -47,6 +47,11 @@ on:
 #       - "framework/languages/dotnet/cross-language/**"
   workflow_dispatch:
   workflow_call:
+  # Job guards limit PR verification to ready-for-queue labels on same-repository branches.
+  pull_request:
+    types:
+      - labeled
+      - synchronize
   schedule:
     - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only;
@@ -72,6 +77,15 @@ concurrency:
 
 jobs:
   framework-node:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'ready-for-queue') ||
+          (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-for-queue'))
+        )
+      )
     name: ${{ matrix.target.name }} / node${{ matrix.node-version }}
     # ZLINK_LINUX_RUNNER/ZLINK_WINDOWS_RUNNER (JSON label lists) move the x64 Linux/Windows
     # jobs to self-hosted runners; arm64 and macOS stay hosted. Queue, manual
@@ -276,6 +290,15 @@ jobs:
         run: npm run test:browser
 
   framework-node-cross-language:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'ready-for-queue') ||
+          (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-for-queue'))
+        )
+      )
     name: cross-language smoke
     runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     timeout-minutes: 30
@@ -394,6 +417,15 @@ jobs:
         run: npm run verify:cross-language
 
   framework-node-gate:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'ready-for-queue') ||
+          (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-for-queue'))
+        )
+      )
     name: node-release-gate
     runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     needs:
