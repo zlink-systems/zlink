@@ -140,9 +140,9 @@ class stream_runtime_t
     using async_dispatch_cancel_t = std::function<bool ()>;
     using actor_binding_replaced_dispatch_t = std::function<task_t<void> (stream_t &, std::string)>;
     result_t<void> dispatch_error_async (packet_stream_session_t &session,
-                                        stream_t &stream,
-                                        const stream_error_t &error,
-                                        async_dispatch_completion_t completion = {}) const;
+                                         stream_t &stream,
+                                         const stream_error_t &error,
+                                         async_dispatch_completion_t completion = {}) const;
     result_t<void> dispatch_connected_async (packet_stream_session_t &session,
                                              stream_t &stream,
                                              async_dispatch_completion_t completion = {}) const;
