@@ -333,7 +333,7 @@ int main ()
     /* IMP-CP-08 — session-owned transport failures reach the session callback. */
     gate.require (stream_host.find ("stream_session_error_t::transport_error") != std::string::npos,
                   "IMP-CP-08", "STREAM host does not classify a session transport failure");
-    gate.require (stream_host.find ("_runtime.dispatch_error (") != std::string::npos, "IMP-CP-08",
+    gate.require (stream_host.find ("_runtime.dispatch_error_async (") != std::string::npos, "IMP-CP-08",
                   "STREAM host does not dispatch a session transport failure callback");
 
     /* IMP-CP-05 — automatic RouteMesh discovery uses MeshNode descriptors. */
