@@ -13,7 +13,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegi
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
@@ -134,7 +133,7 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
                 topology.bindLiveness(
                         peer, liveness.admit(peer, "route:12", Duration.ofSeconds(14).toNanos()));
             }
-            tick(node, Duration.ofSeconds(15).toNanos());
+            node.tickLiveness(Duration.ofSeconds(15).toNanos());
             if (receive || replacement) {
                 assertTrue(topology.peer(peer).isPresent());
                 assertEquals(1, source.routesSnapshot().size());
@@ -142,7 +141,7 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
                 source.disconnectRid(peer);
             } else {
                 assertTrue(topology.peer(peer).isEmpty());
-                tick(node, Duration.ofSeconds(16).toNanos());
+                node.tickLiveness(Duration.ofSeconds(16).toNanos());
             }
             long end = System.nanoTime() + OBSERVE_WINDOW.toNanos();
             while (!observed.toCompletableFuture().isDone() && System.nanoTime() < end)
@@ -193,11 +192,5 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
         Field field = owner.getClass().getDeclaredField(name);
         field.setAccessible(true);
         field.set(owner, value);
-    }
-
-    private static void tick(ZLinkJavaRawMeshNode node, long now) throws Exception {
-        Method tick = ZLinkJavaRawMeshNode.class.getDeclaredMethod("tickLiveness", long.class);
-        tick.setAccessible(true);
-        tick.invoke(node, now);
     }
 }

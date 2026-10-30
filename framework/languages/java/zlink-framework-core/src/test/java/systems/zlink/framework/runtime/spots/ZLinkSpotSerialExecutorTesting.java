@@ -5,6 +5,8 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
+import java.util.concurrent.CompletionStage;
+
 /** Test-only access to the package-private state-lane constructor for other packages' tests. */
 public final class ZLinkSpotSerialExecutorTesting {
     private ZLinkSpotSerialExecutorTesting() {}
@@ -17,5 +19,9 @@ public final class ZLinkSpotSerialExecutorTesting {
                 ZLinkUserSpotExecutionMode.PER_ACTOR,
                 false,
                 stateLane);
+    }
+
+    public static CompletionStage<Void> closeAsync(ZLinkSpotSerialExecutor executor) {
+        return executor.closeAsync();
     }
 }
