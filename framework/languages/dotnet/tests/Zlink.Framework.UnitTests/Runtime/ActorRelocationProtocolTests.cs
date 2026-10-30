@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
@@ -306,9 +308,13 @@ public sealed class ActorRelocationProtocolTests
         var targetIngress = new List<(string Packet, ZLinkFlowValue Flow)>();
         // Root-flow preservation across relocation control hops is a tracing
         // behavior; spec 27 §4 forbids flow capture and outbound flow fields
-        // at Off, so this contract is exercised with tracing enabled.
+        // at Off and without a provider, so this contract is exercised with a
+        // provider and tracing enabled.
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        using var loggerFactory = LoggerFactory.Create(builder =>
+            builder.AddProvider(NullLoggerProvider.Instance)
+        );
         var dispatcher = new ZLinkSpotRouteDispatcher(
             "actor-route",
             "target-spot",
@@ -318,7 +324,7 @@ public sealed class ActorRelocationProtocolTests
                     "Only internal relocation packets are expected."
                 ),
             codecs,
-            new ZLinkDispatchErrorReporter(options),
+            new ZLinkDispatchErrorReporter(options, loggerFactory.CreateLogger("test")),
             (_, header, _) =>
             {
                 var current = Assert.IsType<ZLinkFlowValue>(ZLinkFlowContext.Current);
