@@ -28,6 +28,7 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
     static final int READABLE = 1;
     static final int ROUTE_CHANGED = 2;
     static final int OWNER_WAKE = 4;
+    static final int CONNECTION_CHANGED = 8;
 
     private final Socket socket;
     private final Poller poller;
@@ -113,7 +114,8 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
                         PollEventFlags.POLLIN,
                         PollEventFlags.POLLOUT,
                         PollEventFlags.POLLCOMPLETION,
-                        PollEventFlags.POLLROUTE);
+                        PollEventFlags.POLLROUTE,
+                        PollEventFlags.POLLCONNECT);
             } else if (ownsCompletionQueue) {
                 poller.add(
                         socket,
@@ -162,6 +164,9 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
             }
             if (observesRoutes && events.hasEvent(index, PollEventFlags.POLLROUTE)) {
                 ready |= ROUTE_CHANGED;
+            }
+            if (observesRoutes && events.hasEvent(index, PollEventFlags.POLLCONNECT)) {
+                ready |= CONNECTION_CHANGED;
             }
         }
         return ready;

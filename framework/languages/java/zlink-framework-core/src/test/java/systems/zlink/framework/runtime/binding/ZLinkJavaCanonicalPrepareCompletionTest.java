@@ -114,14 +114,13 @@ final class ZLinkJavaCanonicalPrepareCompletionTest {
     }
 
     @Test
-    void durableSubmissionUsesCurrentOwnerAdmissionEvenWhenTheObservationIsStillReady()
-            throws Exception {
+    void topologyDisconnectPublishesAdmissionBeforeTheNextRequest() throws Exception {
         try (var fixture = new Fixture(true)) {
             assertTrue(fixture.node.observePeerRoute(REMOTE).ready());
             assertTrue(fixture.topology.disconnect(REMOTE, "1"));
-            assertTrue(
+            assertFalse(
                     fixture.node.observePeerRoute(REMOTE).ready(),
-                    "the read-only root still describes its earlier commit");
+                    "the single observation must include the topology disconnect");
             var admitted = new CompletableFuture<Void>();
             var reply =
                     fixture.node
