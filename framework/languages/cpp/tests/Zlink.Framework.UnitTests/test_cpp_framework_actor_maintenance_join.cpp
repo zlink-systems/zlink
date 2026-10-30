@@ -1005,6 +1005,9 @@ struct host_t
         app.request_stop ();
         if (thread.joinable ())
             thread.join ();
+        for (const auto &registration :
+             fw::detail::mesh_node_runtime_t::registrations (app.advanced ().zlink ()))
+            registration->spot_state->handler_invocation_for_tests = {};
     }
     void start ()
     {
@@ -1079,21 +1082,11 @@ void configure (host_t &host,
               obs->changed.notify_all ();
           }
           if (hold && event.actor_id == actor_id && event.packet_name == probe_t::packet_name) {
-              bool entered = false;
-              if (event.detail_stage == "invoke_erased.enter") {
-                  std::lock_guard lock (obs->mutex);
-                  entered = ++hold->entries == 2;
-              }
               if (event.spot_id == local_spot
                   && event.detail_stage == "invoke_erased.application_handler"
                   && event.detail_result == "result=finished success=true") {
                   hold->preceding_h_finished.complete (fw::result_t<void>::success ());
                   obs->changed.notify_all ();
-              }
-              if (entered) {
-                  hold->entered.complete (fw::result_t<void>::success ());
-                  obs->changed.notify_all ();
-                  hold->release.task ().result ().value ();
               }
           }
           {
@@ -1107,20 +1100,6 @@ void configure (host_t &host,
                   obs->replay_failures.push_back (event);
           }
           obs->changed.notify_all ();
-          if (obs->hold_replay_prefix && event.actor_id == actor_id && event.spot_id == local_spot
-              && event.packet_name == probe_t::packet_name
-              && event.detail_stage == "invoke_erased.enter") {
-              std::unique_lock lock (obs->mutex);
-              obs->replay_prefix_entered = true;
-              obs->changed.notify_all ();
-              obs->changed.wait (lock, [obs] { return obs->release_replay_prefix; });
-          }
-          if (!obs->joined_sender || obs->send_after_close
-              || event.packet_name != move_t::packet_name || event.spot_id != local_spot
-              || event.detail_stage != "invoke_erased.post_serial")
-              return;
-          std::unique_lock lock (obs->mutex);
-          obs->changed.wait (lock, [&obs] { return obs->release_replay_post; });
       });
     options.add_location_store (store);
     options.add_relocation_store (relocations);
@@ -1161,6 +1140,43 @@ void configure (host_t &host,
       .add_actor_factory<actor_t, factory_t> (
         actor_type, std::make_shared<factory_t> (observations),
         [] (auto &factory) { factory.recreate_on_relocation (); });
+    for (const auto &registration :
+         fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ()))
+        registration->spot_state->handler_invocation_for_tests =
+          [obs = observations] (fw::detail::handler_invocation_phase_t phase,
+                                std::string_view packet, std::string_view spot,
+                                std::string_view actor) {
+              if (actor != actor_id)
+                  return;
+              if (phase == fw::detail::handler_invocation_phase_t::before_admission) {
+                  const auto hold = obs->native_handoff_hold;
+                  if (hold && packet == probe_t::packet_name) {
+                      bool entered;
+                      {
+                          std::lock_guard lock (obs->mutex);
+                          entered = ++hold->entries == 2;
+                      }
+                      if (entered) {
+                          hold->entered.complete (fw::result_t<void>::success ());
+                          obs->changed.notify_all ();
+                          hold->release.task ().result ().value ();
+                      }
+                  }
+                  if (obs->hold_replay_prefix && spot == local_spot
+                      && packet == probe_t::packet_name) {
+                      std::unique_lock lock (obs->mutex);
+                      if (!obs->replay_prefix_entered) {
+                          obs->replay_prefix_entered = true;
+                          obs->changed.notify_all ();
+                          obs->changed.wait (lock, [obs] { return obs->release_replay_prefix; });
+                      }
+                  }
+              } else if (obs->joined_sender && !obs->send_after_close
+                         && packet == move_t::packet_name && spot == local_spot) {
+                  std::unique_lock lock (obs->mutex);
+                  obs->changed.wait (lock, [obs] { return obs->release_replay_post; });
+              }
+          };
 }
 // A Session owner that binds the member Actor on its first packet and relays
 // every packet to it, as an application Session does.
@@ -1781,6 +1797,100 @@ class consecutive_join_state_t final : public fw::actor_relocation_adapter_t<act
     }
 };
 
+TEST (ActorMaintenanceJoin, HandlerInvocationCallbackStopsBothPhasesWithTracingOff)
+{
+    auto evidence = std::make_shared<observations_t> ();
+    evidence->joined_payloads = {17};
+    host_t host;
+    configure (host, evidence, first_rid,
+               std::make_shared<fw::runtime::in_memory_location_store_t> (),
+               std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
+    struct boundary_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        int entered = 0;
+        int returned = 0;
+        int released = 0;
+    };
+    auto boundary = std::make_shared<boundary_t> ();
+    std::atomic<int> telemetry_events{0};
+    auto &dispatch = host.app.add_zlink_framework ().configure_dispatch ();
+    dispatch.message_flow (fw::message_flow_log_mode_t::off);
+    fw::detail::dispatch_options_access_t::set_observer_for_tests (
+      dispatch, [&] (const auto &) { ++telemetry_events; });
+    const auto node = fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ())
+                        .front ()
+                        ->spot_state;
+    node->handler_invocation_for_tests = [boundary] (fw::detail::handler_invocation_phase_t phase,
+                                                     std::string_view packet, std::string_view spot,
+                                                     std::string_view actor) {
+        if (packet != probe_t::packet_name || actor != actor_id)
+            return;
+        EXPECT_FALSE (spot.empty ());
+        std::unique_lock lock (boundary->mutex);
+        const int step = phase == fw::detail::handler_invocation_phase_t::before_admission ? 1 : 2;
+        boundary->entered = step;
+        boundary->changed.notify_all ();
+        if (!boundary->changed.wait_for (lock, wait_budget,
+                                         [&] { return boundary->released >= step; })) {
+            ADD_FAILURE () << "handler invocation callback release timed out";
+            return;
+        }
+        ++boundary->returned;
+    };
+    host.start ();
+    ASSERT_TRUE (ready (host));
+    auto services = host.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (services.get_required<fw::actor_client_t> ()
+                   .send (fw::actor_id_t (actor_id), move_t{local_spot})
+                   .async ()
+                   .result ());
+    {
+        std::unique_lock lock (evidence->mutex);
+        ASSERT_TRUE (evidence->changed.wait_for (lock, wait_budget,
+                                                 [&] { return !evidence->completions.empty (); }));
+    }
+    auto request = std::async (std::launch::async, [&] {
+        return services.get_required<fw::actor_client_t> ()
+          .request (fw::actor_id_t (actor_id), probe_t{17})
+          .async<probe_t> ()
+          .result ();
+    });
+    {
+        std::unique_lock lock (boundary->mutex);
+        EXPECT_TRUE (
+          boundary->changed.wait_for (lock, wait_budget, [&] { return boundary->entered == 1; }));
+        EXPECT_EQ (boundary->returned, 0);
+        {
+            std::lock_guard evidence_lock (evidence->mutex);
+            EXPECT_TRUE (evidence->handled_payloads.empty ());
+        }
+        boundary->released = 1;
+        boundary->changed.notify_all ();
+        EXPECT_TRUE (
+          boundary->changed.wait_for (lock, wait_budget, [&] { return boundary->entered == 2; }));
+        EXPECT_EQ (boundary->returned, 1);
+        boundary->released = 2;
+        boundary->changed.notify_all ();
+    }
+    const auto reply = request.get ();
+    ASSERT_TRUE (reply);
+    EXPECT_EQ (reply.value ().value, 17);
+    EXPECT_EQ (telemetry_events.load (), 0);
+    host.app.request_stop ();
+    host.thread.join ();
+    node->handler_invocation_for_tests = {};
+}
+
 TEST (ActorMaintenanceJoin, ConsecutiveDeferredJoinsDoNotHoldTargetSpotDuringCapture)
 {
     auto evidence_owner = std::make_shared<observations_t> ();
@@ -2170,11 +2280,11 @@ void physical_disconnect_progresses_while_session_handler_waits (bool websocket)
             if (metric.instrument_descriptor.name_ != "zlink.stream.connections.closed")
                 continue;
             for (const auto &point : metric.point_data_attr_) {
-                if (opentelemetry::nostd::get<std::string> (
-                      point.attributes.at ("close_reason")) != "client_close")
+                if (opentelemetry::nostd::get<std::string> (point.attributes.at ("close_reason"))
+                    != "client_close")
                     continue;
-                const auto &sum = opentelemetry::nostd::get<metric_test::sdk::SumPointData> (
-                  point.point_data);
+                const auto &sum =
+                  opentelemetry::nostd::get<metric_test::sdk::SumPointData> (point.point_data);
                 total += opentelemetry::nostd::get<double> (sum.value_);
             }
         }
@@ -2194,8 +2304,10 @@ void physical_disconnect_progresses_while_session_handler_waits (bool websocket)
       [evidence, probe] (fw::service_provider_t &provider) {
           return std::make_unique<held_bound_session_t> (
             provider.get_required<fw::actor_manager_t> (), evidence, probe);
-      }, fw::service_lifetime_t::scoped);
-    owner.app.add_zlink_framework ().add_stream_node (stream_name)
+      },
+      fw::service_lifetime_t::scoped);
+    owner.app.add_zlink_framework ()
+      .add_stream_node (stream_name)
       .bind (websocket ? "ws://127.0.0.1:0/disconnect" : "tcp://127.0.0.1:0")
       .register_session<held_bound_session_t> ();
     owner.start ();
@@ -2213,11 +2325,12 @@ void physical_disconnect_progresses_while_session_handler_waits (bool websocket)
     auto services = owner.app.advanced ().services ().build_provider ();
     zlink::stream_connector::connector_options_t options;
     options.endpoint = services.get_required<fw::framework_runtime_t> ()
-                         .listener_status (fw::listener_kind_t::stream, stream_name).endpoint;
+                         .listener_status (fw::listener_kind_t::stream, stream_name)
+                         .endpoint;
     // The reader listener status reports its TCP acceptor address.
     if (websocket)
-        options.endpoint = "ws://" + options.endpoint.substr (std::string ("tcp://").size ())
-                           + "/disconnect";
+        options.endpoint =
+          "ws://" + options.endpoint.substr (std::string ("tcp://").size ()) + "/disconnect";
     options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
     options.reconnect.enabled = false;
     auto client = zlink::stream_connector::connector_factory_t::create (options);
@@ -2256,7 +2369,8 @@ void physical_disconnect_progresses_while_session_handler_waits (bool websocket)
     EXPECT_FALSE (shutdown.await_ready ());
     EXPECT_EQ (probe->destroyed.load (), 0);
     std::cout << "cleanup_pending_session_scope_retained=1 shutdown_draining_observed=1"
-                 " public_shutdown_pending=1" << std::endl;
+                 " public_shutdown_pending=1"
+              << std::endl;
     evidence->disconnect_release->complete (fw::result_t<void>::success ());
     auto &gateway = services.get_required<fw::detail::actor_gateway_runtime_t> ();
     const auto terminal_deadline = std::chrono::steady_clock::now () + wait_budget;
@@ -3469,8 +3583,8 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
     for (const auto mode :
          {fw::message_flow_log_mode_t::off, fw::message_flow_log_mode_t::normal}) {
         SCOPED_TRACE (mode == fw::message_flow_log_mode_t::off ? "off" : "normal");
-        auto observations = std::make_shared<
-          fw::test::telemetry_observations_t<fw::message_flow_event_t>> ();
+        auto observations =
+          std::make_shared<fw::test::telemetry_observations_t<fw::message_flow_event_t>> ();
         std::vector<fw::message_flow_event_t> events;
         fw::dispatch_options_t dispatch;
         dispatch.message_flow (mode);

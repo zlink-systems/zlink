@@ -2698,6 +2698,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_message_flow
     tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp
     "framework-unit;framework-regression;framework-observability;diagnostics")
+  target_sources(test_cpp_framework_message_flow PRIVATE tests/support/allocation_counter.cpp)
   target_link_libraries(test_cpp_framework_message_flow PRIVATE opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_message_flow PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)

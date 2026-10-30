@@ -48,7 +48,8 @@ class message_flow_tracer_t
     bool enabled (message_flow_log_mode_t min_mode) const noexcept
     {
         const auto mode = dispatch_options_access_t::effective_message_flow (*_options);
-        return rank (mode) >= rank (min_mode);
+        return rank (mode) >= rank (min_mode)
+               && process_telemetry_has_provider (*_options, telemetry_event_kind_t::message_flow);
     }
 
     message_flow_log_mode_t mode () const noexcept
@@ -71,7 +72,11 @@ class message_flow_tracer_t
 
     /* flow-correlation §2.2: host entry points create new flow ids only when
      * tracing is not fully off. */
-    bool capture_enabled () const noexcept { return enabled (message_flow_log_mode_t::errors); }
+    bool capture_enabled () const noexcept
+    {
+        return rank (mode ()) >= rank (message_flow_log_mode_t::errors)
+               && process_telemetry_has_provider (*_options, telemetry_event_kind_t::any);
+    }
     // Flow fields are created, read and propagated only while flow tracing is
     // on; flow_context_t::tracing owns that decision.
     bool flow_tracing () const noexcept { return runtime::flow_context_t::tracing (mode ()); }
@@ -102,7 +107,8 @@ class message_flow_tracer_t
         const auto required = result == message_flow_result_t::succeeded
                                 ? required_mode (outcome)
                                 : message_flow_log_mode_t::errors;
-        if (rank (effective_mode) < rank (required) || !has_sink ()
+        if (rank (effective_mode) < rank (required)
+            || !process_telemetry_has_provider (*_options, telemetry_event_kind_t::message_flow)
             || (result == message_flow_result_t::succeeded
                 && outcome != message_flow_outcome_t::dropped
                 && outcome != message_flow_outcome_t::backpressured
@@ -140,7 +146,8 @@ class message_flow_tracer_t
         const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
         const auto required =
           rank (min_mode) > rank (required_mode (outcome)) ? min_mode : required_mode (outcome);
-        if (rank (effective_mode) < rank (required) || !has_sink ()
+        if (rank (effective_mode) < rank (required)
+            || !process_telemetry_has_provider (*_options, telemetry_event_kind_t::message_flow)
             || (outcome != message_flow_outcome_t::dropped
                 && outcome != message_flow_outcome_t::backpressured
                 && !sample_current (std::nullopt))) {
@@ -167,7 +174,8 @@ class message_flow_tracer_t
         const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
         const auto required =
           rank (min_mode) > rank (required_mode (outcome)) ? min_mode : required_mode (outcome);
-        if (rank (effective_mode) < rank (required) || !has_sink ()
+        if (rank (effective_mode) < rank (required)
+            || !process_telemetry_has_provider (*_options, telemetry_event_kind_t::message_flow)
             || (outcome != message_flow_outcome_t::dropped
                 && outcome != message_flow_outcome_t::backpressured
                 && !sample_current (sampling_flow_id)))
@@ -190,7 +198,8 @@ class message_flow_tracer_t
         const auto required = event.result && *event.result != message_flow_result_t::succeeded
                                 ? message_flow_log_mode_t::errors
                                 : required_mode (event.outcome);
-        if (rank (effective_mode) < rank (required) || !has_sink ()) {
+        if (rank (effective_mode) < rank (required)
+            || !process_telemetry_has_provider (*_options, telemetry_event_kind_t::message_flow)) {
             return;
         }
         stamp_flow (event, effective_mode);
@@ -204,12 +213,6 @@ class message_flow_tracer_t
     }
 
   private:
-    bool has_sink () const noexcept
-    {
-        return dispatch_options_access_t::logger (*_options).has_value ()
-               || dispatch_options_access_t::has_observer (*_options);
-    }
-
     void emit (message_flow_event_t event, message_flow_log_mode_t effective_mode) const noexcept
     {
         traced_count ().fetch_add (1, std::memory_order_relaxed);

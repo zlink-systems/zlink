@@ -3397,9 +3397,13 @@ int common_session_disconnect_uses_actor_packet_route ()
             || error.action != dispatch_error_action_t::drop
             || dispatch_error_reporter_t::default_log_level (error) != log_level_t::warn)
             return 6;
-        if (error.exception || error.error_type != typeid (framework_exception_t).name ()
-            || (!error.error_message || error.error_message->empty ()))
-            return 7;
+        try {
+            std::rethrow_exception (error.exception);
+        }
+        catch (const framework_exception_t &failure) {
+            if (failure.kind () != framework_error_kind_t::protocol_error)
+                return 7;
+        }
     }
     // Block the Actor with an explicitly completed handler; admit the notification,
     // replace the binding, and release the handler. The comparison belongs to the

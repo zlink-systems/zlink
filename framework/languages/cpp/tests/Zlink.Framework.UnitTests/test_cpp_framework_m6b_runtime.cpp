@@ -1780,15 +1780,16 @@ void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_sea
       host::host_options_t{mesh::raw_mesh_node_options_t{
         .descriptor = descriptor ("descriptor-bind-target"),
         .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
-    std::size_t drops = 0;
+    auto drops_owner = std::make_shared<std::atomic_size_t> (0);
+    auto &drops = *drops_owner;
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_observer_for_tests (
-      options, [&] (const message_flow_event_t &event) {
+      options, [drops_owner] (const message_flow_event_t &event) {
           if (event.packet_name == std::optional<std::string> ("sessionRelocationSeal")
               && event.outcome == message_flow_outcome_t::dropped
               && event.reason == message_flow_reason_t::location_unavailable)
-              ++drops;
+              ++*drops_owner;
       });
     host::public_host_runtime_test_access_t::set_dispatch (*target, std::move (options));
     const auto local = target->status ();
@@ -1867,6 +1868,7 @@ void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_sea
            .source_routing_id = source->status ().routing_id ().to_bytes (),
            .source_node_generation = source->status ().lifecycle_generation ()}));
         await_task (target->dispatch_ready (discard));
+        test::acknowledge_delivery (deadline);
         assert (drops == 1);
     }
     source->close ();
@@ -8195,7 +8197,6 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                         expected_failure->terminal_result, expected_failure->failure_code,
                         "Instance Spot activation");
                     assert (event.error_type == typeid (framework_exception_t).name ());
-                    assert (!event.exception);
                     assert (event.reason == injected_failure_reason);
                     assert (event.error_message == expected_error.what ());
                     if (request.request) {
@@ -8263,9 +8264,13 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                 == expected.at ("surface").get<std::string> ());
                         assert (detail::enum_name (event.reason)
                                 == expected.at ("reason").get<std::string> ());
-                        assert (!event.exception);
-                        assert (event.error_type == typeid (framework_exception_t).name ());
-                        // Send admission and this owned summary do not expose the original kind.
+                        assert (event.exception);
+                        try {
+                            std::rethrow_exception (event.exception);
+                        }
+                        catch (const framework_exception_t &error) {
+                            assert (error.kind () == framework_error_kind_t::unavailable);
+                        }
                     }
                 }
                 assert (expected.at ("factoryCalls") == instance_prepare_count - prepares_before);

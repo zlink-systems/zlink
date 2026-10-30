@@ -11,6 +11,16 @@
 
 namespace zlink::framework::detail
 {
+bool process_telemetry_has_provider (const dispatch_options_t &options,
+                                     telemetry_event_kind_t kind) noexcept
+{
+    return dispatch_options_access_t::logger (options).has_value ()
+           || (kind != telemetry_event_kind_t::dispatch_error
+               && dispatch_options_access_t::has_observer (options))
+           || (kind != telemetry_event_kind_t::message_flow
+               && dispatch_options_access_t::has_dispatch_error_observer (options));
+}
+
 namespace
 {
 std::atomic<std::uint64_t> dropped_count{0};

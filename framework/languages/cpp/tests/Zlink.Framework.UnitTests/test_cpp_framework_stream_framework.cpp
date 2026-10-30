@@ -1061,12 +1061,17 @@ int core_connected_rejection_cleanup (
     dispatch.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
       dispatch, [rejection_source] (const message_dispatch_error_event_t &event) {
-          if (event.surface == dispatch_error_surface_t::stream_session
-              && event.message_kind == dispatch_message_kind_t::control
-              && !event.exception
-              && event.error_type == typeid (framework_exception_t).name ()
-              && event.error_message == "stream dispatch executor is not running")
-              rejection_source->set_value ();
+          if (event.surface != dispatch_error_surface_t::stream_session
+              || event.message_kind != dispatch_message_kind_t::control || !event.exception)
+              return;
+          try {
+              std::rethrow_exception (event.exception);
+          }
+          catch (const framework_exception_t &error) {
+              if (error.kind () == framework_error_kind_t::shutting_down
+                  && std::string_view (error.what ()) == "stream dispatch executor is not running")
+                  rejection_source->set_value ();
+          }
       });
     detail::apply_dispatch_options (builder, dispatch);
 

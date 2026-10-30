@@ -13,6 +13,15 @@
 
 namespace zlink::framework::detail
 {
+enum class telemetry_event_kind_t
+{
+    message_flow,
+    dispatch_error,
+    any
+};
+bool process_telemetry_has_provider (const dispatch_options_t &options,
+                                     telemetry_event_kind_t kind) noexcept;
+
 struct telemetry_record_t
 {
     std::uint64_t registration = 0;

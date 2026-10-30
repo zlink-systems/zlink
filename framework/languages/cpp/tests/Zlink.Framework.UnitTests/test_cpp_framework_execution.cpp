@@ -6078,12 +6078,20 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
           if (event.packet_name != spot_actor_leave_route_command_t::packet_name)
               return;
           ++*source_leave_failures_owner;
-          source_leave_identity_owner->store (
-            event.outcome == message_flow_outcome_t::completed
-            && event.surface == dispatch_error_surface_t::spot_actor
-            && event.message_kind == dispatch_message_kind_t::control
-            && event.result == message_flow_result_t::failed
-            && !event.reason && event.correlation_id == transfer_id && !event.exception);
+          if (!event.exception)
+              return;
+          try {
+              std::rethrow_exception (event.exception);
+          }
+          catch (const framework_exception_t &error) {
+              source_leave_identity_owner->store (
+                event.outcome == message_flow_outcome_t::completed
+                && event.surface == dispatch_error_surface_t::spot_actor
+                && event.message_kind == dispatch_message_kind_t::control
+                && event.result == message_flow_result_t::failed && !event.reason
+                && event.correlation_id == transfer_id
+                && error.kind () == framework_error_kind_t::not_configured);
+          }
       });
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (2);
     node->channel_runtime =
@@ -6108,9 +6116,19 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
           if (event.packet_name != "JoinSpot" || event.correlation_id != transfer_id)
               return;
           ++*commit_failures_owner;
-          commit_identity_owner->store (!event.exception
-            && event.error_type == typeid (framework_exception_t).name ()
-            && event.error_message == (completion_failure ? completion_error : lifecycle_error));
+          if (!event.exception)
+              return;
+          try {
+              std::rethrow_exception (event.exception);
+          }
+          catch (const framework_exception_t &failure) {
+              if (failure.kind ()
+                    == (completion_failure ? framework_error_kind_t::deadline_exceeded
+                                           : framework_error_kind_t::unavailable)
+                  && std::string_view (failure.what ())
+                       == (completion_failure ? completion_error : lifecycle_error))
+                  commit_identity_owner->store (true);
+          }
       });
     spot->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
       *spot->serial_executor, runtime::serial_execution_queue_options_t{},
@@ -6456,12 +6474,16 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     dispatch_options_access_t::set_logger (node->dispatch, logging.create_logger ("leave-submit"));
     dispatch_options_access_t::set_observer_for_tests (
       node->dispatch, [leave_submit_unavailable_events] (const message_flow_event_t &event) {
-          if (event.packet_name == "spot_actor_leave_submit"
-              && event.outcome == message_flow_outcome_t::completed
-              && event.surface == dispatch_error_surface_t::spot_actor
-              && event.message_kind == dispatch_message_kind_t::control
-              && event.result == message_flow_result_t::failed && !event.exception)
-              leave_submit_unavailable_events->fetch_add (1, std::memory_order_release);
+          if (event.packet_name != "spot_actor_leave_submit"
+              || event.result != message_flow_result_t::failed || !event.exception)
+              return;
+          try {
+              std::rethrow_exception (event.exception);
+          }
+          catch (const framework_exception_t &error) {
+              if (error.kind () == framework_error_kind_t::unavailable)
+                  leave_submit_unavailable_events->fetch_add (1, std::memory_order_release);
+          }
       });
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "actor-finalize");
     node->channel_runtime =
@@ -11499,8 +11521,7 @@ int verify_actor_join_completion_observations ()
               .result ()
               .value ();
     zlink::framework::test::acknowledge_delivery ();
-    if (first_failed_delivery || !repeated_failed_delivery
-        || completion_callback_count != 3
+    if (first_failed_delivery || !repeated_failed_delivery || completion_callback_count != 3
         || completion_outcomes.back ()
              != zlink::framework::detail::actor_join_completion_outcome_t::failed
         || completion_error_kind != zlink::framework::framework_error_kind_t::internal_failure
@@ -11508,8 +11529,17 @@ int verify_actor_join_completion_observations ()
         || completion_failure_events ().back ().actor_id != "completion-actor"
         || completion_failure_events ().back ().error_reason
              != zlink::framework::dispatch_error_reason_t::handler_exception
-        || completion_failure_events ().back ().exception) {
+        || !completion_failure_events ().back ().exception) {
         return 72;
+    }
+
+    try {
+        std::rethrow_exception (completion_failure_events ().back ().exception);
+        return 73;
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        if (error.kind () != zlink::framework::framework_error_kind_t::internal_failure)
+            return 73;
     }
 
     const auto completion_records = completion_logs->snapshot ();

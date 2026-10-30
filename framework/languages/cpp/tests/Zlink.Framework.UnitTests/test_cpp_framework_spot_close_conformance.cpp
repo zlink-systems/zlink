@@ -2328,6 +2328,17 @@ nlohmann::json run_scenario (const nlohmann::json &scenario, std::string &failur
         if (event.result == zf::message_flow_result_t::failed) {
             std::string note =
               "flow:" + event.packet_name.value_or ("") + ":" + event.detail_result.value_or ("");
+            if (event.exception) {
+                try {
+                    std::rethrow_exception (event.exception);
+                }
+                catch (const std::exception &error) {
+                    note += std::string (":") + error.what ();
+                }
+                catch (...) {
+                    note += ":non-standard-exception";
+                }
+            }
             std::lock_guard lock (state.mutex);
             state.notes.push_back (std::move (note));
         }

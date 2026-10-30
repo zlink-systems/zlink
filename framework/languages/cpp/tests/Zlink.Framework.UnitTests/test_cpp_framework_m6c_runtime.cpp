@@ -1196,7 +1196,7 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
                       && event.outcome == zlink::framework::message_flow_outcome_t::completed
                       && event.surface == zlink::framework::dispatch_error_surface_t::spot_actor
                       && event.message_kind == zlink::framework::dispatch_message_kind_t::control
-                      && !event.reason && !event.exception) {
+                      && !event.reason && event.exception) {
                       ++diagnostics->failed;
                       if (!(event.correlation_id == transfer_id))
                           ++diagnostics->wrong_correlation;
@@ -6364,6 +6364,22 @@ void test_application_relocation_remote_production_path (test_context_t &test,
                 && event.mesh_name == "production-relocation-mesh" && event.flow_id == flow_id
                 && event.flow_origin == framework::flow_origin_t::application,
               "Session owner lookup failure must retain the Actor identity and ambient flow");
+            bool actual_exception = false;
+            if (event.exception) {
+                try {
+                    std::rethrow_exception (event.exception);
+                }
+                catch (const std::runtime_error &error) {
+                    actual_exception = typeid (error) == typeid (std::runtime_error)
+                                       && std::string_view (error.what ())
+                                            == "production Session owner lookup failed";
+                }
+                catch (...) {
+                }
+            }
+            test.require (actual_exception,
+                          "Session owner lookup failure must retain the actual exception type and "
+                          "message");
             const auto records = resolver_logs->snapshot ();
             const bool owned_cause = std::any_of (records.begin (), records.end (), [&] (const auto &record) {
                 const auto has = [&] (std::string_view key, std::string_view value) {
@@ -6375,8 +6391,9 @@ void test_application_relocation_remote_production_path (test_context_t &test,
                   && has (detail::dispatch_event_field::error_type, typeid (std::runtime_error).name ())
                   && has (detail::dispatch_event_field::error_message, "production Session owner lookup failed");
             });
-            test.require (!event.exception && owned_cause,
-                          "Session owner lookup failure must report the owned error type and message");
+            test.require (
+              event.exception && owned_cause,
+              "Session owner lookup failure must report the owned error type and message");
         }
         source.stop ();
         target.stop ();
@@ -7503,8 +7520,8 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
               && event.outcome == zlink::framework::message_flow_outcome_t::completed
               && event.surface == zlink::framework::dispatch_error_surface_t::spot_actor
               && event.message_kind == zlink::framework::dispatch_message_kind_t::control
-              && event.result == zlink::framework::message_flow_result_t::failed
-              && !event.reason && !event.exception)
+              && event.result == zlink::framework::message_flow_result_t::failed && !event.reason
+              && event.exception)
               ++*failed_leave_diagnostics;
       });
     auto authority = std::make_shared<memory_authority_store_t> ();

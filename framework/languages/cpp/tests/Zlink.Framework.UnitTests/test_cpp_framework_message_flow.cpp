@@ -7,6 +7,7 @@
 // a runtime without a configured logger must not write to a process console.
 
 #include "../support/telemetry_observation.hpp"
+#include "../support/allocation_counter.hpp"
 
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "metric_test_reader.hpp"
@@ -762,8 +763,51 @@ int process_failure_roles (bool fallback_fails)
     return passed ? 0 : 84;
 }
 
+// Provider absence must gate capture and both lazy builders before allocation.
+int no_provider_capture ()
+{
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::detailed);
+    unsigned built = 0;
+    bool capture = false;
+    bool reporter = false;
+    const auto allocations = zlink::framework::tests::count_allocations ([&] {
+        detail::dispatch_options_access_t::set_logger (options, std::nullopt);
+        detail::dispatch_options_access_t::set_observer_for_tests (options, {});
+        detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (options, {});
+        message_flow_tracer_t tracer (options);
+        capture = tracer.capture_enabled ();
+        reporter = dispatch_error_reporter_t (options).enabled ();
+        if (capture) {
+            ++built;
+            const std::string snapshot (1024, 's');
+            if (snapshot.empty ())
+                ++built;
+        }
+        tracer.trace (message_flow_outcome_t::received, [&] {
+            ++built;
+            return flow_event (message_flow_outcome_t::received);
+        });
+        dispatch_error_reporter_t (options).report_lazy ([&] {
+            ++built;
+            return error_event ();
+        });
+    });
+    std::cout << "no_provider allocations=" << allocations << " built=" << built
+              << " capture=" << capture << " reporter=" << reporter << '\n';
+    if (allocations != 0 || built != 0 || capture || reporter) {
+        std::cerr << "no-provider capture must not build or allocate telemetry\n";
+        return 91;
+    }
+    return 0;
+}
+
 int main (int argc, char **argv)
 {
+    if (const auto result = no_provider_capture (); result != 0)
+        return result;
+    if (argc == 2 && std::string (argv[1]) == "--no-provider")
+        return 0;
     if (argc == 2 && std::string (argv[1]) == "--negative-overflow-control")
         return bounded_process_delivery (false, 8191);
     if (argc == 2 && std::string (argv[1]) == "--negative-capture-control")
@@ -1002,9 +1046,16 @@ int main (int argc, char **argv)
               .exception = std::make_exception_ptr (std::runtime_error (message))});
         });
         const auto type = std::string (typeid (std::runtime_error).name ());
-        if (!observed || observed->exception || observed->error_type != type
+        if (!observed || !observed->exception || observed->error_type != type
             || observed->error_message != expected)
             return 40;
+        try {
+            std::rethrow_exception (observed->exception);
+        }
+        catch (const std::runtime_error &error) {
+            if (std::string (error.what ()) != message)
+                return 40;
+        }
         if (!contains (out, "error_type=" + type) || !contains (out, "error_message=" + expected)
             || contains (out, "Bearer auth") || contains (out, "Bearer standalone")
             || contains (out, "password=p") || contains (out, "token=t")

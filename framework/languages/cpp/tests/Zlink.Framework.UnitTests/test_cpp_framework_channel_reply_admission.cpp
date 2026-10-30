@@ -295,7 +295,7 @@ TEST (ChannelHostReplyAdmission, MissingRouteReportsOneTerminalAndReleasesOrdina
         EXPECT_EQ (zlink::framework::dispatch_error_reason_t::unexpected_reply,
                    errors.front ().reason);
         EXPECT_EQ (zlink::framework::dispatch_error_action_t::drop, errors.front ().action);
-        EXPECT_FALSE (errors.front ().exception);
+        EXPECT_TRUE (errors.front ().exception);
         EXPECT_TRUE (errors.front ().error_type && !errors.front ().error_type->empty ());
         EXPECT_TRUE (errors.front ().error_message && !errors.front ().error_message->empty ());
     }

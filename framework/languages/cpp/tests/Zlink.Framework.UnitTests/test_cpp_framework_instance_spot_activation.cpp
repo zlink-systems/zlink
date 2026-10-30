@@ -1087,8 +1087,14 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     ASSERT_EQ (1u, dropped.size ());
     const auto &terminal = dropped.front ();
     EXPECT_EQ (fw::message_flow_reason_t::activation_timeout, terminal.reason);
+    ASSERT_TRUE (terminal.exception);
+    try {
+        std::rethrow_exception (terminal.exception);
+    }
+    catch (const fw::framework_exception_t &error) {
+        EXPECT_EQ (fw::framework_error_kind_t::deadline_exceeded, error.kind ());
+    }
     EXPECT_EQ (fw::dispatch_error_action_t::drop, terminal.error_action);
-    EXPECT_FALSE (terminal.exception);
     ASSERT_EQ (1u, diagnostics.size ());
     EXPECT_EQ (typeid (fw::framework_exception_t).name (), diagnostics.front ().error_type);
     EXPECT_EQ ("Instance Spot activation deadline expired", diagnostics.front ().error_message);
@@ -1242,7 +1248,13 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
         EXPECT_EQ (typeid (fw::framework_exception_t).name (), event.error_type);
         EXPECT_EQ ("Instance Spot activation failed because the target route is not connected.",
                    event.error_message);
-        EXPECT_FALSE (event.exception);
+        ASSERT_TRUE (event.exception);
+        try {
+            std::rethrow_exception (event.exception);
+        }
+        catch (const fw::framework_exception_t &error) {
+            EXPECT_EQ (fw::framework_error_kind_t::unavailable, error.kind ());
+        }
         EXPECT_EQ (0, terminals);
     } else {
         ASSERT_EQ (std::future_status::ready, reply_future.wait_for (0ms));
@@ -3153,7 +3165,27 @@ static void verify_activation_failure_terminal (bool local,
                                   : fw::message_flow_reason_t::activation_rejected,
                event.reason);
     EXPECT_EQ (fw::message_flow_result_t::dropped, event.result);
-    EXPECT_FALSE (event.exception);
+    ASSERT_TRUE (event.exception);
+    try {
+        std::rethrow_exception (event.exception);
+    }
+    catch (const std::exception &error) {
+        if (failure == activation_failure_t::factory)
+            EXPECT_STREQ ("factory terminal failure", error.what ());
+        else if (failure == activation_failure_t::cancelled) {
+            const auto *cancelled = dynamic_cast<const std::system_error *> (&error);
+            ASSERT_NE (nullptr, cancelled);
+            EXPECT_EQ (std::make_error_code (std::errc::operation_canceled), cancelled->code ());
+        } else {
+            const auto *typed = dynamic_cast<const fw::framework_exception_t *> (&error);
+            ASSERT_NE (nullptr, typed);
+            EXPECT_EQ (expected_kind, typed->kind ());
+        }
+    }
+    catch (int error) {
+        EXPECT_EQ (activation_failure_t::non_std_factory, failure);
+        EXPECT_EQ (7, error);
+    }
     EXPECT_EQ (0, dispatches);
     EXPECT_EQ (failure == activation_failure_t::shutdown ? 0 : 1, cleanups);
     ASSERT_EQ (1u, errors.size ());
@@ -3163,7 +3195,6 @@ static void verify_activation_failure_terminal (bool local,
     EXPECT_EQ (fw::dispatch_error_action_t::drop, error.action);
     EXPECT_EQ (flow_id, error.flow_id);
     EXPECT_EQ (fw::flow_origin_t::application, error.flow_origin);
-    EXPECT_FALSE (error.exception);
     EXPECT_EQ (failure == activation_failure_t::factory ? typeid (std::runtime_error).name ()
                : failure == activation_failure_t::cancelled ? typeid (std::system_error).name ()
                : failure == activation_failure_t::non_std_factory ? "non-standard exception"

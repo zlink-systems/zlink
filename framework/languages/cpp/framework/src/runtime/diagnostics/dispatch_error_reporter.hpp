@@ -31,8 +31,8 @@ class dispatch_error_reporter_t
     {
         return dispatch_options_access_t::effective_message_flow (*_options)
                  != message_flow_log_mode_t::off
-               && (dispatch_options_access_t::logger (*_options)
-                   || dispatch_options_access_t::has_dispatch_error_observer (*_options));
+               && process_telemetry_has_provider (*_options,
+                                                  telemetry_event_kind_t::dispatch_error);
     }
 
     void report (message_dispatch_error_event_t event) const noexcept
@@ -41,8 +41,7 @@ class dispatch_error_reporter_t
         if (effective_mode == message_flow_log_mode_t::off) {
             return;
         }
-        if (!dispatch_options_access_t::logger (*_options)
-            && !dispatch_options_access_t::has_dispatch_error_observer (*_options))
+        if (!process_telemetry_has_provider (*_options, telemetry_event_kind_t::dispatch_error))
             return;
         reported_count ().fetch_add (1, std::memory_order_relaxed);
         if (runtime::flow_context_t::tracing (effective_mode)) {
@@ -67,10 +66,7 @@ class dispatch_error_reporter_t
 
     template <typename Fn> void report_lazy (Fn &&build_event) const noexcept
     {
-        if (dispatch_options_access_t::effective_message_flow (*_options)
-              == message_flow_log_mode_t::off
-            || (!dispatch_options_access_t::logger (*_options)
-                && !dispatch_options_access_t::has_dispatch_error_observer (*_options)))
+        if (!enabled ())
             return;
         try {
             report (std::forward<Fn> (build_event) ());

@@ -131,6 +131,10 @@ class dispatch_options_access_t
             record.registration = options._telemetry_registration->id;
             record.mode = mode;
             record.include_sizes = options.diagnostics.include_message_sizes ();
+            if constexpr (std::is_same_v<Event, message_flow_event_t>)
+                record.observer = options._message_flow_observer;
+            else
+                record.observer = options._dispatch_error_observer;
             if (event.exception) {
                 auto summary = diagnostic_event_sink_t::exception_summary (event.exception);
                 if constexpr (std::is_same_v<Event, message_dispatch_error_event_t>) {
@@ -139,14 +143,11 @@ class dispatch_options_access_t
                 } else {
                     record.error = std::move (summary);
                 }
-                event.exception = nullptr;
             }
+            if (!record.observer)
+                event.exception = nullptr;
             record.event = std::move (event);
             record.logger = options._diagnostics_logger;
-            if constexpr (std::is_same_v<Event, message_flow_event_t>)
-                record.observer = options._message_flow_observer;
-            else
-                record.observer = options._dispatch_error_observer;
             submit_process_telemetry (std::move (record));
         }
         catch (...) {
@@ -158,8 +159,7 @@ class dispatch_options_access_t
     static void ensure_registration (dispatch_options_t &options)
     {
         if (!options._telemetry_registration
-            && (options._diagnostics_logger || options._message_flow_observer
-                || options._dispatch_error_observer))
+            && process_telemetry_has_provider (options, telemetry_event_kind_t::any))
             options._telemetry_registration = register_process_telemetry ();
     }
 
