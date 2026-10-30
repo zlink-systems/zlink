@@ -1,5 +1,9 @@
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
-const { mapZLinkRequestReply, prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const {
+  mapZLinkRequestReply,
+  prepareZLinkRequestReply,
+  identityRequestReply
+} = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
@@ -29,12 +33,8 @@ const {
 const {
   ApplicationJobReceiveFlowController
 } = require('../../packages/framework/dist/runtime/application-jobs/receive-flow-controller');
-const clientServerWire = require(
-  '../../packages/framework/dist/runtime/channels/client-server-service-wire'
-);
-const submissionResult = require(
-  '../../packages/framework/dist/runtime/messaging/submission-result'
-);
+const clientServerWire = require('../../packages/framework/dist/runtime/channels/client-server-service-wire');
+const submissionResult = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const routingIds = require('../../packages/framework/dist/runtime/routing-id');
 const {
   ZLinkNodeBackendAdapterFactory
@@ -73,69 +73,72 @@ test('ClientServer service wire preserves opaque server RID bytes and rejects ma
   const owner = { token: { ownerId: 'owner', leaseGeneration: 1n } };
   const opaqueRid = routingIds.decodeRoutingId('opaque-server', 'ff00fe');
   const admitted = clientServerWire.decodeClientServerControl(
-    clientServerWire.encodeClientServerAdmit(
-      descriptor(owner, { serverRid: opaqueRid }),
-      4096
-    )
+    clientServerWire.encodeClientServerAdmit(descriptor(owner, { serverRid: opaqueRid }), 4096)
   );
   assert.equal(admitted.kind, 'admit');
   assert.equal(routingIds.encodeRoutingIdStorageHex(admitted.admission.serverRid), 'ff00fe');
 
   const channelName = 'canonical-utf8-channel';
-  const malformed = Buffer.from(clientServerWire.encodeClientServerHello({
-    channelName,
-    securityIdentity: 'cluster-a',
-    normalizedEffectiveMaxMessageBytes: 4096
-  }));
+  const malformed = Buffer.from(
+    clientServerWire.encodeClientServerHello({
+      channelName,
+      securityIdentity: 'cluster-a',
+      normalizedEffectiveMaxMessageBytes: 4096
+    })
+  );
   const channelOffset = malformed.indexOf(Buffer.from(channelName, 'utf8'));
   assert.ok(channelOffset > 0);
   malformed[channelOffset] = 0xff;
   assert.throws(
     () => clientServerWire.decodeClientServerControl(malformed),
-    ( error ) => error.name === 'ZLinkClientServerServiceWireError'
-      && /channelName/.test(error.message)
+    (error) =>
+      error.name === 'ZLinkClientServerServiceWireError' && /channelName/.test(error.message)
   );
 
   assert.throws(
-    () => clientServerWire.encodeClientServerHello({
-      channelName: 'nul\0channel',
-      securityIdentity: 'cluster-a',
-      normalizedEffectiveMaxMessageBytes: 4096
-    }),
-    ( error ) => error.name === 'ZLinkClientServerServiceWireError'
-      && /channelName/.test(error.message)
+    () =>
+      clientServerWire.encodeClientServerHello({
+        channelName: 'nul\0channel',
+        securityIdentity: 'cluster-a',
+        normalizedEffectiveMaxMessageBytes: 4096
+      }),
+    (error) =>
+      error.name === 'ZLinkClientServerServiceWireError' && /channelName/.test(error.message)
   );
   assert.throws(
-    () => clientServerWire.encodeClientServerHello({
-      channelName: '\ud800',
-      securityIdentity: 'cluster-a',
-      normalizedEffectiveMaxMessageBytes: 4096
-    }),
-    ( error ) => error.name === 'ZLinkClientServerServiceWireError'
-      && /canonical UTF-8/.test(error.message)
+    () =>
+      clientServerWire.encodeClientServerHello({
+        channelName: '\ud800',
+        securityIdentity: 'cluster-a',
+        normalizedEffectiveMaxMessageBytes: 4096
+      }),
+    (error) =>
+      error.name === 'ZLinkClientServerServiceWireError' && /canonical UTF-8/.test(error.message)
   );
 
-  const nulText = Buffer.from(clientServerWire.encodeClientServerHello({
-    channelName: 'nul-channel',
-    securityIdentity: 'cluster-a',
-    normalizedEffectiveMaxMessageBytes: 4096
-  }));
+  const nulText = Buffer.from(
+    clientServerWire.encodeClientServerHello({
+      channelName: 'nul-channel',
+      securityIdentity: 'cluster-a',
+      normalizedEffectiveMaxMessageBytes: 4096
+    })
+  );
   const nulOffset = nulText.indexOf(Buffer.from('nul-channel', 'utf8'));
   assert.ok(nulOffset > 0);
   nulText[nulOffset] = 0;
   assert.throws(
     () => clientServerWire.decodeClientServerControl(nulText),
-    ( error ) => error.name === 'ZLinkClientServerServiceWireError'
-      && /channelName/.test(error.message)
+    (error) =>
+      error.name === 'ZLinkClientServerServiceWireError' && /channelName/.test(error.message)
   );
 
   assert.throws(
-    () => clientServerWire.encodeClientServerAdmit(
-      descriptor(owner, { serverRid: { toHex: () => 'aa'.repeat(256) } }),
-      4096
-    ),
-    ( error ) => error.name === 'ZLinkClientServerServiceWireError'
-      && /serverRid/.test(error.message)
+    () =>
+      clientServerWire.encodeClientServerAdmit(
+        descriptor(owner, { serverRid: { toHex: () => 'aa'.repeat(256) } }),
+        4096
+      ),
+    (error) => error.name === 'ZLinkClientServerServiceWireError' && /serverRid/.test(error.message)
   );
 });
 
@@ -169,20 +172,21 @@ test('dedicated ClientServer descriptor store fences immutable identity and muta
   assert.equal(page.items[0].descriptorRevision, 2n);
 
   assert.equal(
-    await store.removeClientServer(
-      { channelName: 'orders', serverRid: 'server-a' },
-      owner.token
-    ),
+    await store.removeClientServer({ channelName: 'orders', serverRid: 'server-a' }, owner.token),
     internal.ZLinkLocationWriteStatus.Stored
   );
   assert.equal((await store.listClientServers('orders')).items.length, 0);
 });
 
 test('automatic ClientServer startup requires the minimal Location Store provider SPI', () => {
-  assert.throws(() => internal.createFrameworkRegistration({
-    channels: { orders: { client: { manualConnections: [] } } },
-    locations: { storeInstance: {} }
-  }), /Location Store must implement read, write, and scan/);
+  assert.throws(
+    () =>
+      internal.createFrameworkRegistration({
+        channels: { orders: { client: { manualConnections: [] } } },
+        locations: { storeInstance: {} }
+      }),
+    /Location Store must implement read, write, and scan/
+  );
 });
 
 test('ClientServer socket identity defaults a wildcard bind to loopback with the concrete port', async () => {
@@ -205,7 +209,9 @@ test('ClientServer socket identity defaults a wildcard bind to loopback with the
     sendTimeoutMs: -1,
     maxMessageSize: -1,
     setChannelName() {},
-    setRoutingId(value) { this.routingId = value; },
+    setRoutingId(value) {
+      this.routingId = value;
+    },
     bind(endpoint) {
       assert.equal(endpoint, 'tcp://0.0.0.0:0');
       this.lastEndpoint = 'tcp://0.0.0.0:49152';
@@ -216,7 +222,11 @@ test('ClientServer socket identity defaults a wildcard bind to loopback with the
   };
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
-    { createRouterSocket() { return router; } },
+    {
+      createRouterSocket() {
+        return router;
+      }
+    },
     {}
   );
 
@@ -450,9 +460,8 @@ test('receive-flow controller fences reentrant disposal during initial state app
   const queue = new ApplicationJobQueue(
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 5n }, () => 1n)
   );
-  const controller = new ApplicationJobReceiveFlowController(
-    queue,
-    ( state ) => state === 'paused' ? 1 : 0
+  const controller = new ApplicationJobReceiveFlowController(queue, (state) =>
+    state === 'paused' ? 1 : 0
   );
   let calls = 0;
   const target = {
@@ -470,11 +479,13 @@ test('receive-flow controller fences reentrant disposal during initial state app
 
 test('RouteMesh ROUTER receives current absolute pressure before connect and bind', async () => {
   const registration = internal.createFrameworkRegistration({
-    routeChannels: [{
-      routerChannelId: 'play.route',
-      bind: 'tcp://127.0.0.1:9402',
-      manualConnections: ['tcp://127.0.0.1:9403']
-    }]
+    routeChannels: [
+      {
+        routerChannelId: 'play.route',
+        bind: 'tcp://127.0.0.1:9402',
+        manualConnections: ['tcp://127.0.0.1:9403']
+      }
+    ]
   });
   const calls = [];
   const router = {
@@ -484,26 +495,41 @@ test('RouteMesh ROUTER receives current absolute pressure before connect and bin
     receiveHighWaterMark: 0,
     sendTimeoutMs: -1,
     maxMessageSize: -1,
-    setReceiveFlowState(state) { calls.push(`flow:${state}`); },
+    setReceiveFlowState(state) {
+      calls.push(`flow:${state}`);
+    },
     setChannelName() {},
     setRoutingId() {},
     setProbe() {},
-    connect() { calls.push('connect'); },
-    bind() { calls.push('bind'); },
-    async dispose() { calls.push('dispose'); }
+    connect() {
+      calls.push('connect');
+    },
+    bind() {
+      calls.push('bind');
+    },
+    async dispose() {
+      calls.push('dispose');
+    }
   };
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration({
-      maxQueuedApplicationJobs: 5n,
-      pauseThresholdPercent: 80,
-      resumeThresholdPercent: 40
-    }, () => 1n)
+    resolveApplicationJobQueueConfiguration(
+      {
+        maxQueuedApplicationJobs: 5n,
+        pauseThresholdPercent: 80,
+        resumeThresholdPercent: 40
+      },
+      () => 1n
+    )
   );
   const permits = [];
   for (let index = 0; index < 4; index += 1) permits.push(await queue.acquire(undefined, 'remote'));
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
-    { createRouterSocket() { return router; } },
+    {
+      createRouterSocket() {
+        return router;
+      }
+    },
     {},
     undefined,
     undefined,
@@ -531,12 +557,16 @@ test('same-process ClientServer uses local bound endpoint without a Location Sto
     });
     const router = {
       ...fakeDealer('local-router'),
-      bind() { this.lastEndpoint = 'tcp://0.0.0.0:49152'; }
+      bind() {
+        this.lastEndpoint = 'tcp://0.0.0.0:49152';
+      }
     };
     const dealer = fakeDealer('local-dealer');
     const requests = [];
     let dealerMonitor;
-    dealer.connect = ( endpoint ) => { dealer.connected = endpoint; };
+    dealer.connect = (endpoint) => {
+      dealer.connected = endpoint;
+    };
     dealer.request = physicalRequest(
       (message) =>
         new Promise((resolve, reject) => {
@@ -546,9 +576,15 @@ test('same-process ClientServer uses local bound endpoint without a Location Sto
     const sockets = new ZLinkChannelSocketRegistry(
       registration,
       {
-        createRouterSocket() { return router; },
-        createDealerSocket() { return dealer; },
-        createReadablePoller() { return readyPoller(); }
+        createRouterSocket() {
+          return router;
+        },
+        createDealerSocket() {
+          return dealer;
+        },
+        createReadablePoller() {
+          return readyPoller();
+        }
       },
       {},
       {
@@ -567,7 +603,10 @@ test('same-process ClientServer uses local bound endpoint without a Location Sto
     return { sockets, dealer, requests, dealerMonitor };
   };
 
-  for (const [weight, expectedReady] of [[75, true], [0, false]]) {
+  for (const [weight, expectedReady] of [
+    [75, true],
+    [0, false]
+  ]) {
     const local = createLocal(weight);
     const identity = local.sockets.clientServerServerIdentity('orders');
     assert.equal(local.dealer.connected, identity.endpoint);
@@ -578,26 +617,25 @@ test('same-process ClientServer uses local bound endpoint without a Location Sto
       routingId: identity.serverRid,
       remoteAddr: identity.endpoint
     });
-    await new Promise(( resolve ) => setImmediate(resolve));
-    assert.equal(
-      clientServerWire.decodeClientServerControl(local.requests[0].frame).kind,
-      'hello'
-    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(clientServerWire.decodeClientServerControl(local.requests[0].frame).kind, 'hello');
     local.requests[0].resolve([
-      zlink.Message.from(clientServerWire.encodeClientServerAdmit({
-        ...descriptor({ token: { ownerId: 'local', leaseGeneration: 1n } }),
-        serverRid: identity.serverRid,
-        lifecycleGeneration: identity.lifecycleGeneration,
-        endpoint: identity.endpoint,
-        weight,
-        securityIdentity: 'default'
-      }, 4096))
+      zlink.Message.from(
+        clientServerWire.encodeClientServerAdmit(
+          {
+            ...descriptor({ token: { ownerId: 'local', leaseGeneration: 1n } }),
+            serverRid: identity.serverRid,
+            lifecycleGeneration: identity.lifecycleGeneration,
+            endpoint: identity.endpoint,
+            weight,
+            securityIdentity: 'default'
+          },
+          4096
+        )
+      )
     ]);
-    await new Promise(( resolve ) => setImmediate(resolve));
-    assert.equal(
-      local.sockets.clientDealerForOutbound('orders') === local.dealer,
-      expectedReady
-    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(local.sockets.clientDealerForOutbound('orders') === local.dealer, expectedReady);
     await local.sockets.dispose();
   }
 });
@@ -614,44 +652,36 @@ test('production ClientServer outbound socket selection uses admitted descriptor
       dealers.push(dealer);
       return dealer;
     },
-    createReadablePoller() { return readyPoller(); }
+    createReadablePoller() {
+      return readyPoller();
+    }
   };
   const monitoringAdapter = {
     openSocketMonitor() {
       return {
         nativeInstance: {},
         onEvent() {},
-        drain() { return 0; },
+        drain() {
+          return 0;
+        },
         async dispose() {}
       };
     }
   };
-  const sockets = new ZLinkChannelSocketRegistry(
-    registration,
-    adapter,
-    {},
-    monitoringAdapter
-  );
-  sockets.openClientServerConnection(
-    'orders',
-    'orders-a:7',
-    'tcp://10.0.0.1:9401',
-    { onTransportReady() {}, onTerminated() {} }
-  );
-  sockets.openClientServerConnection(
-    'orders',
-    'orders-b:7',
-    'tcp://10.0.0.2:9401',
-    { onTransportReady() {}, onTerminated() {} }
-  );
+  const sockets = new ZLinkChannelSocketRegistry(registration, adapter, {}, monitoringAdapter);
+  sockets.openClientServerConnection('orders', 'orders-a:7', 'tcp://10.0.0.1:9401', {
+    onTransportReady() {},
+    onTerminated() {}
+  });
+  sockets.openClientServerConnection('orders', 'orders-b:7', 'tcp://10.0.0.2:9401', {
+    onTransportReady() {},
+    onTerminated() {}
+  });
   assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
   sockets.admitClientServerConnection(discoveryDescriptor('server-a', 1), 'orders-a:7');
   sockets.admitClientServerConnection(discoveryDescriptor('server-b', 3), 'orders-b:7');
 
-  const selected = Array.from(
-    { length: 8 },
-    () => sockets.clientDealerForOutbound('orders').id
-  );
+  const selected = Array.from({ length: 8 }, () => sockets.clientDealerForOutbound('orders').id);
   assert.deepEqual(selected, [
     'dealer-1',
     'dealer-0',
@@ -662,19 +692,25 @@ test('production ClientServer outbound socket selection uses admitted descriptor
     'dealer-1',
     'dealer-1'
   ]);
-  sockets.admitClientServerConnection({
-    ...discoveryDescriptor('server-a', 0),
-    descriptorRevision: 2n
-  }, 'orders-a:7');
+  sockets.admitClientServerConnection(
+    {
+      ...discoveryDescriptor('server-a', 0),
+      descriptorRevision: 2n
+    },
+    'orders-a:7'
+  );
   assert.deepEqual(
     Array.from({ length: 4 }, () => sockets.clientDealerForOutbound('orders').id),
     ['dealer-1', 'dealer-1', 'dealer-1', 'dealer-1']
   );
-  sockets.admitClientServerConnection({
-    ...discoveryDescriptor('server-b', 3),
-    descriptorRevision: 2n,
-    state: 'retiring'
-  }, 'orders-b:7');
+  sockets.admitClientServerConnection(
+    {
+      ...discoveryDescriptor('server-b', 3),
+      descriptorRevision: 2n,
+      state: 'retiring'
+    },
+    'orders-b:7'
+  );
   assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
   await sockets.dispose();
 });
@@ -697,10 +733,14 @@ test('ClientServer creation cleanup retains only the failed dealer', async () =>
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
-      createDealerSocket() { return dealer; },
+      createDealerSocket() {
+        return dealer;
+      },
       createReadablePoller() {
         return {
-          wait() { return false; },
+          wait() {
+            return false;
+          },
           waitForReadable(signal) {
             return new Promise((resolve) => {
               if (signal?.aborted === true) resolve(false);
@@ -708,7 +748,9 @@ test('ClientServer creation cleanup retains only the failed dealer', async () =>
             });
           },
           markDrained() {},
-          dispose() { pollerDisposed += 1; }
+          dispose() {
+            pollerDisposed += 1;
+          }
         };
       }
     },
@@ -722,12 +764,11 @@ test('ClientServer creation cleanup retains only the failed dealer', async () =>
   );
 
   assert.throws(
-    () => sockets.openClientServerConnection(
-      'orders',
-      'monitor-failure',
-      'tcp://10.0.0.1:9401',
-      { onTransportReady() {}, onTerminated() {} }
-    ),
+    () =>
+      sockets.openClientServerConnection('orders', 'monitor-failure', 'tcp://10.0.0.1:9401', {
+        onTransportReady() {},
+        onTerminated() {}
+      }),
     /monitor setup failed/
   );
   await new Promise((resolve) => setImmediate(resolve));
@@ -753,16 +794,27 @@ test('automatic and manual ClientServer sources share one physical connection un
         createDealerSocket() {
           const dealer = fakeDealer(`physical-${dealers.length}`);
           dealer.disposed = false;
-          dealer.dispose = async () => { dealer.disposed = true; };
+          dealer.dispose = async () => {
+            dealer.disposed = true;
+          };
           dealers.push(dealer);
           return dealer;
         },
-        createReadablePoller() { return readyPoller(); }
+        createReadablePoller() {
+          return readyPoller();
+        }
       },
       {},
       {
         openSocketMonitor() {
-          return { nativeInstance: {}, onEvent() {}, drain() { return 0; }, async dispose() {} };
+          return {
+            nativeInstance: {},
+            onEvent() {},
+            drain() {
+              return 0;
+            },
+            async dispose() {}
+          };
         }
       }
     );
@@ -771,17 +823,17 @@ test('automatic and manual ClientServer sources share one physical connection un
   const descriptor = discoveryDescriptor('server-a', 100);
 
   const forward = createSockets();
-  forward.sockets.openClientServerConnection(
-    'orders', 'automatic', descriptor.advertisedEndpoint,
-    { onTransportReady() {}, onTerminated() {} }
-  );
-  forward.sockets.openClientServerConnection(
-    'orders', 'manual', descriptor.advertisedEndpoint,
-    { onTransportReady() {}, onTerminated() {} }
-  );
+  forward.sockets.openClientServerConnection('orders', 'automatic', descriptor.advertisedEndpoint, {
+    onTransportReady() {},
+    onTerminated() {}
+  });
+  forward.sockets.openClientServerConnection('orders', 'manual', descriptor.advertisedEndpoint, {
+    onTransportReady() {},
+    onTerminated() {}
+  });
   assert.equal(forward.sockets.admitClientServerConnection(descriptor, 'automatic'), true);
   assert.equal(forward.sockets.admitClientServerConnection(descriptor, 'manual'), true);
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(forward.dealers[1].disposed, true);
   assert.equal(forward.sockets.clientDealerForOutbound('orders'), forward.dealers[0]);
   await forward.sockets.closeClientServerConnection('manual');
@@ -790,17 +842,17 @@ test('automatic and manual ClientServer sources share one physical connection un
   await forward.sockets.dispose();
 
   const reverse = createSockets();
-  reverse.sockets.openClientServerConnection(
-    'orders', 'manual', descriptor.advertisedEndpoint,
-    { onTransportReady() {}, onTerminated() {} }
-  );
-  reverse.sockets.openClientServerConnection(
-    'orders', 'automatic', descriptor.advertisedEndpoint,
-    { onTransportReady() {}, onTerminated() {} }
-  );
+  reverse.sockets.openClientServerConnection('orders', 'manual', descriptor.advertisedEndpoint, {
+    onTransportReady() {},
+    onTerminated() {}
+  });
+  reverse.sockets.openClientServerConnection('orders', 'automatic', descriptor.advertisedEndpoint, {
+    onTransportReady() {},
+    onTerminated() {}
+  });
   assert.equal(reverse.sockets.admitClientServerConnection(descriptor, 'manual'), true);
   assert.equal(reverse.sockets.admitClientServerConnection(descriptor, 'automatic'), true);
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(reverse.dealers[1].disposed, true);
   await reverse.sockets.closeClientServerConnection('manual');
   assert.equal(reverse.dealers[0].disposed, false);
@@ -822,7 +874,10 @@ test('manual ClientServer endpoints use dedicated monitored admission and reconn
       createDealerSocket() {
         const dealer = fakeDealer(`manual-${dealers.length}`);
         dealer.requests = [];
-        dealer.connect = ( value ) => { dealer.connected = value; connects.push(value); };
+        dealer.connect = (value) => {
+          dealer.connected = value;
+          connects.push(value);
+        };
         dealer.request = physicalRequest(
           (message) =>
             new Promise((resolve, reject) => {
@@ -832,15 +887,21 @@ test('manual ClientServer endpoints use dedicated monitored admission and reconn
         dealers.push(dealer);
         return dealer;
       },
-      createReadablePoller() { return readyPoller(); }
+      createReadablePoller() {
+        return readyPoller();
+      }
     },
     {},
     {
       openSocketMonitor() {
         return {
           nativeInstance: {},
-          onEvent(handler) { monitorHandler = handler; },
-          drain() { return 0; },
+          onEvent(handler) {
+            monitorHandler = handler;
+          },
+          drain() {
+            return 0;
+          },
           async dispose() {}
         };
       }
@@ -857,15 +918,23 @@ test('manual ClientServer endpoints use dedicated monitored admission and reconn
     routingId: 'server-a',
     remoteAddr: endpoint
   });
-  await new Promise(( resolve ) => setImmediate(resolve));
-  assert.equal(clientServerWire.decodeClientServerControl(dealers[0].requests[0].frame).kind, 'hello');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    clientServerWire.decodeClientServerControl(dealers[0].requests[0].frame).kind,
+    'hello'
+  );
   dealers[0].requests[0].resolve([
-    zlink.Message.from(clientServerWire.encodeClientServerAdmit({
-      ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
-      securityIdentity: 'default'
-    }, 4096))
+    zlink.Message.from(
+      clientServerWire.encodeClientServerAdmit(
+        {
+          ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
+          securityIdentity: 'default'
+        },
+        4096
+      )
+    )
   ]);
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(sockets.clientDealerForOutbound('orders'), dealers[0]);
 
   monitorHandler({
@@ -879,7 +948,7 @@ test('manual ClientServer endpoints use dedicated monitored admission and reconn
     routingId: 'server-a',
     remoteAddr: endpoint
   });
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(dealers[0].requests.length, 2);
   assert.deepEqual(connects, [endpoint]);
   await sockets.dispose();
@@ -893,7 +962,7 @@ test('manual ClientServer admission timeout retries hello on the same physical c
   const dealer = fakeDealer('manual-timeout');
   const requests = [];
   const connects = [];
-  dealer.connect = ( value ) => connects.push(value);
+  dealer.connect = (value) => connects.push(value);
   dealer.request = physicalRequest(
     (message) =>
       new Promise((resolve, reject) => {
@@ -904,16 +973,24 @@ test('manual ClientServer admission timeout retries hello on the same physical c
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
-      createDealerSocket() { return dealer; },
-      createReadablePoller() { return readyPoller(); }
+      createDealerSocket() {
+        return dealer;
+      },
+      createReadablePoller() {
+        return readyPoller();
+      }
     },
     {},
     {
       openSocketMonitor() {
         return {
           nativeInstance: {},
-          onEvent(handler) { monitorHandler = handler; },
-          drain() { return 0; },
+          onEvent(handler) {
+            monitorHandler = handler;
+          },
+          drain() {
+            return 0;
+          },
           async dispose() {}
         };
       }
@@ -927,22 +1004,27 @@ test('manual ClientServer admission timeout retries hello on the same physical c
       remoteAddr: endpoint,
       value: 1n
     });
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(requests.length, 1);
 
     requests[0].reject(new ZLinkBackendResultError('request', RequestResult.TimedOut));
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(requests.length, 2);
     assert.equal(clientServerWire.decodeClientServerControl(requests[1].frame).kind, 'hello');
     assert.deepEqual(connects, [endpoint]);
 
     requests[1].resolve([
-      zlink.Message.from(clientServerWire.encodeClientServerAdmit({
-        ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
-        securityIdentity: 'default'
-      }, 4096))
+      zlink.Message.from(
+        clientServerWire.encodeClientServerAdmit(
+          {
+            ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
+            securityIdentity: 'default'
+          },
+          4096
+        )
+      )
     ]);
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(sockets.clientDealerForOutbound('orders'), dealer);
     assert.deepEqual(connects, [endpoint]);
   } finally {
@@ -961,8 +1043,8 @@ for (const cause of ['malformed control', 'invalid pushed control', 'liveness de
     const inbound = [];
     const diagnostics = [];
     const requests = [];
-    dealer.connect = ( value ) => calls.push(`connect:${value}`);
-    dealer.disconnect = ( value ) => calls.push(`disconnect:${value}`);
+    dealer.connect = (value) => calls.push(`connect:${value}`);
+    dealer.disconnect = (value) => calls.push(`disconnect:${value}`);
     dealer.recv = () => inbound.shift();
     dealer.request = physicalRequest(
       (message) =>
@@ -971,31 +1053,57 @@ for (const cause of ['malformed control', 'invalid pushed control', 'liveness de
         })
     );
     let onEvent;
-    const sockets = new ZLinkChannelSocketRegistry(registration, {
-      createDealerSocket() { return dealer; },
-      createReadablePoller() { return readyPoller(); }
-    }, {}, {
-      openSocketMonitor() {
-        return {
-          nativeInstance: {},
-          onEvent(handler) { onEvent = handler; },
-          drain() { return 0; },
-          async dispose() {}
-        };
-      }
-    }, ( error ) => diagnostics.push(error));
-    const emit = (nativeEvent, remoteAddr = endpoint, value = 1n) => onEvent({
-      nativeEvent, remoteAddr, value, routingId: 'server-a'
-    });
+    const sockets = new ZLinkChannelSocketRegistry(
+      registration,
+      {
+        createDealerSocket() {
+          return dealer;
+        },
+        createReadablePoller() {
+          return readyPoller();
+        }
+      },
+      {},
+      {
+        openSocketMonitor() {
+          return {
+            nativeInstance: {},
+            onEvent(handler) {
+              onEvent = handler;
+            },
+            drain() {
+              return 0;
+            },
+            async dispose() {}
+          };
+        }
+      },
+      (error) => diagnostics.push(error)
+    );
+    const emit = (nativeEvent, remoteAddr = endpoint, value = 1n) =>
+      onEvent({
+        nativeEvent,
+        remoteAddr,
+        value,
+        routingId: 'server-a'
+      });
     const events = internal.ZLinkSocketNativeEventType;
-    const admit = async ( index ) => {
+    const admit = async (index) => {
       assert.equal(clientServerWire.decodeClientServerControl(requests[index].frame).kind, 'hello');
-      requests[index].resolve([zlink.Message.from(clientServerWire.encodeClientServerAdmit(
-        descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }, {
-          securityIdentity: 'default'
-        }), 4096
-      ))]);
-      await new Promise(( resolve ) => setImmediate(resolve));
+      requests[index].resolve([
+        zlink.Message.from(
+          clientServerWire.encodeClientServerAdmit(
+            descriptor(
+              { token: { ownerId: 'owner', leaseGeneration: 1n } },
+              {
+                securityIdentity: 'default'
+              }
+            ),
+            4096
+          )
+        )
+      ]);
+      await new Promise((resolve) => setImmediate(resolve));
     };
     try {
       sockets.startManualClientServerConnections();
@@ -1003,9 +1111,13 @@ for (const cause of ['malformed control', 'invalid pushed control', 'liveness de
       await admit(0);
       assert.equal(sockets.clientDealerForOutbound('orders'), dealer);
       if (cause !== 'liveness deadline') {
-        inbound.push(receivedControl(cause === 'malformed control'
-          ? clientServerWire.encodeClientServerLivenessProbe(1n).subarray(0, 5)
-          : clientServerWire.encodeClientServerReject(1)));
+        inbound.push(
+          receivedControl(
+            cause === 'malformed control'
+              ? clientServerWire.encodeClientServerLivenessProbe(1n).subarray(0, 5)
+              : clientServerWire.encodeClientServerReject(1)
+          )
+        );
         sockets.tickClientServerLiveness();
         assert.equal(diagnostics.length, 1);
         assert.match(diagnostics[0].message, /probeId is truncated|invalid pushed control record/);
@@ -1058,12 +1170,12 @@ for (const transport of ['inproc', 'tcp']) {
       channels: { orders: { client: { manualConnections: [endpoint] } } }
     });
     const createDealer = adapter.createDealerSocket.bind(adapter);
-    adapter.createDealerSocket = ( value ) => {
+    adapter.createDealerSocket = (value) => {
       dealerCount += 1;
       const dealer = createDealer(value);
       for (const action of ['connect', 'disconnect']) {
         const perform = dealer[action].bind(dealer);
-        dealer[action] = ( address ) => {
+        dealer[action] = (address) => {
           calls.push({ kind: action, endpoint: address });
           perform(address);
         };
@@ -1071,17 +1183,25 @@ for (const transport of ['inproc', 'tcp']) {
       return dealer;
     };
     const openMonitor = monitoring.openSocketMonitor.bind(monitoring);
-    monitoring.openSocketMonitor = ( socket ) => {
+    monitoring.openSocketMonitor = (socket) => {
       const monitor = openMonitor(socket);
-      monitor.onEvent(( event ) => calls.push({
-        kind: event.nativeEvent, endpoint: event.remoteAddr, value: String(event.value)
-      }));
+      monitor.onEvent((event) =>
+        calls.push({
+          kind: event.nativeEvent,
+          endpoint: event.remoteAddr,
+          value: String(event.value)
+        })
+      );
       return monitor;
     };
     const sockets = new ZLinkChannelSocketRegistry(
-      registration, adapter, context, monitoring, ( error ) => diagnostics.push(error)
+      registration,
+      adapter,
+      context,
+      monitoring,
+      (error) => diagnostics.push(error)
     );
-    const readmit = async ( expectedHellos ) => {
+    const readmit = async (expectedHellos) => {
       for (;;) {
         sockets.tickClientServerLiveness();
         const received = router.recv(1);
@@ -1106,11 +1226,18 @@ for (const transport of ['inproc', 'tcp']) {
             assert.equal(control.kind, 'hello');
             clientRid = received.routingId;
             helloCount += 1;
-            const reply = zlink.Message.from(clientServerWire.encodeClientServerAdmit(
-              descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }, {
-                endpoint, securityIdentity: 'default'
-              }), 4096
-            ));
+            const reply = zlink.Message.from(
+              clientServerWire.encodeClientServerAdmit(
+                descriptor(
+                  { token: { ownerId: 'owner', leaseGeneration: 1n } },
+                  {
+                    endpoint,
+                    securityIdentity: 'default'
+                  }
+                ),
+                4096
+              )
+            );
             try {
               router.reply(received.routingId, received.replyToken, reply);
             } finally {
@@ -1120,8 +1247,12 @@ for (const transport of ['inproc', 'tcp']) {
             received.close();
           }
         }
-        if (helloCount === expectedHellos && sockets.clientDealerForOutbound('orders') !== undefined) return;
-        await new Promise(( resolve ) => setTimeout(resolve, 5));
+        if (
+          helloCount === expectedHellos &&
+          sockets.clientDealerForOutbound('orders') !== undefined
+        )
+          return;
+        await new Promise((resolve) => setTimeout(resolve, 5));
       }
     };
     try {
@@ -1143,9 +1274,10 @@ for (const transport of ['inproc', 'tcp']) {
       // Core owns the endpoint reconnect (transport liveness §6): the
       // Framework re-admitted on the same connect intent without a
       // disconnect/connect of its own.
-      assert.deepEqual(calls.filter(( value ) => value.kind === 'connect' || value.kind === 'disconnect'), [
-        { kind: 'connect', endpoint }
-      ]);
+      assert.deepEqual(
+        calls.filter((value) => value.kind === 'connect' || value.kind === 'disconnect'),
+        [{ kind: 'connect', endpoint }]
+      );
     } finally {
       await sockets.dispose();
       await router.dispose();
@@ -1171,16 +1303,24 @@ test('manual ClientServer reconnect fences a late admission from the previous ph
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
-      createDealerSocket() { return dealer; },
-      createReadablePoller() { return readyPoller(); }
+      createDealerSocket() {
+        return dealer;
+      },
+      createReadablePoller() {
+        return readyPoller();
+      }
     },
     {},
     {
       openSocketMonitor() {
         return {
           nativeInstance: {},
-          onEvent(handler) { monitorHandler = handler; },
-          drain() { return 0; },
+          onEvent(handler) {
+            monitorHandler = handler;
+          },
+          drain() {
+            return 0;
+          },
           async dispose() {}
         };
       }
@@ -1192,7 +1332,7 @@ test('manual ClientServer reconnect fences a late admission from the previous ph
     routingId: 'server-a',
     remoteAddr: endpoint
   });
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests.length, 1);
 
   monitorHandler({
@@ -1205,7 +1345,7 @@ test('manual ClientServer reconnect fences a late admission from the previous ph
     routingId: 'server-a',
     remoteAddr: endpoint
   });
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests.length, 2);
 
   const admitted = {
@@ -1215,13 +1355,13 @@ test('manual ClientServer reconnect fences a late admission from the previous ph
   requests[0].resolve([
     zlink.Message.from(clientServerWire.encodeClientServerAdmit(admitted, 4096))
   ]);
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
 
   requests[1].resolve([
     zlink.Message.from(clientServerWire.encodeClientServerAdmit(admitted, 4096))
   ]);
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(sockets.clientDealerForOutbound('orders'), dealer);
   await sockets.dispose();
 });
@@ -1239,7 +1379,7 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
   const sent = [];
   const diagnostics = [];
   dealer.recv = () => inbound.shift();
-  dealer.send = async ( message ) => {
+  dealer.send = async (message) => {
     sent.push(Buffer.from(message.data()));
   };
   dealer.request = physicalRequest(
@@ -1251,23 +1391,32 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
-      createDealerSocket() { return dealer; },
-      createReadablePoller() { return readyPoller(); }
+      createDealerSocket() {
+        return dealer;
+      },
+      createReadablePoller() {
+        return readyPoller();
+      }
     },
     {},
     {
       openSocketMonitor() {
-        return { nativeInstance: {}, onEvent() {}, drain() { return 0; }, async dispose() {} };
+        return {
+          nativeInstance: {},
+          onEvent() {},
+          drain() {
+            return 0;
+          },
+          async dispose() {}
+        };
       }
     },
-    ( error ) => diagnostics.push(error)
+    (error) => diagnostics.push(error)
   );
-  sockets.openClientServerConnection(
-    'orders',
-    'connection-a',
-    'tcp://10.0.0.1:9401',
-    { onTransportReady() {}, onTerminated() {} }
-  );
+  sockets.openClientServerConnection('orders', 'connection-a', 'tcp://10.0.0.1:9401', {
+    onTransportReady() {},
+    onTerminated() {}
+  });
   sockets.admitClientServerConnection(discoveryDescriptor('server-a', 100), 'connection-a');
 
   const base = performance.now();
@@ -1286,7 +1435,7 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
   requests[0].resolve([
     zlink.Message.from(clientServerWire.encodeClientServerLivenessAck(probe.probeId + 1n))
   ]);
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0].message, /stale or duplicate liveness ACK/);
   await sockets.tickClientServerLiveness(base + 15_001);
@@ -1305,67 +1454,110 @@ test('ClientServer pushed descriptor updates reject stale and conflicting revisi
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
-      createDealerSocket() { return dealer; },
-      createReadablePoller() { return readyPoller(); }
+      createDealerSocket() {
+        return dealer;
+      },
+      createReadablePoller() {
+        return readyPoller();
+      }
     },
     {},
     {
       openSocketMonitor() {
-        return { nativeInstance: {}, onEvent() {}, drain() { return 0; }, async dispose() {} };
+        return {
+          nativeInstance: {},
+          onEvent() {},
+          drain() {
+            return 0;
+          },
+          async dispose() {}
+        };
       }
     }
   );
-  sockets.openClientServerConnection(
-    'orders',
-    'connection-a',
-    'tcp://10.0.0.1:9401',
-    { onTransportReady() {}, onTerminated() {} }
-  );
+  sockets.openClientServerConnection('orders', 'connection-a', 'tcp://10.0.0.1:9401', {
+    onTransportReady() {},
+    onTerminated() {}
+  });
   sockets.admitClientServerConnection(discoveryDescriptor('server-a', 100), 'connection-a');
-  inbound.push(receivedControl(clientServerWire.encodeClientServerUpdate({
-    ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
-    descriptorRevision: 2n,
-    weight: 25,
-    securityIdentity: 'cluster-a'
-  }, 1024)));
+  inbound.push(
+    receivedControl(
+      clientServerWire.encodeClientServerUpdate(
+        {
+          ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
+          descriptorRevision: 2n,
+          weight: 25,
+          securityIdentity: 'cluster-a'
+        },
+        1024
+      )
+    )
+  );
   await sockets.tickClientServerLiveness();
   assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
 
   const connection = sockets.clientServerConnections.get('connection-a');
-  assert.throws(() => sockets.applyClientServerDescriptorUpdate(
-    'connection-a',
-    connection,
-    clientServerWire.decodeClientServerControl(clientServerWire.encodeClientServerUpdate({
-      ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
-      descriptorRevision: 3n,
-      weight: 25,
-      securityIdentity: 'cluster-a'
-    }, 2048)).admission
-  ), ( error ) => error.name === 'ServiceWireProtocolError' && /message bound/.test(error.message));
+  assert.throws(
+    () =>
+      sockets.applyClientServerDescriptorUpdate(
+        'connection-a',
+        connection,
+        clientServerWire.decodeClientServerControl(
+          clientServerWire.encodeClientServerUpdate(
+            {
+              ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
+              descriptorRevision: 3n,
+              weight: 25,
+              securityIdentity: 'cluster-a'
+            },
+            2048
+          )
+        ).admission
+      ),
+    (error) => error.name === 'ServiceWireProtocolError' && /message bound/.test(error.message)
+  );
   assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
 
-  assert.throws(() => sockets.applyClientServerDescriptorUpdate(
-    'connection-a',
-    connection,
-    clientServerWire.decodeClientServerControl(clientServerWire.encodeClientServerUpdate({
-    ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
-    descriptorRevision: 1n,
-    weight: 100,
-    securityIdentity: 'cluster-a'
-    }, 1024)).admission
-  ), ( error ) => error.name === 'ServiceWireProtocolError' && /stale/.test(error.message));
+  assert.throws(
+    () =>
+      sockets.applyClientServerDescriptorUpdate(
+        'connection-a',
+        connection,
+        clientServerWire.decodeClientServerControl(
+          clientServerWire.encodeClientServerUpdate(
+            {
+              ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
+              descriptorRevision: 1n,
+              weight: 100,
+              securityIdentity: 'cluster-a'
+            },
+            1024
+          )
+        ).admission
+      ),
+    (error) => error.name === 'ServiceWireProtocolError' && /stale/.test(error.message)
+  );
   assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
 
-  assert.throws(() => sockets.applyClientServerDescriptorUpdate(
-    'connection-a',
-    connection,
-    clientServerWire.decodeClientServerControl(clientServerWire.encodeClientServerUpdate({
-    ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
-    descriptorRevision: 2n,
-    weight: 50,
-    securityIdentity: 'cluster-a'
-    }, 1024)).admission
-  ), ( error ) => error.name === 'ServiceWireProtocolError' && /conflicts/.test(error.message));
+  assert.throws(
+    () =>
+      sockets.applyClientServerDescriptorUpdate(
+        'connection-a',
+        connection,
+        clientServerWire.decodeClientServerControl(
+          clientServerWire.encodeClientServerUpdate(
+            {
+              ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
+              descriptorRevision: 2n,
+              weight: 50,
+              securityIdentity: 'cluster-a'
+            },
+            1024
+          )
+        ).admission
+      ),
+    (error) => error.name === 'ServiceWireProtocolError' && /conflicts/.test(error.message)
+  );
   assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
   await sockets.dispose();
 });
@@ -1379,28 +1571,33 @@ test('ClientServer reserved hello is consumed before application dispatch and re
       }
     }
   });
-  const sockets = new ZLinkChannelSocketRegistry(registration, {}, {});
   const server = {
     ...descriptor({
       token: { ownerId: 'server-owner', leaseGeneration: 5n }
     }),
     updatedAt: new Date()
   };
-  sockets.setClientServerServerDescriptor(server, 'orders');
-  const hello = zlink.Message.from(clientServerWire.encodeClientServerHello({
-    channelName: 'orders',
-    securityIdentity: 'cluster-a',
-    normalizedEffectiveMaxMessageBytes: 1024
-  }));
+  const hello = zlink.Message.from(
+    clientServerWire.encodeClientServerHello({
+      channelName: 'orders',
+      securityIdentity: 'cluster-a',
+      normalizedEffectiveMaxMessageBytes: 1024
+    })
+  );
   let reply;
   const pushedFrames = [];
   let received = {
     parts: [hello],
     replyToken: {},
     routingId: 'client-a',
-    close() { hello.close(); }
+    close() {
+      hello.close();
+    }
   };
   const router = {
+    setChannelName() {},
+    setRoutingId() {},
+    bind() {},
     maxMessageSize: 4096,
     recv() {
       const value = received;
@@ -1415,20 +1612,30 @@ test('ClientServer reserved hello is consumed before application dispatch and re
     },
     async dispose() {}
   };
+  const sockets = new ZLinkChannelSocketRegistry(
+    registration,
+    { createRouterSocket: () => router },
+    {}
+  );
+  assert.equal(sockets.channelRouter('orders'), router);
+  sockets.setClientServerServerDescriptor(server, 'orders');
   let applicationDispatches = 0;
   const loop = new ZLinkChannelReceiveLoop(
     'orders',
     router,
-    { async dispatch() { applicationDispatches++; } },
+    {
+      async dispatch() {
+        applicationDispatches++;
+      }
+    },
     undefined,
-    (record, socket) =>
-      sockets.tryHandleClientServerControl('orders', record, socket),
+    (record, socket) => sockets.tryHandleClientServerControl('orders', record, socket),
     readyPoller(),
     new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
   );
   const controller = new AbortController();
   const running = loop.run(controller.signal);
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   controller.abort();
   await loop.stop();
   await running;
@@ -1440,16 +1647,18 @@ test('ClientServer reserved hello is consumed before application dispatch and re
   assert.equal(decoded.admission.lifecycleGeneration, server.lifecycleGeneration);
   assert.equal(decoded.admission.securityIdentity, server.securityIdentity);
   assert.equal(decoded.admission.normalizedEffectiveMaxMessageBytes, 1024);
-  sockets.channelRouters.set('orders', router);
-  sockets.setClientServerServerDescriptor({
-    ...server,
-    descriptorRevision: 2n
-  }, 'orders');
-  await new Promise(( resolve ) => setImmediate(resolve));
+  sockets.setClientServerServerDescriptor(
+    {
+      ...server,
+      descriptorRevision: 2n
+    },
+    'orders'
+  );
+  await new Promise((resolve) => setImmediate(resolve));
   //  The real-time liveness timer may push a probe before or after the update; select the update by kind.
   const updates = pushedFrames
-    .map(( frame ) => clientServerWire.decodeClientServerControl(frame))
-    .filter(( control ) => control.kind === 'update');
+    .map((frame) => clientServerWire.decodeClientServerControl(frame))
+    .filter((control) => control.kind === 'update');
   assert.equal(updates.length, 1);
   const update = updates[0];
   assert.equal(update.admission.normalizedEffectiveMaxMessageBytes, 1024);
@@ -1482,19 +1691,25 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
     async send(routingId, message) {
       sent.push({ routingId, frame: Buffer.from(message.data()) });
     },
-    disconnectPeer(routingId) { disconnected.push(routingId); },
+    disconnectPeer(routingId) {
+      disconnected.push(routingId);
+    },
     reply() {},
     async dispose() {}
   };
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
-      createRouterSocket() { return router; },
-      createReadablePoller() { return readyPoller(); }
+      createRouterSocket() {
+        return router;
+      },
+      createReadablePoller() {
+        return readyPoller();
+      }
     },
     {},
     undefined,
-    ( error ) => diagnostics.push(error)
+    (error) => diagnostics.push(error)
   );
   sockets.clientServerServerIdentity('orders');
   const server = {
@@ -1502,16 +1717,22 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
     securityIdentity: 'default'
   };
   sockets.setClientServerServerDescriptor(server, 'orders');
-  const hello = zlink.Message.from(clientServerWire.encodeClientServerHello({
-    channelName: 'orders',
-    securityIdentity: 'default',
-    normalizedEffectiveMaxMessageBytes: 4096
-  }));
-  sockets.tryHandleClientServerControl('orders', {
-    parts: [hello],
-    replyToken: {},
-    routingId: 'client-a'
-  }, router);
+  const hello = zlink.Message.from(
+    clientServerWire.encodeClientServerHello({
+      channelName: 'orders',
+      securityIdentity: 'default',
+      normalizedEffectiveMaxMessageBytes: 4096
+    })
+  );
+  sockets.tryHandleClientServerControl(
+    'orders',
+    {
+      parts: [hello],
+      replyToken: {},
+      routingId: 'client-a'
+    },
+    router
+  );
   hello.close();
 
   const base = performance.now();
@@ -1525,11 +1746,18 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
   const wrongAck = zlink.Message.from(
     clientServerWire.encodeClientServerLivenessAck(probe.probeId)
   );
-  assert.equal(sockets.tryHandleClientServerControl('orders', {
-    parts: [wrongAck],
-    replyToken: null,
-    routingId: 'client-b'
-  }, router), true);
+  assert.equal(
+    sockets.tryHandleClientServerControl(
+      'orders',
+      {
+        parts: [wrongAck],
+        replyToken: null,
+        routingId: 'client-b'
+      },
+      router
+    ),
+    true
+  );
   wrongAck.close();
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0].message, /stale or duplicate liveness ACK/);
@@ -1537,11 +1765,14 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
   assert.deepEqual(disconnected, ['client-a']);
 
   const beforeUpdate = sent.length;
-  sockets.setClientServerServerDescriptor({
-    ...server,
-    descriptorRevision: 2n,
-    weight: 25
-  }, 'orders');
+  sockets.setClientServerServerDescriptor(
+    {
+      ...server,
+      descriptorRevision: 2n,
+      weight: 25
+    },
+    'orders'
+  );
   assert.equal(sent.length, beforeUpdate);
   await sockets.dispose();
 });
@@ -1574,11 +1805,17 @@ test('ClientServer server publishes its concrete endpoint then drains and remove
     },
     clientDealer() {
       return {
-        connect(endpoint) { dealerCalls.push(`connect:${endpoint}`); },
-        disconnect(endpoint) { dealerCalls.push(`disconnect:${endpoint}`); }
+        connect(endpoint) {
+          dealerCalls.push(`connect:${endpoint}`);
+        },
+        disconnect(endpoint) {
+          dealerCalls.push(`disconnect:${endpoint}`);
+        }
       };
     },
-    clientServerServerWeight() { return this.serverWeight; },
+    clientServerServerWeight() {
+      return this.serverWeight;
+    },
     setClientServerServerDescriptor() {}
   };
   const discovery = new internal.ZLinkClientServerLocationRuntime(
@@ -1714,7 +1951,8 @@ test('automatic ClientServer client reconciles dedicated server descriptors by R
 test('automatic ClientServer admission timeout retries hello on the same physical connection', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const localRuntime = new internal.ZLinkLocationRuntime({
-    stores: stores(store), ownerId: 'client-owner'
+    stores: stores(store),
+    ownerId: 'client-owner'
   });
   await localRuntime.start('client-host');
   const remoteOwner = await store.claimOwnerLease('remote-owner', 30_000);
@@ -1726,18 +1964,22 @@ test('automatic ClientServer admission timeout retries hello on the same physica
   });
   const sockets = automaticClientServerSockets();
   const discovery = new internal.ZLinkClientServerLocationRuntime(
-    registration, sockets, localRuntime, stores(store), { pollingIntervalMs: 60_000 }
+    registration,
+    sockets,
+    localRuntime,
+    stores(store),
+    { pollingIntervalMs: 60_000 }
   );
   try {
     await discovery.start();
     const connection = [...sockets.connections.values()][0];
     connection.callbacks.onTransportReady(expected.serverRid, expected.endpoint);
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     const firstReply = connection.reply;
     assert.notEqual(firstReply, undefined);
 
     connection.reject(new ZLinkBackendResultError('request', RequestResult.TimedOut));
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.notEqual(connection.reply, firstReply);
     assert.equal(clientServerWire.decodeClientServerControl(connection.hello).kind, 'hello');
     assert.deepEqual(sockets.calls, [`connect:${expected.endpoint}`]);
@@ -1745,7 +1987,7 @@ test('automatic ClientServer admission timeout retries hello on the same physica
     connection.reply([
       zlink.Message.from(clientServerWire.encodeClientServerAdmit(expected, 0x7fff_ffff))
     ]);
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(discovery.activeTargets('orders').length, 1);
     assert.deepEqual(sockets.calls, [`connect:${expected.endpoint}`]);
     assert.equal(sockets.connections.size, 1);
@@ -1765,10 +2007,7 @@ test('same ClientServer RID and endpoint reset transport readiness on a new life
   await localRuntime.start('client-host');
   const oldOwner = await store.claimOwnerLease('old-server-owner', 100);
   assert.equal(oldOwner.kind, 'claimed');
-  await store.updateClientServer(
-    descriptor(oldOwner),
-    internal.ZLinkLocationWriteIntent.NewClaim
-  );
+  await store.updateClientServer(descriptor(oldOwner), internal.ZLinkLocationWriteIntent.NewClaim);
   const registration = internal.createFrameworkRegistration({
     channels: { orders: { client: { manualConnections: [] } } },
     locations: { useInMemoryStores: true }
@@ -1794,10 +2033,7 @@ test('same ClientServer RID and endpoint reset transport readiness on a new life
   assert.equal(takeover.status, internal.ZLinkLocationWriteStatus.Stored);
   await discovery.tick();
 
-  assert.deepEqual(sockets.calls, [
-    'connect:tcp://10.0.0.1:9401',
-    'connect:tcp://10.0.0.1:9401'
-  ]);
+  assert.deepEqual(sockets.calls, ['connect:tcp://10.0.0.1:9401', 'connect:tcp://10.0.0.1:9401']);
   assert.equal(discovery.activeTargets('orders')[0].lifecycleGeneration, 7n);
   await sockets.admit(descriptor(newOwner, { lifecycleGeneration: 8n }));
   assert.deepEqual(sockets.calls, [
@@ -1807,7 +2043,7 @@ test('same ClientServer RID and endpoint reset transport readiness on a new life
   ]);
   assert.equal(discovery.activeTargets('orders')[0].lifecycleGeneration, 8n);
   sockets.terminate(7n);
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(discovery.activeTargets('orders')[0].lifecycleGeneration, 8n);
   await discovery.stop();
   await localRuntime.stop();
@@ -1816,7 +2052,8 @@ test('same ClientServer RID and endpoint reset transport readiness on a new life
 test('automatic ClientServer retains intent across close and fences obsolete admission results', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const localRuntime = new internal.ZLinkLocationRuntime({
-    stores: stores(store), ownerId: 'client-owner'
+    stores: stores(store),
+    ownerId: 'client-owner'
   });
   await localRuntime.start('client-host');
   const remoteOwner = await store.claimOwnerLease('remote-owner', 30_000);
@@ -1828,30 +2065,34 @@ test('automatic ClientServer retains intent across close and fences obsolete adm
   });
   const sockets = automaticClientServerSockets();
   const discovery = new internal.ZLinkClientServerLocationRuntime(
-    registration, sockets, localRuntime, stores(store), { pollingIntervalMs: 60_000 }
+    registration,
+    sockets,
+    localRuntime,
+    stores(store),
+    { pollingIntervalMs: 60_000 }
   );
   try {
     await discovery.start();
     await sockets.admit(expected);
     const connection = [...sockets.connections.values()][0];
     sockets.terminate(7n);
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(discovery.activeTargets('orders').length, 0);
     await discovery.tick();
     assert.deepEqual(sockets.calls, [`connect:${expected.endpoint}`]);
 
     connection.callbacks.onTransportReady(expected.serverRid, expected.endpoint);
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     const obsoleteReply = connection.reply;
     sockets.terminate(7n);
     connection.callbacks.onTransportReady(expected.serverRid, expected.endpoint);
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.notEqual(connection.reply, obsoleteReply);
     obsoleteReply([zlink.Message.from(clientServerWire.encodeClientServerAdmit(expected, 4096))]);
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(discovery.activeTargets('orders').length, 0);
     connection.reject(new Error('transport request failed'));
-    await new Promise(( resolve ) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.match((await localRuntime.getStatus()).lastError, /transport request failed/);
     await discovery.tick();
     assert.deepEqual(sockets.calls, [`connect:${expected.endpoint}`]);
@@ -1922,7 +2163,11 @@ test('periodic ClientServer discovery failures remain observable on location run
   const dealer = { connect() {}, disconnect() {} };
   const discovery = new internal.ZLinkClientServerLocationRuntime(
     registration,
-    { clientDealer() { return dealer; } },
+    {
+      clientDealer() {
+        return dealer;
+      }
+    },
     runtime,
     stores(store),
     { pollingIntervalMs: 1 }
@@ -1958,21 +2203,28 @@ function readyWaitSockets(requestTimeoutMs, sendTimeoutMs) {
         created.push(dealer);
         return dealer;
       },
-      createReadablePoller() { return readyPoller(); }
+      createReadablePoller() {
+        return readyPoller();
+      }
     },
     {},
     {
       openSocketMonitor() {
-        return { nativeInstance: {}, onEvent() {}, drain() { return 0; }, async dispose() {} };
+        return {
+          nativeInstance: {},
+          onEvent() {},
+          drain() {
+            return 0;
+          },
+          async dispose() {}
+        };
       }
     }
   );
-  sockets.openClientServerConnection(
-    'orders',
-    'orders-a:7',
-    'tcp://10.0.0.1:9401',
-    { onTransportReady() {}, onTerminated() {} }
-  );
+  sockets.openClientServerConnection('orders', 'orders-a:7', 'tcp://10.0.0.1:9401', {
+    onTransportReady() {},
+    onTerminated() {}
+  });
   return { sockets, dealer, created, registration };
 }
 
@@ -1984,16 +2236,23 @@ function readyWaitClient(t, channelTimeoutMs = 60_000, sendTimeoutMs) {
     new ZLinkChannelDispatchServices(fixture.registration)
   );
   const client = new internal.DefaultZLinkChannelClient(fixture.registration, {
-    request(...args) { return prepareZLinkRequestReply(outbound.request(...args), identityRequestReply); }
+    request(...args) {
+      return prepareZLinkRequestReply(outbound.request(...args), identityRequestReply);
+    }
   });
-  class Lookup { id = 1; }
+  class Lookup {
+    id = 1;
+  }
   t.after(() => fixture.sockets.dispose());
   return {
     ...fixture,
-    request: ( timeoutMs ) => client.requestToChannel('orders', new Lookup()).timeout(timeoutMs).submit(t.signal),
-    admit: () => fixture.sockets.admitClientServerConnection(
-      discoveryDescriptor('server-a', 100), 'orders-a:7'
-    )
+    request: (timeoutMs) =>
+      client.requestToChannel('orders', new Lookup()).timeout(timeoutMs).submit(t.signal),
+    admit: () =>
+      fixture.sockets.admitClientServerConnection(
+        discoveryDescriptor('server-a', 100),
+        'orders-a:7'
+      )
   };
 }
 
@@ -2004,7 +2263,9 @@ test('ClientServer request readiness is bounded by its whole request budget', as
   const { request, dealer, sockets } = readyWaitClient(t);
   const submitted = t.mock.method(dealer, 'request');
   const pending = request(5);
-  const terminal = assert.rejects(pending, { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
+  const terminal = assert.rejects(pending, {
+    kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+  });
   t.mock.timers.tick(5);
   await terminal;
   assert.equal(submitted.mock.callCount(), 0);
@@ -2012,9 +2273,12 @@ test('ClientServer request readiness is bounded by its whole request budget', as
 });
 
 for (const state of ['serving', 'retiring']) {
-  test(`ClientServer ready ${state} weight-zero member fails immediately as Unavailable`, async ( t ) => {
+  test(`ClientServer ready ${state} weight-zero member fails immediately as Unavailable`, async (t) => {
     const { request, dealer, sockets } = readyWaitClient(t);
-    sockets.admitClientServerConnection({ ...discoveryDescriptor('server-a', 0), state }, 'orders-a:7');
+    sockets.admitClientServerConnection(
+      { ...discoveryDescriptor('server-a', 0), state },
+      'orders-a:7'
+    );
     const submitted = t.mock.method(dealer, 'request');
     await assert.rejects(request(200), { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
     assert.equal(submitted.mock.callCount(), 0);
@@ -2022,7 +2286,7 @@ for (const state of ['serving', 'retiring']) {
   });
 }
 
-test('ClientServer readiness reduces the outbound request budget without moving the wire deadline', async ( t ) => {
+test('ClientServer readiness reduces the outbound request budget without moving the wire deadline', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = 0;
   t.mock.method(performance, 'now', () => now);
@@ -2050,14 +2314,16 @@ test('ClientServer readiness reduces the outbound request budget without moving 
   assert.equal(submittedTimeoutMs, 30);
 });
 
-test('ClientServer request uses the remaining reply budget and finishes once', async ( t ) => {
+test('ClientServer request uses the remaining reply budget and finishes once', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = 0;
   t.mock.method(performance, 'now', () => now);
   const { request, dealer, admit } = readyWaitClient(t);
   let attempts = 0;
   let entered;
-  const submitted = new Promise(( resolve ) => { entered = resolve; });
+  const submitted = new Promise((resolve) => {
+    entered = resolve;
+  });
   dealer.request = physicalRequest(async (_parts, timeoutMs) => {
     attempts += 1;
     assert.equal(timeoutMs, 30);
@@ -2066,13 +2332,22 @@ test('ClientServer request uses the remaining reply budget and finishes once', a
     throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
   });
   const pending = request(50);
-  const terminal = assert.rejects(pending, { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
+  const terminal = assert.rejects(pending, {
+    kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+  });
   now = 20;
   t.mock.timers.tick(20);
   admit();
   await submitted;
   let settled = false;
-  pending.then(() => { settled = true; }, () => { settled = true; });
+  pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
   now = 49;
   t.mock.timers.tick(29);
   await Promise.resolve();
@@ -2105,9 +2380,13 @@ for (const sendTimeoutMs of [undefined, 75]) {
 
 for (const sendTimeoutMs of [0, -1, Infinity, 2_147_483_648]) {
   test(`classic fanout publisher rejects invalid send timeout ${sendTimeoutMs}`, () => {
-    assert.throws(() => internal.createFrameworkRegistration({
-      channels: { events: { sendTimeoutMs, publisher: { bind: 'tcp://127.0.0.1:0' } } }
-    }), /sendTimeoutMs/);
+    assert.throws(
+      () =>
+        internal.createFrameworkRegistration({
+          channels: { events: { sendTimeoutMs, publisher: { bind: 'tcp://127.0.0.1:0' } } }
+        }),
+      /sendTimeoutMs/
+    );
   });
 }
 
@@ -2120,7 +2399,10 @@ test('ClientServer readiness wakes on discovery admission and unregisters after 
   sockets.admitClientServerConnection(discoveryDescriptor('server-a', 100), 'orders-a:7');
   assert.equal(await pending, dealer);
   const calls = selected.mock.callCount();
-  sockets.admitClientServerConnection({ ...discoveryDescriptor('server-a', 100), descriptorRevision: 2n }, 'orders-a:7');
+  sockets.admitClientServerConnection(
+    { ...discoveryDescriptor('server-a', 100), descriptorRevision: 2n },
+    'orders-a:7'
+  );
   assert.equal(selected.mock.callCount(), calls);
   assert.equal(drains.mock.callCount(), 0);
   assert.equal(created.length, 1);
@@ -2134,10 +2416,15 @@ test('ClientServer readiness cancellation and shutdown release change listeners'
   controller.abort();
   await assert.rejects(cancelled, { name: 'AbortError' });
   const calls = selected.mock.callCount();
-  sockets.admitClientServerConnection({ ...discoveryDescriptor('server-a', 100), state: 'preparing' }, 'orders-a:7');
+  sockets.admitClientServerConnection(
+    { ...discoveryDescriptor('server-a', 100), state: 'preparing' },
+    'orders-a:7'
+  );
   assert.equal(selected.mock.callCount(), calls);
   const shutdown = sockets.awaitClientDealerForOutbound('orders');
-  const rejected = assert.rejects(shutdown, { kind: framework.ZLinkFrameworkErrorKind.ShuttingDown });
+  const rejected = assert.rejects(shutdown, {
+    kind: framework.ZLinkFrameworkErrorKind.ShuttingDown
+  });
   await sockets.dispose();
   await rejected;
 });
@@ -2147,14 +2434,23 @@ test('ClientServer outbound readiness stays pending for send and request keeps i
     channels: { orders: { client: { manualConnections: [] }, requestTimeoutMs: 5 } },
     locations: { useInMemoryStores: true }
   });
-  const manager = new internal.ZLinkChannelRuntimeManager(registration, {}, { nativeInstance: {}, shutdown() {}, async dispose() {} });
+  const manager = new internal.ZLinkChannelRuntimeManager(
+    registration,
+    {},
+    { nativeInstance: {}, shutdown() {}, async dispose() {} }
+  );
   const send = manager.send('orders', 'Notice', { id: 1 });
   const shutdown = assert.rejects(send, { kind: framework.ZLinkFrameworkErrorKind.ShuttingDown });
   try {
-    await assert.rejects(() => mapZLinkRequestReply(manager.request('orders', 'Lookup', { id: 1 }, 5)), { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
+    await assert.rejects(
+      () => mapZLinkRequestReply(manager.request('orders', 'Lookup', { id: 1 }, 5)),
+      { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded }
+    );
     await manager.dispose();
     await shutdown;
-  } finally { await manager.dispose(); }
+  } finally {
+    await manager.dispose();
+  }
 });
 
 test('ClientServer outbound reports a missing Client role as NotConfigured', async () => {
@@ -2174,13 +2470,15 @@ test('ClientServer outbound reports a missing Client role as NotConfigured', asy
 
   await assert.rejects(
     () => manager.send('orders', 'Notice', { id: 1 }),
-    (error) => error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
+    (error) =>
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
   );
   await assert.rejects(
     () => mapZLinkRequestReply(manager.request('orders', 'Lookup', { id: 1 }, 60)),
-    (error) => error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
+    (error) =>
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
   );
   await manager.dispose();
 });
@@ -2232,25 +2530,32 @@ function automaticClientServerSockets() {
       return ready.delete(connectionId);
     },
     setClientServerServerDescriptor() {},
-    clientServerServerSocket() { return { peerWeight: 100 }; },
+    clientServerServerSocket() {
+      return { peerWeight: 100 };
+    },
     async admit(value, overrides = {}) {
-      const connectionId = [...connections.keys()]
-        .find(( id ) => id.endsWith(`:${value.lifecycleGeneration}`));
+      const connectionId = [...connections.keys()].find((id) =>
+        id.endsWith(`:${value.lifecycleGeneration}`)
+      );
       assert.notEqual(connectionId, undefined);
       const connection = connections.get(connectionId);
       connection.callbacks.onTransportReady(String(value.serverRid), value.endpoint);
-      await new Promise(( resolve ) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       assert.notEqual(connection.reply, undefined);
-      const reply = zlink.Message.from(clientServerWire.encodeClientServerAdmit({
-        ...value,
-        ...overrides
-      }, 0x7fff_ffff));
+      const reply = zlink.Message.from(
+        clientServerWire.encodeClientServerAdmit(
+          {
+            ...value,
+            ...overrides
+          },
+          0x7fff_ffff
+        )
+      );
       connection.reply([reply]);
-      await new Promise(( resolve ) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
     },
     terminate(lifecycleGeneration) {
-      const connectionId = [...history.keys()]
-        .find(( id ) => id.endsWith(`:${lifecycleGeneration}`));
+      const connectionId = [...history.keys()].find((id) => id.endsWith(`:${lifecycleGeneration}`));
       const connection = connectionId === undefined ? undefined : history.get(connectionId);
       connection?.callbacks.onTerminated(String(connection.serverRid), connection.endpoint);
     }
@@ -2271,15 +2576,21 @@ function fakeDealer(id) {
     connect() {},
     disconnect() {},
     async send() {},
-    async request() { return []; },
-    recv() { return undefined; },
+    async request() {
+      return [];
+    },
+    recv() {
+      return undefined;
+    },
     async dispose() {}
   };
 }
 
 function readyPoller() {
   return {
-    wait() { return true; },
+    wait() {
+      return true;
+    },
     waitForReadable() {
       return new Promise((resolve) => setImmediate(() => resolve(true)));
     },
@@ -2306,21 +2617,61 @@ function receivedControl(frame) {
   const message = zlink.Message.from(frame);
   return {
     parts: [message],
-    close() { message.close(); }
+    close() {
+      message.close();
+    }
   };
 }
 
 test('ClientServer admission and disconnect publish after their facts change', async () => {
-  const registration = internal.createFrameworkRegistration({ channels: { orders: { client: { manualConnections: [] } } }, locations: { useInMemoryStores: true } });
+  const registration = internal.createFrameworkRegistration({
+    channels: { orders: { client: { manualConnections: [] } } },
+    locations: { useInMemoryStores: true }
+  });
   const dealer = fakeDealer('status-source');
   let emit;
-  const sockets = new ZLinkChannelSocketRegistry(registration, {
-    createDealerSocket() { return dealer; }, createReadablePoller() { return readyPoller(); }
-  }, {}, { openSocketMonitor() { return { nativeInstance: {}, onEvent(callback) { emit = callback; }, drain() { return 0; }, async dispose() {} }; } });
-  sockets.openClientServerConnection('orders', 'source-connection', 'tcp://10.0.0.1:9401', { onTransportReady() {}, onTerminated() {} });
+  const sockets = new ZLinkChannelSocketRegistry(
+    registration,
+    {
+      createDealerSocket() {
+        return dealer;
+      },
+      createReadablePoller() {
+        return readyPoller();
+      }
+    },
+    {},
+    {
+      openSocketMonitor() {
+        return {
+          nativeInstance: {},
+          onEvent(callback) {
+            emit = callback;
+          },
+          drain() {
+            return 0;
+          },
+          async dispose() {}
+        };
+      }
+    }
+  );
+  sockets.openClientServerConnection('orders', 'source-connection', 'tcp://10.0.0.1:9401', {
+    onTransportReady() {},
+    onTerminated() {}
+  });
   const projection = new internal.ZLinkClientServerRuntimeProjection(() => ({
-    clientServerTopology: ( name ) => ({ localRole: 'client', descriptors: sockets.clientServerActiveTargets(name) }),
-    observeClientServerTopology(name, callback) { const monitor = sockets.clientServerMonitoringSource(name); monitor.onChange(callback); return () => { void monitor.dispose(); }; }
+    clientServerTopology: (name) => ({
+      localRole: 'client',
+      descriptors: sockets.clientServerActiveTargets(name)
+    }),
+    observeClientServerTopology(name, callback) {
+      const monitor = sockets.clientServerMonitoringSource(name);
+      monitor.onChange(callback);
+      return () => {
+        void monitor.dispose();
+      };
+    }
   }));
   const first = projection.snapshot('orders');
   assert.equal(first.sequence, 1n);
@@ -2328,17 +2679,28 @@ test('ClientServer admission and disconnect publish after their facts change', a
   assert.equal((await events.next()).value.status.sequence, 1n);
   let rawReady;
   const raw = sockets.clientServerMonitoringSource('orders');
-  raw.onEvent(() => { rawReady = sockets.clientServerActiveTargets('orders')[0].state; });
+  raw.onEvent(() => {
+    rawReady = sockets.clientServerActiveTargets('orders')[0].state;
+  });
   sockets.admitClientServerConnection(discoveryDescriptor('server-a', 100), 'source-connection');
   const admitted = (await events.next()).value.status;
   assert.equal(admitted.sequence, 2n);
   assert.equal(admitted.targets[0].state, framework.ZLinkPeerState.Ready);
-  emit({ nativeEvent: internal.ZLinkSocketNativeEventType.Disconnected, routingId: 'server-a', localAddr: '', remoteAddr: 'tcp://10.0.0.1:9401', value: 0n });
+  emit({
+    nativeEvent: internal.ZLinkSocketNativeEventType.Disconnected,
+    routingId: 'server-a',
+    localAddr: '',
+    remoteAddr: 'tcp://10.0.0.1:9401',
+    value: 0n
+  });
   assert.equal(rawReady, 'serving');
   const disconnected = (await events.next()).value.status;
   assert.equal(disconnected.sequence, 3n);
   assert.equal(disconnected.targets[0].state, framework.ZLinkPeerState.NotConnected);
-  assert.equal(disconnected.targets[0].unavailableReason, framework.ZLinkTopologyReason.NoReadyTarget);
+  assert.equal(
+    disconnected.targets[0].unavailableReason,
+    framework.ZLinkTopologyReason.NoReadyTarget
+  );
   sockets.admitClientServerConnection(discoveryDescriptor('server-a', 100), 'source-connection');
   assert.equal((await events.next()).value.status.sequence, 4n);
   assert.equal(projection.snapshot('orders').sequence, 4n);
@@ -2415,7 +2777,11 @@ test('ClientServer readiness and HWM admission retain one logical request entry'
     entry = pending;
     parts = requestParts;
     enter();
-    bindingRequestReply({ result: zlink.SubmitResult.Backpressured, admitted, reply }, receiver, pending);
+    bindingRequestReply(
+      { result: zlink.SubmitResult.Backpressured, admitted, reply },
+      receiver,
+      pending
+    );
     return pending.promise;
   };
   const pending = request(1000);
