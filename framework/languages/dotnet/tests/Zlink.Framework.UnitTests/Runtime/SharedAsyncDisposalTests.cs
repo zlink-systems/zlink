@@ -43,7 +43,7 @@ public sealed class SharedAsyncDisposalTests
         );
         var source = ZLinkProcessExecutionPool.CreateReceiveSource();
         source.SetCancellationToken(state.StopTokenSource.Token);
-        var receiving = new TaskCompletionSource<Thread>(
+        var receiving = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var loop = state.TaskRunner.Run(
@@ -53,7 +53,7 @@ public sealed class SharedAsyncDisposalTests
                 try
                 {
                     await source.ResumeAsync();
-                    receiving.TrySetResult(Thread.CurrentThread);
+                    receiving.TrySetResult();
                     while (!token.IsCancellationRequested)
                         await source.WaitAsync(
                             Array.Empty<ZLinkProcessExecutionPool.ReceiveEvent>(),
@@ -66,7 +66,7 @@ public sealed class SharedAsyncDisposalTests
                 }
             }
         );
-        var worker = await receiving.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await receiving.Task.WaitAsync(TimeSpan.FromSeconds(5));
         try
         {
             Assert.Same(
@@ -77,7 +77,8 @@ public sealed class SharedAsyncDisposalTests
             );
             Assert.True(state.StopTokenSource.IsCancellationRequested);
             Assert.True(loop.IsCompleted);
-            Assert.False(worker.IsAlive);
+            Assert.True(source.IsTerminated);
+            Assert.True(source.Removed.Task.IsCompletedSuccessfully);
             Assert.False(proxy.Started.Task.IsCompleted);
         }
         finally

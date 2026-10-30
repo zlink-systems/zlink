@@ -229,6 +229,9 @@ internal abstract class PressureSocket<T>(T inner) : IReceivingMessageSocket, IC
 
     public void DisconnectRid(RoutingId rid) => inner.DisconnectRid(rid);
 
+    public IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot() =>
+        inner.ConnectionAttemptsSnapshot();
+
     public bool Recv(Received result, RecvFlags flags = RecvFlags.None) =>
         inner.Recv(result, flags);
 
