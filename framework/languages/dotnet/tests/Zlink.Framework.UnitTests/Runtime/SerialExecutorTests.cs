@@ -3331,19 +3331,15 @@ public sealed class SerialExecutorTests
             CancellationToken.None
         );
         await work.Completion.WaitAsync(TimeSpan.FromSeconds(5));
-        var source = typeof(ZLinkSerialExecutionQueue).GetField(
-            "_drainSource",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-        )!;
-        Assert.NotNull(source.GetValue(queue));
+        Assert.True(queue.HasExecutionSource);
         await queue.DisposeAsync();
         try
         {
-            Assert.Null(source.GetValue(queue));
+            Assert.False(queue.HasExecutionSource);
             for (var index = 0; index < 16; index++)
             {
                 queue.NotifyReadiness();
-                Assert.Null(source.GetValue(queue));
+                Assert.False(queue.HasExecutionSource);
             }
         }
         finally
