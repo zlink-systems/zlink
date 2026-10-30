@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/telemetry_observation.hpp"
+
 #include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
@@ -253,11 +255,11 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingClientServerSendOwnsCallArgu
     using namespace zlink::framework;
     serializer_registry_t serializers;
     add_int_serializer<route_event_t> (serializers, "application/x-route-event");
-    std::vector<message_flow_event_t> events;
+    auto observations = std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_observer_for_tests (
-      options, [&] (const auto &event) { events.push_back (event); });
+      options, [observations] (const auto &event) { observations->record (event); });
     auto builder = test::runtime_failure_builder ();
     detail::apply_dispatch_options (builder, options);
     auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
@@ -284,10 +286,13 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingClientServerSendOwnsCallArgu
                      .async ();
     EXPECT_TRUE (entered);
     EXPECT_FALSE (pending.await_ready ());
-    EXPECT_TRUE (events.empty ());
+    test::acknowledge_delivery ();
+    EXPECT_TRUE (observations->snapshot ().empty ());
     release.complete (result_t<void>::success ());
     const auto sent = pending.result ();
     ASSERT_TRUE (sent) << error_message (sent);
+    test::acknowledge_delivery ();
+    const auto events = observations->snapshot ();
     ASSERT_EQ (events.size (), 1u);
     EXPECT_EQ (events[0].outcome, message_flow_outcome_t::sent);
     EXPECT_EQ (events[0].message_kind, dispatch_message_kind_t::send);
@@ -303,11 +308,11 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingClientServerRequestOwnsCallA
     serializer_registry_t serializers;
     add_int_serializer<route_request_t> (serializers, "application/x-route-request");
     add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
-    std::vector<message_flow_event_t> events;
+    auto observations = std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_observer_for_tests (
-      options, [&] (const auto &event) { events.push_back (event); });
+      options, [observations] (const auto &event) { observations->record (event); });
     auto builder = test::runtime_failure_builder ();
     detail::apply_dispatch_options (builder, options);
     auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
@@ -341,6 +346,8 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingClientServerRequestOwnsCallA
     const auto reply = pending.result ();
     ASSERT_TRUE (reply) << error_message (reply);
     EXPECT_EQ (reply.value ().value, 38);
+    test::acknowledge_delivery ();
+    const auto events = observations->snapshot ();
     ASSERT_EQ (events.size (), 1u);
     EXPECT_EQ (events[0].outcome, message_flow_outcome_t::sent);
     EXPECT_EQ (events[0].message_kind, dispatch_message_kind_t::request);
