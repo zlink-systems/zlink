@@ -121,7 +121,34 @@ public sealed class MeshNodeHelloSubmissionTests
         using (var payload = Message.From("not-ready"u8))
         {
             Assert.Equal(SubmitResult.NotConnected, node.SendToNode(peerRid, [payload]));
-            Assert.Equal(SubmitResult.NotConnected, node.RequestToNode(peerRid, [payload], out _));
+            // Submit §5 accepts a request while service admission is pending;
+            // its original operation still owns the deadline.
+            var completion = new TaskCompletionSource<RequestResult>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var timeout = TimeSpan.FromMilliseconds(1);
+            Assert.Equal(
+                SubmitResult.Ok,
+                node.RequestToNode(
+                    peerRid,
+                    [payload],
+                    (result, replies) =>
+                    {
+                        foreach (var reply in replies)
+                            reply.Dispose();
+                        completion.TrySetResult(result);
+                    },
+                    timeout
+                )
+            );
+            Assert.False(completion.Task.IsCompleted);
+            Assert.Equal(1, node.PendingOperationCount);
+            time.AdvanceMonotonic(timeout);
+            Assert.Equal(
+                RequestResult.TimedOut,
+                await completion.Task.WaitAsync(ObservationTimeout)
+            );
+            Assert.Equal(0, node.PendingOperationCount);
         }
         ManagementTurn(node);
         await CompleteSubmissions(node);

@@ -208,6 +208,7 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
                             ),
                             default(CancellationToken),
                             null,
+                            null,
                         ]
                     )!;
             if (awaited)
@@ -371,9 +372,6 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
             throw new NotSupportedException();
 
         public IReadOnlyList<RouterRoute> RoutesSnapshot() => throw new NotSupportedException();
-
-        public IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot() =>
-            throw new NotSupportedException();
 
         public bool Recv(Received result, RecvFlags flags = RecvFlags.None) =>
             throw new NotSupportedException();

@@ -1599,34 +1599,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     decode,
                     async (operation, terminal) =>
                     {
-                        using var lifetime =
-                            ObservePeerRoute(
-                                targetNodeRid,
-                                prepare.Target.NodeGeneration
-                            ).ReadyGeneration == 0
-                                ? await _lane
-                                    .RunAsync(() =>
-                                        new NativeDurableRequestLifetime(this, targetNodeRid)
-                                    )
-                                    .ConfigureAwait(false)
-                                : null;
-                        lifetime?.Bind(() =>
+                        using var lifetime = await _lane
+                            .RunAsync(() => new NativeDurableRequestLifetime(this, targetNodeRid))
+                            .ConfigureAwait(false);
+                        lifetime.Bind(() =>
                             TakeEndedNativeRequest(
                                 operation,
                                 default,
                                 lifetime.CreateEndedFailure()
                             )
                         );
-                        using var shutdown = lifetime is null
-                            ? default(CancellationTokenRegistration)
-                            : (_stop?.Token ?? default).Register(() =>
-                                CompleteManagedOperation(
-                                    operation,
-                                    RequestResult.Terminated,
-                                    0,
-                                    Array.Empty<Message>()
-                                )
-                            );
+                        using var shutdown = (_stop?.Token ?? default).Register(() =>
+                            CompleteManagedOperation(
+                                operation,
+                                RequestResult.Terminated,
+                                0,
+                                Array.Empty<Message>()
+                            )
+                        );
                         var ready = await ZLinkDurableRequest
                             .RequestAsync(
                                 [],
@@ -5435,20 +5425,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ? CompleteNativeActorJoinRequest
                 : CompleteNativeInfrastructureRequest;
         var pendingToken = pending.Token;
+        var lifetime = RunState(() => new NativeDurableRequestLifetime(this, targetRid));
         if (
-            !RunInboundOperation(() =>
-                CompleteNativeDurableRequestAsync(
-                    targetRid,
-                    targetNodeGeneration,
-                    pending,
-                    wire,
-                    complete,
-                    pendingToken,
-                    requestAdmission
-                )
-            )
+            !RunInboundOperation(async () =>
+            {
+                using (lifetime)
+                    await CompleteNativeDurableRequestAsync(
+                            targetRid,
+                            targetNodeGeneration,
+                            pending,
+                            wire,
+                            complete,
+                            pendingToken,
+                            lifetime,
+                            requestAdmission
+                        )
+                        .ConfigureAwait(false);
+            })
         )
         {
+            lifetime.Dispose();
             return SubmitResult.Terminated;
         }
 
@@ -11455,7 +11451,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private ValueTask<IReadOnlyList<Message>> RequestNativeDurableWireAsync(
+    private async ValueTask<IReadOnlyList<Message>> RequestNativeDurableWireAsync(
         RoutingId target,
         ulong targetNodeGeneration,
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
@@ -11465,67 +11461,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken pendingToken = default,
         ZLinkRequestAdmission? requestAdmission = null,
         PendingOperation? ownerOperation = null,
-        TimeSpan? absoluteDeadline = null
+        TimeSpan? absoluteDeadline = null,
+        NativeDurableRequestLifetime? suppliedLifetime = null
     )
     {
-        if (
-            ObservePeerRoute(target, targetNodeGeneration).ReadyGeneration != 0
-            && timeout > _deadlineTimeProvider.GetElapsedTime(started)
-        )
-        {
-            var peer = RequireDirectPeer(target, targetNodeGeneration);
-            return ownerOperation is null
-                ? RequestDirectWireAsync(
-                    peer.PhysicalRoutingId,
-                    wire,
-                    timeout - _deadlineTimeProvider.GetElapsedTime(started),
-                    cancellationToken,
-                    peer.Liveness,
-                    requestAdmission: requestAdmission,
-                    absoluteDeadline: absoluteDeadline
-                )
-                : SubmitNativeWireAsync(
-                    peer.PhysicalRoutingId,
-                    wire,
-                    ownerOperation.Deadline - _deadlineClock.Elapsed,
-                    pendingToken,
-                    peer.Liveness,
-                    requestAdmission
-                );
-        }
-        return WaitForNativeRequestAdmissionAsync(
-            target,
-            targetNodeGeneration,
-            wire,
-            started,
-            timeout,
-            cancellationToken,
-            pendingToken,
-            requestAdmission,
-            ownerOperation,
-            absoluteDeadline
-        );
-    }
-
-    private async ValueTask<IReadOnlyList<Message>> WaitForNativeRequestAdmissionAsync(
-        RoutingId target,
-        ulong targetNodeGeneration,
-        IReadOnlyList<ReadOnlyMemory<byte>> wire,
-        long started,
-        TimeSpan timeout,
-        CancellationToken cancellationToken,
-        CancellationToken pendingToken = default,
-        ZLinkRequestAdmission? requestAdmission = null,
-        PendingOperation? ownerOperation = null,
-        TimeSpan? absoluteDeadline = null
-    )
-    {
-        using var lifetime =
-            timeout > _deadlineTimeProvider.GetElapsedTime(started)
+        using var ownedLifetime =
+            suppliedLifetime is null && timeout > _deadlineTimeProvider.GetElapsedTime(started)
                 ? await _lane
                     .RunAsync(() => new NativeDurableRequestLifetime(this, target))
                     .ConfigureAwait(false)
                 : null;
+        var lifetime = suppliedLifetime ?? ownedLifetime;
         requestAdmission ??= new ZLinkRequestAdmission();
         if (ownerOperation is not null)
             return await ProduceAsync(ownerOperation, null, pendingToken).ConfigureAwait(false);
@@ -11597,6 +11543,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         Action<PendingOperation, RequestResult, IReadOnlyList<Message>> complete,
         CancellationToken pendingToken,
+        NativeDurableRequestLifetime? lifetime,
         ZLinkRequestAdmission? requestAdmission
     )
     {
@@ -11611,7 +11558,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     CancellationToken.None,
                     pendingToken,
                     requestAdmission: requestAdmission,
-                    ownerOperation: pending
+                    ownerOperation: pending,
+                    suppliedLifetime: lifetime
                 )
                 .ConfigureAwait(false);
             complete(pending, RequestResult.Ok, replies);
