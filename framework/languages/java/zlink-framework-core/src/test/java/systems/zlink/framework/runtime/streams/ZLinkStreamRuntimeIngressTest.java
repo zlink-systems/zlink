@@ -1967,6 +1967,7 @@ final class ZLinkStreamRuntimeIngressTest {
                     @Override
                     public void close() {}
                 };
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(handler);
         try {
             available.set(false);
@@ -1994,6 +1995,7 @@ final class ZLinkStreamRuntimeIngressTest {
                                     .handleSessionRelocationSeal(actorRef.nodeRid(), new byte[0])
                                     .toCompletableFuture()
                                     .join());
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             var drops =
                     lines.stream()
                             .filter(line -> line.contains("reason=location_unavailable"))
@@ -2014,6 +2016,7 @@ final class ZLinkStreamRuntimeIngressTest {
             assertTrue(decodeErrors.get(0).contains("reason=invalid_frame"));
             assertTrue(decodeErrors.get(0).contains("action=drop"));
         } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
         }
     }

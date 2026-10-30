@@ -157,6 +157,7 @@ public sealed class MeshNodeHelloSubmissionTests
             var firstHello = ReceiveAdmission(peer, poller);
             Assert.Equal(ServiceWireConstants.Command.Hello, firstHello.Command);
             firstHelloBytes = firstHello.Bytes;
+            await CompleteSubmissions(node);
         }
         if (listenOnly)
         {
@@ -181,6 +182,7 @@ public sealed class MeshNodeHelloSubmissionTests
             var retry = ReceiveAdmission(peer, poller);
             Assert.Equal(ServiceWireConstants.Command.Hello, retry.Command);
             Assert.Equal(firstHelloBytes, retry.Bytes);
+            await CompleteSubmissions(node);
             Assert.Equal(0U, node.Status().AdmittedPeerCount);
         }
         Assert.True(
