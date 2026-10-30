@@ -13,12 +13,14 @@ import type { ZLinkChannelRuntimeManagerOptions } from '../channels';
 import type { ZLinkMonitoringBackendAdapter } from '../backend';
 import type { DefaultZLinkSpotManager } from '../spots';
 import type { ZLinkMessageFlowModeCell } from '../diagnostics';
+import type { ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
 import type { ZLinkBoundSessionRelay } from './bound-session-relay';
 import type { ApplicationJobQueue } from './application-job-queue';
 
 export interface ZLinkChannelRuntimeOptionsFactoryOptions {
   readonly monitoringAdapter: ZLinkMonitoringBackendAdapter;
   readonly messageFlowModeCell: ZLinkMessageFlowModeCell;
+  readonly telemetryLease?: ZLinkTelemetryLease;
   readonly boundSessionRelay: ZLinkBoundSessionRelay;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
   readonly oneWayFailureSink: (error: unknown) => void;
@@ -32,6 +34,7 @@ export class ZLinkChannelRuntimeOptionsFactory {
     return {
       monitoringAdapter: this.options.monitoringAdapter,
       messageFlowModeCell: this.options.messageFlowModeCell,
+      telemetryLease: this.options.telemetryLease,
       applicationJobQueue: this.options.applicationJobQueue,
       oneWayFailureSink: this.options.oneWayFailureSink,
       internalRouteSendHandlers: this.internalRouteSendHandlers(),

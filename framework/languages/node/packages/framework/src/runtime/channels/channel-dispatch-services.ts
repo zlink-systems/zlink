@@ -24,6 +24,7 @@ import {
   type ZLinkMessageFlowModeCell
 } from '../diagnostics';
 import type { ZLinkRuntimeTaskErrorSink } from '../execution';
+import { openTelemetryLease, type ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
 import { ZLinkDispatchErrorReporter } from './dispatch-error-reporter';
 import { invokeZLinkHandlerFilters } from '../handlers';
 import {
@@ -72,7 +73,8 @@ export class ZLinkChannelDispatchServices {
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
     private readonly providerResolver?: ZLinkProviderResolver,
-    private readonly configuredMessageFlowModeCell?: ZLinkMessageFlowModeCell
+    private readonly configuredMessageFlowModeCell?: ZLinkMessageFlowModeCell,
+    private readonly telemetryLease: ZLinkTelemetryLease = openTelemetryLease()
   ) {
     this.metricsValue = new ZLinkRuntimeMetrics(registration.metrics?.meterProvider);
   }
@@ -90,13 +92,7 @@ export class ZLinkChannelDispatchServices {
     if (existing !== undefined) {
       return existing;
     }
-    const reporter = new ZLinkDispatchErrorReporter(
-      undefined,
-      undefined,
-      errorSink,
-      this.diagnosticsContext(),
-      this.metricsValue
-    );
+    const reporter = new ZLinkDispatchErrorReporter(this.diagnosticsContext(), this.metricsValue);
     this.dispatchErrorReporters.set(errorSink, reporter);
     return reporter;
   }
@@ -290,15 +286,14 @@ export class ZLinkChannelDispatchServices {
     this.diagnosticsContextValue ??= createDiagnosticsContext(
       this.registration.dispatch,
       this.providerResolver,
-      this.messageFlowModeCell()
+      this.messageFlowModeCell(),
+      this.telemetryLease
     );
     return this.diagnosticsContextValue;
   }
 
   private outboundFlow(): ZLinkMessageFlowTracer {
-    this.outboundFlowValue ??= new ZLinkMessageFlowTracer(this.diagnosticsContext(), {
-      reportRuntimeTaskException() {}
-    });
+    this.outboundFlowValue ??= new ZLinkMessageFlowTracer(this.diagnosticsContext());
     return this.outboundFlowValue;
   }
 }

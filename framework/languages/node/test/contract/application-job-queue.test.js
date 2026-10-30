@@ -1,6 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const telemetry = require('./helpers/telemetry-log-capture');
+const { logs } = require('@opentelemetry/api-logs');
+const { TELEMETRY_INSTRUMENTATION_NAME } = require('../../packages/framework/dist/runtime/diagnostics/message-flow-record');
+const telemetryLogger = logs.getLogger(TELEMETRY_INSTRUMENTATION_NAME);
 
 const {
   ApplicationJobQueue,
@@ -24,6 +27,7 @@ const {
 } = require('../../packages/framework/dist/contracts/Dispatch/ZLinkDispatchOptions');
 
 test('local job backlog warns once until every local waiter leaves', async () => {
+  await telemetry.observed();
   telemetry.reset();
   const queue = new ApplicationJobQueue(
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 3n }, () => 1n)
@@ -46,17 +50,21 @@ test('local job backlog warns once until every local waiter leaves', async () =>
   };
   try {
     for (let i = 0; i < 4; i++) add('remote');
+    await telemetry.observed();
     assert.equal(warnings().length, 0);
     for (let episode = 1; episode <= 2; episode++) {
       const local = Array.from({ length: 3 }, () => add('local'));
+      await telemetry.observed();
       assert.equal(warnings().length, episode - 1);
       const excess = add('local');
+      await telemetry.observed();
       assert.equal(warnings().length, episode);
       assert.equal(warnings().at(-1).localWaiters, 4);
       assert.equal(warnings().at(-1).effectiveMaximum, 3);
       assert.equal(warnings().at(-1).severityText, 'WARN');
       excess.abort();
       const repeated = add('local');
+      await telemetry.observed();
       assert.equal(warnings().length, episode);
       queue.resetMetrics();
       repeated.abort();
@@ -70,9 +78,6 @@ test('local job backlog warns once until every local waiter leaves', async () =>
 });
 
 test('local backlog logger failure preserves the waiting acquisition and episode', async () => {
-  const {
-    telemetryLogger
-  } = require('../../packages/framework/dist/runtime/diagnostics/message-flow');
   const emit = telemetryLogger.emit;
   let attempts = 0;
   telemetryLogger.emit = () => {
@@ -105,9 +110,6 @@ test('local backlog logger failure preserves the waiting acquisition and episode
 });
 
 test('local backlog failure reporter exceptions remain visible', async () => {
-  const {
-    telemetryLogger
-  } = require('../../packages/framework/dist/runtime/diagnostics/message-flow');
   const emit = telemetryLogger.emit;
   const failure = new Error('reporter failure');
   telemetryLogger.emit = () => {
@@ -137,6 +139,7 @@ test('local backlog failure reporter exceptions remain visible', async () => {
 });
 
 test('ingress record follow-up permits keep their original local origin', async () => {
+  await telemetry.observed();
   telemetry.reset();
   const queue = new ApplicationJobQueue(
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 1n)
@@ -145,6 +148,7 @@ test('ingress record follow-up permits keep their original local origin', async 
   const owner = ApplicationIngressRecordOwner.create(queue, initial, { close() {} });
   const first = owner.takeInitial('application');
   const pending = [owner.acquire('application'), owner.acquire('application')];
+  await telemetry.observed();
   assert.equal(
     telemetry.records.filter(
       (record) => record.eventId === 'zlink.runtime.host.local_job_backlog_exceeded'
@@ -817,3 +821,7 @@ test('detached exact-target turn retains its ingress permit until callback start
   next.releaseAfterInternalProcessing();
   assert.equal(queue.snapshot().permitsInUse, 0n);
 });
+
+// Provider bootstrap is test setup; message handling itself never waits for it.
+test.beforeEach(async () => telemetry.observed());
+test.after(() => telemetry.close());

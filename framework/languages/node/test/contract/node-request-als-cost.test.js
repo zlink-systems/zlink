@@ -3,8 +3,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { AsyncLocalStorage, createHook } = require('node:async_hooks');
-const { logs } = require('@opentelemetry/api-logs');
-const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 
 // Module ownership remains meaningful if individual helper functions are renamed.
 const FLOW_MODULE = '/runtime/diagnostics/flow-context.js:';
@@ -75,12 +73,11 @@ function observeAls() {
 
 test('public requests skip diagnostics ALS at Off and preserve flow at Normal', async t => {
   const events = [];
-  const provider = new LoggerProvider({ processors: [{
-    onEmit(record) { events.push(record.attributes); },
-    forceFlush() { return Promise.resolve(); },
-    shutdown() { return Promise.resolve(); }
-  }] });
-  logs.setGlobalLoggerProvider(provider);
+  const observation = require('./fixtures/message-flow-observation.cjs')(
+    require('../../packages/framework/dist/runtime/diagnostics/message-flow-delivery'), {
+      onLog(record) { events.push(record.attributes); }
+    });
+  await observation.observed();
   const observer = observeAls();
   try {
     // Install wrappers and the public OTel observer before loading the runtime.
@@ -89,6 +86,7 @@ test('public requests skip diagnostics ALS at Off and preserve flow at Normal', 
       const pair = await frameworkPair(mode);
       try {
         pair.validate(await pair.submit().reply);
+        await observation.observed();
         events.length = 0;
         const row = observer.start();
         let completed = 0;
@@ -97,6 +95,7 @@ test('public requests skip diagnostics ALS at Off and preserve flow at Normal', 
           completed++;
         }
         observer.stop();
+        await observation.observed();
         assert.equal(completed, REQUEST_COUNT);
         assert.equal(row.permitEnter, 2 * REQUEST_COUNT, 'record permit is entered and restored');
         assert.ok(row.resources.PROMISE > 0, 'async_hooks observes actual request resources');
@@ -133,7 +132,6 @@ test('public requests skip diagnostics ALS at Off and preserve flow at Normal', 
     }
   } finally {
     observer.restore();
-    logs.disable();
-    await provider.shutdown();
+    observation.close();
   }
 });
