@@ -1,6 +1,5 @@
 using System.Collections;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.DependencyInjection;
@@ -269,68 +268,52 @@ public sealed partial class RelocationBehaviorConformanceTests
         var nativePrepare = new TaskCompletionSource<RequestSubmission>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var injected = 0;
         socketField.SetValue(
             native,
             PrepareRequestRecorder.Create(
                 socket,
                 prepares,
                 fault == PrepareRollbackFault.NativeTimeout ? TimeSpan.FromMilliseconds(250) : null,
-                submission => nativePrepare.TrySetResult(submission)
+                submission =>
+                {
+                    nativePrepare.TrySetResult(submission);
+                    if (!replayable || Interlocked.Exchange(ref injected, 1) != 0)
+                        return;
+                    if (fault == PrepareRollbackFault.NativeTimeout)
+                    {
+                        var nativeId = prepares.Single().RelocationId;
+                        store.HeldSourceAbort = Guid.ParseExact(
+                            $"{nativeId.High:x16}{nativeId.Low:x16}",
+                            "N"
+                        );
+                        trace.Record("nativePrepareSubmitted");
+                        return;
+                    }
+                    // Submit the peer replacement before the caller can send its first chunk.
+                    var lane = (ZLinkStateLane)
+                        typeof(ZLinkManagedMeshNode)
+                            .GetField("_lane", PrivateInstance)!
+                            .GetValue(native)!;
+                    var peers = (IDictionary)
+                        typeof(ZLinkManagedMeshNode)
+                            .GetField("_peersByRid", PrivateInstance)!
+                            .GetValue(native)!;
+                    AwaitStateLane(
+                        lane.RunAsync(() =>
+                        {
+                            var peer = peers[target.LocalNodeRid]!;
+                            peers[target.LocalNodeRid] = typeof(object)
+                                .GetMethod("MemberwiseClone", PrivateInstance)!
+                                .Invoke(peer, null);
+                        })
+                    );
+                    trace.Record("preparePeerReplaced");
+                    var id = prepares.Single().RelocationId;
+                    store.HeldSourceAbort = Guid.ParseExact($"{id.High:x16}{id.Low:x16}", "N");
+                }
             )
         );
-        var injected = 0;
-        using var progress = new ActivityListener
-        {
-            ShouldListenTo = static source => source.Name == ZLinkTelemetry.ActivitySourceName,
-            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
-                ActivitySamplingResult.AllData,
-            ActivityStopped = activity =>
-            {
-                if (
-                    !replayable
-                    || activity.GetTagItem(ZLinkTraceFormat.ActorIdField)?.ToString() != actorId
-                    || activity.GetTagItem(ZLinkTraceFormat.PacketNameField)?.ToString()
-                        != nameof(ServiceWireConstants.Command.RelocationPrepare)
-                    || activity.GetTagItem(ZLinkTraceFormat.PhaseField)?.ToString()
-                        != ZLinkTraceFormat.OutcomeKey(ZLinkMessageFlowOutcome.Sent)
-                    || Interlocked.Exchange(ref injected, 1) != 0
-                )
-                    return;
-                if (fault == PrepareRollbackFault.NativeTimeout)
-                {
-                    var nativeId = prepares.Single().RelocationId;
-                    store.HeldSourceAbort = Guid.ParseExact(
-                        $"{nativeId.High:x16}{nativeId.Low:x16}",
-                        "N"
-                    );
-                    trace.Record("nativePrepareSubmitted");
-                    return;
-                }
-                // Publish the replacement peer snapshot before its route notification.
-                // No binding state or Core selection policy is changed by this fixture.
-                var lane = (ZLinkStateLane)
-                    typeof(ZLinkManagedMeshNode)
-                        .GetField("_lane", PrivateInstance)!
-                        .GetValue(native)!;
-                var peers = (IDictionary)
-                    typeof(ZLinkManagedMeshNode)
-                        .GetField("_peersByRid", PrivateInstance)!
-                        .GetValue(native)!;
-                AwaitStateLane(
-                    lane.RunAsync(() =>
-                    {
-                        var peer = peers[target.LocalNodeRid]!;
-                        peers[target.LocalNodeRid] = typeof(object)
-                            .GetMethod("MemberwiseClone", PrivateInstance)!
-                            .Invoke(peer, null);
-                    })
-                );
-                trace.Record("preparePeerReplaced");
-                var id = prepares.Single().RelocationId;
-                store.HeldSourceAbort = Guid.ParseExact($"{id.High:x16}{id.Low:x16}", "N");
-            },
-        };
-        ActivitySource.AddActivityListener(progress);
         var completionRelease = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
