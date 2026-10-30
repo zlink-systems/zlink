@@ -1553,6 +1553,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             }
             finally
             {
+                MessageFlowDeliveryTests.WaitForDelivery();
                 output.WriteLine(File.ReadAllText(flowFilePath));
             }
         }
