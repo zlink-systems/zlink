@@ -603,45 +603,46 @@ TEST (CppFrameworkRouteChannelRequest, SpotRequestReturnsBeforeCallerCompletesRe
     EXPECT_EQ (0u, route.pending_request_count ());
 }
 
-TEST (CppFrameworkRouteChannelRequest, PublicSpotPreparationConsumesSingleBudget)
+TEST (CppFrameworkRouteChannelRequest, PublicSpotDelegatesAdmissionWithSingleBudget)
 {
     public_spot_fixture_t fixture;
     auto &route = fixture.route ();
     route.bind_endpoint ("tcp://self:7500");
     const auto target = zlink::routing_id_t::from (std::string ("peer"));
     route.connect (target, "tcp://peer:7500");
+    task_completion_source_t<parts_t> physical_reply;
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
+    parts_t reply_parts;
+    int submitted = 0;
     std::chrono::milliseconds submitted_timeout{};
-    std::chrono::steady_clock::time_point submitted_at;
     route.set_request_backend ([&] (const auto &, const auto &, const auto &parts, auto timeout) {
-        submitted_at = std::chrono::steady_clock::now ();
+        ++submitted;
         submitted_timeout = timeout;
         runtime::messaging::envelope_codec_t codec;
         auto header = codec.decode_header (parts).value ();
         header.kind = runtime::messaging::message_kind_t::response;
-        return request_task_t<parts_t> (result_t<parts_t>::success (
-          codec.encode_raw_body_parts (header, codec.decode_body (parts).value ())));
+        reply_parts = codec.encode_raw_body_parts (header, codec.decode_body (parts).value ());
+        return request_task_t<parts_t> (physical_reply.task (), admitted);
     });
     auto client = fixture.builder.route_client (fixture.serializers);
-    const auto started = std::chrono::steady_clock::now ();
     auto pending =
       client.request_to_spot ("spot", spot_packet_t{79}).timeout (1s).async<spot_packet_t> ();
-    const auto returned = std::chrono::steady_clock::now ();
-    const bool unfinished = !pending.await_ready ();
-    std::this_thread::sleep_for (30ms);
+    // Submit §5 assigns service admission to the backend owner, before peer readiness.
+    EXPECT_EQ (1, submitted);
+    EXPECT_FALSE (pending.await_ready ());
+    EXPECT_GT (submitted_timeout, 0ms);
+    EXPECT_LE (submitted_timeout, 1s);
     route.mark_peer_ready (target);
+    EXPECT_FALSE (pending.await_ready ());
+    EXPECT_EQ (1, submitted);
+    admitted->complete (result_t<void>::success ());
+    physical_reply.complete (result_t<parts_t>::success (std::move (reply_parts)));
     const auto result = pending.result ();
     ASSERT_TRUE (result);
-    EXPECT_TRUE (unfinished);
     EXPECT_EQ (79, result.value ().value);
-    EXPECT_GT (submitted_timeout, 0ms);
-    const auto minimum_remaining =
-      std::chrono::duration_cast<std::chrono::milliseconds> (started + 1s - submitted_at);
-    const auto maximum_remaining =
-      std::chrono::ceil<std::chrono::milliseconds> (returned + 1s - submitted_at);
-    EXPECT_GE (submitted_timeout, minimum_remaining);
-    EXPECT_LE (submitted_timeout, maximum_remaining);
-    EXPECT_LT (submitted_timeout, 1s);
+    EXPECT_EQ (0u, route.pending_request_count ());
 }
+
 
 TEST (CppFrameworkRouteChannelRequest, ThrowingSubmissionRemovesPendingEntry)
 {
@@ -694,54 +695,61 @@ TEST (CppFrameworkRouteChannelRequest, PhysicalTerminalRetainsBackendAfterAdmiss
     EXPECT_TRUE (lifetime.expired ());
 }
 
-TEST (CppFrameworkRouteChannelRequest, SpotPreparationConsumesBindingBudget)
+TEST (CppFrameworkRouteChannelRequest, SpotSubmissionConsumesOriginalCallerBudget)
 {
     detail::route_channel_runtime_t route ("spot-route");
     route.start ();
     const auto target = zlink::routing_id_t::from (std::string ("peer"));
+    route.connect (target, "tcp://peer:7500");
     std::chrono::milliseconds binding_budget{};
     std::chrono::steady_clock::duration elapsed{};
     const auto started = std::chrono::steady_clock::now ();
-    std::thread ready ([&] {
-        std::this_thread::sleep_for (40ms);
-        route.connect (target, "tcp://peer:7500");
-        route.set_request_backend ([&] (const auto &, const auto &, const auto &, auto timeout) {
-            binding_budget = timeout;
-            elapsed = std::chrono::steady_clock::now () - started;
-            return request_task_t<parts_t> (result_t<parts_t>::success ({}));
-        });
-        std::this_thread::sleep_for (40ms);
-        route.mark_peer_ready (target);
+    int submitted = 0;
+    route.set_request_backend ([&] (const auto &, const auto &, const auto &, auto timeout) {
+        ++submitted;
+        binding_budget = timeout;
+        elapsed = std::chrono::steady_clock::now () - started;
+        return request_task_t<parts_t> (result_t<parts_t>::success ({}));
     });
-    auto pending = route.request_reply_spot_parts (target, "spot", {}, started + 500ms);
-    auto reply = pending.result ();
-    ready.join ();
+    std::this_thread::sleep_for (80ms);
+    auto reply = route.request_reply_spot_parts (target, "spot", {}, started + 500ms).result ();
     ASSERT_TRUE (reply);
+    EXPECT_EQ (1, submitted);
     ASSERT_GE (elapsed, 80ms);
     EXPECT_LE (binding_budget,
                500ms - std::chrono::duration_cast<std::chrono::milliseconds> (elapsed) + 1ms);
     EXPECT_GT (binding_budget, 0ms);
 }
 
-TEST (CppFrameworkRouteChannelRequest, SpotDeadlineBeforeBindingIsTimedOut)
+
+TEST (CppFrameworkRouteChannelRequest, SpotBackendAdmissionDeadlineIsPreserved)
 {
     detail::route_channel_runtime_t route ("spot-route");
     route.start ();
     const auto target = zlink::routing_id_t::from (std::string ("peer"));
     route.connect (target, "tcp://peer:7500");
     int submitted = 0;
-    route.set_request_backend ([&] (const auto &, const auto &, const auto &, auto) {
+    task_completion_source_t<parts_t> physical_reply;
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
+    admitted->complete (
+      result_t<void>::failure (framework_error_kind_t::deadline_exceeded, "backend deadline"));
+    route.set_request_backend ([&] (const auto &, const auto &, const auto &, auto timeout) {
         ++submitted;
-        return request_task_t<parts_t> (result_t<parts_t>::success ({}));
+        EXPECT_GT (timeout, 0ms);
+        EXPECT_LE (timeout, 20ms);
+        return request_task_t<parts_t> (physical_reply.task (), admitted);
     });
     auto reply =
       route.request_reply_spot_parts (target, "spot", {}, std::chrono::steady_clock::now () + 20ms)
         .result ();
     EXPECT_FALSE (reply);
     EXPECT_EQ (framework_error_kind_t::deadline_exceeded, reply.error_kind ());
-    EXPECT_EQ (0, submitted);
+    EXPECT_EQ (1, submitted);
     EXPECT_EQ (0u, route.pending_request_count ());
+    physical_reply.complete (result_t<parts_t>::success ({}));
 }
+
+
 TEST (CppFrameworkRouteChannelRequest, ExpiredCallerDeadlineDoesNotStartBinding)
 {
     detail::route_channel_runtime_t route ("spot-route");
@@ -809,51 +817,74 @@ TEST (CppFrameworkRouteChannelRequest, SpotAdmissionFailureEndsWaitBeforePhysica
     EXPECT_EQ (framework_error_kind_t::unavailable, reply.error_kind ());
 }
 
-TEST (CppFrameworkRouteChannelRequest, SpotPreparationStopAndDestructionCompletePending)
+TEST (CppFrameworkRouteChannelRequest, SpotBackendOwnsShutdownAfterWrapperDestruction)
 {
+    task_completion_source_t<parts_t> physical_reply;
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
     std::optional<request_task_t<parts_t>> pending;
+    int submitted = 0;
     {
         detail::route_channel_runtime_t route ("spot-route");
         route.start ();
         route.bind_endpoint ("tcp://self:7500");
         const auto target = zlink::routing_id_t::from (std::string ("peer"));
         route.connect (target, "tcp://peer:7500");
-        route.set_request_backend ([] (const auto &, const auto &, const auto &, auto) {
-            return request_task_t<parts_t> (result_t<parts_t>::success ({}));
+        route.set_request_backend ([&] (const auto &, const auto &, const auto &, auto) {
+            ++submitted;
+            return request_task_t<parts_t> (physical_reply.task (), admitted);
         });
         pending.emplace (route.request_reply_spot_parts (target, "spot", {},
                                                          std::chrono::steady_clock::now () + 1s));
+        EXPECT_EQ (1, submitted);
         EXPECT_FALSE (pending->await_ready ());
         route.stop ();
     }
+    EXPECT_FALSE (pending->await_ready ());
+    admitted->complete (
+      result_t<void>::failure (framework_error_kind_t::shutting_down, "backend shutdown"));
     auto reply = pending->result ();
     EXPECT_FALSE (reply);
-    // Submit §3 admission table and §7: runtime shutdown settles preparation.
     EXPECT_EQ (framework_error_kind_t::shutting_down, reply.error_kind ());
+    physical_reply.complete (result_t<parts_t>::success ({}));
 }
 
-TEST (CppFrameworkRouteChannelRequest, SpotPreparationDeadlineKeepsOriginalBudget)
+
+TEST (CppFrameworkRouteChannelRequest, SpotBackendDeadlineKeepsOriginalBudget)
 {
     detail::route_channel_runtime_t route ("spot-route");
     route.start ();
     route.bind_endpoint ("tcp://self:7500");
     const auto target = zlink::routing_id_t::from (std::string ("peer"));
     route.connect (target, "tcp://peer:7500");
-    route.set_request_backend ([] (const auto &, const auto &, const auto &, auto) {
-        return request_task_t<parts_t> (result_t<parts_t>::success ({}));
+    task_completion_source_t<parts_t> physical_reply;
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
+    int submitted = 0;
+    route.set_request_backend ([&] (const auto &, const auto &, const auto &, auto timeout) {
+        ++submitted;
+        EXPECT_GT (timeout, 0ms);
+        EXPECT_LE (timeout, 20ms);
+        return request_task_t<parts_t> (physical_reply.task (), admitted);
     });
-    auto pending =
-      route.request_reply_spot_parts (target, "spot", {}, std::chrono::steady_clock::now () + 20ms);
+    const auto deadline = std::chrono::steady_clock::now () + 20ms;
+    auto pending = route.request_reply_spot_parts (target, "spot", {}, deadline);
+    EXPECT_EQ (1, submitted);
     EXPECT_FALSE (pending.await_ready ());
+    std::thread backend_deadline ([&] {
+        std::this_thread::sleep_until (deadline);
+        admitted->complete (
+          result_t<void>::failure (framework_error_kind_t::deadline_exceeded, "backend deadline"));
+    });
     auto terminal = std::async (std::launch::async, [&] { return pending.result (); });
     const auto status = terminal.wait_for (1s);
-    // Release on failure as well, so a broken expiry cannot hang test teardown.
+    backend_deadline.join ();
     route.stop ();
     auto reply = terminal.get ();
     EXPECT_EQ (std::future_status::ready, status);
     EXPECT_FALSE (reply);
     EXPECT_EQ (framework_error_kind_t::deadline_exceeded, reply.error_kind ());
+    physical_reply.complete (result_t<parts_t>::success ({}));
 }
+
 
 TEST (CppFrameworkRouteChannelRequest, SpotPhysicalTerminalRetainsArgumentsAfterStopAndDestruction)
 {
@@ -939,28 +970,48 @@ TEST (CppFrameworkRouteChannelRequest,
     EXPECT_EQ (std::future_status::ready, status);
 }
 
-TEST (CppFrameworkRouteChannelRequest, SpotPreparationPreservesParentTurnCancellation)
+TEST (CppFrameworkRouteChannelRequest, SpotBackendPreservesParentTurnCancellation)
 {
     detail::route_channel_runtime_t route ("spot-route");
     route.start ();
     route.bind_endpoint ("tcp://self:7500");
     const auto target = zlink::routing_id_t::from (std::string ("peer"));
     route.connect (target, "tcp://peer:7500");
+    task_completion_source_t<parts_t> physical_reply;
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
+    using cancellation_t = std::stop_callback<std::function<void ()>>;
+    std::unique_ptr<cancellation_t> cancellation;
+    route.set_request_backend ([&] (const auto &, const auto &, const auto &, auto) {
+        auto owner = detail::current_wait_owner ();
+        EXPECT_TRUE (owner.stop_possible ());
+        cancellation = std::make_unique<cancellation_t> (owner, [admitted] {
+            admitted->complete (
+              result_t<void>::failure (framework_error_kind_t::shutting_down, "backend cancelled"));
+        });
+        return request_task_t<parts_t> (physical_reply.task (), admitted);
+    });
     auto turn = std::make_shared<readiness_turn_t> (std::make_shared<std::promise<void>> ());
     std::optional<request_task_t<parts_t>> pending;
     {
         detail::serial_turn_scope_t scope (turn);
+        detail::ambient_context_scope_t invocation (nullptr, nullptr, turn->wait_cancellation ());
         pending.emplace (route.request_reply_spot_parts (target, "spot", {},
                                                          std::chrono::steady_clock::now () + 1s));
     }
+    EXPECT_FALSE (pending->await_ready ());
     turn->cancel_waits ();
     auto terminal = std::async (std::launch::async, [&] { return pending->result (); });
     const auto status = terminal.wait_for (100ms);
+    // Ensure a broken propagation cannot block test teardown.
+    admitted->complete (
+      result_t<void>::failure (framework_error_kind_t::shutting_down, "backend teardown"));
     route.stop ();
     auto reply = terminal.get ();
     EXPECT_EQ (std::future_status::ready, status);
     EXPECT_FALSE (reply);
     EXPECT_EQ (framework_error_kind_t::shutting_down, reply.error_kind ());
+    physical_reply.complete (result_t<parts_t>::success ({}));
 }
+
 
 }
