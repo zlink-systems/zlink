@@ -1037,6 +1037,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             assert (debugProbe = new AsyncDrainProbe()) != null;
         }
 
+        List<AsyncDrainProbe.Pending> pendingDrainWork() {
+            return inStateLane(debugProbe::pending);
+        }
+
         ZLinkStandaloneActorRelocationStagingOwner.Request targetRequest() {
             return new ZLinkStandaloneActorRelocationStagingOwner.Request(
                     relocationId,
@@ -1233,8 +1237,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             for (ZLinkSerialExecutionQueue.QueuedRecord record : relayed) {
                 CompletableFuture<Void> obligation = null;
                 assert (obligation =
-                                debugProbe.expect(
-                                        "relay:actor:" + record.sequence(), owned.actorId()))
+                                inStateLane(
+                                        () ->
+                                                debugProbe.expect(
+                                                        "relay:actor:" + record.sequence(),
+                                                        owned.actorId())))
                         != null;
                 final CompletableFuture<Void> relayObligation = obligation;
                 chain =

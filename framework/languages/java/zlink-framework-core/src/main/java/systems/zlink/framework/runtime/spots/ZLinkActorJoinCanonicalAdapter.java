@@ -63,6 +63,10 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         this.spots = Objects.requireNonNull(spots, "spots");
     }
 
+    int sourceAttemptCountForTest() {
+        return sources.size();
+    }
+
     void register(
             RoutingId localNodeRid,
             ZLinkInternalMeshNode node,
