@@ -818,6 +818,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         var result = await reply.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await taskRunner.StopAsync();
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
 
         var matching = loggerFactory
             .Messages.Where(line =>
