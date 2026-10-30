@@ -3040,12 +3040,19 @@ public sealed class ServiceRuntimeFoundationTests
                 EffectiveMaxQueuedApplicationJobs: 1
             )
         );
+        var requesterPeers = new Dictionary<RoutingId, ZLinkMeshPeer>();
+        var replierPeers = new Dictionary<RoutingId, ZLinkMeshPeer>();
         await using var requester = new ZLinkManagedMeshNode(
             context,
             "orders",
-            applicationJobQueue: applicationJobQueue
+            applicationJobQueue: applicationJobQueue,
+            peersByRid: requesterPeers
         );
-        await using var replier = new ZLinkManagedMeshNode(context, "orders");
+        await using var replier = new ZLinkManagedMeshNode(
+            context,
+            "orders",
+            peersByRid: replierPeers
+        );
         var suffix = Guid.NewGuid().ToString("N");
         var requesterEndpoint = $"inproc://orders-saturated-requester-{suffix}";
         var replierEndpoint = $"inproc://orders-saturated-replier-{suffix}";
@@ -3067,24 +3074,19 @@ public sealed class ServiceRuntimeFoundationTests
         //  Transport liveness §3: each peer probes right after admission and
         //  the probe and ACK are ordinary data-line records. Saturate only
         //  after both admission-time exchanges are consumed.
-        static bool LivenessSettled(ZLinkManagedMeshNode node, RoutingId peerRid)
+        static bool LivenessSettled(
+            Dictionary<RoutingId, ZLinkMeshPeer> nodePeers,
+            RoutingId peerRid
+        )
         {
-            var nodePeers =
-                (Dictionary<RoutingId, ZLinkMeshPeer>)
-                    typeof(ZLinkManagedMeshNode)
-                        .GetField(
-                            "_peersByRid",
-                            System.Reflection.BindingFlags.Instance
-                                | System.Reflection.BindingFlags.NonPublic
-                        )!
-                        .GetValue(node)!;
             var liveness = nodePeers[peerRid].Liveness;
             return liveness is not null
                 && liveness.OutstandingProbeId == 0
                 && liveness.TimeUntilNextActivity(Stopwatch.GetTimestamp()) > TimeSpan.Zero;
         }
         await WaitUntilAsync(() =>
-            LivenessSettled(requester, replierRid) && LivenessSettled(replier, requesterRid)
+            LivenessSettled(requesterPeers, replierRid)
+            && LivenessSettled(replierPeers, requesterRid)
         );
 
         //  Saturate the requester's ordinary job flow: the single permit is
@@ -3096,16 +3098,7 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
         Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
 
-        var peers =
-            (Dictionary<RoutingId, ZLinkMeshPeer>)
-                typeof(ZLinkManagedMeshNode)
-                    .GetField(
-                        "_peersByRid",
-                        System.Reflection.BindingFlags.Instance
-                            | System.Reflection.BindingFlags.NonPublic
-                    )!
-                    .GetValue(requester)!;
-        var admittedLiveness = peers[replierRid].Liveness!;
+        var admittedLiveness = requesterPeers[replierRid].Liveness!;
         var submittedAt = Stopwatch.GetTimestamp();
 
         //  The saturated requester issues a request; the replier answers.
