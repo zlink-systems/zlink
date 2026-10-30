@@ -119,6 +119,7 @@ function owner(options = {}) {
   );
   coordinator = new ZLinkUserSpotCreationCoordinator({
     store,
+    leaseTracker: { isOwnerTokenLive: async () => true },
     target: async () => ({
       meshName: 'mesh',
       nodeRid: 'node',
