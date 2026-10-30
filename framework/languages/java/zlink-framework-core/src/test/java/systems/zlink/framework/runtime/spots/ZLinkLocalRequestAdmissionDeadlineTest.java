@@ -85,11 +85,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                     .get(5, TimeUnit.SECONDS);
             var host = runtime.spotManager();
             var queue = options.registration().applicationJobQueue();
-            var nodeField = host.getClass().getDeclaredField("primaryNode");
-            nodeField.setAccessible(true);
-            var node =
-                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode)
-                            nodeField.get(host);
+            var node = ((ZLinkSpotRuntime) host).primaryNode();
             var target =
                     ((ZLinkSpotRuntime) host)
                             .spotLifecycle()
@@ -170,7 +166,10 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     @ValueSource(booleans = {false, true})
     void localAdmissionCompletesBeforeTheReply(boolean actor) throws Exception {
         heldReply = new CompletableFuture<>();
-        try (var runtime = startAdmissionRuntime()) {
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             createLocalTargets(runtime);
             var result = submitLocal(runtime, actor, Duration.ofSeconds(1), true);
             result.admitted().toCompletableFuture().get(2, TimeUnit.SECONDS);
@@ -186,9 +185,12 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     @ValueSource(booleans = {false, true})
     void localCapacityWaitSeparatesAdmissionFromReply(boolean actor) throws Exception {
         heldReply = new CompletableFuture<>();
-        try (var runtime = startAdmissionRuntime()) {
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             createLocalTargets(runtime);
-            var queue = applicationQueue(runtime);
+            var queue = options.registration().applicationJobQueue();
             ZLinkRequestStage<String> result;
             try (var held =
                     queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
@@ -212,9 +214,12 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     @ValueSource(booleans = {false, true})
     void localTimeoutBeforeAdmissionFailsBothStagesWithTheSameCause(boolean actor)
             throws Exception {
-        try (var runtime = startAdmissionRuntime()) {
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             createLocalTargets(runtime);
-            var queue = applicationQueue(runtime);
+            var queue = options.registration().applicationJobQueue();
             try (var held =
                     queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
                             .toCompletableFuture()
@@ -244,9 +249,12 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     @ValueSource(booleans = {false, true})
     void localCancellationBeforeAdmissionFailsBothStagesWithTheSameCause(boolean actor)
             throws Exception {
-        try (var runtime = startAdmissionRuntime()) {
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             createLocalTargets(runtime);
-            var queue = applicationQueue(runtime);
+            var queue = options.registration().applicationJobQueue();
             try (var held =
                     queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
                             .toCompletableFuture()
@@ -270,7 +278,10 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void completedLocalCallsHaveIndependentAdmissionStages(boolean actor) throws Exception {
-        try (var runtime = startAdmissionRuntime()) {
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             createLocalTargets(runtime);
             var first = submitLocal(runtime, actor, Duration.ofSeconds(1), false);
             assertEquals("reply", first.toCompletableFuture().get(2, TimeUnit.SECONDS));
@@ -289,7 +300,10 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
 
     @Test
     void ownerRejectionBeforeQueueCommitFailsAdmissionWithTheReplyCause() throws Exception {
-        try (var runtime = startAdmissionRuntime()) {
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             createLocalTargets(runtime);
             var actor =
                     runtime.actorManager()
@@ -297,7 +311,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                             .toCompletableFuture()
                             .get()
                             .orElseThrow();
-            var queue = applicationQueue(runtime);
+            var queue = options.registration().applicationJobQueue();
             ZLinkRequestStage<String> result;
             try (var held =
                     queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
@@ -329,7 +343,10 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     void handlerFailureAfterQueueCommitDoesNotFailAdmission(boolean actor) throws Exception {
         var failure = new IllegalStateException("handler failed after admission");
         heldReply = CompletableFuture.failedFuture(failure);
-        try (var runtime = startAdmissionRuntime()) {
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             createLocalTargets(runtime);
             for (int index = 0; index < IMMEDIATE_FAILURE_REQUEST_COUNT; index++) {
                 var result = submitLocal(runtime, actor, Duration.ofSeconds(1), true);
@@ -345,10 +362,13 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     @Test
     void admissionContinuationOutsideHandlerStartsOutsideInfrastructureTurn() throws Exception {
         heldReply = new CompletableFuture<>();
-        try (var runtime = startAdmissionRuntime()) {
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 createLocalTargets(runtime);
-                var queue = applicationQueue(runtime);
+                var queue = options.registration().applicationJobQueue();
                 ZLinkRequestStage<String> result;
                 CompletionStage<String> continuation;
                 try (var held =
@@ -395,10 +415,13 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     void pendingAdmissionJdkCombinatorRunsOutsideTheOwner(boolean actor, boolean any)
             throws Exception {
         heldReply = new CompletableFuture<>();
-        try (var runtime = startAdmissionRuntime()) {
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 createLocalTargets(runtime);
-                var queue = applicationQueue(runtime);
+                var queue = options.registration().applicationJobQueue();
                 var ownerThread = new CompletableFuture<Thread>();
                 var continuationThread = new CompletableFuture<Thread>();
                 var continuationPool = new AtomicReference<ForkJoinPool>();
@@ -443,7 +466,10 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     @Test
     void queuedActorAdmissionDoesNotWaitForTheActiveHandlerTurn() throws Exception {
         heldReply = new CompletableFuture<>();
-        try (var runtime = startAdmissionRuntime()) {
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 createLocalTargets(runtime);
                 var first = submitLocal(runtime, true, Duration.ofSeconds(1), true);
@@ -461,7 +487,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
         }
     }
 
-    private systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime startAdmissionRuntime() {
+    private DefaultZLinkFrameworkOptions admissionOptions() {
         var options = new DefaultZLinkFrameworkOptions();
         options.registration().inboundDispatch().setMaxQueuedApplicationJobs(1);
         options.configureDispatch()
@@ -476,7 +502,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
         objects.addEntrySpot(Entry.class);
         objects.addSpotFactory("room", Room.class, f -> f.disableRelocation());
         objects.addActorFactory("actor", Actor.class, Factory.class, f -> f.disableRelocation());
-        return ZLinkFrameworkRuntimeTestAccess.start(options, new ZLinkJavaBackendAdapterFactory());
+        return options;
     }
 
     private void createLocalTargets(
@@ -507,14 +533,6 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                         .requestToSpot("room-a", new Probe(hold))
                         .timeout(timeout)
                         .submit(String.class);
-    }
-
-    private ZLinkApplicationJobQueue applicationQueue(
-            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime runtime) throws Exception {
-        var host = runtime.spotManager();
-        var queueField = host.getClass().getDeclaredField("applicationJobQueue");
-        queueField.setAccessible(true);
-        return (ZLinkApplicationJobQueue) queueField.get(host);
     }
 
     private void awaitCapacityWaiter(ZLinkApplicationJobQueue queue) {
