@@ -8,6 +8,7 @@
 
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/dispatch/completion_turn.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1124,8 +1125,333 @@ int verify_completion_dispatcher_hosts ()
              : 1;
 }
 
+namespace
+{
+struct telemetry_http_state_t
+{
+    zlink::framework::task_completion_source_t<void> deadline;
+    std::promise<void> ready, deadline_entered;
+};
+class telemetry_ready_service_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    explicit telemetry_ready_service_t (std::shared_ptr<telemetry_http_state_t> state) : state (std::move (state)) {}
+    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &) override
+    {
+        state->ready.set_value ();
+        co_return;
+    }
+    void stop () noexcept override {}
+  private:
+    std::shared_ptr<telemetry_http_state_t> state;
+};
+struct telemetry_http_handler_t
+{
+    zlink::framework::http_response_t handle (const zlink::framework::http_request_t &)
+    {
+        zlink::framework::http_response_t response;
+        response.status = 200;
+        response.body = "telemetry-progress";
+        return response;
+    }
+};
+struct telemetry_deadline_handler_t
+{
+    using request_type = int;
+    using reply_type = int;
+    std::shared_ptr<telemetry_http_state_t> state;
+    explicit telemetry_deadline_handler_t (std::shared_ptr<telemetry_http_state_t> state) : state (std::move (state)) {}
+    zlink::framework::task_t<int> handle (const int &)
+    {
+        state->deadline_entered.set_value ();
+        co_await state->deadline.task ();
+        co_return 2758;
+    }
+};
+
+int verify_telemetry_host_progress ()
+{
+    using namespace zlink::framework;
+    using namespace std::chrono_literals;
+    struct provider_state_t {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool entered = false, release = false, finished = false, submitted = false;
+        std::vector<log_field_t> frozen;
+        std::vector<std::string> delivered;
+    };
+    auto provider = std::make_shared<provider_state_t> ();
+    auto first_state = std::make_shared<telemetry_http_state_t> ();
+    auto second_state = std::make_shared<telemetry_http_state_t> ();
+    auto first_ready = first_state->ready.get_future ();
+    auto second_ready = second_state->ready.get_future ();
+    auto deadline_entered = first_state->deadline_entered.get_future ();
+    dispatch_options_t *first_dispatch = nullptr, *second_dispatch = nullptr;
+    auto make_host = [&] (const auto &state, dispatch_options_t *&dispatch, bool server, const std::string &channel_endpoint) {
+        auto app = std::make_unique<app_t> (app_t::create ());
+        app->logging ().disable_record_capture ().use_provider ("telemetry-host-progress",
+          [provider, server] (const log_record_t &record) {
+              bool telemetry = false;
+              std::string id;
+              for (const auto &field : record.fields) {
+                  if (field.key == "event_id" && field.value == "zlink.message_flow") telemetry = true;
+                  if (field.key == "corr") id = field.value;
+              }
+              if (!telemetry) return;
+              std::unique_lock lock (provider->mutex);
+              if (!provider->entered && id == "inflight-host-A") {
+                  provider->entered = true;
+                  provider->changed.notify_all ();
+                  provider->changed.wait (lock, [&] { return provider->release; });
+                  provider->frozen = record.fields;
+                  provider->finished = true;
+              }
+              if (provider->entered) provider->delivered.push_back ((server ? "A:" : "B:") + id);
+              provider->changed.notify_all ();
+          });
+        app->add_zlink_framework ([&] (zlink_framework_options_t &options) {
+            dispatch = &options.configure_dispatch ();
+            dispatch->message_flow (message_flow_log_mode_t::normal);
+            options.services ().add_singleton<telemetry_http_handler_t> ();
+            options.http ().listen ("http://127.0.0.1:0").map_get<telemetry_http_handler_t> ("/probe");
+            if (server) {
+                options.services ().add_singleton<telemetry_deadline_handler_t> (
+                  std::make_unique<telemetry_deadline_handler_t> (state));
+                options.add_client_server_channel ("telemetry-deadline").server ()
+                  .set_bind_host ("127.0.0.1").listen (0)
+                  .add_request_handler<telemetry_deadline_handler_t, int, int> ();
+            } else {
+                options.add_client_server_channel ("telemetry-deadline").client ().connect (channel_endpoint);
+            }
+        });
+        app->add_hosted_service (std::make_unique<telemetry_ready_service_t> (state));
+        return app;
+    };
+    auto first = make_host (first_state, first_dispatch, true, {});
+    std::unique_ptr<app_t> second;
+    std::future<int> first_run, second_run;
+    std::thread emitter;
+    struct cleanup_t {
+        std::unique_ptr<app_t> &first, &second;
+        std::thread &emitter;
+        std::shared_ptr<provider_state_t> provider;
+        std::shared_ptr<telemetry_http_state_t> state;
+        ~cleanup_t () {
+            { std::lock_guard lock (provider->mutex); provider->release = true; provider->changed.notify_all (); }
+            if (emitter.joinable ()) emitter.join ();
+            state->deadline.complete (result_t<void>::success ());
+            if (first) first->stop ();
+            if (second) second->stop ();
+        }
+    } cleanup{first, second, emitter, provider, first_state};
+    first_run = std::async (std::launch::async, [&] { return first->run (0, nullptr); });
+    const bool first_started = first_ready.wait_for (2s) == std::future_status::ready;
+    std::string channel_endpoint;
+    if (first_started) {
+        auto services = first->advanced ().services ().build_provider ();
+        channel_endpoint = services.get_required<framework_runtime_t> ()
+          .listener_status (listener_kind_t::client_server, "telemetry-deadline").endpoint;
+    }
+    second = make_host (second_state, second_dispatch, false, channel_endpoint);
+    second_run = std::async (std::launch::async, [&] { return second->run (0, nullptr); });
+    const bool ready = first_started && second_ready.wait_for (2s) == std::future_status::ready;
+    auto endpoint = [] (app_t &app) {
+        auto services = app.advanced ().services ().build_provider ();
+        for (const auto &status : services.get_required<framework_runtime_t> ().http_listener_statuses ())
+            if (!status.bound_url.empty ()) return status.bound_url;
+        return std::string{};
+    };
+    const auto first_url = ready ? endpoint (*first) : std::string{};
+    const auto second_url = ready ? endpoint (*second) : std::string{};
+    auto emit = [] (const dispatch_options_t &options, const char *id) {
+        detail::message_flow_tracer_t (options).trace (message_flow_event_t{
+          .outcome = message_flow_outcome_t::received,
+          .surface = dispatch_error_surface_t::channel,
+          .message_kind = dispatch_message_kind_t::request,
+          .packet_name = std::string ("owned-before-host-destruction"),
+          .correlation_id = std::string (id)});
+    };
+    if (ready) emitter = std::thread ([&] {
+        emit (*first_dispatch, "inflight-host-A");
+        std::lock_guard lock (provider->mutex);
+        provider->submitted = true;
+        provider->changed.notify_all ();
+    });
+    bool entered, nonblocking;
+    {
+        std::unique_lock lock (provider->mutex);
+        entered = provider->changed.wait_for (lock, 2s, [&] { return provider->entered; });
+        nonblocking = provider->changed.wait_for (lock, 2s, [&] { return provider->submitted; });
+        if (!entered || !nonblocking) {
+            provider->release = true;
+            provider->changed.notify_all ();
+        }
+    }
+    if (emitter.joinable ()) emitter.join ();
+    if (ready) {
+        emit (*first_dispatch, "queued-host-A");
+        emit (*second_dispatch, "queued-host-B");
+    }
+    auto request = [] (const std::string &url, const char *path) {
+        return zlink::http_client::client_t::create (url).timeout (2s).get (path).submit_raw ();
+    };
+    bool request_ok = false, deadline_ok = false, completion_ok = false, status_ok = false;
+    if (ready && !first_url.empty () && !second_url.empty ()) {
+        auto result = request (first_url, "/probe");
+        request_ok = result && result.value ().status == 200 && result.value ().body == "telemetry-progress";
+        auto deadline = std::async (std::launch::async, [&] {
+            return second->advanced ().zlink ().request_client ("telemetry-deadline")
+              .request (1).timeout (2s).async<int> ().result ();
+        });
+        const bool accepted = deadline_entered.wait_for (2s) == std::future_status::ready;
+        const bool terminal = deadline.wait_for (3s) == std::future_status::ready;
+        if (terminal) {
+            auto result = deadline.get ();
+            deadline_ok = accepted && !result && result.error_kind () == framework_error_kind_t::deadline_exceeded;
+            std::cout << "telemetry_deadline accepted=" << accepted << " terminal=" << terminal
+                      << " success=" << bool (result) << " error_kind=" << (result ? -1 : int (result.error_kind ())) << std::endl;
+        }
+        first_state->deadline.complete (result_t<void>::success ());
+        if (!terminal) {
+            { std::lock_guard lock (provider->mutex); provider->release = true; provider->changed.notify_all (); }
+            deadline.get ();
+        }
+        task_completion_source_t<int> source;
+        auto completion = std::make_shared<std::promise<int>> ();
+        auto completed = completion->get_future ();
+        auto pending = source.task ();
+        detail::observe_task_completion (pending, [completion] (const auto &value) { completion->set_value (value.value ()); });
+        source.complete (result_t<int>::success (2758));
+        completion_ok = completed.wait_for (2s) == std::future_status::ready && completed.get () == 2758;
+        auto status = std::make_shared<std::promise<framework_runtime_state_t>> ();
+        auto status_once = std::make_shared<std::atomic_bool> (false);
+        auto observed = status->get_future ();
+        auto services = first->advanced ().services ().build_provider ();
+        auto observation = services.get_required<framework_runtime_t> ().observe (
+          1, [status, status_once] (const observed_status_t<framework_runtime_status_t> &value) {
+              if (!status_once->exchange (true)) status->set_value (value.status.state);
+          });
+        status_ok = observed.wait_for (1s) == std::future_status::ready
+                    && observed.get () == framework_runtime_state_t::serving
+                    && !endpoint (*first).empty () && !endpoint (*second).empty ();
+        if (!status_ok) {
+            std::lock_guard lock (provider->mutex);
+            provider->release = true;
+            provider->changed.notify_all ();
+        }
+        observation->close ();
+    }
+    auto shutdown = std::async (std::launch::async, [&] { return first->shutdown (1s).result (); });
+    const bool stopped_before_release = shutdown.wait_for (2s) == std::future_status::ready;
+    bool normal = false, destroyed_before_release = false;
+    if (stopped_before_release) {
+        auto result = shutdown.get ();
+        normal = result && result.value ().outcome == termination_outcome_t::stopped;
+        normal = first_run.get () == 0 && normal;
+        first.reset ();
+        destroyed_before_release = true;
+    }
+    {
+        std::lock_guard lock (provider->mutex);
+        provider->release = true;
+        provider->changed.notify_all ();
+    }
+    if (!stopped_before_release) { shutdown.get (); first_run.get (); first.reset (); }
+    bool frozen_ok, records_ok;
+    {
+        std::unique_lock lock (provider->mutex);
+        const bool delivered = provider->changed.wait_for (lock, 2s, [&] { return provider->delivered.size () >= 2; });
+        frozen_ok = provider->finished;
+        bool packet = false, corr = false;
+        for (const auto &field : provider->frozen) {
+            packet = packet || (field.key == "packet" && field.value == "owned-before-host-destruction");
+            corr = corr || (field.key == "corr" && field.value == "inflight-host-A");
+        }
+        frozen_ok = frozen_ok && packet && corr;
+        records_ok = delivered
+                     && std::count (provider->delivered.begin (), provider->delivered.end (), "A:inflight-host-A") == 1
+                     && std::count (provider->delivered.begin (), provider->delivered.end (), "B:queued-host-B") == 1
+                     && std::none_of (provider->delivered.begin (), provider->delivered.end (), [] (const auto &id) {
+                          return id.starts_with ("A:") && id != "A:inflight-host-A";
+                        });
+        if (!records_ok) for (const auto &id : provider->delivered) std::cout << "delivered=" << id << std::endl;
+    }
+    auto surviving = request (second_url, "/probe");
+    const bool second_ok = surviving && surviving.value ().status == 200;
+    second->shutdown (1s).result ();
+    const auto second_exit = second_run.get ();
+    const bool passed = ready && entered && nonblocking && request_ok && deadline_ok && completion_ok && status_ok
+                        && stopped_before_release && normal && destroyed_before_release && frozen_ok
+                        && records_ok && second_ok && second_exit == 0;
+    std::cout << "telemetry_host_progress ready=" << ready << " entered=" << entered
+              << " nonblocking=" << nonblocking << " request=" << request_ok << " deadline=" << deadline_ok << " completion=" << completion_ok
+              << " status=" << status_ok << " shutdown=" << stopped_before_release << " normal=" << normal
+              << " destroyed=" << destroyed_before_release << " frozen=" << frozen_ok
+              << " records=" << records_ok << " surviving_host=" << second_ok << " passed=" << passed << std::endl;
+    return passed ? 0 : 85;
+}
+} // namespace
+
+int verify_no_provider_host (bool empty_setters)
+{
+    using namespace zlink::framework;
+    using namespace std::chrono_literals;
+    unsigned builds = 0;
+    bool empty_sinks = true;
+    dispatch_options_t empty;
+    if (empty_setters) {
+        detail::dispatch_options_access_t::set_logger (empty, std::nullopt);
+        detail::dispatch_options_access_t::set_observer_for_tests (empty, {});
+        detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (empty, {});
+        empty_sinks = !detail::dispatch_options_access_t::has_observer (empty)
+                      && !detail::dispatch_options_access_t::has_dispatch_error_observer (empty);
+        empty.message_flow (message_flow_log_mode_t::normal);
+        detail::message_flow_tracer_t (empty).trace (message_flow_outcome_t::received, [&] {
+            ++builds;
+            return message_flow_event_t{};
+        });
+
+    }
+    auto app = app_t::create ();
+    auto state = std::make_shared<telemetry_http_state_t> ();
+    auto ready = state->ready.get_future ();
+    dispatch_options_t *dispatch = nullptr;
+    app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
+        dispatch = &options.configure_dispatch ();
+        dispatch->message_flow (message_flow_log_mode_t::normal);
+        options.services ().add_singleton<telemetry_http_handler_t> ();
+        options.http ().listen ("http://127.0.0.1:0").map_get<telemetry_http_handler_t> ("/probe");
+    });
+    app.add_hosted_service (std::make_unique<telemetry_ready_service_t> (state));
+    auto running = std::async (std::launch::async, [&] { return app.run (0, nullptr); });
+    const bool started = ready.wait_for (2s) == std::future_status::ready;
+    if (started) {
+        detail::message_flow_tracer_t (*dispatch).trace (message_flow_outcome_t::received, [&] {
+            ++builds;
+            return message_flow_event_t{};
+        });
+
+    }
+    auto shutdown = app.shutdown (1s).result ();
+    const auto exit = running.get ();
+    const bool passed = started && empty_sinks && builds == 0 && shutdown
+                        && shutdown.value ().outcome == termination_outcome_t::stopped && exit == 0;
+    std::cout << "no_provider_host empty_setters=" << empty_setters << " started=" << started
+              << " empty_sinks=" << empty_sinks << " builders=" << builds << " shutdown=" << bool (shutdown)
+              << " exit=" << exit << " passed=" << passed << std::endl;
+    return passed ? 0 : 86;
+}
+
 int main (int test_argc, char **test_argv)
 {
+    if (test_argc == 2 && std::string (test_argv[1]) == "--no-provider-host")
+        return verify_no_provider_host (false);
+    if (test_argc == 2 && std::string (test_argv[1]) == "--empty-provider-owner")
+        return verify_no_provider_host (true);
+    if (test_argc == 2 && std::string (test_argv[1]) == "--telemetry-host-progress")
+        return verify_telemetry_host_progress ();
+    if (test_argc == 1)
+        if (const auto result = verify_telemetry_host_progress (); result != 0) return result;
     if (test_argc == 2 && std::string (test_argv[1]) == "--dispatcher-hosts")
         return verify_completion_dispatcher_hosts ();
 #ifdef _WIN32

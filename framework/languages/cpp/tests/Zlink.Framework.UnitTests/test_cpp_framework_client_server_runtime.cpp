@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/telemetry_observation.hpp"
 
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/client_server/client_server_location_runtime.hpp"
@@ -289,9 +290,25 @@ namespace
 
 struct overlap_scope_t
 {
+    struct destructor_phase_t
+    {
+        std::atomic_bool armed{false};
+        std::promise<void> entered;
+        std::promise<void> release;
+        std::shared_future<void> released = release.get_future ().share ();
+        std::chrono::steady_clock::time_point deadline;
+        std::atomic_bool timed_out{false};
+    };
+    inline static std::shared_ptr<destructor_phase_t> current_phase;
+    std::shared_ptr<destructor_phase_t> phase = current_phase;
     overlap_scope_t () { ++live; }
     ~overlap_scope_t ()
     {
+        if (phase->armed.load (std::memory_order_acquire)) {
+            phase->entered.set_value ();
+            phase->timed_out =
+              phase->released.wait_until (phase->deadline) != std::future_status::ready;
+        }
         ++destroyed;
         --live;
     }
@@ -306,7 +323,7 @@ struct overlap_state_t
     inline static std::vector<int> pipeline_starts;
     inline static bool filter_wait = false;
     inline static std::vector<int> completions;
-    inline static zlink::framework::task_completion_source_t<void> release;
+    inline static std::shared_ptr<zlink::framework::task_completion_source_t<void>> release;
     inline static std::atomic_int errors{0};
 
     static zlink::framework::task_t<void> run (int id,
@@ -320,7 +337,7 @@ struct overlap_state_t
             starts.push_back (id);
         }
         if (id == 1)
-            co_await release.task ();
+            co_await release->task ();
         assert (scope.marker == 73);
         assert (context.channel_name == "overlap");
         assert (context.correlation_id == std::to_string (id));
@@ -351,7 +368,7 @@ struct overlap_filter_t
         }
         assert (scope.marker == 73);
         if (turn == 1 && overlap_state_t::filter_wait)
-            co_await overlap_state_t::release.task ();
+            co_await overlap_state_t::release->task ();
         assert (scope.marker == 73);
         co_await next ();
     }
@@ -512,8 +529,11 @@ void verify_client_server_terminal_overlap_matrix (int selected = -1)
                             overlap_state_t::pipeline_starts.clear ();
                             overlap_state_t::completions.clear ();
                         }
+                        auto phase = std::make_shared<overlap_scope_t::destructor_phase_t> ();
+                        overlap_scope_t::current_phase = phase;
                         overlap_state_t::filter_wait = filter_wait;
-                        overlap_state_t::release = {};
+                        overlap_state_t::release =
+                          std::make_shared<zlink::framework::task_completion_source_t<void>> ();
                         overlap_state_t::errors = 0;
                         overlap_scope_t::destroyed = 0;
                         assert (overlap_scope_t::live == 0);
@@ -634,8 +654,28 @@ void verify_client_server_terminal_overlap_matrix (int selected = -1)
                         assert (batch.jobs->snapshot ().queued_application_jobs == queued_permits);
                         auto shutdown = app.shutdown ();
                         assert (!shutdown.result_for (20ms));
-                        overlap_state_t::release.complete (
-                          zlink::framework::result_t<void>::success ());
+                        phase->deadline = std::chrono::steady_clock::now () + 5s;
+                        auto destructor_entered = phase->entered.get_future ();
+                        phase->armed.store (true, std::memory_order_release);
+                        auto release = overlap_state_t::release;
+                        std::jthread completion ([release] {
+                            release->complete (zlink::framework::result_t<void>::success ());
+                        });
+                        const auto release_destructor = [phase] (auto *) {
+                            phase->release.set_value ();
+                        };
+                        std::unique_ptr<overlap_scope_t::destructor_phase_t,
+                                        decltype (release_destructor)>
+                          release_guard (phase.get (), release_destructor);
+                        const bool entered = destructor_entered.wait_until (phase->deadline)
+                                             == std::future_status::ready;
+                        if (entered)
+                            zlink::framework::test::acknowledge_delivery (phase->deadline);
+                        const auto errors = overlap_state_t::errors.load ();
+                        release_guard.reset ();
+                        completion.join ();
+                        assert (entered && !phase->timed_out.load ());
+                        assert (errors == (fail_first ? 1 : 0));
                         assert (shutdown.result_for (5s));
                         app_thread.join ();
                         {
@@ -660,7 +700,6 @@ void verify_client_server_terminal_overlap_matrix (int selected = -1)
                                         == std::string (4096, '1'));
                         }
                         assert (overlap_scope_t::live == 0 && overlap_scope_t::destroyed == 2);
-                        assert (overlap_state_t::errors == (fail_first ? 1 : 0));
                         assert (batch.jobs->snapshot ().permits_in_use == 0);
                     }
 }
@@ -673,21 +712,20 @@ void verify_client_server_owner_gate_and_budget ()
     budget_owner_send_handler_t::calls.store (0);
     owner_gate_request_handler_t::first =
       std::make_shared<zlink::framework::task_completion_source_t<std::string>> ();
-    std::mutex flow_mutex;
-    std::vector<zlink::framework::message_flow_event_t> events;
+    auto flows = std::make_shared<zlink::framework::test::telemetry_observations_t<
+      zlink::framework::message_flow_event_t>> ();
     auto app = zlink::framework::app_t::create ();
-    app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+    app.add_zlink_framework ([flows] (zlink::framework::zlink_framework_options_t &options) {
         options.configure_dispatch ().message_flow (
           zlink::framework::message_flow_log_mode_t::normal);
         zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-          options.configure_dispatch (), [&] (const auto &event) {
+          options.configure_dispatch (), [flows] (const auto &event) {
               using phase_t = zlink::framework::message_flow_outcome_t;
               if (event.channel_name == "owner-gate-a"
                   && (event.outcome == phase_t::received || event.outcome == phase_t::admitted
                       || event.outcome == phase_t::dispatched || event.outcome == phase_t::completed
                       || event.outcome == phase_t::replied)) {
-                  std::lock_guard lock (flow_mutex);
-                  events.push_back (event);
+                  flows->record (event);
               }
           });
         options.handlers ()
@@ -739,25 +777,18 @@ void verify_client_server_owner_gate_and_budget ()
     assert (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == 1);
 
     using phase_t = zlink::framework::message_flow_outcome_t;
-    for (;;) {
-        {
-            std::lock_guard lock (flow_mutex);
-            if (std::count_if (
-                  events.begin (), events.end (),
-                  [] (const auto &event) { return event.outcome == phase_t::admitted; })
-                == 3)
-                break;
-        }
-        assert (std::chrono::steady_clock::now () < deadline);
-        std::this_thread::yield ();
-    }
-    {
-        std::lock_guard lock (flow_mutex);
-        assert (
-          std::count_if (events.begin (), events.end (),
-                         [] (const auto &event) { return event.outcome == phase_t::dispatched; })
-          == 3);
-    }
+    zlink::framework::test::acknowledge_delivery (deadline);
+    const auto observed_events = flows->snapshot ();
+    assert (std::count_if (observed_events.begin (), observed_events.end (),
+                           [] (const auto &event) {
+                               return event.outcome == phase_t::admitted;
+                           })
+            == 3);
+    assert (std::count_if (observed_events.begin (), observed_events.end (),
+                           [] (const auto &event) {
+                               return event.outcome == phase_t::dispatched;
+                           })
+            == 3);
 
     constexpr int budget_records = 24;
     for (int i = 0; i < budget_records; ++i)
@@ -777,8 +808,8 @@ void verify_client_server_owner_gate_and_budget ()
            && std::chrono::steady_clock::now () < deadline)
         std::this_thread::sleep_for (1ms);
     assert (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == 1);
-    app.stop ();
-    app_thread.join ();
+    zlink::framework::test::acknowledge_delivery (deadline);
+    const auto events = flows->snapshot ();
     std::map<std::pair<std::string, std::string>,
              std::vector<zlink::framework::message_flow_event_t>>
       by_flow;
@@ -798,6 +829,8 @@ void verify_client_server_owner_gate_and_budget ()
         for (const auto &event : records)
             assert (event.correlation_id.value_or ("") == records[0].correlation_id.value_or (""));
     }
+    app.stop ();
+    app_thread.join ();
     owner_gate_request_handler_t::first.reset ();
 }
 
@@ -2359,6 +2392,10 @@ void verify_fanout_first_observation_is_complete ()
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string (argv[1]) == "--owner-gate-and-budget") {
+        verify_client_server_owner_gate_and_budget ();
+        return 0;
+    }
     if (argc == 3 && std::string (argv[1]) == "--terminal-overlap") {
         verify_client_server_terminal_overlap_matrix (std::stoi (argv[2]));
         return 0;

@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../support/telemetry_observation.hpp"
+
 #include "../support/allocation_counter.hpp"
 
 #include "runtime/backend/raw_dealer_port.hpp"
@@ -404,14 +406,13 @@ void verify_deferred_send_trace_owns_its_context ()
     }
     assert (monitor.status ().flow_paused_connections == 1);
 
-    auto captured_events = std::make_shared<std::vector<zlink::framework::message_flow_event_t>> ();
-    std::mutex captured_events_mutex;
+    auto observations = std::make_shared<zlink::framework::test::telemetry_observations_t<
+      zlink::framework::message_flow_event_t>> ();
     zlink::framework::dispatch_options_t trace_options;
     trace_options.message_flow (zlink::framework::message_flow_log_mode_t::detailed);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-      trace_options, [&] (const zlink::framework::message_flow_event_t &event) {
-          std::lock_guard lock (captured_events_mutex);
-          captured_events->push_back (event);
+      trace_options, [observations] (const zlink::framework::message_flow_event_t &event) {
+          observations->record (event);
       });
 
     std::optional<zlink::framework::task_t<zlink::submit_result_t>> pending;
@@ -440,9 +441,10 @@ void verify_deferred_send_trace_owns_its_context ()
       zlink::routing_id_t::from (deferred_trace_session_id).to_hex ();
     bool saw_deferred_completion = false;
     {
-        std::lock_guard lock (captured_events_mutex);
+        zlink::framework::test::acknowledge_delivery (completion_deadline);
+        const auto captured_events = observations->snapshot ();
         saw_deferred_completion =
-          std::any_of (captured_events->begin (), captured_events->end (), [&] (const auto &event) {
+          std::any_of (captured_events.begin (), captured_events.end (), [&] (const auto &event) {
               return event.detail_stage == "router_admission_complete"
                      && event.detail_result == "ok" && event.actor_id == deferred_trace_actor_id
                      && event.stream_session_id == expected_session_rid;

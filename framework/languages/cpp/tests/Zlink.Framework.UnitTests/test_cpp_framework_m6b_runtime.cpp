@@ -2,6 +2,7 @@
 #include "../support/stateful_object_sync.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/telemetry_observation.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
 #include "../support/allocation_counter.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
@@ -7751,11 +7752,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         .descriptor = descriptor ("user-source"),
         .runtime_failures =
           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
-    std::vector<message_dispatch_error_event_t> instance_dispatch_diagnostics;
-    std::mutex instance_dispatch_diagnostics_mutex;
-    const auto dispatch_diagnostic_snapshot = [&] {
-        const std::lock_guard lock (instance_dispatch_diagnostics_mutex);
-        return instance_dispatch_diagnostics;
+    auto instance_dispatch_diagnostics =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
+    const auto dispatch_diagnostic_snapshot = [instance_dispatch_diagnostics] {
+        return instance_dispatch_diagnostics->snapshot ();
     };
     auto target_options = host::host_options_t{
       .mesh =
@@ -7766,15 +7766,15 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
       .user_spot_operation_replay_retention = 50ms};
     target_options.mesh.dispatch.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      target_options.mesh.dispatch, [&] (const message_dispatch_error_event_t &event) {
+      target_options.mesh.dispatch,
+      [instance_dispatch_diagnostics] (const message_dispatch_error_event_t &event) {
           if (event.surface == dispatch_error_surface_t::instance_spot) {
               assert (event.action
                       == (event.message_kind == dispatch_message_kind_t::request
                             ? dispatch_error_action_t::reply_error
                             : dispatch_error_action_t::drop));
               assert (event.error_message);
-              const std::lock_guard lock (instance_dispatch_diagnostics_mutex);
-              instance_dispatch_diagnostics.push_back (event);
+              instance_dispatch_diagnostics->record (event);
           }
       });
     auto target = std::make_shared<host::public_host_runtime_t> (std::move (target_options));
@@ -7845,6 +7845,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         const auto result = dispatched.result ();
         const auto [reply_terminal, reply] = local_reply.get ();
         const auto pending_after_cleanup = target->pending_operation_count ();
+        test::acknowledge_delivery (std::chrono::steady_clock::now () + 5s);
         target->close ();
         std::cout << "cleanup_started=" << cleanup_started
                   << " pending_before_cleanup=" << pending_before_cleanup
@@ -8126,10 +8127,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                 const auto reads_before = store->authority_reads.load ();
                 instance_reply_header.reset ();
                 instance_reply_payload.reset ();
-                {
-                    const std::lock_guard lock (instance_dispatch_diagnostics_mutex);
-                    instance_dispatch_diagnostics.clear ();
-                }
+                deadline = std::chrono::steady_clock::now () + 5s;
+                // The preceding operation finished before resetting its owned observations.
+                test::acknowledge_delivery (deadline);
+                instance_dispatch_diagnostics->clear ();
                 std::size_t terminal_count = 0;
                 // Failover policy §4.4: the public Instance intent call still uses
                 // the Ready route its resolver cached before Close released authority.
@@ -8168,7 +8169,6 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                               .result ()
                               .value ());
                 }
-                deadline = std::chrono::steady_clock::now () + 5s;
                 while ((public_call       ? !public_reply->await_ready ()
                         : request.request ? !instance_reply_header
                                           : dispatch_diagnostic_snapshot ().empty ())
@@ -8177,6 +8177,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                     (void) source->dispatch_ready (dispatch);
                     std::this_thread::sleep_for (1ms);
                 }
+                // dispatch_ready/actual request completion has crossed the producer boundary.
+                test::acknowledge_delivery (deadline);
                 assert (store->authority_reads.load () > reads_before);
                 if (injected_activation_failure) {
                     const auto diagnostics = dispatch_diagnostic_snapshot ();
@@ -8192,6 +8194,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                       runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
                         expected_failure->terminal_result, expected_failure->failure_code,
                         "Instance Spot activation");
+                    assert (event.error_type == typeid (framework_exception_t).name ());
+                    assert (!event.exception);
                     assert (event.reason == injected_failure_reason);
                     assert (event.error_message == expected_error.what ());
                     if (request.request) {
@@ -8259,13 +8263,9 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                 == expected.at ("surface").get<std::string> ());
                         assert (detail::enum_name (event.reason)
                                 == expected.at ("reason").get<std::string> ());
-                        assert (event.exception);
-                        try {
-                            std::rethrow_exception (event.exception);
-                        }
-                        catch (const framework_exception_t &error) {
-                            assert (error.kind () == framework_error_kind_t::unavailable);
-                        }
+                        assert (!event.exception);
+                        assert (event.error_type == typeid (framework_exception_t).name ());
+                        // Send admission and this owned summary do not expose the original kind.
                     }
                 }
                 assert (expected.at ("factoryCalls") == instance_prepare_count - prepares_before);
@@ -9153,6 +9153,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
               mesh::service_mailbox_domain_t::infrastructure)
             == 1);
     assert (!create_operation_terminal);
+    test::acknowledge_delivery (deadline);
     target->close ();
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!create_operation_terminal && std::chrono::steady_clock::now () < deadline) {
@@ -9520,11 +9521,11 @@ void verify_forwarded_request_return_dispatches_without_source_operation ()
         -> task_t<std::optional<stateful::accepted_record_authority_t>> {
           co_return std::nullopt;
       });
-    std::exception_ptr dispatch_error;
+    auto errors =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     dispatch_options_t options;
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      options,
-      [&] (const message_dispatch_error_event_t &event) { dispatch_error = event.exception; });
+      options, [errors] (const message_dispatch_error_event_t &event) { errors->record (event); });
     host::public_host_runtime_test_access_t::set_dispatch (*target, std::move (options));
     target->start ();
     const auto local = target->transport ().topology ().local_descriptor ();
@@ -9561,8 +9562,9 @@ void verify_forwarded_request_return_dispatches_without_source_operation ()
           assert (record.operation_id.low == operation.low);
           assert (!parts.empty ());
       });
-    if (dispatch_error)
-        std::rethrow_exception (dispatch_error);
+    // dispatch_saved has finished producing diagnostics; acknowledge while Host is registered.
+    test::acknowledge_delivery (std::chrono::steady_clock::now () + 5s);
+    assert (errors->snapshot ().empty ());
     assert (dispatched);
     assert (calls == 1);
     target->close ();
@@ -9577,6 +9579,12 @@ int main (int argc, char **argv)
     zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 2 && std::string_view (argv[1]) == "--message-follow-capture-lifetime") {
         verify_message_follow_unsubscribe_waits_for_capture_destruction ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--telemetry-create-close")
+        return verify_remote_user_spot_create_close_terminal_once () ? 0 : 1;
+    if (argc == 2 && std::string_view (argv[1]) == "--telemetry-returned-request") {
+        verify_forwarded_request_return_dispatches_without_source_operation ();
         return 0;
     }
     verify_host_send_forwarding_allocations ();

@@ -10,6 +10,7 @@
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include <gtest/gtest.h>
+#include "../support/telemetry_observation.hpp"
 #include <nlohmann/json.hpp>
 #include <zlink/json.hpp>
 #include <zlink/framework.hpp>
@@ -158,7 +159,6 @@ struct evidence_t
     std::vector<std::string> send_error_types;
     std::vector<std::string> send_surfaces;
     std::vector<std::string> send_reasons;
-    std::vector<zf::framework_error_kind_t> send_error_kinds;
     std::mutex mutex;
     std::promise<void> closing_entered;
     zf::task_completion_source_t<void> closing_release;
@@ -1082,6 +1082,7 @@ class exercise_t final : public zf::hosted_service_t
             auto terminated = _evidence->send_terminated.get_future ();
             require_ready (terminated, "pending intent send diagnostic did not complete");
         }
+        zf::test::acknowledge_delivery (std::chrono::steady_clock::now () + request_timeout);
         if (followup.valid ())
             followup_result.emplace (followup.get ());
         const auto closed = _evidence->close_completion->result ();
@@ -1140,13 +1141,6 @@ void configure_app (zf::app_t &app,
               evidence->send_error_types.push_back (event.error_type.value_or (""));
               evidence->send_surfaces.emplace_back (zf::detail::enum_name (event.surface));
               evidence->send_reasons.emplace_back (zf::detail::enum_name (event.reason));
-              ASSERT_TRUE (event.exception);
-              try {
-                  std::rethrow_exception (event.exception);
-              }
-              catch (const zf::framework_exception_t &error) {
-                  evidence->send_error_kinds.push_back (error.kind ());
-              }
               if (evidence->send_diagnostics.size () == 1)
                   evidence->send_terminated.set_value ();
           });
@@ -1314,9 +1308,7 @@ void check_branch (branch_t kind,
                    evidence->send_surfaces);
         EXPECT_EQ ((std::vector<std::string>{diagnostic.at ("reason").get<std::string> ()}),
                    evidence->send_reasons);
-        EXPECT_EQ ((std::vector<zf::framework_error_kind_t>{
-                     kinds.at (diagnostic.at ("kind").get<std::string> ())}),
-                   evidence->send_error_kinds);
+        // One-way send exposes owned diagnostics; the request kind above is independent.
         const auto wire = zf::runtime::messaging::request_failure_mapper_t{}.target_failure_reply (
           kinds.at (diagnostic.at ("kind").get<std::string> ()));
         ASSERT_TRUE (wire);

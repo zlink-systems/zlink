@@ -17,6 +17,7 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "../support/allocation_counter.hpp"
+#include "../support/telemetry_observation.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <array>
@@ -273,18 +274,25 @@ struct copy_counting_permit_t
 {
     int *copies;
     int *calls;
+    const route_boundary_handler_t *handler;
     std::array<std::byte, 1024> storage{};
 
-    copy_counting_permit_t (int &copy_count, int &call_count) :
-        copies (&copy_count), calls (&call_count)
+    copy_counting_permit_t (int &copy_count, int &call_count,
+                            const route_boundary_handler_t &owner) :
+        copies (&copy_count), calls (&call_count), handler (&owner)
     {
     }
     copy_counting_permit_t (const copy_counting_permit_t &other) :
-        copies (other.copies), calls (other.calls)
+        copies (other.copies), calls (other.calls), handler (other.handler)
     {
         ++*copies;
     }
-    void operator() () const { ++*calls; }
+    void operator() () const
+    {
+        ++*calls;
+        EXPECT_EQ (1, *calls);
+        EXPECT_EQ (0, handler->calls);
+    }
 };
 
 TEST (RouteHandlerBoundary, DispatcherBorrowsPermitCallback)
@@ -307,17 +315,15 @@ TEST (RouteHandlerBoundary, DispatcherBorrowsPermitCallback)
             detail::no_route_internal_packet_dispatcher_t internal;
             int copies = 0;
             int calls = 0;
-            int dispatched = 0;
-            std::function<void ()> permit = copy_counting_permit_t (copies, calls);
+            auto observations = std::make_shared<
+              test::telemetry_observations_t<message_flow_event_t>> ();
+            std::function<void ()> permit = copy_counting_permit_t (copies, calls, owner);
             dispatch_options_t options;
             options.message_flow (mode);
             detail::dispatch_options_access_t::set_observer_for_tests (
-              options, [&] (const message_flow_event_t &event) {
-                  if (event.outcome == message_flow_outcome_t::dispatched) {
-                      ++dispatched;
-                      EXPECT_EQ (1, calls);
-                      EXPECT_EQ (0, owner.calls);
-                  }
+              options, [observations] (const message_flow_event_t &event) {
+                  if (event.outcome == message_flow_outcome_t::dispatched)
+                      observations->record (event);
               });
             detail::route_packet_dispatcher_t dispatcher (
               "mesh", provider, serializers, handlers, internal, options, nullptr,
@@ -338,7 +344,9 @@ TEST (RouteHandlerBoundary, DispatcherBorrowsPermitCallback)
             EXPECT_EQ (0, copies);
             EXPECT_EQ (1, calls);
             EXPECT_EQ (1, owner.calls);
-            EXPECT_EQ (mode == message_flow_log_mode_t::off ? 0 : 1, dispatched);
+            test::acknowledge_delivery ();
+            EXPECT_EQ (mode == message_flow_log_mode_t::off ? 0u : 1u,
+                       observations->snapshot ().size ());
         }
     }
 }
@@ -754,9 +762,13 @@ TEST (RoutePayloadOwnership, MeshIngressRepliesToInvalidRequestHeadersForEveryOw
     msg::envelope_codec_t codec;
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
+    auto observations = std::make_shared<
+      test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     std::vector<message_dispatch_error_event_t> errors;
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      options, [&] (const message_dispatch_error_event_t &event) { errors.push_back (event); });
+      options, [observations] (const message_dispatch_error_event_t &event) {
+          observations->record (event);
+      });
     for (auto kind : {host::record_kind_t::spot_request, host::record_kind_t::node_request,
                       host::record_kind_t::channel_request}) {
         SCOPED_TRACE (static_cast<int> (kind));
@@ -806,6 +818,8 @@ TEST (RoutePayloadOwnership, MeshIngressRepliesToInvalidRequestHeadersForEveryOw
             EXPECT_FALSE (rejected);
             EXPECT_EQ (rejected.error_kind (), framework_error_kind_t::protocol_error);
             EXPECT_EQ (replies, previous_replies + 1);
+            test::acknowledge_delivery ();
+            errors = observations->snapshot ();
             ASSERT_EQ (errors.size (), previous_errors + 1);
             EXPECT_EQ (errors.back ().action, dispatch_error_action_t::reply_error);
             EXPECT_EQ (errors.back ().reason, dispatch_error_reason_t::invalid_frame);
@@ -827,6 +841,8 @@ TEST (RoutePayloadOwnership, MeshIngressRepliesToInvalidRequestHeadersForEveryOw
         auto unreadable = std::vector<zlink::message_t>{zlink::message_t::from ("invalid header")};
         EXPECT_FALSE (runtime::decode_mesh_record_header (record, unreadable, true, options));
         EXPECT_EQ (replies, previous_replies);
+        test::acknowledge_delivery ();
+        errors = observations->snapshot ();
         ASSERT_EQ (errors.size (), previous_errors + 1);
         EXPECT_EQ (errors.back ().action, dispatch_error_action_t::drop);
         EXPECT_FALSE (errors.back ().correlation_id);
@@ -839,9 +855,13 @@ TEST (RoutePayloadOwnership, MeshIngressDropsInvalidSendsAndReportsOnceForEveryO
     namespace msg = runtime::messaging;
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
+    auto observations = std::make_shared<
+      test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     std::vector<message_dispatch_error_event_t> errors;
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      options, [&] (const message_dispatch_error_event_t &event) { errors.push_back (event); });
+      options, [observations] (const message_dispatch_error_event_t &event) {
+          observations->record (event);
+      });
     for (auto kind : {host::record_kind_t::actor_send, host::record_kind_t::spot_send,
                       host::record_kind_t::node_send, host::record_kind_t::channel_send}) {
         SCOPED_TRACE (static_cast<int> (kind));
@@ -859,6 +879,8 @@ TEST (RoutePayloadOwnership, MeshIngressDropsInvalidSendsAndReportsOnceForEveryO
         EXPECT_FALSE (decoded);
         EXPECT_EQ (decoded.error_kind (), framework_error_kind_t::protocol_error);
         EXPECT_EQ (replies, 0);
+        test::acknowledge_delivery ();
+        errors = observations->snapshot ();
         ASSERT_EQ (errors.size (), previous_errors + 1);
         EXPECT_EQ (errors.back ().reason, dispatch_error_reason_t::invalid_frame);
         EXPECT_EQ (errors.back ().action, dispatch_error_action_t::drop);
@@ -946,15 +968,21 @@ TEST (RoutePayloadOwnership, MalformedReplyRouteMatchesSharedFourLanguageContrac
             }
             dispatch_options_t options;
             options.message_flow (message_flow_log_mode_t::normal);
+            auto observations = std::make_shared<
+              test::telemetry_observations_t<message_dispatch_error_event_t>> ();
             std::vector<message_dispatch_error_event_t> errors;
             detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
               options,
-              [&] (const message_dispatch_error_event_t &event) { errors.push_back (event); });
+              [observations] (const message_dispatch_error_event_t &event) {
+                  observations->record (event);
+              });
             auto parts = std::vector<zlink::message_t>{zlink::message_t::from (json),
                                                        zlink::message_t::from ("request")};
             auto result = runtime::decode_mesh_record_header (record, parts, false, options);
             EXPECT_FALSE (result);
             EXPECT_EQ (replies, action == "reply_error" ? 1 : 0);
+            test::acknowledge_delivery ();
+            errors = observations->snapshot ();
             ASSERT_EQ (errors.size (), 1u);
             EXPECT_EQ (errors[0].reason, dispatch_error_reason_t::invalid_frame);
             EXPECT_EQ (errors[0].action, action == "reply_error"

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/telemetry_observation.hpp"
 #include <zlink/json.hpp>
 #include "../support/stateful_object_sync.hpp"
 #include "../support/manual_internal_scheduler.hpp"
@@ -3298,11 +3299,13 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
     for (const auto mode :
          {fw::message_flow_log_mode_t::off, fw::message_flow_log_mode_t::normal}) {
         SCOPED_TRACE (mode == fw::message_flow_log_mode_t::off ? "off" : "normal");
+        auto observations = std::make_shared<
+          fw::test::telemetry_observations_t<fw::message_flow_event_t>> ();
         std::vector<fw::message_flow_event_t> events;
         fw::dispatch_options_t dispatch;
         dispatch.message_flow (mode);
         fw::detail::dispatch_options_access_t::set_observer_for_tests (
-          dispatch, [&] (const auto &event) { events.push_back (event); });
+          dispatch, [observations] (const auto &event) { observations->record (event); });
         native_intake_fixture_t fixture (std::move (dispatch));
         auto host = fixture.host;
         const st::object_ref_t object{st::object_kind_t::actor,
@@ -3341,10 +3344,14 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
         EXPECT_NE (ingest (rt::mesh::service_mailbox_slot_t{claim, 0}, object),
                    st::stateful_error_t::none);
         EXPECT_EQ (releases (), 1u);
+        fw::test::acknowledge_delivery ();
+        events = observations->snapshot ();
         EXPECT_TRUE (events.empty ());
         EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 0u);
         EXPECT_EQ (ingest (rt::mesh::service_mailbox_slot_t{claim, 1}, object),
                    st::stateful_error_t::none);
+        fw::test::acknowledge_delivery ();
+        events = observations->snapshot ();
         EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 1u : 0u);
         if (!events.empty ()) {
             EXPECT_EQ (events.front ().outcome, fw::message_flow_outcome_t::admitted);
@@ -3359,6 +3366,8 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
         EXPECT_EQ (ingest (rt::mesh::service_mailbox_slot_t{claim, 2}, stale_object),
                    st::stateful_error_t::generation_stale);
         EXPECT_EQ (releases (), 2u);
+        fw::test::acknowledge_delivery ();
+        events = observations->snapshot ();
         EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 1u : 0u);
         EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 1u);
         auto [error, delivery] = raw.try_claim (object);
@@ -3382,6 +3391,8 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
             EXPECT_EQ (following->frozen.operation.low, 4u);
             EXPECT_EQ (raw.complete (*following), st::stateful_error_t::none);
         }
+        fw::test::acknowledge_delivery ();
+        events = observations->snapshot ();
         EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 2u : 0u);
         EXPECT_EQ (raw.discard_pending (object), st::stateful_error_t::none);
         EXPECT_EQ (releases (), 4u);
@@ -7557,6 +7568,8 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
       [&, node] (void *, void *, fw::service_provider_t &, fw::serializer_registry_t &,
                  const zlink::message_t &,
                  const fw::spot_inbound_message_t &metadata) -> fw::task_t<zlink::message_t> {
+          if (auto turn = detail::capture_current_serial_turn ())
+              replay_turns.push_back (std::move (turn));
           if (multiple_packets && metadata.values.contains ("second")) {
               order.push_back ("second");
               co_return zlink::message_t{};
@@ -7596,14 +7609,10 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
           co_return zlink::message_t{};
       });
     node->dispatch.message_flow (fw::message_flow_log_mode_t::detailed);
-    const auto observe_flow = [&] (const fw::message_flow_event_t &event) {
+    const auto observe_flow = [] (const fw::message_flow_event_t &event) {
         std::fprintf (
           stderr, "FLOW packet=%s stage=%s result=%s\n", event.packet_name.value_or ("").c_str (),
           event.detail_stage.value_or ("").c_str (), event.detail_result.value_or ("").c_str ());
-        if (event.packet_name == packet_name && event.detail_stage == "invoke_erased.post_serial") {
-            if (auto turn = detail::capture_current_serial_turn ())
-                replay_turns.push_back (std::move (turn));
-        }
     };
     if (!rejected_deferred)
         detail::dispatch_options_access_t::set_observer_for_tests (node->dispatch, observe_flow);

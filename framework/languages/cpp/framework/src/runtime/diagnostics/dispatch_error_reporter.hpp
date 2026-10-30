@@ -45,11 +45,6 @@ class dispatch_error_reporter_t
             && !dispatch_options_access_t::has_dispatch_error_observer (*_options))
             return;
         reported_count ().fetch_add (1, std::memory_order_relaxed);
-        if (event.exception) {
-            auto error = diagnostic_event_sink_t::exception_summary (event.exception);
-            event.error_type = std::move (error.type);
-            event.error_message = std::move (error.message);
-        }
         if (runtime::flow_context_t::tracing (effective_mode)) {
             if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
                 event.flow_id.reset ();
@@ -67,14 +62,7 @@ class dispatch_error_reporter_t
             event.flow_id.reset ();
             event.flow_origin.reset ();
         }
-        if (dispatch_options_access_t::logger (*_options))
-            log_default (event);
-        try {
-            dispatch_options_access_t::observe_dispatch_error (*_options, event);
-        }
-        catch (...) {
-            message_flow_tracer_t::record_observer_failure ();
-        }
+        dispatch_options_access_t::submit (*_options, std::move (event), effective_mode);
     }
 
     template <typename Fn> void report_lazy (Fn &&build_event) const noexcept
@@ -127,88 +115,9 @@ class dispatch_error_reporter_t
     }
 
   private:
-    void log_default (const message_dispatch_error_event_t &event) const noexcept
-    {
-        try {
-            std::vector<log_field_t> fields;
-            fields.reserve (11);
-            auto add = [&fields] (const char *key, std::string value) {
-                diagnostic_event_sink_t::append_field (fields, key, std::move (value));
-            };
-            add (dispatch_event_field::event_id, "zlink.dispatch_error");
-            add (dispatch_event_field::outcome, "failed");
-            add (dispatch_event_field::surface, std::string (enum_name (event.surface)));
-            add (dispatch_event_field::kind, std::string (enum_name (event.message_kind)));
-            add (dispatch_event_field::reason, std::string (enum_name (event.reason)));
-            add (dispatch_event_field::action, std::string (enum_name (event.action)));
-            if (event.packet_name) {
-                add (dispatch_event_field::packet, *event.packet_name);
-            }
-            if (event.channel_name) {
-                add (dispatch_event_field::channel, *event.channel_name);
-            }
-            if (event.channel_route_kind) {
-                add (dispatch_event_field::channel_route, *event.channel_route_kind);
-            } else if (const auto route_name = default_channel_route_name (event.surface)) {
-                add (dispatch_event_field::channel_route, std::string (*route_name));
-            }
-            if (event.mesh_name) {
-                add (dispatch_event_field::mesh, *event.mesh_name);
-            }
-            if (event.topic) {
-                add (dispatch_event_field::topic, *event.topic);
-            }
-            if (event.correlation_id) {
-                add (dispatch_event_field::corr, *event.correlation_id);
-            }
-            if (event.flow_id) {
-                add (dispatch_event_field::flow, *event.flow_id);
-            }
-            if (event.flow_origin) {
-                add (dispatch_event_field::origin, std::string (enum_name (*event.flow_origin)));
-            }
-            if (event.source_rid) {
-                add (dispatch_event_field::source_rid, *event.source_rid);
-            }
-            if (event.target_rid) {
-                add (dispatch_event_field::target_rid, *event.target_rid);
-            }
-            if (event.server_rid) {
-                add (dispatch_event_field::server_rid, *event.server_rid);
-            }
-            if (event.spot_id) {
-                add (dispatch_event_field::spot, *event.spot_id);
-            }
-            if (event.actor_id) {
-                add (dispatch_event_field::actor, *event.actor_id);
-            }
-            if (event.instance_spot_type) {
-                add (dispatch_event_field::instance_type, *event.instance_spot_type);
-            }
-            if (event.activation_state) {
-                add (dispatch_event_field::activation_state, *event.activation_state);
-            }
-            if (event.error_type) {
-                add (dispatch_event_field::error_type, *event.error_type);
-            }
-            if (event.error_message) {
-                add (dispatch_event_field::error_message, *event.error_message);
-            }
-            // Structured fields through the configured framework logger.
-            if (!diagnostic_event_sink_t::log_if_configured (
-                  dispatch_options_access_t::logger (*_options), default_log_level (event),
-                  "dispatch error", std::move (fields)))
-                message_flow_tracer_t::record_observer_failure ();
-        }
-        catch (...) {
-            message_flow_tracer_t::record_observer_failure ();
-        }
-    }
-
     static std::atomic<std::uint64_t> &reported_count () noexcept
     {
-        static std::atomic<std::uint64_t> value{0};
-        return value;
+        return telemetry_reported_count ();
     }
 
     const dispatch_options_t *_options;

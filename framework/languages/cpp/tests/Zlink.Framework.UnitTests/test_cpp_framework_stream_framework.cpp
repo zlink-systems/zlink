@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/telemetry_observation.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/runtime_metric_contract.hpp"
 
@@ -1050,23 +1051,18 @@ int core_connected_rejection_cleanup (
         registration->core_context = detail::zlink_builder_access_t::shared_core_context (builder);
     }
 
-    std::promise<void> rejection_source;
-    auto rejected = rejection_source.get_future ();
+    auto rejection_source = std::make_shared<std::promise<void>> ();
+    auto rejected = rejection_source->get_future ();
     dispatch_options_t dispatch;
     dispatch.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      dispatch, [&] (const message_dispatch_error_event_t &event) {
-          if (event.surface != dispatch_error_surface_t::stream_session
-              || event.message_kind != dispatch_message_kind_t::control || !event.exception)
-              return;
-          try {
-              std::rethrow_exception (event.exception);
-          }
-          catch (const framework_exception_t &error) {
-              if (error.kind () == framework_error_kind_t::shutting_down
-                  && std::string_view (error.what ()) == "stream dispatch executor is not running")
-                  rejection_source.set_value ();
-          }
+      dispatch, [rejection_source] (const message_dispatch_error_event_t &event) {
+          if (event.surface == dispatch_error_surface_t::stream_session
+              && event.message_kind == dispatch_message_kind_t::control
+              && !event.exception
+              && event.error_type == typeid (framework_exception_t).name ()
+              && event.error_message == "stream dispatch executor is not running")
+              rejection_source->set_value ();
       });
     detail::apply_dispatch_options (builder, dispatch);
 
@@ -1226,15 +1222,15 @@ int descriptor_unavailable_replacement_records_drop ()
       .bind (loopback_tcp_any_port)
       .register_session ("drop-session");
     options.apply ();
-    std::atomic_int drops{0};
+    auto drops = std::make_shared<std::atomic_int> (0);
     dispatch_options_t dispatch;
     dispatch.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_observer_for_tests (
-      dispatch, [&] (const message_flow_event_t &event) {
+      dispatch, [drops] (const message_flow_event_t &event) {
           if (event.packet_name == std::optional<std::string> ("boundSessionReplaced")
               && event.outcome == message_flow_outcome_t::dropped
               && event.reason == message_flow_reason_t::location_unavailable)
-              ++drops;
+              ++*drops;
       });
     detail::apply_dispatch_options (builder, dispatch);
     for (const auto &registration : detail::mesh_node_runtime_t::registrations (builder))
@@ -1265,7 +1261,8 @@ int descriptor_unavailable_replacement_records_drop ()
         if (provider.get_required<detail::actor_gateway_runtime_t> ()
               .dispatch_bound_session_replaced (notice))
             result = 2;
-        if (drops != 1)
+        test::acknowledge_delivery ();
+        if (*drops != 1)
             result = 3;
     }
     close_native_client (client);
@@ -2186,6 +2183,7 @@ int main (int argc, char **argv)
                                   zlink::message_t::from (std::string ("payload")))) {
         return 8;
     }
+    zlink::framework::test::acknowledge_delivery ();
     if (!flow_state->saw_stream_session_flow.load (std::memory_order_acquire))
         return 229;
     // Spec 26 §2.1: the typed handler start of a STREAM packet records `dispatched` once, after `received`.
@@ -2312,8 +2310,10 @@ int main (int argc, char **argv)
       stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none, std::nullopt,
       "move", {});
     stale_send_header.with_actor_slot (2);
-    if (!runtime.dispatch_packet (actor_session, actor_stream, stale_send_header,
-                                  zlink::message_t::from (std::string ("stale-send")))
+    const auto stale_send_result = runtime.dispatch_packet (actor_session, actor_stream, stale_send_header,
+                                  zlink::message_t::from (std::string ("stale-send")));
+    zlink::framework::test::acknowledge_delivery ();
+    if (!stale_send_result
         || actor_session.events.size () != 1 || flow_state->none_of ([] (const auto &event) {
                return event.outcome == zlink::framework::message_flow_outcome_t::dropped
                       && event.message_kind == zlink::framework::dispatch_message_kind_t::send
@@ -2963,20 +2963,19 @@ int main (int argc, char **argv)
     transport_stream_options.bind (loopback_tcp_any_port).register_session ("transport-session");
     transport_options.apply ();
     zlink::framework::detail::bind_stream_serializers (transport_zlink, transport_serializers);
-    std::mutex stale_diagnostics_mutex;
-    std::vector<zlink::framework::message_dispatch_error_event_t> stale_dispatch_errors;
-    std::vector<zlink::framework::message_flow_event_t> stale_flow_events;
+    const auto stale_errors = std::make_shared<zlink::framework::test::telemetry_observations_t<
+      zlink::framework::message_dispatch_error_event_t>> ();
+    const auto stale_flows = std::make_shared<zlink::framework::test::telemetry_observations_t<
+      zlink::framework::message_flow_event_t>> ();
     zlink::framework::dispatch_options_t transport_dispatch_options;
     transport_dispatch_options.message_flow (zlink::framework::message_flow_log_mode_t::errors);
     zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      transport_dispatch_options, [&] (const auto &event) {
-          const std::lock_guard lock (stale_diagnostics_mutex);
-          stale_dispatch_errors.push_back (event);
+      transport_dispatch_options, [stale_errors] (const auto &event) {
+          stale_errors->record (event);
       });
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-      transport_dispatch_options, [&] (const auto &event) {
-          const std::lock_guard lock (stale_diagnostics_mutex);
-          stale_flow_events.push_back (event);
+      transport_dispatch_options, [stale_flows] (const auto &event) {
+          stale_flows->record (event);
       });
     zlink::framework::detail::apply_dispatch_options (transport_zlink, transport_dispatch_options);
     auto transport_provider = transport_services.build_provider ();
@@ -3198,9 +3197,11 @@ int main (int argc, char **argv)
         transport_host.stop ();
         return 328;
     }
+    zlink::framework::test::acknowledge_delivery ();
+    const auto stale_dispatch_errors = stale_errors->snapshot ();
+    const auto stale_flow_events = stale_flows->snapshot ();
     bool stale_diagnostics_recorded = false;
     {
-        const std::lock_guard lock (stale_diagnostics_mutex);
         stale_diagnostics_recorded =
           std::any_of (
             stale_dispatch_errors.begin (), stale_dispatch_errors.end (),

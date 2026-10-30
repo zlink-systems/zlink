@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/telemetry_observation.hpp"
 #include "../support/committed_authority_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/runtime_metric_contract.hpp"
@@ -1182,13 +1183,20 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
         detail::spot_node_runtime_t spot_runtime (node);
         if (decline_source) {
             constexpr auto transfer_id = "entry-return-declined-leave";
+            auto leave_logs = std::make_shared<zlink::framework::test::telemetry_observations_t<zlink::framework::log_record_t>> ();
+            zlink::framework::logging_builder_t logging;
+            logging.use_provider ("declined-leave", [leave_logs] (const auto &record) { leave_logs->record (record); });
+            detail::dispatch_options_access_t::set_logger (node->dispatch, logging.create_logger ("declined-leave"));
             node->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
             detail::dispatch_options_access_t::set_observer_for_tests (
               node->dispatch, [diagnostics, cleanup_before_cancel,
                                transfer_id] (const zlink::framework::message_flow_event_t &event) {
                   if (event.packet_name == "spot_actor_leave"
                       && event.result == zlink::framework::message_flow_result_t::failed
-                      && event.exception) {
+                      && event.outcome == zlink::framework::message_flow_outcome_t::completed
+                      && event.surface == zlink::framework::dispatch_error_surface_t::spot_actor
+                      && event.message_kind == zlink::framework::dispatch_message_kind_t::control
+                      && !event.reason && !event.exception) {
                       ++diagnostics->failed;
                       if (!(event.correlation_id == transfer_id))
                           ++diagnostics->wrong_correlation;
@@ -1271,6 +1279,21 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
                             ? "source leave canceled before activation must finish retirement"
                             : "source leave declined before activation must finish retirement");
             spot_runtime.cleanup_expired_actor_admissions_at (cleanup_boundary);
+            zlink::framework::test::acknowledge_delivery ();
+            const auto leave_records = leave_logs->snapshot ();
+            test.require (std::count_if (leave_records.begin (), leave_records.end (), [transfer_id] (const auto &record) {
+                const auto has = [&] (std::string_view key, std::string_view value) {
+                    return std::any_of (record.fields.begin (), record.fields.end (), [&] (const auto &field) {
+                        return field.key == key && field.value == value;
+                    });
+                };
+                return has (detail::dispatch_event_field::packet, "spot_actor_leave")
+                  && has (detail::dispatch_event_field::corr, transfer_id)
+                  && has (detail::dispatch_event_field::error_type, typeid (zlink::framework::framework_exception_t).name ())
+                  && std::any_of (record.fields.begin (), record.fields.end (), [] (const auto &field) {
+                      return field.key == detail::dispatch_event_field::error_message && !field.value.empty ();
+                  });
+            }) == 1, "declined Leave must report its owned error summary once");
             test.require (diagnostics->wrong_correlation == 0,
                           "source leave failure must retain its transfer correlation");
             test.require (diagnostics->borrowed_context == 0,
@@ -1284,6 +1307,7 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
                                                     source->object_generation, target_id,
                                                     target_fence);
             spot_runtime.cleanup_expired_actor_admissions_at (cleanup_boundary);
+            zlink::framework::test::acknowledge_delivery ();
             test.require (leave_callbacks.load (std::memory_order_acquire) == 0
                             && diagnostics->failed == 1,
                           "terminal source leave failure must not rerun callback or diagnostics");
@@ -5908,7 +5932,8 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     namespace host = zlink::framework::runtime::host;
 
     const auto core_context = std::make_shared<zlink::context_t> ();
-    std::vector<framework::message_flow_event_t> resolver_failures;
+    auto resolver_observations = std::make_shared<framework::test::telemetry_observations_t<framework::message_flow_event_t>> ();
+    auto resolver_logs = std::make_shared<framework::test::telemetry_observations_t<framework::log_record_t>> ();
     const auto make_state = [core_context] (const std::string &rid) {
         auto state = zlink::framework::test::runtime_failure_fixture<
           zlink::framework::detail::mesh_node_builder_state_t> ("production-relocation-mesh");
@@ -5921,12 +5946,18 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<memory_authority_store_t> ();
     auto source_state = make_state ("production-source");
-    source_state->spot_state->dispatch.message_flow (framework::message_flow_log_mode_t::errors);
+    source_state->spot_state->dispatch.message_flow (framework::message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_observer_for_tests (
-      source_state->spot_state->dispatch, [&resolver_failures] (const auto &event) {
+      source_state->spot_state->dispatch, [resolver_observations] (const auto &event) {
           if (event.surface == framework::dispatch_error_surface_t::actor_relocation)
-              resolver_failures.push_back (event);
+              resolver_observations->record (event);
       });
+    framework::logging_builder_t resolver_logging;
+    resolver_logging.use_provider ("resolver-cause", [resolver_logs] (const framework::log_record_t &record) {
+        resolver_logs->record (record);
+    });
+    detail::dispatch_options_access_t::set_logger (source_state->spot_state->dispatch,
+      resolver_logging.create_logger ("resolver-cause"));
     std::mutex delay_mutex;
     detail::delay_owner_t delays (delay_mutex);
     detail::mesh_node_runtime_t source (source_state);
@@ -6247,7 +6278,7 @@ void test_application_relocation_remote_production_path (test_context_t &test,
         framework::runtime::install_host_context_hooks ();
         framework::runtime::flow_context_t::scope_t flow (
           framework::runtime::flow_value_t{flow_id, framework::flow_origin_t::application,
-                                           framework::message_flow_log_mode_t::errors});
+                                           framework::message_flow_log_mode_t::normal});
         auto relocation = source.relocate_application_actor (actor, target_descriptor, snapshot,
                                                              operation_deadline);
         relocation_submitted.set_value (!relocation.await_ready ());
@@ -6317,6 +6348,8 @@ void test_application_relocation_remote_production_path (test_context_t &test,
         session_owner_dispatch.join ();
         test.require (result.terminal != relocation_terminal_t::completed,
                       "Session owner lookup failure must reject relocation");
+        framework::test::acknowledge_delivery ();
+        const auto resolver_failures = resolver_observations->snapshot ();
         test.require (resolver_failures.size () == 1,
                       "Session owner lookup failure must report one relocation terminal");
         if (resolver_failures.size () == 1) {
@@ -6331,22 +6364,19 @@ void test_application_relocation_remote_production_path (test_context_t &test,
                 && event.mesh_name == "production-relocation-mesh" && event.flow_id == flow_id
                 && event.flow_origin == framework::flow_origin_t::application,
               "Session owner lookup failure must retain the Actor identity and ambient flow");
-            bool actual_exception = false;
-            if (event.exception) {
-                try {
-                    std::rethrow_exception (event.exception);
-                }
-                catch (const std::runtime_error &error) {
-                    actual_exception = typeid (error) == typeid (std::runtime_error)
-                                       && std::string_view (error.what ())
-                                            == "production Session owner lookup failed";
-                }
-                catch (...) {
-                }
-            }
-            test.require (actual_exception,
-                          "Session owner lookup failure must retain the actual exception type and "
-                          "message");
+            const auto records = resolver_logs->snapshot ();
+            const bool owned_cause = std::any_of (records.begin (), records.end (), [&] (const auto &record) {
+                const auto has = [&] (std::string_view key, std::string_view value) {
+                    return std::any_of (record.fields.begin (), record.fields.end (), [&] (const auto &field) {
+                        return field.key == key && field.value == value;
+                    });
+                };
+                return has (detail::dispatch_event_field::actor, "production-remote-actor") && has (detail::dispatch_event_field::flow, flow_id)
+                  && has (detail::dispatch_event_field::error_type, typeid (std::runtime_error).name ())
+                  && has (detail::dispatch_event_field::error_message, "production Session owner lookup failed");
+            });
+            test.require (!event.exception && owned_cause,
+                          "Session owner lookup failure must report the owned error type and message");
         }
         source.stop ();
         target.stop ();
@@ -7461,12 +7491,20 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
     test.require (state != nullptr, "return relocation fixture must retain its runtime state");
     if (!state)
         return;
+    auto leave_logs = std::make_shared<zlink::framework::test::telemetry_observations_t<zlink::framework::log_record_t>> ();
+    zlink::framework::logging_builder_t logging;
+    logging.use_provider ("return-leave", [leave_logs] (const auto &record) { leave_logs->record (record); });
+    zlink::framework::detail::dispatch_options_access_t::set_logger (state->dispatch, logging.create_logger ("return-leave"));
     state->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
       state->dispatch,
       [failed_leave_diagnostics] (const zlink::framework::message_flow_event_t &event) {
           if (event.packet_name == "spot_actor_leave"
-              && event.result == zlink::framework::message_flow_result_t::failed && event.exception)
+              && event.outcome == zlink::framework::message_flow_outcome_t::completed
+              && event.surface == zlink::framework::dispatch_error_surface_t::spot_actor
+              && event.message_kind == zlink::framework::dispatch_message_kind_t::control
+              && event.result == zlink::framework::message_flow_result_t::failed
+              && !event.reason && !event.exception)
               ++*failed_leave_diagnostics;
       });
     auto authority = std::make_shared<memory_authority_store_t> ();
@@ -7593,6 +7631,18 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
                     && cleanup->leave_submitted && cleanup->leave_completed,
                   "a newer exact-fenced return must retire the old source lifecycle, "
                   "suppress its late leave, and install a fresh local Actor");
+    zlink::framework::test::acknowledge_delivery ();
+    const auto leave_records = leave_logs->snapshot ();
+    test.require (std::count_if (leave_records.begin (), leave_records.end (), [] (const auto &record) {
+        const auto has = [&] (std::string_view key, std::string_view value) {
+            return std::any_of (record.fields.begin (), record.fields.end (), [&] (const auto &field) {
+                return field.key == key && field.value == value;
+            });
+        };
+        return has (zlink::framework::detail::dispatch_event_field::packet, "spot_actor_leave")
+          && has (zlink::framework::detail::dispatch_event_field::error_type, typeid (std::runtime_error).name ())
+          && has (zlink::framework::detail::dispatch_event_field::error_message, "source leave failed");
+    }) == (source_leave_fails ? 1 : 0), "return Leave must retain the exact owned failure summary");
     test.require (
       *failed_leave_diagnostics == (source_leave_fails ? 1 : 0),
       "source OnLeave failure must be diagnosed once while return restores a fresh Actor");
@@ -7601,6 +7651,7 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
     if (cleanup == state->pending_remote_source_cleanups.end ())
         return;
     runtime.cleanup_expired_actor_admissions_at (cleanup->not_before);
+    zlink::framework::test::acknowledge_delivery ();
     test.require (entry_relocation_test_entry_spot_t::leave_count == 1
                     && *failed_leave_diagnostics == (source_leave_fails ? 1 : 0)
                     && state->actor_instances.contains (key)
@@ -8673,6 +8724,16 @@ int main (int argc, char **argv)
         }
     } executor_shutdown;
     test_context_t test;
+    if (argc == 2 && std::string_view (argv[1]) == "--telemetry-consumers") {
+        test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callbacks (
+          test, std::make_shared<memory_authority_store_t> ());
+        test_application_relocation_remote_production_path (test, true);
+        test_return_actor_relocation_replaces_departed_spot_instance (test);
+        test_return_actor_relocation_replaces_departed_spot_instance (test, true);
+        test_return_actor_relocation_replaces_departed_spot_instance (test, false, true);
+        std::cerr << "Telemetry consumers helpers=5 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--target-cutover") {
         test_relocation_target_cutover_and_authority_settlement (test);
         std::cerr << "target-cutover failures=" << test.failures << '\n';

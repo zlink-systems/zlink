@@ -189,6 +189,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/execution/state_lane.cpp
   framework/src/runtime/messaging/call_facade_runtime.cpp
   framework/src/runtime/messaging/logical_multicast_runtime.cpp
+  framework/src/runtime/diagnostics/process_telemetry_delivery.cpp
   framework/src/runtime/diagnostics/runtime_observation.cpp
   framework/src/runtime/diagnostics/logging.cpp
   framework/src/runtime/diagnostics/monitoring_runtime.cpp
@@ -2696,6 +2697,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_message_flow
     tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp
     "framework-unit;framework-regression;framework-observability;diagnostics")
+  target_link_libraries(test_cpp_framework_message_flow PRIVATE opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_message_flow PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(

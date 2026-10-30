@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/telemetry_observation.hpp"
+
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/allocation_counter.hpp"
 
@@ -2730,14 +2732,14 @@ void verify_raw_owner_node_send_and_liveness (
   bool framework_multipart = false)
 {
     namespace fw = zlink::framework;
-    std::mutex observations_mutex;
-    std::vector<std::map<std::string, std::string>> observations;
+    auto observations = std::make_shared<fw::test::telemetry_observations_t<
+      std::map<std::string, std::string>>> ();
     fw::logging_builder_t logging;
-    logging.use_provider ("owner-rejection-test", [&] (const fw::log_record_t &record) {
-        std::lock_guard lock (observations_mutex);
-        auto &fields = observations.emplace_back ();
+    logging.use_provider ("owner-rejection-test", [observations] (const fw::log_record_t &record) {
+        std::map<std::string, std::string> fields;
         for (const auto &field : record.fields)
             fields.emplace (field.key, field.value);
+        observations->record (fields);
     });
     auto monitoring = zlink::framework::test::runtime_failure_monitoring ();
     monitoring->diagnostics_logger = logging.create_logger ("owner-rejection-test");
@@ -2925,13 +2927,14 @@ void verify_raw_owner_node_send_and_liveness (
     // it does emit must stay zero across both collections.
     for (int scrape = 0; scrape < 2; ++scrape) {
         auto collected = metric_provider.collect_fields ();
-        std::lock_guard lock (observations_mutex);
-        observations.insert (observations.end (), collected.begin (), collected.end ());
+        for (const auto &fields : collected)
+            observations->record (fields);
     }
+    fw::test::acknowledge_delivery (deadline);
     {
-        std::lock_guard lock (observations_mutex);
+        const auto snapshot = observations->snapshot ();
         std::size_t flows = 0, errors = 0;
-        for (const auto &fields : observations) {
+        for (const auto &fields : snapshot) {
             const auto get = [&] (const char *key) -> std::string {
                 const auto found = fields.find (key);
                 return found == fields.end () ? "" : found->second;

@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/telemetry_observation.hpp"
+
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/foundation/operation_registry.hpp"
@@ -659,11 +661,12 @@ class ChannelMessageFlow : public ::testing::TestWithParam<bool>
 TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
 {
     using namespace zlink::framework;
-    std::vector<message_flow_event_t> events;
+    auto observations =
+      std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_observer_for_tests (
-      options, [&] (const auto &event) { events.push_back (event); });
+      options, [observations] (const auto &event) { observations->record (event); });
     auto context = std::make_shared<zlink::context_t> ();
     mesh::service_node_descriptor_t target_descriptor{"channel-flow",
                                                       bytes ("flow-target"),
@@ -709,7 +712,8 @@ TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
       "X", provider, serializers, handlers, no_internal, options, &filters,
       handler_dispatch_kind_t::channel_send, handler_dispatch_kind_t::channel_request);
     const bool request = GetParam ();
-    events.clear ();
+    test::acknowledge_delivery ();
+    observations->clear ();
     runtime::messaging::envelope_header_t outbound;
     outbound.kind = request ? runtime::messaging::message_kind_t::request
                             : runtime::messaging::message_kind_t::command;
@@ -749,6 +753,8 @@ TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
       {zlink::routing_id_t::from ("flow-source"), received.correlation, std::move (encoded), {}},
       std::move (header));
     ASSERT_TRUE (result);
+    test::acknowledge_delivery ();
+    const auto events = observations->snapshot ();
     ASSERT_EQ (4u, events.size ());
     EXPECT_EQ (message_flow_outcome_t::received, events[0].outcome);
     EXPECT_EQ (message_flow_outcome_t::admitted, events[1].outcome);

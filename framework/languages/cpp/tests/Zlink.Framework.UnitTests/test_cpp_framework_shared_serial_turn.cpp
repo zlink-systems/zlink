@@ -387,6 +387,7 @@ TEST (ZLinkFrameworkSharedSerialTurn, DiscardWithoutPreparationReleasesContext)
 }
 
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "../support/telemetry_observation.hpp"
 
 namespace
 {
@@ -427,42 +428,12 @@ void verify_accepted_activation_shutdown ()
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     bool retained = false;
     node->dispatch.message_flow (message_flow_log_mode_t::normal);
+    auto observations = std::make_shared<
+      test::telemetry_observations_t<message_flow_event_t>> ();
     detail::dispatch_options_access_t::set_observer_for_tests (
-      node->dispatch, [&] (const message_flow_event_t &event) {
-          if (event.outcome != message_flow_outcome_t::received)
-              return;
-          if (!state->admit (true))
-              std::_Exit (3);
-          serial_work_options_t options;
-          options.completion = [state, &handler_terminals,
-                                &handler_succeeded] (result_t<void> terminal) {
-              if (!terminal) {
-                  ++handler_terminals;
-                  handler_succeeded = false;
-                  state->leave_callback ();
-              }
-          };
-          if (!state->try_post_serial_async (
-                "accepted-handler",
-                [&] (auto resume) {
-                    handler_invoked = true;
-                    resume ([state, &handler_terminals, &handler_succeeded] {
-                        ++handler_terminals;
-                        handler_succeeded = true;
-                        state->leave_callback ();
-                    });
-                },
-                std::move (options)))
-              std::_Exit (4);
-          stopped = std::async (std::launch::async,
-                                [&] { detail::drain_spot_node_executors (*node, deadline); });
-          const bool drained_early =
-            stopped.wait_for (std::chrono::milliseconds (100)) == std::future_status::ready;
-          retained =
-            !drained_early && worker->try_submit_internal ([] {}) && handler_terminals == 0;
-          release_worker.set_value ();
-          std::cerr << "accepted_activation drained_early=" << drained_early
-                    << " retained=" << retained << std::endl;
+      node->dispatch, [observations] (const message_flow_event_t &event) {
+          if (event.outcome == message_flow_outcome_t::received)
+              observations->record (event);
       });
     service_provider_t services;
     serializer_registry_t serializers;
@@ -478,6 +449,42 @@ void verify_accepted_activation_shutdown ()
     const bool rejected = !result && result.error_kind () == framework_error_kind_t::not_found;
     if (!accepted_terminal)
         std::_Exit (2);
+    test::acknowledge_delivery (deadline);
+    if (observations->snapshot ().size () != 1)
+        std::_Exit (5);
+    // The accepted activation remains owned until its explicit terminal below.
+    if (!state->admit (true))
+        std::_Exit (3);
+    serial_work_options_t options;
+    options.completion = [state, &handler_terminals,
+                          &handler_succeeded] (result_t<void> terminal) {
+        if (!terminal) {
+            ++handler_terminals;
+            handler_succeeded = false;
+            state->leave_callback ();
+        }
+    };
+    if (!state->try_post_serial_async (
+          "accepted-handler",
+          [&] (auto resume) {
+              handler_invoked = true;
+              resume ([state, &handler_terminals, &handler_succeeded] {
+                  ++handler_terminals;
+                  handler_succeeded = true;
+                  state->leave_callback ();
+              });
+          },
+          std::move (options)))
+        std::_Exit (4);
+    stopped = std::async (std::launch::async,
+                          [&] { detail::drain_spot_node_executors (*node, deadline); });
+    const bool drained_early =
+      stopped.wait_for (std::chrono::milliseconds (100)) == std::future_status::ready;
+    retained =
+      !drained_early && worker->try_submit_internal ([] {}) && handler_terminals == 0;
+    release_worker.set_value ();
+    std::cerr << "accepted_activation drained_early=" << drained_early
+              << " retained=" << retained << std::endl;
     accepted_terminal ();
     const bool drained = stopped.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool released =

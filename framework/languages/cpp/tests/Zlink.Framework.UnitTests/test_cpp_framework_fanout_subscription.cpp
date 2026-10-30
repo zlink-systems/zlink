@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/telemetry_observation.hpp"
 
 #include <zlink/framework.hpp>
 #include <zlink.hpp>
@@ -69,6 +70,12 @@ struct gate_state_t
     std::atomic_int scopes_live{0};
     std::atomic_int failures{0};
     bool fail_first = false;
+    std::atomic_bool hold_destructor{false};
+    std::promise<void> destructor_entered;
+    std::promise<void> destructor_release;
+    std::shared_future<void> destructor_released = destructor_release.get_future ().share ();
+    std::chrono::steady_clock::time_point destructor_deadline;
+    std::atomic_bool destructor_timed_out{false};
 };
 
 std::shared_ptr<gate_state_t> gate_state;
@@ -83,6 +90,12 @@ struct gate_scope_t
     }
     ~gate_scope_t ()
     {
+        if (state->hold_destructor.load (std::memory_order_acquire)) {
+            state->destructor_entered.set_value ();
+            state->destructor_timed_out =
+              state->destructor_released.wait_until (state->destructor_deadline)
+              != std::future_status::ready;
+        }
         ++state->scopes_destroyed;
         --state->scopes_live;
     }
@@ -569,10 +582,39 @@ TEST (CppFrameworkFanoutSubscription, AsyncHandlersStartInFifoAndOwnTheirTermina
         EXPECT_EQ (gate_state->scopes_live.load (), 1);
         auto shutdown = app.shutdown ();
         EXPECT_FALSE (shutdown.result_for (20ms));
-        client->terminal_completed_once =
-          gate_state->first_terminal.complete (zlink::framework::result_t<void>::success ());
-        client->terminal_repeated =
-          gate_state->first_terminal.complete (zlink::framework::result_t<void>::success ());
+        const auto state = gate_state;
+        state->destructor_deadline = std::chrono::steady_clock::now () + 5s;
+        auto destructor_entered = state->destructor_entered.get_future ();
+        state->hold_destructor.store (true, std::memory_order_release);
+        struct completion_results_t
+        {
+            bool once = false;
+            bool repeated = false;
+        };
+        auto completed = std::make_shared<completion_results_t> ();
+        std::jthread completion ([state, completed] {
+            completed->once =
+              state->first_terminal.complete (zlink::framework::result_t<void>::success ());
+            completed->repeated =
+              state->first_terminal.complete (zlink::framework::result_t<void>::success ());
+        });
+        const auto release_destructor = [state] (gate_state_t *) {
+            state->destructor_release.set_value ();
+        };
+        std::unique_ptr<gate_state_t, decltype (release_destructor)> release_guard (
+          state.get (), release_destructor);
+        const bool entered = destructor_entered.wait_until (state->destructor_deadline)
+                             == std::future_status::ready;
+        EXPECT_TRUE (entered);
+        if (entered) {
+            zlink::framework::test::acknowledge_delivery (state->destructor_deadline);
+            EXPECT_EQ (state->failures.load (), fail_first ? 1 : 0);
+        }
+        release_guard.reset ();
+        completion.join ();
+        client->terminal_completed_once = completed->once;
+        client->terminal_repeated = completed->repeated;
+        EXPECT_FALSE (state->destructor_timed_out.load ());
         EXPECT_TRUE (shutdown.result_for (5s));
         host.request_stop ();
         host.join ();
@@ -584,7 +626,6 @@ TEST (CppFrameworkFanoutSubscription, AsyncHandlersStartInFifoAndOwnTheirTermina
         }
         EXPECT_EQ (gate_state->scopes_live.load (), 0);
         EXPECT_EQ (gate_state->scopes_created.load (), gate_state->scopes_destroyed.load ());
-        EXPECT_EQ (gate_state->failures.load (), fail_first ? 1 : 0);
         EXPECT_TRUE (client->first_submitted);
         EXPECT_TRUE (client->first_received);
         EXPECT_TRUE (client->last_error.empty ()) << client->last_error;
