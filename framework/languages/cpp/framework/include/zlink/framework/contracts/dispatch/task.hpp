@@ -443,19 +443,24 @@ class task_wait_registration_t
 
     bool pending () const noexcept { return !_started.load (std::memory_order_acquire); }
 
+    using delivery_t = std::optional<std::pair<task_scheduler_t, bool>>;
+
+    // The state owner extracts delivery while holding its result/list mutex.
+    delivery_t take_delivery () noexcept
+    {
+        if (_started.load (std::memory_order_acquire))
+            return {};
+        return std::pair{std::move (_scheduler), _ambient.infrastructure_wait || _turn != nullptr};
+    }
+
     bool deliver (const std::shared_ptr<task_wait_registration_t> &self,
                   std::shared_ptr<void> lifetime,
-                  std::mutex &owner_mutex) noexcept
+                  std::mutex &owner_mutex,
+                  delivery_t delivery) noexcept
     {
-        task_scheduler_t scheduler;
-        bool inline_allowed = false;
-        {
-            std::lock_guard lock (owner_mutex);
-            if (_started.load (std::memory_order_acquire))
-                return true;
-            scheduler = std::move (_scheduler);
-            inline_allowed = _ambient.infrastructure_wait || _turn != nullptr;
-        }
+        if (!delivery)
+            return true;
+        auto &[scheduler, inline_allowed] = *delivery;
         std::function<void ()> resume = [self, lifetime = std::move (lifetime)] {
             (void) lifetime; // Retain the terminal result until delivery finishes.
             self->resume (false);
@@ -566,6 +571,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     {
         std::shared_ptr<task_wait_registration_t> continuations;
         std::vector<callback_t> terminal_callbacks;
+        task_wait_registration_t::delivery_t delivery;
         auto self = this->shared_from_this ();
         {
             std::lock_guard lock (_mutex);
@@ -575,6 +581,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             _result.emplace (std::move (result));
             continuations = std::move (_continuations_head);
             _continuations_tail = nullptr;
+            if (continuations)
+                delivery = continuations->take_delivery ();
             terminal_callbacks = std::move (_terminal_callbacks);
         }
         _ready.notify_all ();
@@ -587,7 +595,11 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             while (continuations) {
                 auto continuation = std::move (continuations);
                 continuations = std::move (continuation->_next);
-                deliver_registration (continuation, self);
+                deliver_registration (continuation, self, std::move (delivery));
+                if (continuations) {
+                    std::lock_guard lock (_mutex);
+                    delivery = continuations->take_delivery ();
+                }
             }
         }();
         return true;
@@ -603,6 +615,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     {
         auto self = this->shared_from_this ();
         std::shared_ptr<task_shared_state_t<T>> lifetime;
+        task_wait_registration_t::delivery_t delivery;
         const auto owner_state = registration->has_wait_owner ()
                                    ? this->weak_from_this ()
                                    : std::weak_ptr<task_shared_state_t<T>>{};
@@ -610,13 +623,14 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             std::lock_guard lock (_mutex);
             if (_result) {
                 lifetime = std::move (self);
+                delivery = registration->take_delivery ();
             } else {
                 append_continuation_unlocked (registration);
             }
         }
         bind_wait_owner (registration, registration, owner_state);
         if (lifetime)
-            lifetime->deliver_registration (registration, lifetime);
+            lifetime->deliver_registration (registration, lifetime, std::move (delivery));
     }
 
     const result_t<T> &result ()
@@ -708,9 +722,10 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
 
   private:
     void deliver_registration (const std::shared_ptr<task_wait_registration_t> &registration,
-                               const std::shared_ptr<task_shared_state_t<T>> &lifetime) noexcept
+                               const std::shared_ptr<task_shared_state_t<T>> &lifetime,
+                               task_wait_registration_t::delivery_t delivery) noexcept
     {
-        if (registration->deliver (registration, lifetime, _mutex))
+        if (registration->deliver (registration, lifetime, _mutex, std::move (delivery)))
             return;
         // A rejected delivery remains owned until its registered owner stops.
         // Keeping it in the original list also covers ready-registration races.
