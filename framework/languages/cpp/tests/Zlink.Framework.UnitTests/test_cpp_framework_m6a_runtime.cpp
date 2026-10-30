@@ -2236,7 +2236,7 @@ void verify_client_server_close_drains_parked_control_reply ()
     auto callback_entered = entered.get_future ();
     std::promise<void> release;
     const auto released = release.get_future ().share ();
-    std::atomic_bool first{true};
+    std::atomic<runtime::state_lane_t *> deadline_owner{nullptr};
     zlink::poller_t client_poller;
     auto options = zlink::framework::test::runtime_failure_options (
       client_server::raw_client_server_client_options_t{
@@ -2245,10 +2245,15 @@ void verify_client_server_close_drains_parked_control_reply ()
         expected});
     options.transport_poller = &client_poller;
     options.control_reply_parked = [&] {
-        if (first.exchange (false)) {
-            entered.set_value ();
-            released.wait ();
-        }
+        auto *current = runtime::state_lane_t::current ();
+        assert (current);
+        runtime::state_lane_t *unobserved = nullptr;
+        // The monitor drain registers the request deadline before the server is pumped.
+        // Deadline wakes use that owner; parked replies use the separate reply lane.
+        if (deadline_owner.compare_exchange_strong (unobserved, current) || unobserved == current)
+            return;
+        entered.set_value ();
+        released.wait ();
     };
     client_server::raw_client_server_client_t client (std::move (options));
     client.start ();
