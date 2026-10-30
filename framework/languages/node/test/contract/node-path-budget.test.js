@@ -59,6 +59,27 @@ const {
   runWithApplicationJobPermit
 } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
 
+/** @param {import('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime').RawServiceMeshRuntimeOptions} options */
+function startRawRuntime(options, router) {
+  const runtime = new RawServiceMeshRuntime({
+    ...options,
+    bindingPort: {
+      createHost: () => ({
+        createRouter: () => ({
+          setRoutingId() {},
+          setReceiveFlowState() {},
+          bind() {},
+          localEndpoint: () => options.descriptor.advertisedEndpoint,
+          ...router
+        }),
+        close() {}
+      })
+    }
+  });
+  runtime.start();
+  return runtime;
+}
+
 test('managed and binding binary replies retain payload views after source close', () => {
   const header = { channelName: 'mesh', messageName: 'Reply', correlationId: 'a'.repeat(32) };
   const payload = Buffer.alloc(1024, 7);
@@ -272,8 +293,27 @@ test('ordinary ingress transfers its existing permit and payload without operati
     activeCapacityUsed: 0,
     pendingCapacityUsed: 0
   };
-  const runtime = new RawServiceMeshRuntime({ applicationJobQueue: queue, descriptor });
-  runtime.admitPeer({ ...descriptor, nodeRoutingId: 'peer' }, 1n, 0);
+  const admissions = [
+    {
+      sourceRid: 'peer',
+      routeGeneration: 1n,
+      parts: [
+        wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.hello, {
+          ...descriptor,
+          nodeRoutingId: 'peer'
+        })
+      ],
+      close() {}
+    }
+  ];
+  const runtime = startRawRuntime(
+    { applicationJobQueue: queue, descriptor },
+    {
+      receive: () => admissions.shift(),
+      submitSend: () => ({ result: 0 })
+    }
+  );
+  assert.equal(await runtime.pumpOne(0), 'infrastructure');
   const record = {
     sourceRid: 'peer',
     sourceRoute: Buffer.from('peer'),
@@ -304,32 +344,11 @@ test('ordinary ingress transfers its existing permit and payload without operati
   assert.equal(await result, 'application');
   assert.equal(promises, 0);
   owner.close();
-  runtime.mailbox.close();
+  runtime.close();
   assert.equal(queue.snapshot().permitsInUse, 0n);
 });
 
 test('immediately admitted node send submits once without allocating a Promise', async () => {
-  const runtime = new RawServiceMeshRuntime({
-    applicationJobQueue: {},
-    descriptor: {
-      meshName: 'mesh',
-      nodeRoutingId: 'source',
-      advertisedEndpoint: 'tcp://127.0.0.1:1',
-      channels: [],
-      state: 'serving',
-      securityIdentity: 'test',
-      applicationVersion: 0n,
-      protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY],
-      objectRole: 'server',
-      placementWeight: 1,
-      lifecycleGeneration: 1n,
-      descriptorRevision: 1n,
-      activeCapacityLimit: 10,
-      pendingCapacityLimit: 10,
-      activeCapacityUsed: 0,
-      pendingCapacityUsed: 0
-    }
-  });
   let submissions = 0;
   const submission = {
     result: 0,
@@ -337,7 +356,7 @@ test('immediately admitted node send submits once without allocating a Promise',
       assert.fail('OK must not observe admission');
     }
   };
-  runtime.router = {
+  const router = {
     submitSend() {
       submissions++;
       return submission;
@@ -347,12 +366,51 @@ test('immediately admitted node send submits once without allocating a Promise',
       return Promise.resolve();
     }
   };
-  runtime.topology.admit(
-    { ...runtime.topology.localDescriptor(), nodeRoutingId: 'peer', advertisedEndpoint: 'tcp://127.0.0.1:2' },
-    'peer-route', undefined, undefined, ServiceWireCommand.admit
+  const runtime = startRawRuntime(
+    {
+      applicationJobQueue: {},
+      descriptor: {
+        meshName: 'mesh',
+        nodeRoutingId: 'source',
+        advertisedEndpoint: 'tcp://127.0.0.1:1',
+        channels: [],
+        state: 'serving',
+        securityIdentity: 'test',
+        applicationVersion: 0n,
+        protocolCapabilities: [SERVICE_WIRE_REQUIRED_CAPABILITY],
+        objectRole: 'server',
+        placementWeight: 1,
+        lifecycleGeneration: 1n,
+        descriptorRevision: 1n,
+        activeCapacityLimit: 10,
+        pendingCapacityLimit: 10,
+        activeCapacityUsed: 0,
+        pendingCapacityUsed: 0
+      }
+    },
+    router
   );
-  const backend = new ZLinkNodeRawMeshBackend('mesh', 'source', {});
-  backend.runtime = runtime;
+  runtime.topology.admit(
+    {
+      ...runtime.topology.localDescriptor(),
+      nodeRoutingId: 'peer',
+      advertisedEndpoint: 'tcp://127.0.0.1:2'
+    },
+    'peer-route',
+    undefined,
+    undefined,
+    ServiceWireCommand.admit
+  );
+  const backend = new ZLinkNodeRawMeshBackend(
+    'mesh',
+    'source',
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { raw: runtime }
+  );
   let promises = 0;
   const hook = createHook({
     init(_id, type) {
@@ -370,6 +428,7 @@ test('immediately admitted node send submits once without allocating a Promise',
   assert.equal(await result, 0);
   assert.equal(submissions, 1);
   assert.equal(promises, 0, 'Framework immediate submit must not create operation Promises');
+  runtime.close();
 });
 
 function terminal(operationId) {
