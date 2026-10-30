@@ -24,6 +24,7 @@
 #include "runtime/locations/sha256.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
+#include "runtime/configuration/request_defaults.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -1042,17 +1043,6 @@ spot_node_builder_state_t::runtime_failures () const
 }
 
 spot_node_builder_state_t::~spot_node_builder_state_t () = default;
-
-std::chrono::steady_clock::time_point spot_node_builder_state_t::close_deadline (
-  std::chrono::steady_clock::time_point entered)
-{
-    const auto configuration = lane.run ([&] { return channel_runtime; }).get ();
-    const auto timeout = configuration
-      ? configuration->lane.run_checked ([&] { return configuration->default_request_timeout; })
-          .get ()
-      : runtime::configuration::default_request_timeout;
-    return entered + timeout;
-}
 
 namespace
 {
@@ -3652,18 +3642,14 @@ task_t<bool> spot_context_t::close ()
 
 task_t<bool> spot_context_t::close_erased ()
 {
-    const auto entered = std::chrono::steady_clock::now ();
     if (!_state || !_state->node)
         return task_t<bool> (result_t<bool>::success (false));
     const auto state = _state;
-    const auto deadline = runtime::messaging::request_deadline_utc_from_unix_ms (
-      runtime::messaging::request_deadline_unix_ms (state->node->close_deadline (entered)));
     state->ensure_relocation_turn_open ();
     auto completion = std::make_shared<task_completion_source_t<bool>> ();
     auto closed = completion->task ();
     state->request_close (
-      {}, [completion] (result_t<bool> result) { completion->complete (std::move (result)); },
-      spot_close_reason_t::explicit_close, deadline);
+      {}, [completion] (result_t<bool> result) { completion->complete (std::move (result)); });
     return closed;
 }
 
@@ -5372,11 +5358,7 @@ task_t<std::vector<spot_info_t>> spot_node_builder_t::list_spots () const
 
 task_t<bool> spot_node_builder_t::close_spot (spot_id_t spot_id)
 {
-    const auto entered = std::chrono::steady_clock::now ();
-    const auto deadline = runtime::messaging::request_deadline_utc_from_unix_ms (
-      runtime::messaging::request_deadline_unix_ms (_state->close_deadline (entered)));
-    return detail::spot_node_runtime_t (_state).close_spot (
-      std::move (spot_id), spot_close_reason_t::explicit_close, deadline);
+    return detail::spot_node_runtime_t (_state).close_spot (std::move (spot_id));
 }
 
 void spot_node_builder_t::retain_factory_builder (std::shared_ptr<void> builder)
@@ -5592,7 +5574,7 @@ task_t<bool> spot_manager_t::close (spot_ref_t spot)
         return task_t<bool> (
           result_t<bool>::failure (framework_error_kind_t::not_configured,
                                    "Spot manager is not connected to a Location runtime"));
-    const auto deadline = _state->close_deadline (entered);
+    const auto deadline = entered + runtime::configuration::default_request_timeout;
     const auto wire_deadline = runtime::messaging::request_deadline_unix_ms (deadline);
     const auto close_user_spot = _state->lane.run ([&] { return _state->close_user_spot; }).get ();
     if (!close_user_spot)

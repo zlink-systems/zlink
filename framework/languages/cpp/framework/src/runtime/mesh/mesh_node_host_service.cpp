@@ -2555,9 +2555,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [this, weak_source = std::weak_ptr (source)] (
                 spot_ref_t spot, std::chrono::steady_clock::time_point deadline,
                 std::uint64_t wire_deadline) {
-                return close_user_spot (detail::lock_runtime_owner (weak_source),
-                                        std::move (spot), deadline, wire_deadline);
-            };
+                  return close_user_spot (detail::lock_runtime_owner (weak_source),
+                                          std::move (spot), deadline, wire_deadline);
+              };
             registration->spot_state->begin_user_spot_close =
               [weak_source = std::weak_ptr (source)] (const spot_id_t &spot_id,
                                                       std::uint64_t object_generation,

@@ -108,8 +108,6 @@ class spot_node_builder_state_t
     explicit spot_node_builder_state_t (std::string name) : snapshot{.name = std::move (name)} {}
     ~spot_node_builder_state_t ();
     std::shared_ptr<runtime::runtime_failure_collector_t> runtime_failures () const;
-    std::chrono::steady_clock::time_point close_deadline (
-      std::chrono::steady_clock::time_point entered);
 
     // Builder configuration is synchronously admitted through this lane.  The
     // MeshNode start path takes its configuration projection only after those
