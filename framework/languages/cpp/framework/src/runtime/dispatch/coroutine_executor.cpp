@@ -240,7 +240,7 @@ completion_dispatcher_borrow_t borrow_host_dispatcher ()
 {
     const std::lock_guard lock (runtime::executor_mutex ());
     const auto &executor = runtime::executor_instance ();
-    return executor ? executor->completion_dispatcher () : nullptr;
+    return executor ? executor->completion_dispatcher () : completion_dispatcher_borrow_t{};
 }
 
 constexpr runtime_execution_hooks_t host_execution_hooks{

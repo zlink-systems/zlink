@@ -708,7 +708,7 @@ TEST (CppFrameworkRouteClientChannelRouting, NodeEnvelopeConversionDoesNotSuspen
 {
     using namespace zlink::framework;
     const detail::runtime_execution_hooks_t hooks{
-      [] () -> detail::completion_dispatcher_borrow_t { return nullptr; },
+      [] () -> detail::completion_dispatcher_borrow_t { return {}; },
       &count_node_request_resumption, [] { return detail::task_scheduler_t{}; }, [] {}};
     struct restore_hooks_t
     {
