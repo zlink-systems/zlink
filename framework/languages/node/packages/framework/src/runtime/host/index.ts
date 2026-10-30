@@ -128,7 +128,11 @@ import {
 } from '../diagnostics';
 import { METRIC_NAMES, MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { RuntimeEventQueue } from '../diagnostics/runtime-observation-queue';
-import { openTelemetryLease, renewTelemetryLease, retireTelemetryLease } from '../diagnostics/message-flow-delivery';
+import {
+  openTelemetryLease,
+  renewTelemetryLease,
+  retireTelemetryLease
+} from '../diagnostics/message-flow-delivery';
 import {
   ZLinkClientServerRuntimeProjection,
   ZLinkFanoutRuntimeProjection
