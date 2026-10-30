@@ -292,12 +292,6 @@ final class ZLinkJavaRawSubmissionFailureContractTest {
         }
 
         @Override
-        public List<systems.zlink.contracts.sockets.ConnectionAttempt>
-                connectionAttemptsSnapshot() {
-            return nativeSocket.connectionAttemptsSnapshot();
-        }
-
-        @Override
         public List<RouterRoute> routesSnapshot() {
             return nativeSocket.routesSnapshot();
         }

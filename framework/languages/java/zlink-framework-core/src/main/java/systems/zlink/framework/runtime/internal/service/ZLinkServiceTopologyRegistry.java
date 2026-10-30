@@ -30,6 +30,7 @@ public final class ZLinkServiceTopologyRegistry {
     private final Map<String, Map<String, Long>> dynamicSelectionCurrents = new HashMap<>();
     private final Map<String, Long> placementSelectionCursors = new HashMap<>();
     private ZLinkServiceNodeDescriptor local;
+    private Runnable observationPublisher = () -> {};
 
     public ZLinkServiceTopologyRegistry(ZLinkServiceNodeDescriptor local) {
         this(local, new ZLinkStateLane());
@@ -57,6 +58,16 @@ public final class ZLinkServiceTopologyRegistry {
         return inStateLane(() -> local);
     }
 
+    /** Publishes this owner's admission facts to its single transport observer. */
+    public void observeChanges(Runnable publisher) {
+        inStateLane(
+                () -> {
+                    observationPublisher = Objects.requireNonNull(publisher, "publisher");
+                    observationPublisher.run();
+                    return null;
+                });
+    }
+
     public void publishLocal(ZLinkServiceNodeDescriptor descriptor) {
         inStateLane(
                 () -> {
@@ -79,6 +90,7 @@ public final class ZLinkServiceTopologyRegistry {
             throw new IllegalArgumentException("published descriptor changes immutable fields");
         }
         local = descriptor;
+        observationPublisher.run();
     }
 
     /**
@@ -502,6 +514,7 @@ public final class ZLinkServiceTopologyRegistry {
     private void rebuildChannelPlansOnLane() {
         rebuildChannelPlansOnLane(channelPlans, ignored -> true);
         rebuildChannelPlansOnLane(readyChannelPlans, this::isReady);
+        observationPublisher.run();
     }
 
     private void rebuildChannelPlansOnLane(

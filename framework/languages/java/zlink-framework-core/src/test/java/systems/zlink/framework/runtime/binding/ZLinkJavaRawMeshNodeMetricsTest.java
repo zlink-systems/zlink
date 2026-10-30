@@ -97,7 +97,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                 java.util.concurrent.ExecutionException.class,
                                 () -> request.toCompletableFuture().get(2, TimeUnit.SECONDS));
                 assertEquals(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                         ((ZLinkFrameworkException) replyFailure.getCause()).kind());
                 var admissionFailure =
                         assertThrows(
@@ -294,7 +294,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
     }
 
     @Test
-    void coldInstanceRequestFailsAsCoreRequestWhenTargetDisconnects() throws Exception {
+    void disconnectedInstanceRequestsKeepTheirAdmissionDeadline() throws Exception {
         try (Pair pair = new Pair()) {
             var route =
                     new ZLinkServiceM6BWireCodec.InstanceColdActivation(
@@ -305,7 +305,9 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                             "unmaterialized",
                             Long.toString(pair.target.status().descriptorRevision()),
                             System.currentTimeMillis() + 5000);
-            pair.router().disconnect(pair.target.status().localEndpoint());
+            pair.source.removePeerConnection(pair.source.connectionIntentIds().getFirst());
+            await(() -> !pair.source.isPeerTransportConnected(pair.target.routingId()));
+            assertTrue(pair.source.connectionIntentIds().isEmpty());
             try (Message packet = Message.from("Packet");
                     Message body = Message.from("body")) {
                 var readyFailure =
@@ -319,7 +321,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                         null,
                                                         new byte[0],
                                                         List.of(packet, body),
-                                                        Duration.ofSeconds(5),
+                                                        Duration.ofMillis(250),
                                                         null)
                                                 .toCompletableFuture()
                                                 .get(2, TimeUnit.SECONDS));
@@ -334,10 +336,13 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                         null,
                                                         new byte[0],
                                                         List.of(packet, body),
-                                                        Duration.ofSeconds(5),
+                                                        Duration.ofMillis(250),
                                                         null)
                                                 .toCompletableFuture()
                                                 .get(2, TimeUnit.SECONDS));
+                assertEquals(
+                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        ((ZLinkFrameworkException) readyFailure.getCause()).kind());
                 assertEquals(
                         ((ZLinkFrameworkException) readyFailure.getCause()).kind(),
                         ((ZLinkFrameworkException) coldFailure.getCause()).kind());

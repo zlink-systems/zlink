@@ -209,8 +209,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private volatile PeerObservationRoot peerObservation =
             new PeerObservationRoot(null, Map.of(), Set.of(), Map.of(), null);
 
-    /** Publishes admission facts only, after the enclosing transport commit is complete. */
-    private void publishPeerObservation() {
+    /** Publishes the single observation of committed topology and selected-route facts. */
+    void publishPeerObservation() {
         Map<RoutingId, ZLinkServiceTopologyRegistry.Peer> peers = new java.util.LinkedHashMap<>();
         Set<RoutingId> ready = new java.util.HashSet<>();
         Map<String, Long> counts = new HashMap<>();
@@ -479,7 +479,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (topology != null) {
             port.inStateLane(
                     () -> {
-                        publishPeerObservation();
+                        topology.observeChanges(this::publishPeerObservation);
                         return null;
                     });
         } else {
@@ -540,7 +540,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                    + " descriptor is not live")));
+                                                                        + " descriptor is not live")));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
@@ -958,7 +958,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             topology = topologyFactory.apply(localDescriptor, transportStateLane);
             port.inStateLane(
                     () -> {
-                        publishPeerObservation();
+                        topology.observeChanges(this::publishPeerObservation);
                         return null;
                     });
             state = MeshNodeState.STARTED;
@@ -1055,7 +1055,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 port.inStateLane(
                         () -> {
                             topology.publishLocal(updated);
-                            publishPeerObservation();
                             return topology.peers().stream()
                                     .map(peer -> peer.descriptor().nodeRoutingId())
                                     .toList();
@@ -1357,9 +1356,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         boolean absent =
                 port.inStateLane(
                         () -> {
-                            boolean changed =
-                                    disconnectAdmitted(target, admittedConnectionId(target));
-                            if (changed) publishPeerObservation();
+                            disconnectAdmitted(target, admittedConnectionId(target));
                             return topology == null || topology.peer(target).isEmpty();
                         });
         knownPeerChannels.remove(target);
@@ -5542,7 +5539,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             || command == ServiceWireConstants.COMMAND_UPDATE
                             || command == ServiceWireConstants.COMMAND_REJECT) {
                         afterCommit = dispatchAdmission(inbound, command, head);
-                        publishPeerObservation();
                     }
                 }
             }
@@ -7711,7 +7707,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             } catch (IllegalArgumentException invalid) {
                 return () -> {};
             }
-            disconnectAdmitted(sourceRid, routeConnectionId(inbound.routeGeneration()));
             boolean newlyRejected = rejectedPeers.add(sourceRid);
             return () -> {
                 finishSelectedRouteObservation(routeChanges);
@@ -7970,7 +7965,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
      * route disappeared or changed generation ends its logical admission; a new RID or generation
      * starts the service handshake on that route (transport-liveness §5, §6).
      */
-    private void observeTransportState(int readiness) {
+    void observeTransportState(int readiness) {
         var changes =
                 port.inStateLane(
                         () -> {
@@ -7980,12 +7975,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             if (connectionsChanged)
                                 connectionAttempts =
                                         List.copyOf(requireStarted().connectionAttemptsSnapshot());
-                            var previous = selectedRoutes;
                             var targets =
                                     (readiness & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0
                                             ? observeSelectedRoutesOnLane()
                                             : List.<RoutingId>of();
-                            if (!previous.equals(selectedRoutes)) publishPeerObservation();
                             if (connectionsChanged)
                                 stateListeners.forEach(observer -> notifyStateChanged(observer));
                             return targets;
@@ -8012,6 +8005,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 (peerRid, generation) -> {
                     if (!generation.equals(previous.get(peerRid))) changes.add(peerRid);
                 });
+        publishPeerObservation();
         return List.copyOf(changes);
     }
 
@@ -8182,7 +8176,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 disconnected.add(peer);
             }
         }
-        if (disconnected != null) publishPeerObservation();
         List<RoutingId> targets = disconnected == null ? List.of() : List.copyOf(disconnected);
         return () -> {
             for (var exchange : submissions) {
