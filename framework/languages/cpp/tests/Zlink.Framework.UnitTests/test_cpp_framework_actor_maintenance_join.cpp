@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/json.hpp>
+#include "metric_test_reader.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 #include <zlink/framework.hpp>
@@ -375,6 +376,7 @@ struct observations_t
     creation_case_t creation_case = creation_case_t::accepted;
     int creation_callbacks = 0;
     int disconnect_callbacks = 0;
+    std::shared_ptr<fw::task_completion_source_t<void>> disconnect_release;
     bool fail_remote_factory = false;
     int remote_factory_failure_count = 0;
     std::vector<int> destroyed;
@@ -645,6 +647,8 @@ class entry_t final : public fw::entry_spot_t<actor_t>
             ++observations->disconnect_callbacks;
         }
         observations->changed.notify_all ();
+        if (observations->disconnect_release)
+            co_await observations->disconnect_release->task ();
         co_return;
     }
     fw::task_t<probe_t>
@@ -2113,6 +2117,172 @@ TEST (BoundSessionSequenceGap, LocalExpiredHeldRequestDoesNotBlockNextLiveActor)
 TEST (BoundSessionSequenceGap, RemoteExpiredHeldRequestDoesNotBlockNextLiveActor)
 {
     expired_sealed_request_preserves_next_live_actor_relay (true);
+}
+
+struct held_session_disconnect_probe_t
+{
+    std::promise<void> entered;
+    std::promise<void> packet_returned;
+    fw::task_completion_source_t<void> release;
+    std::atomic_int final_callbacks{0};
+    std::atomic_int destroyed{0};
+};
+
+class held_bound_session_t final : public fw::packet_stream_session_t
+{
+  public:
+    held_bound_session_t (fw::actor_manager_t &actors,
+                          std::shared_ptr<observations_t> evidence,
+                          std::shared_ptr<held_session_disconnect_probe_t> probe) :
+        _relay (actors, std::move (evidence)), _probe (std::move (probe))
+    {
+    }
+    ~held_bound_session_t () override { ++_probe->destroyed; }
+    fw::task_t<void> on_connected (fw::stream_t &) override { co_return; }
+    fw::task_t<void> on_disconnected (fw::stream_t &) override
+    {
+        ++_probe->final_callbacks;
+        co_return;
+    }
+    fw::task_t<void> on_error (fw::stream_t &, const fw::stream_error_t &) override { co_return; }
+    fw::task_t<void> on_packet (fw::stream_t &stream,
+                                const fw::session_message_context_t &dispatch,
+                                const fw::message_t &payload) override
+    {
+        co_await _relay.on_packet (stream, dispatch, payload);
+        _probe->entered.set_value ();
+        co_await _probe->release.task ();
+        _probe->packet_returned.set_value ();
+    }
+
+  private:
+    relay_session_t _relay;
+    std::shared_ptr<held_session_disconnect_probe_t> _probe;
+};
+
+void physical_disconnect_progresses_while_session_handler_waits (bool websocket)
+{
+    metric_test::provider_t metrics;
+    const auto closed_connections = [&] {
+        double total = 0;
+        for (const auto &metric : metrics.collect ()) {
+            if (metric.instrument_descriptor.name_ != "zlink.stream.connections.closed")
+                continue;
+            for (const auto &point : metric.point_data_attr_) {
+                if (opentelemetry::nostd::get<std::string> (
+                      point.attributes.at ("close_reason")) != "client_close")
+                    continue;
+                const auto &sum = opentelemetry::nostd::get<metric_test::sdk::SumPointData> (
+                  point.point_data);
+                total += opentelemetry::nostd::get<double> (sum.value_);
+            }
+        }
+        return total;
+    };
+    auto evidence = std::make_shared<observations_t> ();
+    evidence->disconnect_release = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto probe = std::make_shared<held_session_disconnect_probe_t> ();
+    auto entered = probe->entered.get_future ();
+    auto packet_returned = probe->packet_returned.get_future ();
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t owner;
+    owner.app.use_metric_provider (metrics.api ());
+    configure (owner, evidence, first_rid, store, relocations);
+    owner.app.advanced ().services ().add_factory<held_bound_session_t> (
+      [evidence, probe] (fw::service_provider_t &provider) {
+          return std::make_unique<held_bound_session_t> (
+            provider.get_required<fw::actor_manager_t> (), evidence, probe);
+      }, fw::service_lifetime_t::scoped);
+    owner.app.add_zlink_framework ().add_stream_node (stream_name)
+      .bind (websocket ? "ws://127.0.0.1:0/disconnect" : "tcp://127.0.0.1:0")
+      .register_session<held_bound_session_t> ();
+    owner.start ();
+    ASSERT_TRUE (ready (owner));
+    struct release_t
+    {
+        std::shared_ptr<held_session_disconnect_probe_t> probe;
+        std::shared_ptr<observations_t> evidence;
+        ~release_t ()
+        {
+            probe->release.complete (fw::result_t<void>::success ());
+            evidence->disconnect_release->complete (fw::result_t<void>::success ());
+        }
+    } release{probe, evidence};
+    auto services = owner.app.advanced ().services ().build_provider ();
+    zlink::stream_connector::connector_options_t options;
+    options.endpoint = services.get_required<fw::framework_runtime_t> ()
+                         .listener_status (fw::listener_kind_t::stream, stream_name).endpoint;
+    // The reader listener status reports its TCP acceptor address.
+    if (websocket)
+        options.endpoint = "ws://" + options.endpoint.substr (std::string ("tcp://").size ())
+                           + "/disconnect";
+    options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
+    options.reconnect.enabled = false;
+    auto client = zlink::stream_connector::connector_factory_t::create (options);
+    ASSERT_TRUE (client.connect ());
+    client.send (view_request_t{}).submit ();
+    ASSERT_EQ (entered.wait_for (wait_budget), std::future_status::ready);
+    const auto before_close = closed_connections ();
+    ASSERT_TRUE (client.close ());
+    const auto physical_deadline = std::chrono::steady_clock::now () + wait_budget;
+    while (closed_connections () == before_close
+           && std::chrono::steady_clock::now () < physical_deadline)
+        std::this_thread::yield ();
+    ASSERT_EQ (closed_connections () - before_close, 1);
+    std::cout << "physical_close_observed=1 session_final_while_held="
+              << probe->final_callbacks.load () << std::endl;
+    EXPECT_EQ (probe->final_callbacks.load (), 0);
+    {
+        std::unique_lock lock (evidence->mutex);
+        const bool progressed = evidence->changed.wait_for (
+          lock, wait_budget, [&] { return evidence->disconnect_callbacks == 1; });
+        std::cout << "actor_disconnect_while_session_held=" << progressed << std::endl;
+        EXPECT_TRUE (progressed);
+    }
+    EXPECT_EQ (probe->final_callbacks.load (), 0);
+    probe->release.complete (fw::result_t<void>::success ());
+    ASSERT_EQ (packet_returned.wait_for (wait_budget), std::future_status::ready);
+    {
+        std::unique_lock lock (evidence->mutex);
+        ASSERT_TRUE (evidence->changed.wait_for (
+          lock, wait_budget, [&] { return evidence->disconnect_callbacks == 1; }));
+    }
+    EXPECT_EQ (probe->final_callbacks.load (), 0);
+    EXPECT_EQ (probe->destroyed.load (), 0);
+    auto shutdown = owner.app.shutdown ();
+    ASSERT_EQ (owner.app.runtime_state (), fw::framework_runtime_state_t::draining);
+    EXPECT_FALSE (shutdown.await_ready ());
+    EXPECT_EQ (probe->destroyed.load (), 0);
+    std::cout << "cleanup_pending_session_scope_retained=1 shutdown_draining_observed=1"
+                 " public_shutdown_pending=1" << std::endl;
+    evidence->disconnect_release->complete (fw::result_t<void>::success ());
+    auto &gateway = services.get_required<fw::detail::actor_gateway_runtime_t> ();
+    const auto terminal_deadline = std::chrono::steady_clock::now () + wait_budget;
+    while ((probe->final_callbacks.load () != 1 || gateway.actor_bound (actor_id))
+           && std::chrono::steady_clock::now () < terminal_deadline)
+        std::this_thread::yield ();
+    EXPECT_EQ (probe->final_callbacks.load (), 1);
+    EXPECT_FALSE (gateway.actor_bound (actor_id));
+    const auto stopped = shutdown.result_for (wait_budget);
+    ASSERT_TRUE (stopped && *stopped);
+    EXPECT_EQ (stopped->value ().outcome, fw::termination_outcome_t::stopped);
+    EXPECT_EQ (stopped->value ().reason, fw::termination_reason_t::none);
+    owner.thread.join ();
+    EXPECT_EQ (evidence->disconnect_callbacks, 1);
+    EXPECT_EQ (probe->final_callbacks.load (), 1);
+    EXPECT_EQ (probe->destroyed.load (), 1);
+    std::cout << "released_positive_control=1 actor_disconnect_exactly_once="
+              << evidence->disconnect_callbacks << std::endl;
+}
+
+TEST (BoundSessionDisconnect, TcpCleanupProgressesWhileSessionHandlerWaits)
+{
+    physical_disconnect_progresses_while_session_handler_waits (false);
+}
+TEST (BoundSessionDisconnect, WebSocketCleanupProgressesWhileSessionHandlerWaits)
+{
+    physical_disconnect_progresses_while_session_handler_waits (true);
 }
 
 void actor_handler_closes_physical_session (bool remote, bool join)

@@ -965,18 +965,27 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
      * calls it on every exit path before its thread ends. Like a Core
      * session, the retirement stays in _retiring_sessions until it
      * completes, so stop () waits for it before MeshNode stops. */
-    void retire_connection (const std::shared_ptr<stream_connection_state_t> &state)
+    void retire_connection (
+      const std::shared_ptr<stream_connection_state_t> &state,
+      std::function<void (std::function<void ()>)> dispatch_final =
+        [] (std::function<void ()> completed) { completed (); })
     {
-        if (!state->transport_connection)
+        if (!state->transport_connection) {
+            dispatch_final ([] {});
             return;
+        }
         auto retirement_id = state->stream.session_id ();
         track_retiring_session (retirement_id, state, state->stream);
         const auto session_rid = state->stream.routing_id ().value_or (
           zlink::routing_id_t::from (state->stream.session_id ()));
         retire_actor_session_bindings_async (
           *state->transport_connection, session_rid, *state->actors,
-          [self = shared_from_this (), retirement_id = std::move (retirement_id), state] {
-              self->forget_retiring_session (retirement_id, state.get ());
+          [self = shared_from_this (), retirement_id = std::move (retirement_id), state,
+           dispatch_final = std::move (dispatch_final)] () mutable {
+              auto completed = [self, retirement_id = std::move (retirement_id), state] {
+                  self->forget_retiring_session (retirement_id, state.get ());
+              };
+              dispatch_final (std::move (completed));
           });
     }
 
@@ -2312,24 +2321,23 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 }
             }
 
-            auto finalize = [this, retirement_id, current] (const result_t<void> &) {
-                const auto session_rid = current->stream.routing_id ().value_or (
-                  zlink::routing_id_t::from (current->stream.session_id ()));
-                retire_actor_session_bindings_async (
-                  current->transport_connection, session_rid, *current->actors,
-                  [this, retirement_id, current] {
+            const auto session_rid = current->stream.routing_id ().value_or (
+              zlink::routing_id_t::from (current->stream.session_id ()));
+            retire_actor_session_bindings_async (
+              current->transport_connection, session_rid, *current->actors,
+              [this, retirement_id, current, dispatch_disconnected] {
+                  auto finalize = [this, retirement_id, current] (const result_t<void> &) {
                       finalize_core_session (retirement_id, current);
-                  });
-            };
-            if (dispatch_disconnected) {
-                auto submitted = _runtime.dispatch_disconnected_async (*current->session,
-                                                                       current->stream, finalize);
-                if (!submitted) {
-                    finalize (submitted);
-                }
-            } else {
-                finalize (result_t<void>::success ());
-            }
+                  };
+                  if (dispatch_disconnected) {
+                      auto submitted = _runtime.dispatch_disconnected_async (
+                        *current->session, current->stream, finalize);
+                      if (!submitted)
+                          finalize (submitted);
+                  } else {
+                      finalize (result_t<void>::success ());
+                  }
+              });
             {
                 const std::lock_guard lock (_core_sessions_mutex);
                 ++_core_sessions_revision;
@@ -3507,30 +3515,41 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             // Settle owner work queued before it before reading the close reason.
             owner->io.restart ();
             owner->io.run ();
-            auto dispatch_disconnect = [this, &session, &stream, connection_state] {
-                auto completed = [self = shared_from_this (),
-                                  connection_state] (const result_t<void> &) {
-                    trace_stream_host ("dispatch-disconnected-end", self->_stream);
-                    self->retire_connection (connection_state);
-                };
-                auto submitted = _runtime.dispatch_disconnected_async (session, stream, completed);
-                if (!submitted) {
-                    completed (submitted);
-                }
-            };
             const auto forced = liveness->forced ();
             const bool stopping = _stop->load (std::memory_order_acquire);
+            auto dispatch_disconnect = [self = shared_from_this (), connection_state,
+                                        session_transport_error, forced, stopping] (
+                                         std::function<void ()> retired) {
+                if (!stopping) {
+                    trace_stream_host ("dispatch-disconnected-begin", self->_stream);
+                }
+                auto disconnected = [self, connection_state,
+                                     retired = std::move (retired)] (const result_t<void> &) {
+                    auto completed = [self, connection_state,
+                                      retired] (const result_t<void> &) {
+                        trace_stream_host ("dispatch-disconnected-end", self->_stream);
+                        retired ();
+                    };
+                    auto submitted = self->_runtime.dispatch_disconnected_async (
+                      *connection_state->session, connection_state->stream, completed);
+                    if (!submitted)
+                        completed (submitted);
+                };
+                if (!stopping && session_transport_error && !forced) {
+                    auto submitted = self->_runtime.dispatch_error_async (
+                      *connection_state->session, connection_state->stream,
+                      *session_transport_error, disconnected);
+                    if (!submitted)
+                        disconnected (submitted);
+                } else {
+                    disconnected (result_t<void>::success ());
+                }
+            };
             record_connection_closed (stopping                  ? "server_shutdown"
                                       : forced                  ? liveness_close_label (*forced)
                                       : session_transport_error ? "transport_error"
                                                                 : "client_close");
-            if (!stopping) {
-                trace_stream_host ("dispatch-disconnected-begin", _stream);
-                if (session_transport_error && !forced) {
-                    (void) _runtime.dispatch_error (session, stream, *session_transport_error);
-                }
-            }
-            dispatch_disconnect ();
+            retire_connection (connection_state, std::move (dispatch_disconnect));
             _runtime.drain_async_dispatch (stream);
             // Connected/packet/disconnected callbacks have settled, and the
             // active entry is gone. Release their final IO posts on this owner.
