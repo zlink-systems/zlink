@@ -92,11 +92,8 @@ final class ZLinkAutoConnectLoopTest {
         try {
             loop.start();
             resolver.complete(List.of());
-            var taskField = ZLinkAutoConnectLoop.class.getDeclaredField("task");
-            taskField.setAccessible(true);
-            var scheduled = (java.util.concurrent.ScheduledFuture<?>) taskField.get(loop);
             assertTrue(
-                    scheduled.getDelay(TimeUnit.SECONDS) > 20,
+                    TimeUnit.NANOSECONDS.toSeconds(loop.scheduledDelayNanosForTest()) > 20,
                     "startup must use the configured polling interval");
         } finally {
             loop.stop().toCompletableFuture().get(1, TimeUnit.SECONDS);

@@ -122,13 +122,10 @@ final class ZLinkActorRelocationStagingTest {
         var prepared = publishedActor(runtime, "actor-deferred-source-retirement");
         systems.zlink.framework.runtime.internal.handlers.ZLinkActorHandlerInstances.instance(
                 prepared.actor(), CloseableProbeHandler.class);
-        var dispatchesField = ZLinkActorRuntime.class.getDeclaredField("dispatches");
-        dispatchesField.setAccessible(true);
-        var dispatches = (ZLinkActorDispatchSerials) dispatchesField.get(runtime);
         var entered = new CompletableFuture<Void>();
         var release = new CompletableFuture<Void>();
         CompletionStage<Void> barrier =
-                dispatches.enqueueBarrier(
+                runtime.submitDeferredJoinBarrier(
                         prepared.actorId(),
                         () -> {
                             entered.complete(null);
@@ -148,8 +145,7 @@ final class ZLinkActorRelocationStagingTest {
         } finally {
             release.complete(null);
             barrier.toCompletableFuture().get(RETIREMENT_BOUND_SECONDS, TimeUnit.SECONDS);
-            dispatches
-                    .awaitTeardown(prepared.actorId())
+            runtime.awaitDrainBarrier()
                     .toCompletableFuture()
                     .get(RETIREMENT_BOUND_SECONDS, TimeUnit.SECONDS);
             runtime.closeAsync()

@@ -295,10 +295,6 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
             var count = new AtomicInteger();
             var targetCount = new AtomicInteger();
             var targetInitial = new CompletableFuture<Void>();
-            var method =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "onPeerStateChanged", RoutingId.class, Runnable.class, Runnable.class);
-            method.setAccessible(true);
             try (var failing =
                             source.onStateChanged(
                                     () -> {
@@ -311,27 +307,22 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                                         else changed.complete(null);
                                     });
                     var target =
-                            (AutoCloseable)
-                                    method.invoke(
-                                            source,
-                                            RoutingId.from("waiting-target"),
-                                            (Runnable)
-                                                    () -> {
-                                                        targetCount.incrementAndGet();
-                                                        targetInitial.complete(null);
-                                                    },
-                                            (Runnable) () -> {})) {
+                            source.onPeerStateChanged(
+                                    RoutingId.from("waiting-target"),
+                                    () -> {
+                                        targetCount.incrementAndGet();
+                                        targetInitial.complete(null);
+                                    },
+                                    () -> {})) {
                 initial.get(1, TimeUnit.SECONDS);
                 targetInitial.get(1, TimeUnit.SECONDS);
                 source.setPlacementWeight(2);
                 changed.get(1, TimeUnit.SECONDS);
                 // Complete the same owner boundary used by observer publication.
-                var laneField = ZLinkJavaRawMeshNode.class.getDeclaredField("descriptorStateLane");
-                laneField.setAccessible(true);
-                var lane =
-                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                                laneField.get(source);
-                lane.runAsync(() -> null).toCompletableFuture().get(1, TimeUnit.SECONDS);
+                source.descriptorStateLaneForTest()
+                        .runAsync(() -> null)
+                        .toCompletableFuture()
+                        .get(1, TimeUnit.SECONDS);
                 assertEquals(1, targetCount.get());
             }
         }
