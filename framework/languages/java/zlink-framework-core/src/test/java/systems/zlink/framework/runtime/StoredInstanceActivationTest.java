@@ -42,7 +42,8 @@ final class StoredInstanceActivationTest {
     void storedActivationMismatchPreservesStore(String field, boolean ready) throws Exception {
         var recovery = new InMemoryRelocationStore();
         var options = new DefaultZLinkFrameworkOptions();
-        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        var provider = new ZLinkInMemoryLocationStore();
+        options.addLocationStore(provider);
         options.addRelocationStore(recovery);
         options.addRouteMesh("mesh")
                 .listen("inproc://stored-" + UUID.randomUUID())
@@ -58,9 +59,7 @@ final class StoredInstanceActivationTest {
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
             var host = (ZLinkSpotRuntime) runtime.spotManager();
-            var repositoryField = ZLinkSpotRuntime.class.getDeclaredField("userSpotLocationStore");
-            repositoryField.setAccessible(true);
-            var store = (ZLinkLocationRepository) repositoryField.get(host);
+            var store = new ZLinkProviderLocationRepository(provider);
             var descriptor =
                     store.listMeshNodes("mesh", new ZLinkPageRequest(10, null))
                             .toCompletableFuture()
