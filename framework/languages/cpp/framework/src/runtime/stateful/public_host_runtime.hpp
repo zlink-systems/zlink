@@ -163,7 +163,12 @@ using call_id_t = runtime::call_id_t;
 using spot_request_completion_t =
   std::function<void (foundation::operation_terminal_t, result_t<std::vector<zlink::message_t>>)>;
 
-using route_fence_t = std::pair<std::uint64_t, std::uint64_t>;
+struct route_fence_t
+{
+    std::uint64_t authority_owner_generation = 0;
+    std::uint64_t owner_lease_generation = 0;
+    std::uint64_t target_node_generation = 0;
+};
 using spot_route_fence_resolver_t = std::function<task_t<std::optional<route_fence_t>> (
   zlink::routing_id_t, std::string, std::uint64_t)>;
 
