@@ -88,6 +88,7 @@ public sealed class JoinCallbackSendTests
             Assert.IsType<ZLinkActorJoinCompletion.Failed>(
                 Assert.Single(trace.JoinCompletions).Completion
             );
+            global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
             Assert.Empty(errors);
             return;
         }

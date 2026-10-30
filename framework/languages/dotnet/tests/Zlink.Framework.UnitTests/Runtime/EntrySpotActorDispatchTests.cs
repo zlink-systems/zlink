@@ -350,7 +350,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var physicalActor = mesh.CreateActor("actor-a");
         await using var receiver = new ZLinkBackendSpotNodeWrapper(mesh);
         var node = new CapturingSpotNode { ActorRequestNode = receiver };
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, _) = await CreateStartedRuntimeAsync(node, observer);
         using var cancellation = new CancellationTokenSource();
         try
@@ -887,6 +887,7 @@ public sealed partial class EntrySpotActorDispatchTests
             }
             else
                 Assert.Empty(replies);
+            global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
             if (scenario == "malformed")
                 Assert.Contains(
                     logs.Events,
@@ -9019,7 +9020,7 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task Diagnostics_Off_Actor_Send_Creates_Neither_Wire_Flow_Nor_Activity()
     {
         var node = new CapturingSpotNode { ActorSendAccepted = true };
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, actor) = await CreateStartedRuntimeAsync(
             node,
             observer,
@@ -9077,7 +9078,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 ];
             },
         };
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, actor) = await CreateStartedRuntimeAsync(node, observer);
         try
         {
@@ -9272,7 +9273,7 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task Retained_BoundSession_First_Application_Send_Creates_One_Wire_Flow_And_Emits_Sent()
     {
         var node = new CapturingSpotNode();
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, actor) = await CreateStartedRuntimeAsync(node, observer);
         try
         {
@@ -9702,7 +9703,7 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task EntrySpotActorDispatch_NoBindHandlerException_RepliesNoBindError()
     {
         var node = new CapturingSpotNode();
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, observer);
         try
         {
@@ -9741,7 +9742,7 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task EntrySpotActorDispatch_MalformedRequestPayload_ReportsPayloadDecodeFailure()
     {
         var node = new CapturingSpotNode();
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, observer);
         try
         {
@@ -10914,7 +10915,7 @@ public sealed partial class EntrySpotActorDispatchTests
     [Fact]
     public async Task NativeActorJoin_Records_Target_Node_As_SourceRid_Without_PeerRid()
     {
-        var observer = new CapturingMessageFlowObserver();
+        using var observer = new CapturingMessageFlowObserver();
         var node = new CapturingSpotNode();
         ZLinkEnvelopeHeader? requestHeader = null;
         ZLinkEnvelopeHeader? replyHeader = null;
@@ -16157,7 +16158,14 @@ public sealed partial class EntrySpotActorDispatchTests
             ActivitySource.AddActivityListener(_listener);
         }
 
-        public IReadOnlyCollection<ObservedMessageFlow> Events => _events.ToArray();
+        public IReadOnlyCollection<ObservedMessageFlow> Events
+        {
+            get
+            {
+                global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
+                return _events.ToArray();
+            }
+        }
 
         public async Task<ObservedMessageFlow> WaitAsync(TimeSpan timeout)
         {

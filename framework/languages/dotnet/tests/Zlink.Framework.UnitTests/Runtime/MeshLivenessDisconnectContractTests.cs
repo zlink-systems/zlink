@@ -34,7 +34,12 @@ public sealed partial class StatefulServiceRuntimeTests
         string methodName
     )
     {
-        if (await IsolatedTestProcess.RunIsolatedAsync(typeof(StatefulServiceRuntimeTests), methodName))
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StatefulServiceRuntimeTests),
+                methodName
+            )
+        )
             return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         Exception? failure = null;
@@ -55,12 +60,14 @@ public sealed partial class StatefulServiceRuntimeTests
             captured,
             "mesh",
             routedSubmitScheduler: scheduler,
-            receivePollerFactory: () => new MeshNodeShutdownSealTests.CanonicalRequestPoller(
-                Systems.Zlink.Zlink.CreatePoller(),
-                socket => socket is CapturingMeshSocketContext.CapturingRouterSocketProxy proxy
-                    ? proxy.Native
-                    : socket
-            )
+            receivePollerFactory: () =>
+                new MeshNodeShutdownSealTests.CanonicalRequestPoller(
+                    Systems.Zlink.Zlink.CreatePoller(),
+                    socket =>
+                        socket is CapturingMeshSocketContext.CapturingRouterSocketProxy proxy
+                            ? proxy.Native
+                            : socket
+                )
         );
         owner.SetRoutingId(RoutingId.From("control-failure-owner"));
         owner.SetBind("tcp://127.0.0.1:0");
@@ -70,17 +77,19 @@ public sealed partial class StatefulServiceRuntimeTests
         const string peerEndpoint = "inproc://control-failure-peer";
         peer.SetRoutingId(rid);
         peer.Connect(Assert.IsType<string>(owner.Status().LocalEndpoint));
-        using (var hello = Message.From(
-            ZLinkServiceWireCodec.EncodeRouteAdmission(
-                ServiceWireConstants.Command.Hello,
-                "mesh",
-                peerEndpoint,
-                7,
-                1,
-                new Dictionary<string, uint>(),
-                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+        using (
+            var hello = Message.From(
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Hello,
+                    "mesh",
+                    peerEndpoint,
+                    7,
+                    1,
+                    new Dictionary<string, uint>(),
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                )
             )
-        ))
+        )
             await peer.Send().Message(hello).Async().EnsureAcceptedAsync();
         using var admission = await RawMeshPeerAdmission.CompleteAsync(
             peer,
@@ -92,9 +101,11 @@ public sealed partial class StatefulServiceRuntimeTests
         var generation = owner.ObservePeerRoute(rid).ReadyGeneration;
         Assert.NotEqual(0UL, generation);
         Interlocked.Exchange(ref failure, new ZlinkSubmitException(result));
-        using (var probe = Message.From(
-            ZLinkServiceWireCodec.EncodeLiveness(ServiceWireConstants.Command.LivenessProbe, 1)
-        ))
+        using (
+            var probe = Message.From(
+                ZLinkServiceWireCodec.EncodeLiveness(ServiceWireConstants.Command.LivenessProbe, 1)
+            )
+        )
             await peer.Send().Message(probe).Async().EnsureAcceptedAsync();
         // The scheduler signals after the throwing send and its synchronous catch finish.
         await scheduler.FailedTurn.WaitAsync(TimeSpan.FromSeconds(5));
@@ -125,7 +136,8 @@ public sealed partial class StatefulServiceRuntimeTests
 
         protected override IEnumerable<Task> GetScheduledTasks() => [];
 
-        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) =>
+            false;
 
         protected override void QueueTask(Task task) =>
             ThreadPool.QueueUserWorkItem(_ =>
