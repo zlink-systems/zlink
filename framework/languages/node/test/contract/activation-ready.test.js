@@ -421,10 +421,11 @@ test('Instance initialization Close waits for first handler, durable cursor and 
       foundation.instanceSpotApplicationTarget(spotId),
     beginInstanceClosingAuthority: (...args) => claims.beginInstanceClosing(...args)
   });
-  const host = new framework.ZLinkFrameworkRuntimeHost({
-    registration: framework.createFrameworkRegistrationWithBuilder(() => {})
-  });
-  host.registerInstanceApplicationLifecycle('mesh', foundation, manager);
+  const host = new framework.ZLinkFrameworkRuntimeHost(
+    { registration: framework.createFrameworkRegistrationWithBuilder(() => {}) },
+    { spotNodeRuntime: { meshNodesByName: new Map([['mesh', foundation]]) } }
+  );
+  host.setSpotManager(manager);
   foundation.registerAsyncInstanceActivationAuthority(
     new ZLinkInstanceActivationAuthority({
       store,
@@ -486,6 +487,7 @@ test('Instance initialization Close waits for first handler, durable cursor and 
     applicationJobOwner: job
   });
   await held.ready.promise;
+  assert.ok(close instanceof Promise, 'Instance initialization must expose Close before Ready.');
   let settled = false;
   close.then(() => {
     settled = true;
