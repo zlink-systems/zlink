@@ -139,6 +139,7 @@ for (const targetKind of ['entry', 'user']) {
     const queued = [];
     const serviceRuntime = new ServiceStatefulRuntime(
       {
+        peerLifecycleGeneration: () => undefined,
         observePeerRoute: () => ({ generation: 1n, ready: true }),
         observePeerRouteChanged: () => () => {},
         observePeerConnectionIntentRemoved() {
