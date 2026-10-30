@@ -33,6 +33,7 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
   const requester = new ServiceStatefulRuntime(
     {
       setServiceIngress() {},
+      isPeerRouteReady: () => true,
       requestService(_rid, parts) {
         submitted = parts;
         return new Promise(() => {});
