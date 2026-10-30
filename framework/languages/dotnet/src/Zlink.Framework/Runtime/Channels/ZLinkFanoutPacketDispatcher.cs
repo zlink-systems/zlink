@@ -24,12 +24,7 @@ internal sealed class ZLinkFanoutPacketDispatcher
         _runtime = runtime;
         _dispatchErrors = new ZLinkDispatchErrorReporter(
             registration.DispatchOptions,
-            runtime is null
-                ? logger
-                : ZLinkMessageFlowTracer.CreateLogger(
-                    runtime.Services.GetService<ILoggerFactory>(),
-                    logger
-                ),
+            runtime is null ? logger : ZLinkMessageFlowTracer.CreateLogger(runtime.Services),
             runtime
         );
         _publishPipeline = new ZLinkChannelPublishDispatchPipeline(

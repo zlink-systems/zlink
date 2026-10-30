@@ -120,7 +120,7 @@ internal static class ZLinkFrameworkServiceRegistrar
             registration,
             new ZLinkDispatchErrorReporter(
                 registration.DispatchOptions,
-                ZLinkMessageFlowTracer.CreateLogger(provider.GetService<ILoggerFactory>(), null),
+                ZLinkMessageFlowTracer.CreateLogger(provider),
                 submission: provider.GetRequiredService<ZLinkTelemetrySubmission>()
             )
         ));

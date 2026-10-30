@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -207,8 +208,20 @@ internal sealed class ZLinkMessageFlowTracer
                 : RequiredLevel(outcome)
         );
 
-    internal static ILogger CreateLogger(ILoggerFactory? factory, ILogger? fallback = null) =>
-        factory?.CreateLogger(LoggerCategory) ?? fallback ?? NullLogger.Instance;
+    internal static ILogger CreateLogger(IServiceProvider services)
+    {
+        var factory = services.GetService<ILoggerFactory>();
+        if (factory is null)
+            return NullLogger.Instance;
+
+        if (
+            factory.GetType().FullName == "Microsoft.Extensions.Logging.LoggerFactory"
+            && !services.GetServices<ILoggerProvider>().Any()
+        )
+            return NullLogger.Instance;
+
+        return factory.CreateLogger(LoggerCategory);
+    }
 
     private static ZLinkDiagnosticsLevel RequiredLevel(ZLinkMessageFlowOutcome outcome)
     {

@@ -22,10 +22,64 @@ public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelpe
         )
             return;
 
+        AssertNoProviderAllocation(null);
+    }
+
+    [Fact]
+    public async Task EmptyLoggerFactoryDetailedSkipsCaptureAndBuildersWithoutAllocating()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MessageFlowDeliveryTests),
+                nameof(EmptyLoggerFactoryDetailedSkipsCaptureAndBuildersWithoutAllocating)
+            )
+        )
+            return;
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        using var provider = services.BuildServiceProvider();
+        AssertNoProviderAllocation(ZLinkMessageFlowTracer.CreateLogger(provider));
+    }
+
+    [Fact]
+    public void RegisteredLoggerProviderDeliversAndProviderCheckDoesNotAllocate()
+    {
+        WaitForDelivery();
+        var logger = new RecordingLogger();
+        var services = new ServiceCollection();
+        services.AddLogging(builder => builder.AddProvider(new RecordingProvider(logger)));
+        using var provider = services.BuildServiceProvider();
+        var configuredLogger = ZLinkMessageFlowTracer.CreateLogger(provider);
+        for (var i = 0; i < 10_000; ++i)
+            Assert.True(ZLinkMessageFlowDelivery.HasProvider(configuredLogger));
+        var present = 0;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 10_000; ++i)
+            if (ZLinkMessageFlowDelivery.HasProvider(configuredLogger))
+                ++present;
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine("provider-present allocated={0} checks={1}", allocated, present);
+        Assert.Equal(10_000, present);
+        Assert.Equal(0, allocated);
+
+        var tracer = new ZLinkMessageFlowTracer(Options(), configuredLogger);
+        Assert.True(tracer.Enabled(ZLinkMessageFlowOutcome.Received));
+        tracer.Trace(Event("registered-provider"));
+        WaitForDelivery();
+        Assert.Single(logger.Records);
+        Assert.Contains(
+            logger.Records[0].Fields,
+            field => field.Key == "packet" && Equals(field.Value, "registered-provider")
+        );
+    }
+
+    private void AssertNoProviderAllocation(ILogger? logger)
+    {
         Assert.False(ZLinkTelemetry.ActivitySource.HasListeners());
         var options = Options();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
-        var tracer = new ZLinkMessageFlowTracer(options);
+        var tracer = new ZLinkMessageFlowTracer(options, logger);
         var captures = 0;
         var builders = 0;
         for (var i = 0; i < 10_000; ++i)
@@ -36,6 +90,7 @@ public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelpe
         for (var i = 0; i < 10_000; ++i)
             Produce();
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine("allocated={0} captures={1} builders={2}", allocated, captures, builders);
 
         Assert.Equal(0, allocated);
         Assert.Equal(0, captures);
@@ -717,6 +772,13 @@ public sealed class MessageFlowDeliveryTests(Xunit.Abstractions.ITestOutputHelpe
                 TimeSpan.FromSeconds(10)
             )
         );
+
+    private sealed class RecordingProvider(ILogger logger) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => logger;
+
+        public void Dispose() { }
+    }
 
     private sealed class RecordingLogger : ILogger
     {
