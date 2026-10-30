@@ -2858,7 +2858,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       co_return std::nullopt;
                   co_return host::route_fence_t{
                     address.authority_owner_generation,
-                    static_cast<std::uint64_t> (address.owner.lease_generation)};
+                    static_cast<std::uint64_t> (address.owner.lease_generation),
+                    address.node_generation};
               },
               location_options_at_startup.owner_lease_fencing_margin,
               location_options_at_startup.session_relocation_seal_timeout);
