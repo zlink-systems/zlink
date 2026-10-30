@@ -363,7 +363,11 @@ measurement_t verify_ready_native_failure (std::size_t iterations = 1, bool trac
           static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::nanoseconds> (
                                         std::chrono::steady_clock::now () - started)
                                         .count ());
-        require (!submitted->result ().value (), "initial rejection was admitted");
+        const auto &admission = submitted->result ();
+        require (!admission
+                   && admission.error_kind ()
+                        == zlink::framework::framework_error_kind_t::unavailable,
+                 "initial rejection did not preserve Unavailable");
         submitted.reset ();
         marker.reset ();
         const auto terminal_deadline = std::chrono::steady_clock::now () + 5s;
