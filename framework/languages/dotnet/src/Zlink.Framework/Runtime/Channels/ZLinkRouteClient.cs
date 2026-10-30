@@ -358,8 +358,7 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
     ZLinkFrameworkRuntime runtime,
     string meshName,
     RoutingId targetNodeRid,
-    TRequest request,
-    bool durable = false
+    TRequest request
 ) : IZLinkRequestCall
 {
     private ZLinkCallMetadata? _metadata;
@@ -423,14 +422,13 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
             : null;
         try
         {
-            if (!durable)
-                runtime.EnsureKnownRouteMeshPeer(
-                    nodeRuntime,
-                    meshName,
-                    targetNodeRid,
-                    ZLinkFrameworkRuntime.PacketRouteTarget,
-                    packetName
-                );
+            runtime.RequireKnownRouteMeshTarget(
+                nodeRuntime,
+                meshName,
+                targetNodeRid,
+                ZLinkFrameworkRuntime.PacketRouteTarget,
+                packetName
+            );
             var header = ZLinkClientCallCodec.CreateEnvelope(
                 ZLinkMessageKind.Request,
                 meshName,
@@ -462,7 +460,6 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
                     timeout,
                     cancellationToken,
                     ZLinkCallMetadata.Encode(_metadata),
-                    durable,
                     requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
