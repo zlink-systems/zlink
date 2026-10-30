@@ -10,6 +10,7 @@
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include <gtest/gtest.h>
+#include "../support/telemetry_observation.hpp"
 #include <nlohmann/json.hpp>
 #include <zlink/json.hpp>
 #include <zlink/framework.hpp>
@@ -1082,6 +1083,7 @@ class exercise_t final : public zf::hosted_service_t
             auto terminated = _evidence->send_terminated.get_future ();
             require_ready (terminated, "pending intent send diagnostic did not complete");
         }
+        zf::test::acknowledge_delivery (std::chrono::steady_clock::now () + request_timeout);
         if (followup.valid ())
             followup_result.emplace (followup.get ());
         const auto closed = _evidence->close_completion->result ();

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/telemetry_observation.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "../support/session_disconnect_probe_spot.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
@@ -1562,6 +1563,7 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
       (*staged_source_sink) ("StaleBindingPush", stream_codec_t::message_pack,
                              zlink::message_t::from ("stale"))
         .result ();
+    test::acknowledge_delivery ();
     if (stale_binding_push || !saw_stale_target->load (std::memory_order_acquire))
         return 10;
 
@@ -1889,6 +1891,7 @@ int bound_session_push_detaches_before_direct_sink_entry ()
             return 6;
         }
     }
+    test::acknowledge_delivery ();
     if (!saw_fifo_session->load (std::memory_order_acquire)
         || !saw_completion_session->load (std::memory_order_acquire))
         return 8;
@@ -1905,6 +1908,7 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
     const auto owner = zlink::routing_id_t::from ("session-owner");
     const auto original_rid = zlink::routing_id_t::from ("original-session");
     const auto replacement_rid = zlink::routing_id_t::from ("replacement-session");
+    auto observations = std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
     std::vector<message_flow_event_t> events;
     auto live_mode =
       std::make_shared<std::atomic<message_flow_log_mode_t>> (message_flow_log_mode_t::detailed);
@@ -1912,7 +1916,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
     trace_options.message_flow (message_flow_log_mode_t::detailed);
     dispatch_options_access_t::set_live_mode (trace_options, live_mode);
     dispatch_options_access_t::set_observer_for_tests (
-      trace_options, [&] (const message_flow_event_t &event) { events.push_back (event); });
+      trace_options,
+      [observations] (const message_flow_event_t &event) { observations->record (event); });
     gateway.set_dispatch (std::move (trace_options));
 
     const auto original_route =
@@ -1938,6 +1943,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
         return 3;
     if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
         return 4;
+    test::acknowledge_delivery ();
+    events = observations->snapshot ();
     const auto original_hex = original_rid.to_hex ();
     const auto completion = std::find_if (events.begin (), events.end (), [&] (const auto &event) {
         return event.detail_stage
@@ -1971,6 +1978,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
         return 8;
     if ((*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
         return 9;
+    test::acknowledge_delivery ();
+    events = observations->snapshot ();
     const auto failed_hex = zlink::routing_id_t::from ("failed-session").to_hex ();
     const auto failure = std::find_if (events.begin (), events.end (), [&] (const auto &event) {
         return event.detail_stage == std::optional<std::string> ("detached_delivery")
@@ -1993,6 +2002,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
     live_mode->store (message_flow_log_mode_t::off, std::memory_order_relaxed);
     const auto event_count_before_off = events.size ();
     admitted = gateway.admit_bound_session_delivery (actor, 31);
+    test::acknowledge_delivery ();
+    events = observations->snapshot ();
     if (!admitted || events.size () != event_count_before_off)
         return 12;
     replacement_route.session_rid = zlink::routing_id_t::from ("newest-session");
@@ -2007,6 +2018,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
     live_mode->store (message_flow_log_mode_t::detailed, std::memory_order_relaxed);
     if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
         return 14;
+    test::acknowledge_delivery ();
+    events = observations->snapshot ();
     const auto switched_completion = std::find_if (
       events.begin () + static_cast<std::ptrdiff_t> (event_count_before_off), events.end (),
       [&] (const auto &event) {
@@ -3353,11 +3366,11 @@ int common_session_disconnect_uses_actor_packet_route ()
         if (!empty_success (deliver (stale)) || callbacks != 2)
             return 3;
     }
-    auto errors_owner = std::make_shared<std::vector<message_dispatch_error_event_t>> ();
-    const auto &errors = *errors_owner;
+    auto errors_owner =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     node->dispatch.message_flow (message_flow_log_mode_t::normal);
     dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      node->dispatch, [errors_owner] (const auto &event) { errors_owner->push_back (event); });
+      node->dispatch, [errors_owner] (const auto &event) { errors_owner->record (event); });
     auto trailing = bytes;
     trailing.push_back (0);
     auto truncated = bytes;
@@ -3371,6 +3384,8 @@ int common_session_disconnect_uses_actor_packet_route ()
         if (!empty_success (deliver (malformed)) || callbacks != 2)
             return 4;
     }
+    test::acknowledge_delivery ();
+    const auto errors = errors_owner->snapshot ();
     if (errors.size () != 5)
         return 5;
     for (const auto &error : errors) {
@@ -8106,16 +8121,19 @@ int join_completion_callback_failure_is_reported ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
     auto state = std::make_shared<actor_gateway_state_t> ();
-    std::vector<message_dispatch_error_event_t> errors;
+    auto observations =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     state->dispatch.message_flow (message_flow_log_mode_t::normal);
     dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      state->dispatch, [&errors] (const auto &event) { errors.push_back (event); });
+      state->dispatch, [observations] (const auto &event) { observations->record (event); });
     actor_gateway_runtime_t gateway (state);
     auto actor = test_actor_ref ("node", "player", "callback-failure", 7);
     auto fence = gateway.begin_join_completion_delivery_fence (actor);
     gateway.settle_join_completion_delivery_fence (
       actor, fence, result_t<void>::success (),
       [] (result_t<void>) { throw std::runtime_error ("completion failure"); });
+    test::acknowledge_delivery ();
+    const auto errors = observations->snapshot ();
     return errors.size () == 1
                && errors.front ().reason == dispatch_error_reason_t::handler_exception
                && errors.front ().error_message == "completion failure"
@@ -8481,18 +8499,15 @@ int actor_native_terminal_cause (std::string_view cause,
       });
     dispatch_options_t diagnostics;
     diagnostics.message_flow (mode);
-    std::mutex errors_mutex;
-    std::vector<message_dispatch_error_event_t> errors;
-    std::vector<message_flow_event_t> flows;
-    dispatch_options_access_t::set_observer_for_tests (diagnostics, [&] (const auto &event) {
-        std::lock_guard lock (errors_mutex);
-        flows.push_back (event);
-    });
+    auto error_observations =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
+    auto flow_observations =
+      std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
+    dispatch_options_access_t::set_observer_for_tests (
+      diagnostics, [flow_observations] (const auto &event) { flow_observations->record (event); });
     dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      diagnostics, [&] (const auto &event) {
-          std::lock_guard lock (errors_mutex);
-          errors.push_back (event);
-      });
+      diagnostics,
+      [error_observations] (const auto &event) { error_observations->record (event); });
     node->dispatch = diagnostics;
     service_collection_t services;
     services.add_singleton<actor_gateway_runtime_t> ();
@@ -8645,8 +8660,8 @@ int actor_native_terminal_cause (std::string_view cause,
     if (forwarded) {
         assert (following.wait_for (5s) == std::future_status::ready);
         {
-            std::lock_guard lock (errors_mutex);
-            assert (errors.empty ());
+            test::acknowledge_delivery (std::chrono::steady_clock::now () + 5s);
+            assert (error_observations->snapshot ().empty ());
         }
         for (const auto &fields : metrics.collect_fields ())
             assert (fields.at ("name") != "zlink.mesh_node.messages.dropped");
@@ -8661,8 +8676,8 @@ int actor_native_terminal_cause (std::string_view cause,
         assert (backlog.front ().packet_name == header.message_name);
         assert (!backlog.front ().is_request);
         {
-            std::lock_guard lock (errors_mutex);
-            assert (errors.empty ());
+            test::acknowledge_delivery (std::chrono::steady_clock::now () + 5s);
+            assert (error_observations->snapshot ().empty ());
         }
         for (const auto &fields : metrics.collect_fields ())
             assert (fields.at ("name") != "zlink.mesh_node.messages.dropped");
@@ -8674,6 +8689,11 @@ int actor_native_terminal_cause (std::string_view cause,
     const auto ready = completed.wait_for (5s) == std::future_status::ready;
     const auto drained =
       service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 5s);
+    const auto observer_failure_delta =
+      dispatch_error_reporter_t::observer_failures () - observer_failures_before;
+    test::acknowledge_delivery (std::chrono::steady_clock::now () + 5s);
+    const auto errors = error_observations->snapshot ();
+    const auto flows = flow_observations->snapshot ();
     service.stop ();
     location.stop ();
     worker->drain ();
@@ -8739,8 +8759,7 @@ int actor_native_terminal_cause (std::string_view cause,
         ? 1
         : 0;
     if (malformed)
-        assert (dispatch_error_reporter_t::observer_failures () - observer_failures_before
-                == (stale && mode != message_flow_log_mode_t::off ? 1 : 0));
+        assert (observer_failure_delta == (stale && mode != message_flow_log_mode_t::off ? 1 : 0));
     return handler_calls == (application_failure ? 1 : 0) && reported == expected_reports
                && opposite_cause == 0 && errors.size () == expected_reports
                && drops == expected_drops
@@ -8751,6 +8770,21 @@ int actor_native_terminal_cause (std::string_view cause,
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--telemetry-consumers") {
+        zlink::framework::completion_owner_t completion_owner;
+        for (
+          const auto run :
+          {relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_atomically,
+           bound_session_push_detaches_before_direct_sink_entry,
+           admitted_bound_session_delivery_keeps_original_session_after_rebind,
+           common_session_disconnect_uses_actor_packet_route,
+           join_completion_callback_failure_is_reported}) {
+            if (const auto result = run (); result != 0)
+                return result;
+        }
+        return 0;
+    }
+
     if (argc == 1) {
         using zlink::framework::message_flow_log_mode_t;
         for (const auto cause : {"stale_target", "no_handler"})
