@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Zlink.Framework.Runtime.Diagnostics;
 
@@ -27,6 +28,11 @@ internal sealed class ZLinkTelemetryLease
 internal sealed class ZLinkMessageFlowDelivery
 {
     internal const int Capacity = 8192;
+
+    // Provider discovery must precede capture and event construction without creating the worker.
+    internal static bool HasProvider(ILogger logger) =>
+        logger is not NullLogger || ZLinkTelemetry.ActivitySource.HasListeners();
+
     private static readonly Lazy<ZLinkMessageFlowDelivery> ProcessOwner = new(() => new());
     internal static ZLinkMessageFlowDelivery Shared => ProcessOwner.Value;
     internal static bool IsCreated => ProcessOwner.IsValueCreated;
@@ -72,8 +78,22 @@ internal sealed class ZLinkMessageFlowDelivery
     internal long FailureCount(ZLinkTelemetryProviderRole role) =>
         Volatile.Read(ref _failures[(int)role]);
 
-    internal void Submit(ZLinkTelemetryRecord record)
+    internal void Submit(
+        ZLinkTelemetryLease lease,
+        ILogger logger,
+        ZLinkMessageFlowEvent? flow,
+        ZLinkDispatchErrorSnapshot? error
+    )
     {
+        var source = ZLinkTelemetry.ActivitySource;
+        var record = new ZLinkTelemetryRecord(
+            lease,
+            logger,
+            source.HasListeners() ? source : null,
+            Activity.Current?.Context ?? default,
+            flow,
+            error
+        );
         lock (_gate)
         {
             if (record.Lease.Retired)
