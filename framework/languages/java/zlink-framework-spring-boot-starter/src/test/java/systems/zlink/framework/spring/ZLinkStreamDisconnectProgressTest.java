@@ -6,11 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
@@ -68,8 +70,11 @@ final class ZLinkStreamDisconnectProgressTest {
             application.refresh();
             var runtime = application.getBean(ZLinkFrameworkRuntime.class);
             var metrics = application.getBean(SimpleMeterRegistry.class);
-            int port = URI.create(runtime.listenerStatus(ZLinkListenerKind.STREAM, STREAM_NODE)
-                    .endpoint()).getPort();
+            int port =
+                    URI.create(
+                                    runtime.listenerStatus(ZLinkListenerKind.STREAM, STREAM_NODE)
+                                            .endpoint())
+                            .getPort();
             try (var client = new Socket("127.0.0.1", port)) {
                 client.setSoTimeout((int) OBSERVATION_TIMEOUT.toMillis());
                 send(client, BIND_PACKET, 1L, "\"" + ACTOR_ID + "\"");
@@ -77,20 +82,28 @@ final class ZLinkStreamDisconnectProgressTest {
                 readFrame(client);
                 readFrame(client);
                 observations.bound.get(OBSERVATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-                Counter opened = metrics.find("zlink.stream.connections.opened")
-                        .tag("transport", "tcp").counter();
-                assertTrue(opened != null && opened.count() >= 1,
+                Counter opened =
+                        metrics.find("zlink.stream.connections.opened")
+                                .tag("transport", "tcp")
+                                .counter();
+                assertTrue(
+                        opened != null && opened.count() >= 1,
                         "The public metrics provider must observe the bound connection before Hold");
                 send(client, HOLD_PACKET, null, "{}");
-                observations.handlerEntered.get(OBSERVATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                observations.handlerEntered.get(
+                        OBSERVATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
                 client.close();
 
                 awaitPhysicalCloseMetric(metrics);
                 assertFalse(observations.releaseHandler.isDone());
-                assertFalse(observations.sessionDisconnected.isDone(),
+                assertFalse(
+                        observations.sessionDisconnected.isDone(),
                         "Session user callbacks must stay serialized behind the held handler");
-                System.out.println("STREAM_CAUSAL physical-close-witness=micrometer "
-                        + "metric=" + CLOSED_METRIC + " held-handler=pending");
+                System.out.println(
+                        "STREAM_CAUSAL physical-close-witness=micrometer "
+                                + "metric="
+                                + CLOSED_METRIC
+                                + " held-handler=pending");
                 try {
                     observations.actorDisconnected.get(
                             OBSERVATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
@@ -105,9 +118,12 @@ final class ZLinkStreamDisconnectProgressTest {
                 observations.sessionDisconnected.get(
                         OBSERVATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
                 assertEquals(1, observations.actorDisconnectCount.get());
-                System.out.println("STREAM_CAUSAL after-release-actor-callback=observed "
-                        + "actor-callback-before-release=" + actorNotifiedBeforeRelease);
-                assertTrue(actorNotifiedBeforeRelease,
+                System.out.println(
+                        "STREAM_CAUSAL after-release-actor-callback=observed "
+                                + "actor-callback-before-release="
+                                + actorNotifiedBeforeRelease);
+                assertTrue(
+                        actorNotifiedBeforeRelease,
                         "Physical disconnect was observed by the server, but its Actor notification "
                                 + "waited for the unrelated Session handler to finish");
             } finally {
@@ -119,21 +135,33 @@ final class ZLinkStreamDisconnectProgressTest {
     private static void awaitPhysicalCloseMetric(SimpleMeterRegistry metrics) throws Exception {
         long deadline = System.nanoTime() + OBSERVATION_TIMEOUT.toNanos();
         while (System.nanoTime() < deadline) {
-            Counter counter = metrics.find(CLOSED_METRIC).tag("transport", "tcp")
-                    .tag("close_reason", "transport_error").counter();
+            Counter counter =
+                    metrics.find(CLOSED_METRIC)
+                            .tag("transport", "tcp")
+                            .tag("close_reason", "transport_error")
+                            .counter();
             if (counter != null && counter.count() >= 1) return;
             Thread.sleep(METRIC_POLL_MILLIS);
         }
-        throw new AssertionError("No server physical-disconnect metric was observed; "
-                + "this run cannot establish a handler/cleanup dependency");
+        throw new AssertionError(
+                "No server physical-disconnect metric was observed; "
+                        + "this run cannot establish a handler/cleanup dependency");
     }
 
     private static void send(Socket client, String packet, Long sequence, String json)
             throws Exception {
-        byte[] header = ZLinkStreamHeaderCodec.encode(new ZLinkStreamHeader(
-                sequence == null ? ZLinkStreamMessageKind.SEND : ZLinkStreamMessageKind.REQUEST,
-                ZLinkStreamCodec.RAW, EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                Optional.ofNullable(sequence), packet, Map.of(), Optional.empty()));
+        byte[] header =
+                ZLinkStreamHeaderCodec.encode(
+                        new ZLinkStreamHeader(
+                                sequence == null
+                                        ? ZLinkStreamMessageKind.SEND
+                                        : ZLinkStreamMessageKind.REQUEST,
+                                ZLinkStreamCodec.RAW,
+                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                Optional.ofNullable(sequence),
+                                packet,
+                                Map.of(),
+                                Optional.empty()));
         byte[] body = json.getBytes(StandardCharsets.UTF_8);
         ByteBuffer frame = ByteBuffer.allocate(6 + header.length + body.length);
         frame.putShort((short) header.length).putInt(body.length).put(header).put(body);
@@ -171,8 +199,13 @@ final class ZLinkStreamDisconnectProgressTest {
                 options.addLocationStore(new ZLinkInMemoryLocationStore());
                 var node = options.addRouteMesh("game");
                 node.listen("tcp://127.0.0.1:0");
-                node.objects().server().addEntrySpot(DisconnectSpot.class)
-                        .addActorFactory(ACTOR_TYPE, Player.class, PlayerFactory.class,
+                node.objects()
+                        .server()
+                        .addEntrySpot(DisconnectSpot.class)
+                        .addActorFactory(
+                                ACTOR_TYPE,
+                                Player.class,
+                                PlayerFactory.class,
                                 factory -> factory.disableRelocation());
                 var stream = options.addStreamNode(STREAM_NODE);
                 stream.bind("tcp://127.0.0.1:0");
@@ -184,27 +217,48 @@ final class ZLinkStreamDisconnectProgressTest {
 
     public static final class Player implements ZLinkActor {
         private final ZLinkActorContext context;
-        Player(ZLinkActorContext context) { this.context = context; }
-        @Override public ZLinkActorContext context() { return context; }
+
+        Player(ZLinkActorContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public ZLinkActorContext context() {
+            return context;
+        }
     }
 
     public static final class PlayerFactory implements ZLinkActorFactory {
-        @Override public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
+        @Override
+        public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
             return CompletableFuture.completedFuture(new Player(context));
         }
     }
 
     public static final class DisconnectSpot implements ZLinkEntrySpot<Player> {
         private final ZLinkEntrySpotContext context;
-        public DisconnectSpot(ZLinkEntrySpotContext context) { this.context = context; }
-        @Override public ZLinkEntrySpotContext context() { return context; }
-        @Override public CompletionStage<Void> onJoinedActor(Player actor) {
+
+        public DisconnectSpot(ZLinkEntrySpotContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public ZLinkEntrySpotContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(Player actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(Player actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(Player actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onDisconnectActor(Player actor) {
+
+        @Override
+        public CompletionStage<Void> onDisconnectActor(Player actor) {
             observations.actorDisconnectCount.incrementAndGet();
             observations.actorDisconnected.complete(null);
             return CompletableFuture.completedFuture(null);
@@ -214,40 +268,62 @@ final class ZLinkStreamDisconnectProgressTest {
     public static final class HeldSession implements ZLinkSession {
         private final ZLinkSessionContext context;
         private final ZLinkActorManager actors;
+
         public HeldSession(ZLinkSessionContext context, ZLinkActorManager actors) {
             this.context = context;
             this.actors = actors;
         }
-        @Override public ZLinkSessionContext context() { return context; }
-        @Override public CompletionStage<Void> onConnected() {
+
+        @Override
+        public ZLinkSessionContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onConnected() {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onDisconnected() {
+
+        @Override
+        public CompletionStage<Void> onDisconnected() {
             observations.sessionDisconnected.complete(null);
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onError(ZLinkStreamError error) {
+
+        @Override
+        public CompletionStage<Void> onError(ZLinkStreamError error) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onDispatch(
+
+        @Override
+        public CompletionStage<Void> onDispatch(
                 ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
             if (HOLD_PACKET.equals(dispatch.packetName())) {
                 observations.handlerEntered.complete(null);
                 return observations.releaseHandler;
             }
-            return actors.getOrCreate(payload.decode(String.class), ACTOR_TYPE).submit()
-                    .thenCompose(result -> {
-                        var actor = switch (result) {
-                            case ZLinkActorCreateResult.Created created -> created.actor();
-                            case ZLinkActorCreateResult.Existing existing -> existing.actor();
-                            case ZLinkActorCreateResult.Rejected rejected ->
-                                throw new IllegalStateException("Actor creation rejected: " + rejected.reply());
-                        };
-                        return context.actors().bindOrGet(actor);
-                    }).thenRun(() -> {
-                        context.client().reply("bound").submit();
-                        observations.bound.complete(null);
-                    });
+            return actors.getOrCreate(payload.decode(String.class), ACTOR_TYPE)
+                    .submit()
+                    .thenCompose(
+                            result -> {
+                                var actor =
+                                        switch (result) {
+                                            case ZLinkActorCreateResult.Created created ->
+                                                    created.actor();
+                                            case ZLinkActorCreateResult.Existing existing ->
+                                                    existing.actor();
+                                            case ZLinkActorCreateResult.Rejected rejected ->
+                                                    throw new IllegalStateException(
+                                                            "Actor creation rejected: "
+                                                                    + rejected.reply());
+                                        };
+                                return context.actors().bindOrGet(actor);
+                            })
+                    .thenRun(
+                            () -> {
+                                context.client().reply("bound").submit();
+                                observations.bound.complete(null);
+                            });
         }
     }
 }
