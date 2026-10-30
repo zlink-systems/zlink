@@ -1,0 +1,58 @@
+name: Ready for queue
+
+on:
+  pull_request:
+    types:
+      - labeled
+      - synchronize
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ready-for-queue-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        (github.event.action == 'labeled' && github.event.label.name == 'ready-for-queue') ||
+        (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-for-queue'))
+      )
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "Ready-for-queue verification is enabled for this pull request."
+
+  framework-cpp:
+    name: framework-cpp
+    needs: gate
+    uses: ./.github/workflows/framework-cpp.yml
+    with:
+      queue_checks_only: true
+      concurrency_key: framework-cpp
+
+  framework-dotnet:
+    name: framework-dotnet
+    needs: gate
+    uses: ./.github/workflows/framework-dotnet.yml
+    with:
+      queue_checks_only: true
+      concurrency_key: framework-dotnet
+
+  framework-java:
+    name: framework-java
+    needs: gate
+    uses: ./.github/workflows/framework-java.yml
+    with:
+      queue_checks_only: true
+      concurrency_key: framework-java
+
+  framework-node:
+    name: framework-node
+    needs: gate
+    uses: ./.github/workflows/framework-node.yml
+    with:
+      queue_checks_only: true
+      concurrency_key: framework-node

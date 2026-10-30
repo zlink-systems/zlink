@@ -34,6 +34,17 @@ on:
 #      - "scripts/ci/framework-java-test-results.ps1"
   workflow_dispatch:
   workflow_call:
+    inputs:
+      queue_checks_only:
+        description: Run the checks used to admit a pull request to the merge queue.
+        required: false
+        type: boolean
+        default: false
+      concurrency_key:
+        description: Unique concurrency key supplied by the calling workflow.
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only;
@@ -50,7 +61,7 @@ env:
   FRAMEWORK_JAVA_MIN_TESTS: "1459"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ inputs.concurrency_key || github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -68,8 +79,8 @@ jobs:
             runner: ubuntu-24.04
             core_platform: linux-x64
             local_package_root: .artifacts/wsl
-        # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
-        include: ${{ fromJSON(startsWith(github.ref_name, 'mergify/merge-queue/') && '[]' || '[{"target":{"name":"win-x64","runner":"windows-latest","core_platform":"windows-x64","local_package_root":".artifacts/windows"}}]') }}
+        # Windows runs on schedule, manual and release runs; queue batches and queue checks omit Windows.
+        include: ${{ fromJSON((inputs.queue_checks_only || startsWith(github.ref_name, 'mergify/merge-queue/')) && '[]' || '[{"target":{"name":"win-x64","runner":"windows-latest","core_platform":"windows-x64","local_package_root":".artifacts/windows"}}]') }}
 
     steps:
       - name: Checkout repository
@@ -192,7 +203,7 @@ jobs:
   framework-java-compare:
     name: Compare Linux and Windows Java results
     runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
-    if: always() && !startsWith(github.ref_name, 'mergify/merge-queue/')
+    if: always() && !inputs.queue_checks_only && !startsWith(github.ref_name, 'mergify/merge-queue/')
     needs: framework-java
     steps:
       - name: Checkout repository

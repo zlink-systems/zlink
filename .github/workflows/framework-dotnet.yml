@@ -45,6 +45,17 @@ on:
 #       - "bindings/dotnet/native/**"
   workflow_dispatch:
   workflow_call:
+    inputs:
+      queue_checks_only:
+        description: Run the checks used to admit a pull request to the merge queue.
+        required: false
+        type: boolean
+        default: false
+      concurrency_key:
+        description: Unique concurrency key supplied by the calling workflow.
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only;
@@ -69,7 +80,7 @@ env:
 # progress, so consecutive pushes do not pile up matrix jobs and starve the
 # release workflows of runners.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ inputs.concurrency_key || github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -148,8 +159,8 @@ jobs:
             runner: macos-15
             rid: osx-arm64
             core_platform: macos-arm64
-        # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
-        include: ${{ fromJSON(startsWith(github.ref_name, 'mergify/merge-queue/') && '[]' || '[{"target":{"name":"win-x64","runner":"windows-latest","rid":"win-x64","core_platform":"windows-x64"}}]') }}
+        # Windows runs on schedule, manual and release runs; queue batches and queue checks omit Windows.
+        include: ${{ fromJSON((inputs.queue_checks_only || startsWith(github.ref_name, 'mergify/merge-queue/')) && '[]' || '[{"target":{"name":"win-x64","runner":"windows-latest","rid":"win-x64","core_platform":"windows-x64"}}]') }}
 
     steps:
       - name: Checkout repository

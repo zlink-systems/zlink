@@ -22,7 +22,7 @@ jobs:
       (github.event_name == 'delete' &&
        github.event.ref_type == 'branch' &&
        startsWith(github.event.ref, 'mergify/merge-queue/'))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Cancel queued and running workflow runs for the branch
         env:
@@ -60,4 +60,3 @@ jobs:
             echo "Canceling workflow run $run_id for $branch."
             gh run cancel "$run_id" --repo "$GITHUB_REPOSITORY"
           done <<< "$run_ids"
-

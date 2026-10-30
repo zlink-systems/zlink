@@ -41,6 +41,17 @@ on:
 #      - "scripts/local-package/sync-version.py"
   workflow_dispatch:
   workflow_call:
+    inputs:
+      queue_checks_only:
+        description: Run the checks used to admit a pull request to the merge queue.
+        required: false
+        type: boolean
+        default: false
+      concurrency_key:
+        description: Unique concurrency key supplied by the calling workflow.
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only;
@@ -54,7 +65,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ inputs.concurrency_key || github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -195,8 +206,8 @@ jobs:
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
-    # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
-    if: ${{ !startsWith(github.ref_name, 'mergify/merge-queue/') }}
+    # Windows runs on schedule, manual and release runs; queue batches and queue checks use Linux only.
+    if: ${{ !inputs.queue_checks_only && !startsWith(github.ref_name, 'mergify/merge-queue/') }}
     # Same rule as the Linux job, with its own variable.
     runs-on: ${{ vars.ZLINK_CPP_WINDOWS_RUNNER && fromJSON(vars.ZLINK_CPP_WINDOWS_RUNNER) || 'windows-2022' }}
     env:

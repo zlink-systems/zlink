@@ -19,6 +19,10 @@ queue_rules:
       - base=main
       - label=merge-queue
       - -draft
+      - check-success=framework-dotnet / dotnet-release-gate
+      - check-success=framework-node / node-release-gate
+      - check-success=framework-java / linux-x64 / Java 25
+      - check-success=framework-cpp / Framework C++ unit and contract tests
     merge_conditions:
       - check-success=dotnet-release-gate
       - check-success=node-release-gate
