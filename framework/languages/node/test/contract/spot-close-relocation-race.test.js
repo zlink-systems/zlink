@@ -1,8 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+const {
+  ZLinkHostServiceRelocationRuntime
+} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
 const { ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/contracts');
-const { ZLinkSpotSerialTurnExecutor } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+const {
+  ZLinkSpotSerialTurnExecutor
+} = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
 
 for (const { casCommits, path } of [
   { casCommits: true, path: 'shell' },
@@ -11,11 +15,17 @@ for (const { casCommits, path } of [
 ]) {
   test(`Spot ${path} relocation waits for pending Close CAS before sealing (${casCommits ? 'stored' : 'failed'})`, async () => {
     let releaseCas;
-    const casDecision = new Promise((resolve) => { releaseCas = resolve; });
+    const casDecision = new Promise((resolve) => {
+      releaseCas = resolve;
+    });
     let enteredDecision;
-    const decisionEntered = new Promise((resolve) => { enteredDecision = resolve; });
+    const decisionEntered = new Promise((resolve) => {
+      enteredDecision = resolve;
+    });
     let enteredSeal;
-    const sealEntered = new Promise((resolve) => { enteredSeal = resolve; });
+    const sealEntered = new Promise((resolve) => {
+      enteredSeal = resolve;
+    });
     let closing = false;
     const events = [];
     const activation = {
@@ -25,20 +35,36 @@ for (const { casCommits, path } of [
         events.push('execution:seal');
         return Promise.resolve({ timers: [] });
       },
-      abortRelocation() { events.push('execution:abort'); return true; }
+      abortRelocation() {
+        events.push('execution:abort');
+        return true;
+      }
     };
     const runtime = new ZLinkHostServiceRelocationRuntime({
-      locationStore: () => ({ readAuthority: async () => ({
-        kind: 'snapshot',
-        storeVersion: { value: 'ready-v1' },
-        payload: Buffer.alloc(0),
-        objectGeneration: 1n,
-        authorityOwnerGeneration: 1n,
-        ownerId: 'owner',
-        ownerLeaseGeneration: 1n,
-        allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Spot' },
-        storeNow: new Date()
-      }) }),
+      registration: {
+        spotNodes: new Map([
+          [
+            'mesh',
+            {
+              spotFactoryRegistrations: { Spot: { relocation: { kind: 'recreate' } } },
+              instanceSpotFactoryRegistrations: { Spot: { relocation: { kind: 'recreate' } } }
+            }
+          ]
+        ])
+      },
+      locationStore: () => ({
+        readAuthority: async () => ({
+          kind: 'snapshot',
+          storeVersion: { value: 'ready-v1' },
+          payload: Buffer.alloc(0),
+          objectGeneration: 1n,
+          authorityOwnerGeneration: 1n,
+          ownerId: 'owner',
+          ownerLeaseGeneration: 1n,
+          allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Spot' },
+          storeNow: new Date()
+        })
+      }),
       spotManager: () => ({
         pendingSpotCloseDecision() {
           enteredDecision();
@@ -60,15 +86,22 @@ for (const { casCommits, path } of [
         commitSpotMessageFollowIngress() {}
       })
     });
-    runtime.spotRegistration = () => ({ relocation: { kind: 'allowed' } });
     runtime.waitForRelocationBudgetHeadroom = async () => {};
     runtime.runCoordinator = async (_mesh, _target, _authority, captured) => {
       await captured.abortSource();
     };
 
-    const relocation = path === 'shell'
-      ? runtime.relocatePerActorSpotShell('mesh', activation, { rid: 'target' }, undefined)
-      : runtime.relocateSpotAggregate('mesh', activation, 'instance_spot', [], { rid: 'target' }, undefined);
+    const relocation =
+      path === 'shell'
+        ? runtime.relocatePerActorSpotShell('mesh', activation, { rid: 'target' }, undefined)
+        : runtime.relocateSpotAggregate(
+            'mesh',
+            activation,
+            'instance_spot',
+            [],
+            { rid: 'target' },
+            undefined
+          );
     await Promise.race([decisionEntered, sealEntered]);
     assert.deepEqual(events, []);
     closing = casCommits;
@@ -82,8 +115,10 @@ for (const { casCommits, path } of [
     } else {
       await relocation;
       assert.deepEqual(events, [
-        'message-follow:seal', 'execution:seal',
-        'execution:abort', 'message-follow:abort'
+        'message-follow:seal',
+        'execution:seal',
+        'execution:abort',
+        'message-follow:abort'
       ]);
     }
   });
