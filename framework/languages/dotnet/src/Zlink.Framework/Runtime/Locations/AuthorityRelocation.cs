@@ -177,6 +177,8 @@ internal sealed record ZLinkObjectReservationRequest(
     byte? ObjectRelocationPolicy = null
 );
 
+internal sealed record ZLinkCreationAuthorityRecovery(byte? RelocationPolicy);
+
 internal sealed record ZLinkObjectReservation(
     ZLinkAuthorityKey Key,
     string StoreVersion,

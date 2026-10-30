@@ -1,4 +1,3 @@
-import { encodeRoutingIdStorageHex } from '../../packages/framework/src/runtime/routing-id';
 import { ZLinkStatefulAuthorityRouteRuntime } from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
 import { encodeServiceInstanceAuthorityPayload } from '../../packages/framework/src/runtime/foundation/service-authority-payload-codec';
 import assert from 'node:assert/strict';
@@ -371,6 +370,7 @@ for (const backend of ['provider', 'memory'] as const) {
         } else if (scenario === 'factory') {
           let factories = 0;
           const coordinator = new ZLinkUserSpotCreationCoordinator({
+            leaseTracker: creationLeaseTracker(store),
             store,
             relocationPolicy: () => 'disabled',
             target: async () => ({
@@ -2380,6 +2380,7 @@ test('public User Spot coordinator hides Pending, runs one factory, then publish
   let forgottenMesh: string | undefined;
   let forgottenRoute: unknown;
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     publishReadyRoute: (meshName, route) => {
       publicationOrder.push('route');
@@ -2471,6 +2472,7 @@ test('public User Spot coordinator hides Pending, runs one factory, then publish
 test('User Spot rejection is terminal and aborts the Location reservation without Relocation Store', async () => {
   const store = authority(new Set(['mesh:node-a:1:owner-a:1']));
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -2502,6 +2504,7 @@ test('User Spot rejection is terminal and aborts the Location reservation withou
 test('User Spot creation applies one deadline signal through factory and abort cleanup', async () => {
   const store = authority(new Set(['mesh:node-a:1:owner-a:1']));
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -2539,6 +2542,7 @@ test('User Spot reconciliation and abort cleanup stop at their bounded cleanup d
   const store = authority(new Set(['mesh:node-a:1:owner-a:1']));
   store.abort = async () => await new Promise(() => undefined);
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -2573,7 +2577,11 @@ test('User Spot reconciliation and abort cleanup stop at their bounded cleanup d
 test('User Spot reservation maps capacity exhaustion and Pending expiry to exact typed errors', async () => {
   const base = authority(new Set(['mesh:node-a:1:owner-a:1']));
   const exhausted = Object.create(base) as ZLinkInMemoryAuthorityStore;
-  exhausted.reserve = async () => ({ kind: 'placementCapacityExhausted' });
+  let capacityExhausted = false;
+  exhausted.reserve = async () => {
+    capacityExhausted = true;
+    return { kind: 'placementCapacityExhausted' };
+  };
   const targetOptions = {
     meshName: 'mesh',
     nodeRid: 'node-a',
@@ -2582,8 +2590,9 @@ test('User Spot reservation maps capacity exhaustion and Pending expiry to exact
     isLocal: true
   } as const;
   const exhaustedCoordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(exhausted),
     store: exhausted,
-    target: async () => targetOptions
+    target: async () => (capacityExhausted ? undefined : targetOptions)
   });
   await assert.rejects(
     () =>
@@ -2609,6 +2618,7 @@ test('User Spot reservation maps capacity exhaustion and Pending expiry to exact
   const pendingStore = authority(new Set(['mesh:node-a:1:owner-a:1']));
   await pendingStore.reserve(reserveRequest('pending-room', target('node-a', 'owner-a')));
   const pendingCoordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(pendingStore),
     store: pendingStore,
     target: async () => targetOptions,
     pollIntervalMs: 1
@@ -2634,7 +2644,7 @@ test('User Spot reservation maps capacity exhaustion and Pending expiry to exact
   );
 });
 
-test('User Spot placement excludes a capacity-race loser and reserves the next candidate', async () => {
+test('User Spot placement refreshes capacity after a race and reserves the next candidate', async () => {
   const base = authority(new Set(['mesh:node-a:1:owner-a:1', 'mesh:node-b:1:owner-b:1']));
   const store = Object.create(base) as ZLinkInMemoryAuthorityStore;
   const reserve = base.reserve.bind(base);
@@ -2644,10 +2654,10 @@ test('User Spot placement excludes a capacity-race loser and reserves the next c
     return reserveCalls === 1 ? { kind: 'placementCapacityExhausted' } : reserve(request, signal);
   };
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
-    target: async (_request, _signal, excluded) => {
-      const node =
-        excluded?.has(encodeRoutingIdStorageHex('node-a')) === true ? 'node-b' : 'node-a';
+    target: async () => {
+      const node = reserveCalls === 0 ? 'node-a' : 'node-b';
       return {
         meshName: 'mesh',
         nodeRid: node,
@@ -2687,6 +2697,7 @@ test('User Spot production placement maps no target to retriable capacity exhaus
     timeoutMs: 100
   };
   const noTarget = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => undefined
   });
@@ -2704,6 +2715,7 @@ test('User Spot production placement maps no target to retriable capacity exhaus
 
   const providerFault = new Error('provider unavailable');
   const failedProvider = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => {
       throw providerFault;
@@ -2727,6 +2739,7 @@ test('User Spot production placement maps no target to retriable capacity exhaus
     throw storeFault;
   };
   const failedReservation = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(failedStore),
     store: failedStore,
     target: async () => ({
       meshName: 'mesh',
@@ -2758,10 +2771,12 @@ test('User Spot creation reserves at the source and materializes exact Pending c
     release = resolve;
   });
   const targetCoordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => undefined
   });
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -2834,10 +2849,12 @@ test('User Spot creation reserves at the source and materializes exact Pending c
 test('remote User Spot target aborts the exact reservation when materialization fails', async () => {
   const store = authority(new Set(['mesh:node-b:2:owner-b:2']));
   const targetCoordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => undefined
   });
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -2891,6 +2908,7 @@ test('User Spot Ready commit Store rejection is exposed as RequestFailed with th
     throw commitFault;
   };
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -2928,6 +2946,7 @@ test('User Spot get-or-create returns an existing Ready remote incarnation witho
   const store = authority(new Set(['mesh:node-a:1:owner-a:1', 'mesh:node-b:2:owner-b:2']));
   await createActive(store, 'remote-room', target('node-b', 'owner-b'));
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -2963,6 +2982,7 @@ test('User Spot close fences the exact generation and deletes authority only aft
     return await compareExchange(key, version, mutation, signal);
   };
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -3038,6 +3058,7 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
   class RoomSpot {}
   const store = authority(new Set(['mesh:node-a:1:owner-a:1']));
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -3163,6 +3184,7 @@ test('User Spot create reports its first generated SpotId collision without anot
     readyPayload: Buffer.from('ready')
   });
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -3214,6 +3236,7 @@ test('User Spot create rejects its first remote SpotId collision while getOrCrea
   const store = authority(new Set(['mesh:node-a:1:owner-a:1', 'mesh:node-b:2:owner-b:2']));
   await createActive(store, 'spot-remote-collision', target('node-b', 'owner-b'));
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => ({
       meshName: 'mesh',
@@ -3333,6 +3356,7 @@ test('remote User Spot close remains deleted when the terminal reply is lost', a
   const store = authority(new Set(['mesh:node-b:2:owner-b:2']));
   const ready = await createActive(store, 'reply-loss-close', target('node-b', 'owner-b'));
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => undefined
   });
@@ -3421,6 +3445,7 @@ test('command 48 target classifies generation as 33 and every owner fence or mov
           } as never);
     };
     const coordinator = new ZLinkUserSpotCreationCoordinator({
+      leaseTracker: creationLeaseTracker(store),
       store,
       target: async () => undefined
     });
@@ -3471,6 +3496,7 @@ test('local manager Close classifies an owner node change as 34 through the same
   const base = authority(new Set(['mesh:node-b:2:owner-b:2']));
   const ready = await createActive(base, 'classify-local-owner', target('node-b', 'owner-b'));
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(base),
     store: base,
     target: async () => undefined
   });
@@ -3535,19 +3561,31 @@ test('aggregate prepare reserves one typed bundle until aggregate commit or abor
   assert.deepEqual(await store.commitAggregate(prepared.fence), { kind: 'committed' });
 });
 
-function authority(live: Set<string>): ZLinkInMemoryAuthorityStore {
-  return new ZLinkInMemoryAuthorityStore(
+function authority(live: Set<string>) {
+  const ownerLive = (token: ZLinkLocationOwnerToken) =>
+    [...live].some((value) => value.endsWith(`:${token.ownerId}:${token.leaseGeneration}`));
+  return Object.assign(
+    new ZLinkInMemoryAuthorityStore(
+      {
+        isOwnerLive: ownerLive,
+        isTargetLive(descriptor, lifecycle, token) {
+          return live.has(
+            `${descriptor.meshName}:${descriptor.rid}:${lifecycle}:${token.ownerId}:${token.leaseGeneration}`
+          );
+        }
+      },
+      () => new Date(100)
+    ),
     {
-      isOwnerLive: (token) =>
-        [...live].some((value) => value.endsWith(`:${token.ownerId}:${token.leaseGeneration}`)),
-      isTargetLive(descriptor, lifecycle, token) {
-        return live.has(
-          `${descriptor.meshName}:${descriptor.rid}:${lifecycle}:${token.ownerId}:${token.leaseGeneration}`
-        );
-      }
-    },
-    () => new Date(100)
+      leaseTracker: { isOwnerTokenLive: async (token: ZLinkLocationOwnerToken) => ownerLive(token) }
+    }
   );
+}
+
+function creationLeaseTracker(store: object): Pick<ZLinkOwnerLeaseTracker, 'isOwnerTokenLive'> {
+  if ('readOwnerLease' in store)
+    return new ZLinkOwnerLeaseTracker({ store: store as ZLinkOwnerLeaseStore });
+  return (store as ReturnType<typeof authority>).leaseTracker;
 }
 
 for (const boundary of ['attempts', 'elapsed time', 'cancellation', 'target lease loss'] as const) {
@@ -3694,6 +3732,7 @@ async function createThroughLiveDescriptor(
   const tracker = new ZLinkOwnerLeaseTracker({ store: ownerLeaseStore });
   const liveRows = new ZLinkLiveRowFilter();
   const coordinator = new ZLinkUserSpotCreationCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => {
       const descriptors = await liveRows.filter(
