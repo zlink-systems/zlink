@@ -467,7 +467,7 @@ test('default JSON encoding adds no unused custom-replacer context', async (t) =
   }
   const baseline = await trackedCodecAllocations('/node-envelope-codec-cost.test.js', control);
   const allocations = await trackedCodecAllocations('/internal/framework-json-v1.js', encode);
-  const expected = baseline.get('nativeJsonEncoding').objects;
+  const expected = baseline.get('nativeJsonEncoding')?.objects ?? 0;
   const actual = allocationTotal(allocations);
   t.diagnostic(`1000 calls: native=${expected}, strict=${actual} objects`);
   assert.equal(encode(), control());
@@ -593,7 +593,7 @@ test('service reply allocates only its final multipart array', async (t) => {
       reply
     );
     const actual = allocationTotal(allocations);
-    const expected = baseline.get('nativeReplyParts').objects;
+    const expected = baseline.get('nativeReplyParts')?.objects ?? 0;
     t.diagnostic(`1000 calls: final-array=${expected}, reply=${actual} objects`);
     assert.deepEqual(captured[0], header);
     assert.equal(captured[1], payload);
