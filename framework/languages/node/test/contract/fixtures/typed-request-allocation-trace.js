@@ -92,6 +92,7 @@ async function trace({ registryOnly = false } = {}) {
       const control = { objects: 0, bytes: 0 };
       const maintenance = { objects: 0, bytes: 0 };
       const requiredRegistration = { objects: 0, bytes: 0 };
+      const registrationIndex = { objects: 0, bytes: 0 };
       const identity = { objects: 0, bytes: 0 };
       const sites = [];
       function visit(nodes, registrationControl = false) {
@@ -128,8 +129,13 @@ async function trace({ registryOnly = false } = {}) {
             (owner === '/runtime/foundation/operation-registry.js' ||
               (script === __filename && name === 'calibrationClockNow'))
           ) {
-            requiredRegistration.objects += objects;
-            requiredRegistration.bytes += bytes;
+            // Index reads and empty-index resets belong to the full turn,
+            // not the entry/id/clock/deadline registration reference.
+            const target = ['notePending', 'resetEmptyIndex'].includes(name)
+              ? registrationIndex
+              : requiredRegistration;
+            target.objects += objects;
+            target.bytes += bytes;
           } else if (periodic) {
             maintenance.objects += objects;
             maintenance.bytes += bytes;
@@ -167,6 +173,7 @@ async function trace({ registryOnly = false } = {}) {
         modules,
         total,
         requiredRegistration,
+        registrationIndex,
         identity,
         sites
       };
@@ -197,6 +204,7 @@ async function trace({ registryOnly = false } = {}) {
       ...completion,
       control: control.control,
       requiredRegistration: registration.requiredRegistration,
+      registrationIndex: registration.registrationIndex,
       sites: [
         ...completion.sites.filter((site) => !site.registrationControl),
         ...registration.sites.filter((site) => site.registrationControl)
