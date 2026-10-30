@@ -1876,12 +1876,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                                 .toCompletableFuture();
                 try (var record = incoming.get(2, TimeUnit.SECONDS)) {
                     assertEquals(1, caller.pendingCount());
-                    var field = ZLinkJavaRawMeshNode.class.getDeclaredField("operations");
-                    field.setAccessible(true);
-                    var meshRegistry =
-                            (systems.zlink.framework.runtime.internal.service
-                                            .ZLinkServiceOperationRegistry)
-                                    field.get(source);
+                    var meshRegistry = source.operationRegistry();
                     assertEquals(
                             0,
                             meshRegistry.pendingCount(),
