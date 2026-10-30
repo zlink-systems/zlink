@@ -1586,15 +1586,18 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
         }
     }
     const auto selected_mesh = mesh_name.value_or (source->mesh_name ());
-    const auto read_candidates = [&] () -> task_t<std::vector<mesh_node_descriptor_t>> {
+    const auto read_live_descriptors = [&] () -> task_t<std::vector<mesh_node_descriptor_t>> {
         auto listed = co_await await_result (
           _services->get_required<store_location_resolvers_t> ().list_live_mesh_nodes (
             selected_mesh));
         if (!listed.has_value ())
             co_return detail::propagate_failure<std::vector<mesh_node_descriptor_t>> (
               listed, "User Spot target lookup failed");
+        co_return std::move (listed).value ();
+    };
+    const auto eligible_candidates = [&] (const std::vector<mesh_node_descriptor_t> &descriptors) {
         std::vector<mesh_node_descriptor_t> candidates;
-        for (auto &descriptor : listed.value ()) {
+        for (auto &descriptor : descriptors) {
             const auto capable = std::any_of (
               descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
               [&] (const object_capability_t &capability) {
@@ -1609,7 +1612,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                 && capable)
                 candidates.push_back (std::move (descriptor));
         }
-        co_return candidates;
+        return candidates;
     };
     const auto choose_target = [&] (const std::vector<mesh_node_descriptor_t> &candidates) {
         const auto total_weight = std::accumulate (
@@ -1679,6 +1682,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
     }
     object_reserve_result_t reserved;
     live_location_reader_t authority_reader (*_location_store);
+    auto live_descriptors = co_await read_live_descriptors ();
     while (true) {
         if (std::chrono::steady_clock::now () >= deadline)
             co_return result_t<spot_create_result_t>::failure (
@@ -1694,9 +1698,16 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                 || current->allocation.stable_type != stable_type)
                 co_return result_t<spot_create_result_t>::failure (
                   framework_error_kind_t::type_mismatch, "User Spot stable type does not match");
-            if ((current->allocation.state == placement_allocation_state_t::reserved
-                 && current->pending_creation)
-                || !(co_await authority_reader.owner_available (current->owner))) {
+            const bool reservation_pending =
+              current->allocation.state == placement_allocation_state_t::reserved
+              && current->pending_creation;
+            bool owner_unavailable = false;
+            if (!reservation_pending) {
+                const bool owner_available =
+                  co_await authority_reader.owner_available (current->owner);
+                owner_unavailable = !owner_available;
+            }
+            if (reservation_pending || owner_unavailable) {
                 const auto released = co_await _location_store->release_ended_reservation (
                   spot_authority_key (*spot_id), current->store_version, {}, reserve_request);
                 if (released)
@@ -1733,7 +1744,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                           deadline - std::chrono::steady_clock::now ())));
             continue;
         }
-        const auto candidates = co_await read_candidates ();
+        const auto candidates = eligible_candidates (live_descriptors);
         if (candidates.empty ()) {
             // A winner may have committed between the Missing observation and
             // placement lookup. Only the outer observation classifies it.
@@ -1749,9 +1760,18 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                                   target.lifecycle_generation,
                                   {target.owner_id, target.lease_generation}};
         reserved = co_await _location_store->reserve (reserve_request);
+        if (exclusive
+            && (std::holds_alternative<object_already_exists_t> (reserved)
+                || std::holds_alternative<object_reserve_conflict_t> (reserved)))
+            co_return result_t<spot_create_result_t>::failure (
+              framework_error_kind_t::already_exists,
+              "Framework-generated User SpotId already has an authority claim");
+        if (std::holds_alternative<object_placement_capacity_exhausted_t> (reserved)) {
+            live_descriptors = co_await read_live_descriptors ();
+            continue;
+        }
         if (std::holds_alternative<object_already_exists_t> (reserved)
-            || std::holds_alternative<object_reserve_conflict_t> (reserved)
-            || std::holds_alternative<object_placement_capacity_exhausted_t> (reserved))
+            || std::holds_alternative<object_reserve_conflict_t> (reserved))
             continue;
         break;
     }
