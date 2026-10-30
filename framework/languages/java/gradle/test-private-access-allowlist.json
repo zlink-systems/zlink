@@ -154,7 +154,6 @@
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
       "742b58790041bad1dc68efa296764d6d5d7d5701136cc489a3ec9ff92df5fa94": 1,
-      "ddd4b45e7b5eae4bea9001cb8229b01b56ba4d30a8c41d8bf24dd5cb891aa1d2": 1,
       "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 2
     }
   },
@@ -171,7 +170,6 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeIngressAdmissionTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "84e00ccc2de89e033cf9bf84345c4a44747680f107cd28c74f64248185a59f82": 1,
       "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 1
     }
   },
@@ -205,8 +203,7 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeRouteEndTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "0af9c167c85c6013bb432fe0f72dd4c92b555eddc2a2c57182b7878d5d5380ce": 2,
-      "84e00ccc2de89e033cf9bf84345c4a44747680f107cd28c74f64248185a59f82": 1
+      "0af9c167c85c6013bb432fe0f72dd4c92b555eddc2a2c57182b7878d5d5380ce": 2
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeShutdownSealTest.java": {

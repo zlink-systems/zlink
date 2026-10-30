@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/telemetry_observation.hpp"
+
 #include "../support/runtime_failure_fixture.hpp"
 
 #include <zlink/framework.hpp>
@@ -314,7 +316,18 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
                    1);
     }
     if (close_owner) {
-        const std::lock_guard lock (events_mutex);
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        std::unique_lock lock (events_mutex);
+        ASSERT_TRUE (events_changed.wait_until (lock, deadline, [&] {
+            return std::any_of (events.begin (), events.end (), [] (const auto &event) {
+                return event.outcome == message_flow_outcome_t::dropped
+                       && event.surface == dispatch_error_surface_t::stream_session
+                       && event.packet_name == "SealRelay";
+            });
+        }));
+        lock.unlock ();
+        zlink::framework::test::acknowledge_delivery (deadline);
+        lock.lock ();
         std::size_t drops = 0;
         for (const auto &event : events) {
             if (event.outcome == message_flow_outcome_t::dropped

@@ -521,16 +521,22 @@ final class ZLinkJavaRawServicePortContractTest {
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({
-        "false,false",
-        "false,true",
-        "true,false",
-        "true,true"
+        "false,false,false",
+        "false,true,false",
+        "true,false,false",
+        "true,true,false",
+        "false,false,true",
+        "false,true,true",
+        "true,false,true",
+        "true,true,true"
     })
-    void durableLogicalTerminalRetainsTheNativeReplyReceiver(boolean cancel, boolean codecThrows)
-            throws Exception {
+    void durableLogicalTerminalRetainsTheNativeReplyReceiver(
+            boolean cancel, boolean codecThrows, boolean initiallyReady) throws Exception {
         var decoded = new java.util.concurrent.atomic.AtomicInteger();
         var attempts = new java.util.concurrent.atomic.AtomicInteger();
         var observerClosed = new java.util.concurrent.CompletableFuture<Void>();
+        var ready = new java.util.concurrent.atomic.AtomicBoolean(initiallyReady);
+        var observations = new java.util.concurrent.atomic.AtomicInteger();
         var physical =
                 new java.util.concurrent.atomic.AtomicReference<
                         java.util.concurrent.CompletionStage<?>>();
@@ -577,8 +583,12 @@ final class ZLinkJavaRawServicePortContractTest {
                                     () ->
                                             new systems.zlink.framework.runtime.internal.backend
                                                     .ZLinkInternalMeshNode.PeerRouteObservation(
-                                                    1, true),
-                                    (changed, ended) -> () -> observerClosed.complete(null),
+                                                    1, ready.get()),
+                                    (changed, ended) -> {
+                                        observations.incrementAndGet();
+                                        ready.set(true);
+                                        return () -> observerClosed.complete(null);
+                                    },
                                     action -> {
                                         if (port.stateLane().isOnLane()) {
                                             action.run();
@@ -607,7 +617,7 @@ final class ZLinkJavaRawServicePortContractTest {
                     cancellation = result.handle((reply, failure) -> failure).join();
                     assertInstanceOf(
                             java.util.concurrent.CancellationException.class, cancellation);
-                    observerClosed.get(2, TimeUnit.SECONDS);
+                    if (!initiallyReady) observerClosed.get(2, TimeUnit.SECONDS);
                     port.stateLane().awaitTurn(() -> null);
                     assertEquals(0, operations.pendingCount());
                     assertFalse(physical.get().toCompletableFuture().isDone());
@@ -634,7 +644,9 @@ final class ZLinkJavaRawServicePortContractTest {
             } else {
                 assertEquals(7, result.get(2, TimeUnit.SECONDS));
             }
-            observerClosed.get(2, TimeUnit.SECONDS);
+            if (!initiallyReady) observerClosed.get(2, TimeUnit.SECONDS);
+            assertEquals(initiallyReady ? 0 : 1, observations.get());
+            assertEquals(!initiallyReady, observerClosed.isDone());
             assertEquals(0, operations.pendingCount());
             assertEquals(1, attempts.get());
             assertEquals(1, decoded.get());

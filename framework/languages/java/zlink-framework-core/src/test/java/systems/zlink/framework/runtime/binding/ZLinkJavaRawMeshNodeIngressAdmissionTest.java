@@ -94,15 +94,13 @@ final class ZLinkJavaRawMeshNodeIngressAdmissionTest {
                 inbound.close();
             } while (true);
             try (var retained = inbound) {
-                var observe = ZLinkJavaRawMeshNode.class.getDeclaredMethod("observeSelectedRoutes");
-                observe.setAccessible(true);
-                observe.invoke(node);
+                node.observeTransportState(ZLinkJavaSocketReceivePoller.ROUTE_CHANGED);
                 peer.close();
                 long deadline = System.nanoTime() + java.time.Duration.ofSeconds(2).toNanos();
                 do {
                     assertTrue(System.nanoTime() < deadline, "selected route must end");
                     port.waitForReady(router, java.time.Duration.ofMillis(10));
-                    observe.invoke(node);
+                    node.observeTransportState(ZLinkJavaSocketReceivePoller.ROUTE_CHANGED);
                 } while (!((java.util.Map<?, ?>) field(node, "selectedRoutes")).isEmpty());
                 // Core ROUTER §10.1 permits buffered records after a selected pipe ends.
                 // Receipt is not selection, so a pending handshake cannot restore admission.

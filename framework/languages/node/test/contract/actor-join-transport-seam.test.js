@@ -17,6 +17,7 @@ const ACTOR_JOIN_WIRE_COMMAND = 28;
 function joinFixture({ canonical, entry }) {
   const attempts = [];
   const runtime = new ServiceStatefulRuntime({
+    peerLifecycleGeneration: () => undefined,
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() { return () => {}; },

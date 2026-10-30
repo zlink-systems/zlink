@@ -71,6 +71,16 @@ test('precommit abort completes Continued before releasing held application work
     applicationVersion: 1n
   };
   const runtime = new ZLinkHostServiceRelocationRuntime({
+    registration: {
+      spotNodes: new Map([
+        [
+          'mesh',
+          {
+            spotFactoryRegistrations: { spot: { relocation: { kind: 'recreate' } } }
+          }
+        ]
+      ])
+    },
     meshNode: () => ({
       status: () => ({ routingId: 'source', lifecycleGeneration: 1n }),
       sealSpotMessageFollowIngress: () => ({}),
@@ -83,7 +93,6 @@ test('precommit abort completes Continued before releasing held application work
     }),
     locationStore: () => ({ readAuthority: async () => authority })
   });
-  runtime.spotRegistration = () => ({ relocation: { kind: 'recreate' } });
   runtime.waitForRelocationBudgetHeadroom = async () => {};
   let boundaryRegistered;
   const registered = new Promise((resolve) => {

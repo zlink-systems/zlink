@@ -12,6 +12,7 @@
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/telemetry_observation.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -1270,6 +1271,10 @@ class scenario_client_t final : public zf::hosted_service_t
     {
         try {
             run (services);
+            // Explicit Close completed before its diagnostic snapshot and app.stop().
+            // Shutdown scenarios already own their separate terminal/cleanup assertions.
+            if (!stopping)
+                zf::test::acknowledge_delivery (std::chrono::steady_clock::now () + 3s);
         }
         catch (const std::exception &error) {
             failure = error.what ();

@@ -108,6 +108,7 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
             assertEquals(1, source.routesSnapshot().size());
             var topology = new ZLinkServiceTopologyRegistry(descriptor(local));
             set(node, "topology", topology);
+            topology.observeChanges(node::publishPeerObservation);
             assertEquals(
                     ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
                     topology.admit(

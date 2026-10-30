@@ -1,3 +1,4 @@
+import type { ConnectionAttempt } from '@zlink-systems/zlink';
 import type { OperationHandle } from '../foundation/operation-registry';
 import type { SubmitResult } from './runtime-values';
 
@@ -34,7 +35,9 @@ export interface ZLinkRawMonitorRecord {
 }
 
 export interface ZLinkRawSocketPort {
-  setReadableHandler(handler: (receiveReady: boolean, routeReady: boolean) => void): void;
+  setReadableHandler(
+    handler: (receiveReady: boolean, routeReady: boolean, connectReady: boolean) => void
+  ): void;
   bind(endpoint: string): void;
   unbind(endpoint: string): void;
   connect(endpoint: string): void;
@@ -77,6 +80,7 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
   receive(dontWait?: boolean): ZLinkRawReceivedRecord | undefined;
   /** The selected route of every RID. The socket's one route observer calls it. */
   routesSnapshot(): readonly ZLinkRawRouterRoute[];
+  connectionAttemptsSnapshot(): readonly ConnectionAttempt[];
 }
 
 export interface ZLinkRawDealerPort extends ZLinkRawSocketPort {

@@ -23,7 +23,13 @@ public sealed class MeshLivenessPhysicalCloseTests
         context.Options.AutoHwmEnabled = false;
         await using var source = context.CreateRouterSocket();
         await using var target = context.CreateDealerSocket();
-        await using var node = new ZLinkManagedMeshNode(context, "liveness-close");
+        var peers = new Dictionary<RoutingId, ZLinkMeshPeer>();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "liveness-close",
+            directRequestSocket: source,
+            peersByRid: peers
+        );
         var rid = RoutingId.From("liveness-target");
         target.SetRoutingId(rid);
         const int recordBytes = 65536;
@@ -48,89 +54,68 @@ public sealed class MeshLivenessPhysicalCloseTests
             State = MeshPeerState.Admitted,
             Liveness = new ZLinkServiceLiveness(0),
         };
-        var peers = Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid");
         peers.Add(rid, peer);
-        SetField(node, "_socket", source);
-        SetField(node, "_activeSocketGeneration", Field<ulong>(node, "_lifecycleGeneration"));
         using var monitor = node.OpenMonitor();
-        try
+        var submitted = new List<Task>();
+        for (var i = 0; i < 16; i++)
         {
-            var submitted = new List<Task>();
-            for (var i = 0; i < 16; i++)
-            {
-                var submission = source
-                    .Send(rid)
-                    .Message(Message.From(new byte[recordBytes]))
-                    .Async();
-                submitted.Add(submission.Admitted);
-            }
-            var pending = submitted[^1];
-            await Task.Delay(25);
-            Assert.False(pending.IsCompleted, $"{pending.Status}: {pending.Exception}");
-            var terminals = 0;
-            var observed = pending.ContinueWith(_ => Interlocked.Increment(ref terminals));
-            if (receive)
-                peer.Liveness.RecordReceived(14 * Stopwatch.Frequency);
-            Tick(node, 15 * Stopwatch.Frequency);
-            if (observeProbeSubmission)
-            {
-                // Observe after the existing control-submit worker has run. Its
-                // asynchronous Core admission may remain pending under backpressure.
-                var scheduler = Field<ConcurrentExclusiveSchedulerPair>(
-                    node,
-                    "_routedSubmitScheduler"
-                );
-                await Task.Factory.StartNew(
-                    () => Assert.True(peer.Admitted),
-                    CancellationToken.None,
-                    TaskCreationOptions.None,
-                    scheduler.ExclusiveScheduler
-                );
-            }
-            if (receive)
-            {
-                Assert.True(peer.Admitted);
-                Assert.Single(source.RoutesSnapshot());
-                Assert.False(pending.IsCompleted);
-                Assert.Null(monitor.Recv(RecvFlags.DontWait));
-                Assert.Null(physicalMonitor.Recv(RecvFlags.DontWait));
-                source.DisconnectRid(rid);
-            }
-            else
-            {
-                Assert.False(peer.Admitted);
-                Tick(node, 16 * Stopwatch.Frequency);
-                Assert.Equal(
-                    MeshMonitorEventKind.PeerClosed,
-                    monitor.Recv(RecvFlags.DontWait)?.Kind
-                );
-                Assert.Null(monitor.Recv(RecvFlags.DontWait));
-            }
-            var error = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
-                pending.WaitAsync(TimeSpan.FromSeconds(2))
+            var submission = source.Send(rid).Message(Message.From(new byte[recordBytes])).Async();
+            submitted.Add(submission.Admitted);
+        }
+        var pending = submitted[^1];
+        await Task.Delay(25);
+        Assert.False(pending.IsCompleted, $"{pending.Status}: {pending.Exception}");
+        var terminals = 0;
+        var observed = pending.ContinueWith(_ => Interlocked.Increment(ref terminals));
+        if (receive)
+            peer.Liveness.RecordReceived(14 * Stopwatch.Frequency);
+        Tick(node, 15 * Stopwatch.Frequency);
+        if (observeProbeSubmission)
+        {
+            // Observe after the existing control-submit worker has run. Its
+            // asynchronous Core admission may remain pending under backpressure.
+            var scheduler = Field<ConcurrentExclusiveSchedulerPair>(node, "_routedSubmitScheduler");
+            await Task.Factory.StartNew(
+                () => Assert.True(peer.Admitted),
+                CancellationToken.None,
+                TaskCreationOptions.None,
+                scheduler.ExclusiveScheduler
             );
-            Assert.Equal(ZlinkSubmitException.ErrorCode.NotFound, error.Result);
-            await observed;
-            Assert.Equal(1, terminals);
-            Assert.Equal(1, ZlinkPoll.Poll([physicalMonitor], 2000));
-            Assert.Equal(
-                MonitorEventType.Disconnected,
-                physicalMonitor.Recv(RecvFlags.DontWait)?.Event
-            );
+        }
+        if (receive)
+        {
+            Assert.True(peer.Admitted);
+            Assert.Single(source.RoutesSnapshot());
+            Assert.False(pending.IsCompleted);
+            Assert.Null(monitor.Recv(RecvFlags.DontWait));
             Assert.Null(physicalMonitor.Recv(RecvFlags.DontWait));
+            source.DisconnectRid(rid);
         }
-        finally
+        else
         {
-            SetField(node, "_socket", null);
-            SetField(node, "_activeSocketGeneration", 0UL);
+            Assert.False(peer.Admitted);
+            Tick(node, 16 * Stopwatch.Frequency);
+            Assert.Equal(MeshMonitorEventKind.PeerClosed, monitor.Recv(RecvFlags.DontWait)?.Kind);
+            Assert.Null(monitor.Recv(RecvFlags.DontWait));
         }
+        var error = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
+            pending.WaitAsync(TimeSpan.FromSeconds(2))
+        );
+        Assert.Equal(ZlinkSubmitException.ErrorCode.NotFound, error.Result);
+        await observed;
+        Assert.Equal(1, terminals);
+        Assert.Equal(1, ZlinkPoll.Poll([physicalMonitor], 2000));
+        Assert.Equal(
+            MonitorEventType.Disconnected,
+            physicalMonitor.Recv(RecvFlags.DontWait)?.Event
+        );
+        Assert.Null(physicalMonitor.Recv(RecvFlags.DontWait));
     }
 
     [Fact]
     public async Task RetiredDeadlineDoesNotCloseReplacementAdmission()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var node = new ZLinkManagedMeshNode(context, "liveness-close");
         var retired = new ZLinkServiceLiveness(0);
         var peer = new ZLinkMeshPeer(1)
         {
@@ -140,7 +125,11 @@ public sealed class MeshLivenessPhysicalCloseTests
             State = MeshPeerState.Admitted,
             Liveness = new ZLinkServiceLiveness(14 * Stopwatch.Frequency),
         };
-        Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid").Add(peer.RoutingId, peer);
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "liveness-close",
+            peersByRid: new Dictionary<RoutingId, ZLinkMeshPeer> { [peer.RoutingId] = peer }
+        );
         Assert.True(retired.IsExpired(15 * Stopwatch.Frequency));
         Tick(node, 15 * Stopwatch.Frequency);
         Assert.True(peer.Admitted);
@@ -158,10 +147,4 @@ public sealed class MeshLivenessPhysicalCloseTests
                 .GetType()
                 .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(owner)!;
-
-    private static void SetField(object owner, string name, object? value) =>
-        owner
-            .GetType()
-            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(owner, value);
 }

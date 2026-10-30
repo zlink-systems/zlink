@@ -144,7 +144,8 @@ void emit_log (const std::shared_ptr<logging_state_t> &state,
                int level,
                const std::string &category,
                const std::string &message,
-               std::vector<log_field_t> fields)
+               std::vector<log_field_t> fields,
+               void (*failure) () noexcept)
 {
     if (!is_log_enabled (state, level)) {
         return;
@@ -203,7 +204,10 @@ void emit_log (const std::shared_ptr<logging_state_t> &state,
         catch (...) {
             // A logging provider is an observation boundary.  Its failure
             // must not escape into the dispatch or lifecycle owner.
-            message_flow_tracer_t::record_observer_failure ();
+            if (failure)
+                failure ();
+            else
+                message_flow_tracer_t::record_observer_failure ();
         }
     }
 }
