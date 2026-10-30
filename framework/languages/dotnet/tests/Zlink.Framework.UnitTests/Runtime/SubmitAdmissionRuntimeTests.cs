@@ -326,9 +326,6 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
 
         public IReadOnlyList<RouterRoute> RoutesSnapshot() => throw new NotSupportedException();
 
-        public IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot() =>
-            throw new NotSupportedException();
-
         public bool Recv(Received result, RecvFlags flags = RecvFlags.None) =>
             throw new NotSupportedException();
 
