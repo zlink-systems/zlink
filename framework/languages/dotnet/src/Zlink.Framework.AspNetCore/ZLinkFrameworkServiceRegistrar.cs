@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Zlink.Framework.AspNetCore;
 
@@ -100,6 +101,28 @@ internal static class ZLinkFrameworkServiceRegistrar
     {
         services.AddSingleton(registration);
         services.TryAddSingleton<IZLinkBackendAdapterFactory, ZLinkDotNetBackendAdapterFactory>();
+        services.TryAddSingleton<ZLinkMessageFlowLogger>(provider =>
+        {
+            var factoryDescriptor = services.LastOrDefault(static descriptor =>
+                descriptor.ServiceType == typeof(ILoggerFactory) && !descriptor.IsKeyedService
+            );
+            if (factoryDescriptor is null)
+                return new ZLinkMessageFlowLogger(NullLogger.Instance);
+
+            if (
+                factoryDescriptor.ImplementationType == typeof(LoggerFactory)
+                && !services.Any(static descriptor =>
+                    descriptor.ServiceType == typeof(ILoggerProvider) && !descriptor.IsKeyedService
+                )
+            )
+                return new ZLinkMessageFlowLogger(NullLogger.Instance);
+
+            return new ZLinkMessageFlowLogger(
+                provider
+                    .GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(ZLinkMessageFlowTracer.LoggerCategory)
+            );
+        });
 
         // Framework-internal consumer for cross-node bound-session pushes
         // (spec 31 §6); the node route dispatcher resolves it from DI when a
@@ -120,7 +143,7 @@ internal static class ZLinkFrameworkServiceRegistrar
             registration,
             new ZLinkDispatchErrorReporter(
                 registration.DispatchOptions,
-                ZLinkMessageFlowTracer.CreateLogger(provider),
+                ZLinkMessageFlowTracer.GetLogger(provider),
                 submission: provider.GetRequiredService<ZLinkTelemetrySubmission>()
             )
         ));

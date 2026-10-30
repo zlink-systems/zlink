@@ -30,7 +30,7 @@ internal static class ZLinkFrameworkRuntimeComponentFactory
         var loggerFactory = services.GetService<ILoggerFactory>();
         var channelDispatchErrors = new ZLinkDispatchErrorReporter(
             registration.DispatchOptions,
-            ZLinkMessageFlowTracer.CreateLogger(services),
+            ZLinkMessageFlowTracer.GetLogger(services),
             runtime
         );
         IReadOnlySet<string> ResolveHandlerGroups(string channelName) =>

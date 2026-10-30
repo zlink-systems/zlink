@@ -161,7 +161,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
 
         var dispatchErrors = new ZLinkDispatchErrorReporter(
             registration.DispatchOptions,
-            ZLinkMessageFlowTracer.CreateLogger(runtime.Services),
+            ZLinkMessageFlowTracer.GetLogger(runtime.Services),
             runtime
         );
 

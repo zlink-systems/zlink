@@ -226,7 +226,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     internal ZLinkMessageFlowTracer Flow =>
         _flow ??= new ZLinkMessageFlowTracer(
             Registration.DispatchOptions,
-            ZLinkMessageFlowTracer.CreateLogger(Services),
+            ZLinkMessageFlowTracer.GetLogger(Services),
             this
         );
 

@@ -8,6 +8,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Zlink.Framework.Runtime.Diagnostics;
 
+internal sealed class ZLinkMessageFlowLogger(ILogger logger)
+{
+    internal ILogger Logger { get; } = logger;
+}
+
 // Success-path message-flow tracer — the twin of ZLinkDispatchErrorReporter for
 // received/admitted/dispatched/completed/replied/sent/reply_received and
 // backpressure/drop transitions.
@@ -208,20 +213,8 @@ internal sealed class ZLinkMessageFlowTracer
                 : RequiredLevel(outcome)
         );
 
-    internal static ILogger CreateLogger(IServiceProvider services)
-    {
-        var factory = services.GetService<ILoggerFactory>();
-        if (factory is null)
-            return NullLogger.Instance;
-
-        if (
-            factory.GetType().FullName == "Microsoft.Extensions.Logging.LoggerFactory"
-            && !services.GetServices<ILoggerProvider>().Any()
-        )
-            return NullLogger.Instance;
-
-        return factory.CreateLogger(LoggerCategory);
-    }
+    internal static ILogger GetLogger(IServiceProvider services) =>
+        services.GetRequiredService<ZLinkMessageFlowLogger>().Logger;
 
     private static ZLinkDiagnosticsLevel RequiredLevel(ZLinkMessageFlowOutcome outcome)
     {
