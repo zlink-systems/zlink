@@ -5921,7 +5921,7 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<memory_authority_store_t> ();
     auto source_state = make_state ("production-source");
-    source_state->spot_state->dispatch.message_flow (framework::message_flow_log_mode_t::errors);
+    source_state->spot_state->dispatch.message_flow (framework::message_flow_log_mode_t::normal);
     detail::dispatch_options_access_t::set_observer_for_tests (
       source_state->spot_state->dispatch, [&resolver_failures] (const auto &event) {
           if (event.surface == framework::dispatch_error_surface_t::actor_relocation)
@@ -6247,7 +6247,7 @@ void test_application_relocation_remote_production_path (test_context_t &test,
         framework::runtime::install_host_context_hooks ();
         framework::runtime::flow_context_t::scope_t flow (
           framework::runtime::flow_value_t{flow_id, framework::flow_origin_t::application,
-                                           framework::message_flow_log_mode_t::errors});
+                                           framework::message_flow_log_mode_t::normal});
         auto relocation = source.relocate_application_actor (actor, target_descriptor, snapshot,
                                                              operation_deadline);
         relocation_submitted.set_value (!relocation.await_ready ());
