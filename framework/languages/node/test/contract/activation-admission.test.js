@@ -10,6 +10,7 @@ test('activation count changes do not publish descriptors, while weight changes 
     builder.addRouteMesh('game').objects().server();
   });
   const host = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  const { activationAdmission } = host.createSpotManagerOptions();
   const manager = new framework.ZLinkSpotNodeRuntimeManager({
     ...host.createSpotNodeRuntimeOptions(
       undefined,
@@ -38,18 +39,15 @@ test('activation count changes do not publish descriptors, while weight changes 
   await manager.publishMeshNodeState(framework.ZLinkFrameworkRuntimeState.Serving);
   const initialRevision = writes[0].descriptorRevision;
   for (let index = 0; index < 8; index += 1) {
-    const release = await host.activationAdmission.acquire('game');
+    const release = await activationAdmission.acquire('game');
     release();
   }
   // Drain any publication already submitted by admission changes.
   await manager.statePublication;
   assert.equal(writes.length, 1);
-  assert.equal(
-    manager.meshNodeDescriptor('game').descriptorRevision,
-    initialRevision
-  );
+  assert.equal(manager.meshNodeDescriptor('game').descriptorRevision, initialRevision);
 
-  const release = await host.activationAdmission.acquire('game');
+  const release = await activationAdmission.acquire('game');
   try {
     manager.setRuntimePlacementWeight('game', 250);
     await manager.waitForRuntimeWeightPublication();
