@@ -55,12 +55,15 @@ class application_dispatch_terminal_owner_t final
     operator= (const application_dispatch_terminal_owner_t &) = delete;
 
     void settle () noexcept;
+    void retain_physical_work (std::shared_ptr<void> work) noexcept;
+    std::function<void ()> take_mailbox_reservation () noexcept;
 
   private:
     static void invoke (const std::function<void ()> &callback) noexcept;
 
     std::atomic_bool _settled{false};
-    std::weak_ptr<detail::mesh_node_runtime_t> _node;
+    std::shared_ptr<detail::mesh_node_runtime_t> _node;
+    std::shared_ptr<void> _physical_work;
     std::function<void ()> _complete_stateful_dispatch;
     std::function<void ()> _release_mailbox_reservation;
 };
@@ -166,7 +169,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                           serializer_registry_t *serializers,
                           const handler_registry_t *filters,
                           const dispatch_options_t &dispatch_options,
-                          serial_execution_queue_t::async_completion_t application_completed = {});
+                          serial_execution_queue_t::async_completion_t application_completed = {},
+                          std::weak_ptr<offload_executor_t> executor = {});
     static task_t<void>
     drain_application_owner (std::shared_ptr<detail::mesh_node_runtime_t> node,
                              std::shared_ptr<detail::mesh_node_builder_state_t> registration,
@@ -175,7 +179,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                              service_provider_t *services,
                              serializer_registry_t *serializers,
                              const handler_registry_t *filters,
-                             dispatch_options_t dispatch_options);
+                             dispatch_options_t dispatch_options,
+                             std::weak_ptr<offload_executor_t> executor);
 
     std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> _registrations;
     serializer_registry_t *_serializers;

@@ -2,34 +2,26 @@
 #pragma once
 
 #include "runtime/channels/route_handler_registry.hpp"
-
+#include "runtime/channels/route_packet.hpp"
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
 
 namespace zlink::framework::detail
 {
-
 class route_handler_invoker_t
 {
   public:
-    task_t<void>
-    invoke_send (const route_handler_registry_t::entry_t &handler,
-                 const handler_registry_t &filters,
-                 handler_dispatch_kind_t dispatch_kind,
-                 service_provider_t &services,
-                 serializer_registry_t &serializers,
-                 const zlink::message_t &message,
-                 const framework::route_message_context_t &context,
-                 detail::handler_start_callback_ref_t before_application_handler = {}) const;
+    using completion_t = std::function<result_t<std::optional<route_dispatch_reply_t>> (
+      const result_t<zlink::message_t> &)>;
 
-    task_t<zlink::message_t>
-    invoke_request (const route_handler_registry_t::entry_t &handler,
-                    const handler_registry_t &filters,
-                    handler_dispatch_kind_t dispatch_kind,
-                    service_provider_t &services,
-                    serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const framework::route_message_context_t &context,
-                    detail::handler_start_callback_ref_t before_application_handler = {}) const;
+    static task_t<std::optional<route_dispatch_reply_t>>
+    invoke (const route_handler_registry_t::entry_t &handler,
+            const handler_registry_t &filters,
+            handler_dispatch_kind_t dispatch_kind,
+            service_provider_t &services,
+            serializer_registry_t &serializers,
+            zlink::message_t message,
+            framework::route_message_context_t context,
+            std::function<void ()> before_application_handler = {},
+            completion_t complete = {});
 };
-
 } // namespace zlink::framework::detail
