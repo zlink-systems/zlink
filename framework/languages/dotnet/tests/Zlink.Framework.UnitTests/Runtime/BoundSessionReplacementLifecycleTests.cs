@@ -265,6 +265,7 @@ public sealed partial class BoundSessionReplacementLifecycleTests
         Assert.Equal(new ZlinkStreamRequestSeq(41), reply.RequestSeq);
         Assert.Equal("invalid_operation", error?.Code);
         Assert.Empty(fixture.Lifetime.Dispatches);
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         Assert.Contains(
             activities,
             activity =>
@@ -291,6 +292,7 @@ public sealed partial class BoundSessionReplacementLifecycleTests
         var dispatch = Assert.Single(fixture.Lifetime.Dispatches);
         Assert.Equal("plain.send", dispatch.PacketName);
         Assert.Null(dispatch.Actor);
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         Assert.Contains(
             activities,
             activity =>
@@ -458,6 +460,7 @@ public sealed partial class BoundSessionReplacementLifecycleTests
         Assert.False(
             retired.Runtime.TryHandleBoundSessionReplacedNotification(nodeRid, nodeRid, record)
         );
+        global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
         var drop = Assert.Single(
             activities.Where(item =>
                 Equals(item.GetTagItem("packet_name"), "boundSessionReplaced")
