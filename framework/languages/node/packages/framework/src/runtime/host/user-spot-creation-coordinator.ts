@@ -5,6 +5,7 @@ import {
   type SpotRef,
   type ZLinkSpotCreateResult,
   ZLinkFrameworkException,
+  ZLinkFrameworkErrorKind,
   ZLinkSpotCreateState
 } from '../../contracts';
 
@@ -25,6 +26,7 @@ import {
   wireReplyFailureException
 } from '../framework-errors-internal';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
+import type { ZLinkOwnerLeaseTracker } from '../locations/lease-tracker';
 import type {
   ZLinkAuthoritySnapshot,
   ZLinkLocationOwnerToken,
@@ -40,10 +42,11 @@ const DEFAULT_USER_SPOT_POLL_INTERVAL_MS = 10;
 
 export interface ZLinkUserSpotCreationCoordinatorOptions {
   readonly relocationPolicy?: (
-    meshName: string,
+    meshName: string | undefined,
     stableType: string
   ) => import('../locations/internal-location-contracts').ZLinkObjectReserveRequest['actorRelocationPolicy'];
   readonly store: ZLinkObjectCreationStore & ZLinkAuthorityStore;
+  readonly leaseTracker: Pick<ZLinkOwnerLeaseTracker, 'isOwnerTokenLive'>;
   readonly target: (
     request: Pick<ZLinkUserSpotCreationRequest, 'meshName' | 'stableType'>,
     signal?: AbortSignal,
@@ -135,6 +138,16 @@ export class ZLinkUserSpotCreationCoordinator {
     let reserved: ZLinkObjectReserveResult;
     for (;;) {
       try {
+        const spot = await this.awaitReady(request, signal);
+        if (spot !== undefined) {
+          deadline.close();
+          return { result: { spot, state: ZLinkSpotCreateState.Existing }, spot };
+        }
+      } catch (error) {
+        deadline.close();
+        throw error;
+      }
+      try {
         target = await this.options.target(request, signal, excludedNodeRids);
       } catch (error) {
         deadline.close();
@@ -147,6 +160,16 @@ export class ZLinkUserSpotCreationCoordinator {
         );
       }
       if (target === undefined) {
+        try {
+          const current = await this.options.store.readAuthority(
+            encodeAuthorityKey('user_spot', String(request.spotId)),
+            signal
+          );
+          if (current.kind !== 'missing') continue;
+        } catch (error) {
+          deadline.close();
+          throw error;
+        }
         deadline.close();
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
@@ -219,30 +242,14 @@ export class ZLinkUserSpotCreationCoordinator {
       }
       if (
         reserved.kind === 'alreadyExists' ||
-        (reserved.kind === 'conflict' &&
-          reserved.current.kind === 'snapshot' &&
-          reserved.current.allocation.objectKind === 'user_spot' &&
-          reserved.current.allocation.stableType === request.stableType)
-      ) {
-        if (request.generatedIdentity === true) {
-          deadline.close();
-          throw spotIdConflict(request.spotId);
-        }
-        try {
-          const spot = await this.awaitReady(request, signal);
-          if (spot !== undefined) {
-            deadline.close();
-            return { result: { spot, state: ZLinkSpotCreateState.Existing }, spot };
-          }
-        } catch (error) {
-          deadline.close();
-          throw error;
-        }
+        (reserved.kind === 'conflict' && reserved.current.kind === 'snapshot')
+      )
         continue;
-      }
-      if (reserved.kind !== 'placementCapacityExhausted') break;
+      if (reserved.kind === 'placementCapacityExhausted') continue;
+      if (!(reserved.kind === 'conflict' && reserved.current.kind === 'missing')) break;
       excludedNodeRids.add(encodeRoutingIdStorageHex(target.nodeRid));
     }
+
     if (reserved.kind === 'typeMismatch') {
       deadline.close();
       if (request.generatedIdentity === true) {
@@ -721,6 +728,7 @@ export class ZLinkUserSpotCreationCoordinator {
       signal.throwIfAborted();
       const current = await this.options.store.readAuthority(key, signal);
       if (current.kind === 'missing') return undefined;
+      if (request.generatedIdentity === true) throw spotIdConflict(request.spotId);
       if (
         current.allocation.objectKind !== 'user_spot' ||
         current.allocation.stableType !== request.stableType
@@ -729,6 +737,45 @@ export class ZLinkUserSpotCreationCoordinator {
           ZLinkFrameworkInternalErrorKind.SpotTypeMismatch,
           `User Spot '${String(request.spotId)}' has another stable type.`
         );
+      }
+      const ownerLive = await this.options.leaseTracker.isOwnerTokenLive(
+        {
+          ownerId: current.ownerId,
+          leaseGeneration: current.ownerLeaseGeneration
+        },
+        signal
+      );
+      if (!ownerLive || current.allocation.state !== 'active') {
+        const release = this.options.store.releaseEndedReservation;
+        if (release === undefined) {
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.NotConfigured,
+            'User Spot creation requires repository ended-owner release support.'
+          );
+        }
+        if (
+          await release.call(this.options.store, key, current.storeVersion.value, signal, {
+            key: { kind: 'user_spot', globalId: String(request.spotId) },
+            intent: { stableType: request.stableType },
+            actorRelocationPolicy: this.options.relocationPolicy?.(
+              request.meshName,
+              request.stableType
+            )
+          })
+        )
+          continue;
+        const confirmed = await this.options.store.readAuthority(key, signal);
+        if (
+          confirmed.kind === 'missing' ||
+          confirmed.storeVersion.value !== current.storeVersion.value
+        )
+          continue;
+        if (!ownerLive) {
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            'User Spot authority owner lease is unavailable.'
+          );
+        }
       }
       if (
         current.allocation.state === 'active' &&
