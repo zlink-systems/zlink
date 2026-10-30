@@ -455,7 +455,8 @@ read_route_owner_fence (std::shared_ptr<zlink::framework::location_repository_t>
         }
         co_return route_owner_fence_read_t{
           {snapshot->authority_owner_generation,
-           static_cast<std::uint64_t> (snapshot->owner.lease_generation)},
+           static_cast<std::uint64_t> (snapshot->owner.lease_generation),
+           snapshot->allocation.target.node_lifecycle_generation},
           admission_lifetime};
     }
     catch (...) {
@@ -739,16 +740,16 @@ spot_handle_t::send_to_spot (const zlink::routing_id_t &target_node_rid,
     if (!_host) {
         co_return zlink::submit_result_t::invalid_handle;
     }
-    const auto peer = _host->transport ().topology ().peer (target_node_rid.to_bytes ());
-    const auto target_node_generation =
-      peer ? peer->descriptor.lifecycle_generation : _host->status ().lifecycle_generation ();
     const auto route_fence = co_await _host->resolve_spot_route_fence (
       target_node_rid, target_spot_id, target_spot_generation);
     if (!route_fence)
         co_return zlink::submit_result_t::not_found;
-    const auto target = protocol::spot_route_fence_t{
-      target_spot_id,         target_spot_generation, target_node_rid.to_bytes (),
-      target_node_generation, route_fence->first,     route_fence->second};
+    const auto target = protocol::spot_route_fence_t{target_spot_id,
+                                                     target_spot_generation,
+                                                     target_node_rid.to_bytes (),
+                                                     route_fence->target_node_generation,
+                                                     route_fence->authority_owner_generation,
+                                                     route_fence->owner_lease_generation};
     if (target.target_node_routing_id == _host->status ().routing_id ().to_bytes ()) {
         co_return co_await _host->enqueue_local_spot_send (target, parts, spot_id ());
     }
@@ -774,17 +775,17 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
         throw std::invalid_argument ("framework SPOT request timeout must be positive");
     }
     try {
-        const auto peer = _host->transport ().topology ().peer (target_node_rid.to_bytes ());
-        const auto target_node_generation =
-          peer ? peer->descriptor.lifecycle_generation : _host->status ().lifecycle_generation ();
         const auto route_fence = co_await _host->resolve_spot_route_fence (
           target_node_rid, target_spot_id, target_spot_generation);
         if (!route_fence) {
             co_return zlink::submit_result_t::not_found;
         }
-        const auto target = protocol::spot_route_fence_t{
-          target_spot_id,         target_spot_generation, target_node_rid.to_bytes (),
-          target_node_generation, route_fence->first,     route_fence->second};
+        const auto target = protocol::spot_route_fence_t{target_spot_id,
+                                                         target_spot_generation,
+                                                         target_node_rid.to_bytes (),
+                                                         route_fence->target_node_generation,
+                                                         route_fence->authority_owner_generation,
+                                                         route_fence->owner_lease_generation};
         const auto host = _host;
         const auto direct_completion = static_cast<bool> (completion);
         if (target.target_node_routing_id == host->status ().routing_id ().to_bytes ()) {
@@ -2990,20 +2991,25 @@ public_host_runtime_t::resolve_spot_route_fence (zlink::routing_id_t target_node
         resolver = _spot_route_fence_resolver;
         store = _user_spot_store;
     });
+    std::optional<route_fence_t> fence;
     if (resolver) {
         auto resolved = co_await await_result (
           resolver (target_node_rid, target_spot_id, target_spot_generation));
-        co_return resolved ? resolved.value () : std::nullopt;
+        if (resolved)
+            fence = resolved.value ();
+    } else {
+        const auto measured_at = std::chrono::steady_clock::now ();
+        const auto read =
+          co_await read_route_owner_fence (store, '2', target_spot_id, target_spot_generation, 0, 0,
+                                           _options.owner_lease_fencing_margin);
+        if (read
+            && (!read->admission_lifetime
+                || std::chrono::steady_clock::now () < measured_at + *read->admission_lifetime))
+            fence = read->fence;
     }
-
-    const auto measured_at = std::chrono::steady_clock::now ();
-    const auto read =
-      co_await read_route_owner_fence (store, '2', target_spot_id, target_spot_generation, 0, 0,
-                                       _options.owner_lease_fencing_margin);
-    if (read && read->admission_lifetime
-        && std::chrono::steady_clock::now () >= measured_at + *read->admission_lifetime)
+    if (!fence || fence->target_node_generation == 0)
         co_return std::nullopt;
-    co_return read ? std::optional<route_fence_t> (read->fence) : std::nullopt;
+    co_return fence;
 }
 
 task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
@@ -3034,7 +3040,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
     const auto route_fence = co_await read_route_owner_fence (
       _user_spot_store, '1', std::string (target.actor_id ().value ()), target.object_generation (),
       authority_generation, owner_lease_generation, _options.owner_lease_fencing_margin);
-    if (!route_fence || route_fence->fence.first != authority_generation)
+    if (!route_fence || route_fence->fence.authority_owner_generation != authority_generation)
         co_return zlink::submit_result_t::not_found;
     co_return co_await _transport->send_to_actor_result (
       zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes (),
@@ -3042,7 +3048,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
       protocol::actor_route_fence_t{
         std::string (target.actor_id ().value ()), target.object_generation (),
         zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes (),
-        node_generation, authority_generation, route_fence->fence.second},
+        node_generation, authority_generation, route_fence->fence.owner_lease_generation},
       encode_application (parts, metadata), std::move (bound_session_source));
 }
 
@@ -3103,7 +3109,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
     const auto route_fence = co_await read_route_owner_fence (
       _user_spot_store, '1', std::string (target.actor_id ().value ()), target.object_generation (),
       authority_generation, owner_lease_generation, _options.owner_lease_fencing_margin);
-    if (!route_fence || route_fence->fence.first != authority_generation) {
+    if (!route_fence || route_fence->fence.authority_owner_generation != authority_generation) {
         co_return zlink::submit_result_t::not_found;
     }
     const auto host = shared_from_this ();
@@ -3113,7 +3119,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
       protocol::actor_route_fence_t{
         std::string (target.actor_id ().value ()), target.object_generation (),
         zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes (),
-        node_generation, authority_generation, route_fence->fence.second},
+        node_generation, authority_generation, route_fence->fence.owner_lease_generation},
       encode_application (parts, metadata), timeout,
       [host, operation] (foundation::operation_terminal_t terminal,
                          zlink::message_t payload) mutable {
