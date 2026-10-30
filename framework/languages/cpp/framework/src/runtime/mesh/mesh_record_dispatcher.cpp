@@ -15,17 +15,19 @@ mesh_record_dispatcher_t::mesh_record_dispatcher_t (
   const route_handler_registry_t &handlers,
   const handler_registry_t &filters,
   dispatch_options_t dispatch_options,
-  std::function<void ()> before_application_handler) :
+  std::function<void ()> before_application_handler,
+  std::shared_ptr<void> registration) :
     _services (&services),
     _serializers (&serializers),
     _handlers (&handlers),
     _filters (&filters),
     _dispatch_options (std::move (dispatch_options)),
-    _before_application_handler (std::move (before_application_handler))
+    _before_application_handler (std::move (before_application_handler)),
+    _registration (std::move (registration))
 {
 }
 
-result_t<void>
+task_t<std::optional<route_dispatch_reply_t>>
 mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &record,
                                     std::vector<zlink::message_t> parts,
                                     runtime::messaging::envelope_header_t header) const
@@ -34,8 +36,10 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
     if (record.kind != record_kind_t::node_send && record.kind != record_kind_t::node_request
         && record.kind != record_kind_t::channel_send
         && record.kind != record_kind_t::channel_request) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "record kind is not node or ChannelName messaging");
+        return task_t<std::optional<route_dispatch_reply_t>> (
+          result_t<std::optional<route_dispatch_reply_t>>::failure (
+            framework_error_kind_t::protocol_error,
+            "record kind is not node or ChannelName messaging"));
     }
 
     runtime::messaging::message_parts_t message_parts (std::move (parts));
@@ -50,27 +54,16 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
                        : handler_dispatch_kind_t::node_direct_send,
       channel_dispatch ? handler_dispatch_kind_t::channel_request
                        : handler_dispatch_kind_t::node_direct_request,
-      _before_application_handler);
-    auto dispatched = dispatcher.dispatch (
+      _before_application_handler, _registration,
+      [token = record.reply_token] (const route_dispatch_reply_t &reply) {
+          if (runtime::host::reply (token, reply.parts.items ()) != zlink::submit_result_t::ok)
+              return result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                              "MeshNode reply submit failed");
+          return result_t<void>::success ();
+      });
+    return dispatcher.dispatch (
       route_received_packet_t{record.source_node_rid, {}, std::move (message_parts), {}},
       std::move (header));
-    if (!dispatched) {
-        return detail::propagate_failure<void> (dispatched, "MeshNode handler dispatch failed");
-    }
-    if (!dispatched.value ())
-        return result_t<void>::success ();
-    if (record.kind != record_kind_t::node_request
-        && record.kind != record_kind_t::channel_request) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "send handler produced a reply");
-    }
-    const auto submit =
-      runtime::host::reply (record.reply_token, dispatched.value ()->parts.items ());
-    if (submit != zlink::submit_result_t::ok) {
-        return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                        "MeshNode reply submit failed");
-    }
-    return result_t<void>::success ();
 }
 
 } // namespace zlink::framework::detail

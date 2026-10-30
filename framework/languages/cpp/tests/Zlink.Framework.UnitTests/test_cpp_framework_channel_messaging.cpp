@@ -198,7 +198,7 @@ class test_route_receive_pump_t
         while (!_packets.empty ()) {
             auto packet = std::move (_packets.front ());
             _packets.pop_front ();
-            auto dispatch = _dispatcher.dispatch (packet);
+            auto dispatch = _dispatcher.dispatch (packet).result ();
             if (!dispatch) {
                 return zlink::framework::detail::propagate_failure<test_route_receive_result_t> (
                   dispatch, "route packet dispatch failed");
@@ -864,9 +864,11 @@ int main ()
         off_options.message_flow (message_flow_log_mode_t::off);
         detail::mesh_record_dispatcher_t off (provider, serializers, handlers, filters,
                                               off_options);
-        if (!off.dispatch (
-              record, parts (malformed),
-              codec.decode_header (msg::message_parts_t (parts (malformed)), false).value ())
+        if (!off
+               .dispatch (
+                 record, parts (malformed),
+                 codec.decode_header (msg::message_parts_t (parts (malformed)), false).value ())
+               .result ()
             || handler.invocations != 1 || handler.last_value != 42)
             return 220;
         dispatch_options_t options;
@@ -881,6 +883,7 @@ int main ()
         detail::mesh_record_dispatcher_t on (provider, serializers, handlers, filters, options);
         if (!on.dispatch (record, parts (wire),
                           codec.decode_header (msg::message_parts_t (parts (wire)), true).value ())
+               .result ()
             || !preserved || handler.invocations != 2 || handler.last_value != 42)
             return 221;
         auto invalid_parts = parts (malformed);
@@ -2855,7 +2858,8 @@ int main ()
         .dispatch (zlink::framework::detail::route_received_packet_t{
           zlink::routing_id_t::from (std::string ("source-node")), std::nullopt,
           zlink::framework::runtime::messaging::message_parts_t (
-            std::vector<zlink::message_t>{zlink::message_t::from (std::string ("not-json"))})});
+            std::vector<zlink::message_t>{zlink::message_t::from (std::string ("not-json"))})})
+        .result ();
     if (malformed_route_dispatch
         || malformed_route_dispatch.error_kind ()
              != zlink::framework::framework_error_kind_t::protocol_error) {
@@ -2872,7 +2876,8 @@ int main ()
                                                            route_handlers, no_internal)
         .dispatch (zlink::framework::detail::route_received_packet_t{
           zlink::routing_id_t::from (std::string ("source-node")), std::nullopt,
-          unsupported_route_parts});
+          unsupported_route_parts})
+        .result ();
     if (unsupported_route_dispatch
         || unsupported_route_dispatch.error_kind ()
              != zlink::framework::framework_error_kind_t::protocol_error) {
@@ -2891,7 +2896,8 @@ int main ()
         .dispatch (zlink::framework::detail::route_received_packet_t{
           zlink::routing_id_t::from (std::string ("source-node")), std::nullopt,
           zlink::framework::runtime::messaging::message_parts_t (
-            std::vector<zlink::message_t>{missing_body_header_only})});
+            std::vector<zlink::message_t>{missing_body_header_only})})
+        .result ();
     if (missing_body_dispatch
         || missing_body_dispatch.error_kind ()
              != zlink::framework::framework_error_kind_t::protocol_error) {
@@ -2953,7 +2959,8 @@ int main ()
       [&] (const zlink::framework::detail::route_received_packet_t &received) {
           return zlink::framework::detail::route_packet_dispatcher_t (
                    "game.route", provider, serializers, route_handlers, internal_a)
-            .dispatch (received);
+            .dispatch (received)
+            .result ();
       };
     const auto supported_internal_send =
       dispatch_internal_packet (zlink::framework::detail::route_received_packet_t{
