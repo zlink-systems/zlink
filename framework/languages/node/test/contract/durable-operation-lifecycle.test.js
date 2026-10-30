@@ -31,20 +31,25 @@ function fixture(request, disconnectOnFailure = true) {
   const routes = new Map();
   let nextRouteGeneration = 1n;
   const attempts = [];
+  const bindingFailures = new Set();
+  const bindingFailure = new ZLinkBackendResultError('request', RequestResult.NotConnected);
+  let connectionRows = [];
   const router = {
     setRoutingId() {}, setReceiveFlowState() {}, bind() {}, connectToRoutingId() {}, connect() {},
     disconnect() {}, disconnectRid() {}, close() {}, localEndpoint: () => 'inproc://source-node',
     receive: () => incoming.shift(), send: async () => {},
     submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }),
+    connectionAttemptsSnapshot: () => connectionRows,
     routesSnapshot: () => [...routes].map(([routingId, routeGeneration]) => ({ routingId, routeGeneration })),
     request: (rid, parts, timeoutMs, onReply, onFailed, _recordReceived, onAdmitted, existing) => (async () => {
       const record = parts[0][3] === 28 ? decodeActorJoin28(parts) : wire.decodeStatefulHeader(parts[0]);
       const attempt = { rid, parts, timeoutMs, record, existing };
       attempts.push(attempt);
+
       try {
         const result = request(attempt, attempts.length);
         onAdmitted?.();
-        return await result;
+        return await Promise.race([result, new Promise((_resolve, reject) => { bindingFailures.add(reject); })]);
       } catch (error) {
         if (disconnectOnFailure && error instanceof ZLinkBackendResultError) {
           routes.delete(target.nodeRoutingId);
@@ -74,6 +79,7 @@ function fixture(request, disconnectOnFailure = true) {
   };
   return {
     raw, runtime, attempts, target, router,
+    async snapshot(rows) { connectionRows = rows; await raw.pumpBatch(false, false, true); },
     async admit() {
       const routeGeneration = nextRouteGeneration++;
       routes.set(target.nodeRoutingId, routeGeneration);
@@ -86,6 +92,10 @@ function fixture(request, disconnectOnFailure = true) {
       routes.delete(target.nodeRoutingId);
       await raw.observeSelectedRoutes();
       assert.equal(raw.topology.peer(target.nodeRoutingId), undefined);
+    },
+    bindingFailure,
+    failBinding() {
+      for (const failed of bindingFailures) failed(bindingFailure);
     },
     start(kind, timeoutMs = 80) {
       const common = { sourceNodeRid: 'source-node', sourceNodeGeneration: 7n,
@@ -110,7 +120,7 @@ function fixture(request, disconnectOnFailure = true) {
 
 for (const kind of operationKinds) {
   for (const mode of ['inFlight', 'beforeStart']) {
-    test(`${kind}: intent removal immediately terminates ${mode} as Unavailable`, async t => {
+    test(`${kind}: intent removal uses ${mode} completion owner`, async t => {
       let now = 1000;
       t.mock.method(performance, 'now', () => now);
       t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -124,8 +134,16 @@ for (const kind of operationKinds) {
         assert.equal(outcome, undefined);
         f.raw.disconnectPeer(f.target.advertisedEndpoint, f.target.nodeRoutingId, 7n);
         await turn();
-        assert.equal(outcome?.error?.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
-        assert.match(outcome.error.message, /lifecycle ended/);
+        if (mode === 'inFlight') {
+          assert.equal(outcome, undefined, 'started request awaits binding terminal');
+          f.failBinding();
+          await turn();
+        }
+        if (mode === 'inFlight') assert.equal(outcome?.error, f.bindingFailure);
+        else {
+          assert.equal(outcome?.error?.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+          assert.match(outcome.error.message, /lifecycle ended/);
+        }
         assert.equal(now, 1000, 'termination does not consume a timer tick');
         await operation;
         finishAttempt?.(f.terminal(f.attempts[0]));
@@ -138,7 +156,7 @@ for (const kind of operationKinds) {
     });
   }
 
-  test(`${kind}: physical disconnect preserves the original request until logical intent removal`, async t => {
+  test(`${kind}: started request retains binding completion after physical and logical disconnect`, async t => {
     let now = 1000;
     t.mock.method(performance, 'now', () => now);
     t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -157,8 +175,10 @@ for (const kind of operationKinds) {
       assert.equal(f.attempts.length, 1, 'absent routes receive no submission');
       f.raw.disconnectPeerEndpoint(f.target.advertisedEndpoint);
       await turn();
-      assert.equal(outcome?.error?.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
-      assert.match(outcome.error.message, /lifecycle ended/);
+      assert.equal(outcome, undefined, 'logical removal does not replace the binding terminal');
+      f.failBinding();
+      await turn();
+      assert.equal(outcome?.error, f.bindingFailure);
       await operation;
       reply(f.terminal(f.attempts[0]));
       await turn();
@@ -389,5 +409,23 @@ for (const mode of ['sync', 'async', 'cancel-at-creation']) {
       assert.equal(submitted, 1);
       assert.equal(requests.registry.size, 0);
     } finally { resolve([]); requests.close(); f.runtime.close(); f.raw.close(); }
+  });
+}
+
+for (const kind of operationKinds) {
+  test(`${kind}: Core ATTEMPT_FAILED ends readiness as Unavailable before sender deadline`, async () => {
+    const f = fixture(() => { throw new Error('Failed connection must not start a binding request'); });
+    const row = (state, lastFailureId) => ({ endpoint: f.target.advertisedEndpoint,
+      intentId: 1n, revision: 1n, state, lastFailureId,
+      lastFailure: { kind: zlink.ConnectionFailureKind.Refused,
+        stage: zlink.ConnectionFailureStage.Transport, normalizedErrno: 0, disconnectReason: 0 } });
+    try {
+      await f.snapshot([row(zlink.ConnectionAttemptState.Connecting, 0n)]);
+      const rejected = assert.rejects(f.start(kind, 1000),
+        error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable);
+      await f.snapshot([row(zlink.ConnectionAttemptState.AttemptFailed, 2n)]);
+      await rejected;
+      assert.equal(f.attempts.length, 0);
+    } finally { f.close(); }
   });
 }

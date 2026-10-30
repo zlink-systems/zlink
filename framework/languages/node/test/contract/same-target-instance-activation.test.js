@@ -13,6 +13,7 @@ test('cold event and request have distinct operation identities on the same sour
   const runtime = new ServiceStatefulRuntime(
     {
       setServiceIngress() {},
+      isPeerRouteReady: () => true,
       async sendService(target, parts) {
         records.push(wire.decodeStatefulHeader(parts[0]));
         return true;
