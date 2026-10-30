@@ -262,6 +262,11 @@ final class ZLinkJavaRawSubmissionFailureContractTest {
         }
 
         @Override
+        public List<ConnectionAttempt> connectionAttemptsSnapshot() {
+            return nativeSocket.connectionAttemptsSnapshot();
+        }
+
+        @Override
         public void unbind(String v) {
             nativeSocket.unbind(v);
         }

@@ -282,6 +282,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                     public void close() {}
                 };
         logger.setLevel(Level.ALL);
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(traceHandler);
         try {
             MeshNodeRegistration mesh = new MeshNodeRegistration("game");
@@ -313,6 +314,7 @@ final class ZLinkMeshApplicationDispatcherTest {
             assertTrue(dispatchError.get(2, TimeUnit.SECONDS).contains("action=drop"));
             assertFalse(traces.stream().anyMatch(line -> line.contains("phase=replied")));
         } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(traceHandler);
             logger.setLevel(previousLevel);
         }
@@ -348,6 +350,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                     public void close() {}
                 };
         logger.setLevel(Level.ALL);
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(traceHandler);
         try {
             MeshNodeRegistration mesh = new MeshNodeRegistration("game");
@@ -375,6 +378,7 @@ final class ZLinkMeshApplicationDispatcherTest {
             FlowChannelRequestHandler.received.get(2, TimeUnit.SECONDS);
             dispatcher.accept(recordWithFlow());
             workers.drain();
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(
                     2L,
                     traces.stream().filter(line -> line.contains("phase=admitted")).count(),
@@ -400,6 +404,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         } finally {
             FlowChannelRequestHandler.release.complete(null);
             FlowChannelRequestHandler.release = CompletableFuture.completedFuture(null);
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(traceHandler);
             logger.setLevel(previousLevel);
         }
@@ -467,6 +472,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                     public void close() {}
                 };
         logger.setLevel(Level.ALL);
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(listener);
         try {
             MeshNodeRegistration mesh = new MeshNodeRegistration("game");
@@ -533,6 +539,7 @@ final class ZLinkMeshApplicationDispatcherTest {
             }
             assertEquals(22, count);
         } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(listener);
             logger.setLevel(previousLevel);
         }
@@ -936,6 +943,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                     public void close() {}
                 };
         logger.setLevel(Level.ALL);
+        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(listener);
         try (var scope = ZLinkFlowContext.enterOrCreate(null, ZLinkFlowOrigin.APPLICATION)) {
             String flowId = ZLinkFlowContext.current().flowId();
@@ -977,6 +985,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                 }
             }
             drains.sealAndAwaitZero("game").toCompletableFuture().get(2, TimeUnit.SECONDS);
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             assertTrue(
                     traces.stream()
                             .anyMatch(
@@ -991,6 +1000,7 @@ final class ZLinkMeshApplicationDispatcherTest {
                                                     && trace.contains(
                                                             "error_message=expected failure")));
         } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(listener);
             logger.setLevel(previousLevel);
         }
