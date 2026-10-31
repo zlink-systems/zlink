@@ -130,3 +130,14 @@ const isValidServiceWireTerminalFailure = (terminal, failureCode) => {
     return expected !== undefined && expected === terminal;
 };
 exports.isValidServiceWireTerminalFailure = isValidServiceWireTerminalFailure;
+function recoverRequestCorrelation(bytes) {
+  if (bytes.length < 13
+      || bytes[0] !== 90 || bytes[1] !== 77
+      || bytes[2] !== 1
+      || ![17, 19, 22, 25, 26, 27, 28, 38, 47, 48, 49, 54].includes(bytes[3])) return undefined;
+  let correlation = 0n;
+  for (let index = 5; index < 13; ++index)
+    correlation = (correlation << 8n) | BigInt(bytes[index]);
+  return correlation === 0n ? undefined : correlation;
+}
+exports.recoverRequestCorrelation = recoverRequestCorrelation;
