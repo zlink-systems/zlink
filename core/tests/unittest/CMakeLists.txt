@@ -32,6 +32,7 @@ set(unittests
     unittest_monitor_ready_drain
     unittest_proxy_metadata
     unittest_monitor_queue_accounting
+    unittest_monitor_close_socket
     unittest_zmp_pair_lifecycle
     unittest_ws_metadata
     unittest_phase3_request_reply_owners
