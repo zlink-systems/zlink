@@ -193,13 +193,6 @@
       "7271639c976e434f18e5f5436418ea45ef1016772ddfaec98c2e76e0e9083a1a": 1
     }
   },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodePumpTest.java": {
-    "reason": "의도된 내부 시험: receive rotation executor 재제출 횟수와 pending permit grant의 실행 위치를 측정한다.",
-    "accesses": {
-      "6593742c1b3a7163b5c6608754f2f508ce8d0db33fa38373f6abd945b26e7cdb": 1,
-      "dfef80c78f2bac9c85558a56ebac0463cf150a2c198e27573ddfbf6ea4afb99d": 1
-    }
-  },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeRouteEndTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {

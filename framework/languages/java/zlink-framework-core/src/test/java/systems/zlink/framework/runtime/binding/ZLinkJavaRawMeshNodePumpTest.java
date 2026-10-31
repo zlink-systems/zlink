@@ -10,11 +10,15 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.Received;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
 import java.util.OptionalLong;
@@ -27,6 +31,402 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkJavaRawMeshNodePumpTest {
+    @Test
+    void crossedHelloResponseKeepsItsSnapshotWhenAdmitIsClaimedInTheSameRotation()
+            throws Exception {
+        var localRid = RoutingId.from("crossed-local");
+        var peerRid = RoutingId.from("crossed-peer");
+        var codec = new ZLinkServiceM6AWireCodec();
+        var localHello = admissionDescriptor(localRid, 1);
+        var current = admissionDescriptor(localRid, 2);
+        var remote = admissionDescriptor(peerRid, 1);
+        try (var context = Zlink.createContext();
+                var port = new ZLinkJavaRawServicePort(context);
+                var peerPort = new ZLinkJavaRawServicePort(context);
+                var router = port.openRouter(localRid);
+                var peer = peerPort.openRouter(peerRid)) {
+            String endpoint = "inproc://crossed-hello-" + UUID.randomUUID();
+            peer.bind(endpoint);
+            router.connect(endpoint);
+            awaitRoute(port, router, peerRid);
+            awaitRoute(peerPort, peer, localRid);
+            var topology = new ZLinkServiceTopologyRegistry(current, port.stateLane());
+            try (var node =
+                    new ZLinkJavaRawMeshNode(
+                            "rotation",
+                            System::currentTimeMillis,
+                            () -> 0L,
+                            Duration.ofSeconds(5),
+                            Duration.ofSeconds(15),
+                            port,
+                            Runnable::run,
+                            router,
+                            current,
+                            topology,
+                            java.util.Map.of())) {
+                for (int command :
+                        new int[] {
+                            ServiceWireConstants.COMMAND_HELLO, ServiceWireConstants.COMMAND_ADMIT
+                        }) {
+                    peerPort.send(peer, localRid, List.of(codec.encodeAdmission(command, remote)))
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                }
+                var pending = new java.util.ArrayDeque<ZLinkJavaRawServicePort.Inbound>();
+                try {
+                    for (int index = 0; index < 2; index++) {
+                        assertTrue(port.waitForReadable(router, Duration.ofSeconds(5)));
+                        var inbound = port.receive(router);
+                        assertNotNull(inbound);
+                        pending.add(inbound);
+                    }
+                    node.helloExchanges.put(
+                            peerRid,
+                            new ZLinkJavaRawMeshNode.HelloExchange(
+                                    peerRid,
+                                    pending.getFirst().routeGeneration(),
+                                    CompletableFuture.completedFuture(null),
+                                    codec.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_HELLO, localHello)));
+                    installClaims(
+                            node,
+                            () -> {
+                                var inbound = pending.pollFirst();
+                                if (inbound == null) return null;
+                                return node.claimRecordForTest(inbound);
+                            });
+                    drain(node);
+                    assertTrue(pending.isEmpty());
+                    for (int command :
+                            new int[] {
+                                ServiceWireConstants.COMMAND_ADMIT,
+                                ServiceWireConstants.COMMAND_UPDATE
+                            }) {
+                        assertTrue(peerPort.waitForReadable(peer, Duration.ofSeconds(5)));
+                        try (var response = peerPort.receive(peer)) {
+                            assertNotNull(response);
+                            var head = response.frames().getFirst();
+                            assertEquals(command, codec.decodeHeader(head).command());
+                            assertEquals(
+                                    command == ServiceWireConstants.COMMAND_ADMIT ? 1 : 2,
+                                    codec.decodeAdmission(head, command, localRid)
+                                            .descriptorRevision());
+                        }
+                    }
+                } finally {
+                    pending.forEach(ZLinkJavaRawServicePort.Inbound::close);
+                }
+            }
+        }
+    }
+
+    private static void awaitRoute(
+            ZLinkJavaRawServicePort port,
+            systems.zlink.contracts.sockets.RouterSocket router,
+            RoutingId peer) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (port.routesSnapshot(router).stream()
+                .noneMatch(route -> route.routingId().equals(peer))) {
+            long remaining = deadline - System.nanoTime();
+            assertTrue(remaining > 0, "selected route was not observed");
+            port.waitForReady(router, Duration.ofNanos(remaining));
+        }
+    }
+
+    private static ZLinkServiceNodeDescriptor admissionDescriptor(RoutingId rid, long revision) {
+        return new ZLinkServiceNodeDescriptor(
+                "rotation",
+                rid,
+                1,
+                revision,
+                "inproc://" + rid,
+                List.of(),
+                ZLinkServiceNodeDescriptor.State.SERVING,
+                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                1,
+                List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                ZLinkServiceNodeDescriptor.ObjectRole.NONE,
+                1,
+                1,
+                0,
+                0,
+                0);
+    }
+
+    @Test
+    void permitPressureTransitionsRunOutsideTheTransportTurn() throws Exception {
+        try (var queue =
+                        new ZLinkApplicationJobQueue(
+                                ZLinkApplicationJobQueueProfile.BALANCED,
+                                OptionalLong.of(4),
+                                new ZLinkApplicationJobQueue.ProcessorCandidates(
+                                        1, null, null, null),
+                                100,
+                                0);
+                var context = Zlink.createContext();
+                var node = rotationNode(context, () -> 0L)) {
+            node.setApplicationJobQueue(queue);
+            var transitions =
+                    new java.util.ArrayList<systems.zlink.contracts.sockets.ReceiveFlowState>();
+            try (var observation =
+                    queue.registerReceiveFlowTarget(
+                            state -> {
+                                assertFalse(node.sourceTransportLane().isOnLane());
+                                transitions.add(state);
+                            })) {
+                var claims = new AtomicInteger();
+                var owned = new java.util.ArrayList<Received>();
+                var pending = new java.util.ArrayDeque<Object>();
+                for (int index = 0; index < 6; index++)
+                    pending.add(admissionRecord(() -> {}, owned));
+                installClaims(
+                        node,
+                        () -> {
+                            var record = pending.pollFirst();
+                            if (record != null) claims.incrementAndGet();
+                            return record;
+                        });
+                drain(node);
+                assertEquals(4, claims.get());
+                assertEquals(2, pending.size());
+                assertEquals(
+                        List.of(
+                                systems.zlink.contracts.sockets.ReceiveFlowState.RUNNING,
+                                systems.zlink.contracts.sockets.ReceiveFlowState.PAUSED,
+                                systems.zlink.contracts.sockets.ReceiveFlowState.RUNNING),
+                        transitions);
+                drain(node);
+                assertEquals(6, claims.get());
+                assertTrue(pending.isEmpty());
+                for (var record : owned)
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            IllegalStateException.class, record::parts);
+            }
+        }
+    }
+
+    @Test
+    void admissionPublicationsKeepReceiveOrderOutsideTheTransportLane() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = rotationNode(context, () -> 0L)) {
+            var order = new java.util.ArrayList<Integer>();
+            var claims = new AtomicInteger();
+            installClaims(
+                    node,
+                    () -> {
+                        int index = claims.getAndIncrement();
+                        if (index == 3) return null;
+                        return admissionRecord(
+                                () -> {
+                                    assertFalse(node.sourceTransportLane().isOnLane());
+                                    order.add(index);
+                                },
+                                new java.util.ArrayList<>());
+                    });
+            drain(node);
+            assertEquals(List.of(0, 1, 2), order);
+        }
+    }
+
+    @Test
+    void claimAndDispatchFailuresReleaseEveryRecordAndPermit() throws Exception {
+        for (boolean failClaim : new boolean[] {true, false}) {
+            try (var queue =
+                            new ZLinkApplicationJobQueue(
+                                    ZLinkApplicationJobQueueProfile.BALANCED,
+                                    OptionalLong.of(100),
+                                    new ZLinkApplicationJobQueue.ProcessorCandidates(
+                                            1, null, null, null),
+                                    100,
+                                    0);
+                    var context = Zlink.createContext();
+                    var node = rotationNode(context, () -> 0L)) {
+                node.setApplicationJobQueue(queue);
+                var received = new java.util.ArrayList<Received>();
+                var claims = new AtomicInteger();
+                var failure = new IllegalStateException("rotation failure");
+                installClaims(
+                        node,
+                        () -> {
+                            int index = claims.getAndIncrement();
+                            if (index == 3) {
+                                if (failClaim) throw failure;
+                                return null;
+                            }
+                            return admissionRecord(
+                                    () -> {
+                                        if (!failClaim && index == 1) throw failure;
+                                    },
+                                    received);
+                        });
+                var thrown =
+                        org.junit.jupiter.api.Assertions.assertThrows(
+                                java.lang.reflect.InvocationTargetException.class,
+                                () -> drain(node));
+                org.junit.jupiter.api.Assertions.assertSame(failure, thrown.getCause());
+                assertEquals(3, received.size());
+                for (var record : received)
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            IllegalStateException.class, record::parts);
+                int returned = queue.reserveRotationBudget(100);
+                try {
+                    assertEquals(100, returned);
+                } finally {
+                    queue.abandonRotationBudget(returned);
+                }
+            }
+        }
+    }
+
+    @Test
+    void expiredRotationBudgetStillAllowsItsFirstClaim() throws Exception {
+        var reads = new AtomicInteger();
+        try (var context = Zlink.createContext();
+                var node =
+                        rotationNode(
+                                context,
+                                () ->
+                                        reads.getAndIncrement() == 0
+                                                ? 0
+                                                : TimeUnit.MILLISECONDS.toNanos(3))) {
+            reads.set(0);
+            var claims = new AtomicInteger();
+            var received = new java.util.ArrayList<Received>();
+            installClaims(
+                    node,
+                    () -> {
+                        claims.incrementAndGet();
+                        return admissionRecord(() -> {}, received);
+                    });
+            drain(node);
+            assertEquals(1, claims.get());
+            assertEquals(1, received.size());
+        }
+    }
+
+    @Test
+    void closeDuringPublicationReleasesRemainingClaimsWithoutPublishingThem() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = rotationNode(context, () -> 0L)) {
+            var claims = new AtomicInteger();
+            var publications = new AtomicInteger();
+            var received = new java.util.ArrayList<Received>();
+            installClaims(
+                    node,
+                    () -> {
+                        if (claims.getAndIncrement() == 3) return null;
+                        return admissionRecord(
+                                () -> {
+                                    publications.incrementAndGet();
+                                    node.close();
+                                },
+                                received);
+                    });
+            drain(node);
+            assertEquals(1, publications.get());
+            assertEquals(3, received.size());
+            for (var record : received)
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        IllegalStateException.class, record::parts);
+        }
+    }
+
+    private static ZLinkJavaRawMeshNode rotationNode(
+            systems.zlink.contracts.core.Context context, java.util.function.LongSupplier clock) {
+        return new ZLinkJavaRawMeshNode(
+                context,
+                "rotation",
+                System::currentTimeMillis,
+                clock,
+                Duration.ofSeconds(5),
+                Duration.ofSeconds(15));
+    }
+
+    private static Object admissionRecord(Runnable publication, List<Received> owned) {
+        var received =
+                new Received(
+                        RoutingId.from("rotation-source"),
+                        new Message[] {Message.from(new byte[] {1})});
+        owned.add(received);
+        var inbound =
+                new ZLinkJavaRawServicePort.Inbound(
+                        RoutingId.from("rotation-source"), null, received);
+        return ZLinkJavaRawMeshNode.claimedRecordForTest(
+                inbound,
+                java.util.Optional.empty(),
+                new byte[] {1},
+                new ZLinkServiceM6AWireCodec.Header(ServiceWireConstants.COMMAND_HELLO, 0),
+                publication);
+    }
+
+    private static void installClaims(
+            ZLinkJavaRawMeshNode node, java.util.function.Supplier<?> claims) {
+        node.pumpClaimForTest(claims);
+    }
+
+    private static void drain(ZLinkJavaRawMeshNode node) throws Exception {
+        try {
+            node.drainIngressBatchForTest(null);
+        } catch (RuntimeException | Error failure) {
+            throw new java.lang.reflect.InvocationTargetException(failure);
+        }
+    }
+
+    @Test
+    void oneReceiveRotationClaimsItsBudgetBeforeTheNextStateLaneTurn() throws Exception {
+        try (var context = Zlink.createContext();
+                var node =
+                        new ZLinkJavaRawMeshNode(
+                                context,
+                                "claim-turn",
+                                System::currentTimeMillis,
+                                () -> 0L,
+                                Duration.ofSeconds(5),
+                                Duration.ofSeconds(15));
+                var worker = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var lane = node.sourceTransportLane();
+            var claims = new AtomicInteger();
+            var claimsBeforeNextTurn = new CompletableFuture<Integer>();
+            installClaims(
+                    node,
+                    (java.util.function.Supplier<?>)
+                            () -> {
+                                assertTrue(lane.isOnLane());
+                                int count = claims.incrementAndGet();
+                                if (count == 1) {
+                                    CompletableFuture.runAsync(
+                                                    () ->
+                                                            lane.runAsync(
+                                                                    () -> {
+                                                                        claimsBeforeNextTurn
+                                                                                .complete(
+                                                                                        claims
+                                                                                                .get());
+                                                                        return null;
+                                                                    }),
+                                                    worker)
+                                            .orTimeout(5, TimeUnit.SECONDS)
+                                            .join();
+                                }
+                                if (count > ZLinkJavaRawMeshNode.ingressBatchLimit()) return null;
+                                var received =
+                                        new Received(
+                                                RoutingId.from("claim-source"),
+                                                new Message[] {Message.from(new byte[] {1})});
+                                var inbound =
+                                        new ZLinkJavaRawServicePort.Inbound(
+                                                RoutingId.from("claim-source"), null, received);
+                                return node.claimRecordForTest(inbound);
+                            });
+            node.drainIngressBatchForTest(null);
+            assertEquals(ZLinkJavaRawMeshNode.ingressBatchLimit(), claims.get());
+            assertEquals(
+                    ZLinkJavaRawMeshNode.ingressBatchLimit(),
+                    claimsBeforeNextTurn.get(5, TimeUnit.SECONDS));
+            assertFalse(lane.isOnLane());
+        }
+    }
+
     @Test
     void serialRequestsKeepTheReceiveTaskUntilShutdown() throws Exception {
         runSerialRequests(false);
@@ -113,13 +513,7 @@ final class ZLinkJavaRawMeshNodePumpTest {
                                         null,
                                         null);
                         if (held != null) {
-                            Field field =
-                                    ZLinkJavaRawMeshNode.class.getDeclaredField(
-                                            "pendingReceiveAcquire");
-                            field.setAccessible(true);
-                            var pending =
-                                    (java.util.concurrent.atomic.AtomicReference<?>)
-                                            field.get(target);
+                            var pending = target.pendingReceiveAcquireForTest();
                             var yielded = new CompletableFuture<Boolean>();
                             targetPump.execute(() -> yielded.complete(pending.get() != null));
                             assertTrue(yielded.get(5, TimeUnit.SECONDS));
@@ -154,11 +548,9 @@ final class ZLinkJavaRawMeshNodePumpTest {
                     targetPump.posts.get() >= 2, "pending grant must run on the receive executor");
     }
 
-    private static CountingExecutor countPump(ZLinkJavaRawMeshNode node) throws Exception {
-        Field field = ZLinkJavaRawMeshNode.class.getDeclaredField("pump");
-        field.setAccessible(true);
-        var counting = new CountingExecutor((ExecutorService) field.get(node));
-        field.set(node, counting);
+    private static CountingExecutor countPump(ZLinkJavaRawMeshNode node) {
+        var counting = new CountingExecutor(node.pumpForTest());
+        node.pumpForTest(counting);
         return counting;
     }
 

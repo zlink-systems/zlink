@@ -286,6 +286,24 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private Supplier<ClaimedRecord> pumpClaim;
     private final AtomicReference<CompletableFuture<ZLinkApplicationJobQueue.Permit>>
             pendingReceiveAcquire = new AtomicReference<>();
+
+    ExecutorService pumpForTest() {
+        return pump;
+    }
+
+    void pumpForTest(ExecutorService value) {
+        pump = value;
+    }
+
+    @SuppressWarnings("unchecked")
+    void pumpClaimForTest(Supplier<?> value) {
+        pumpClaim = (Supplier<ClaimedRecord>) value;
+    }
+
+    AtomicReference<?> pendingReceiveAcquireForTest() {
+        return pendingReceiveAcquire;
+    }
+
     // The pump executor alone reads and writes it; close reads it after the pump terminates.
     private RawMulticastFanout pendingRawMulticast;
     // Pump-confined: the source connection whose receive this rotation already recorded.
@@ -5271,110 +5289,154 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
+    void drainIngressBatchForTest(RouterSocket pumpSocket) {
+        drainIngressBatch(pumpSocket);
+    }
+
     private void drainIngressBatch(RouterSocket pumpSocket) {
         if (pendingReceiveAcquire.get() != null || logicalClose.get() != null) return;
         drainIngressBatch(pumpSocket, null);
     }
 
     private void drainIngressBatch(RouterSocket pumpSocket, ZLinkApplicationJobQueue.Permit grant) {
-        long startedAt = System.nanoTime();
-        long receivedBytes = 0;
-        int count = 0;
-        // Spec 08 §4.1 I1/I2: reserve the rotation's currently free budget in one FIFO-aware
-        // lock before its first claim. Only a source with no free budget needs a resumption
-        // callback. Convert budget units to permit objects only for records that exist.
-        var budgetQueue = applicationJobQueue;
-        int budget = 0;
-        boolean budgetReserved = false;
-        rotationReceivePeer = null;
-        try {
-            while (count < MAX_INGRESS_BATCH && logicalClose.get() == null) {
+        // Spec 08 §4.1 I1–I3: the rotation owns its permits and records. Claim in one
+        // transport turn, then publish in receive order after leaving that turn.
+        class Rotation implements AutoCloseable, Supplier<Void> {
+            final long startedAt = nanoTime.getAsLong();
+            final ZLinkApplicationJobQueue budgetQueue = applicationJobQueue;
+            final List<ClaimedRecord> records = new ArrayList<>(MAX_INGRESS_BATCH);
+            final ZLinkApplicationJobQueue.Permit[] permits =
+                    new ZLinkApplicationJobQueue.Permit[MAX_INGRESS_BATCH];
+            ZLinkApplicationJobQueue.Permit nextPermit;
+            long receivedBytes;
+            int count;
+            int budget;
+            boolean budgetReserved;
+
+            boolean exhausted() {
+                return count >= MAX_INGRESS_BATCH
+                        || (count > 0
+                                && (receivedBytes >= MAX_INGRESS_BATCH_BYTES
+                                        || nanoTime.getAsLong() - startedAt
+                                                >= MAX_INGRESS_BATCH_NANOS))
+                        || logicalClose.get() != null;
+            }
+
+            boolean acquirePermit() {
                 var queue = applicationJobQueue;
-                boolean budgeted = false;
-                if (grant == null && queue != null && queue == budgetQueue) {
+                if (queue != null && queue == budgetQueue) {
                     if (!budgetReserved) {
                         budgetReserved = true;
-                        budget = queue.reserveRotationBudget(MAX_INGRESS_BATCH - count);
+                        budget =
+                                queue.reserveRotationBudget(
+                                        MAX_INGRESS_BATCH - count - (nextPermit == null ? 0 : 1));
                     }
-                    budgeted = budget > 0;
-                }
-                if (grant == null && !budgeted && queue != null) {
-                    grant =
-                            queue.acquireOrResume(
-                                    this::resumeReceiveOwner,
-                                    permit -> drainIngressBatch(pumpSocket, permit),
-                                    pendingReceiveAcquire,
-                                    ZLinkApplicationJobQueue.Origin.REMOTE);
-                    if (logicalClose.get() != null) {
-                        ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
-                        return;
-                    }
-                    if (grant == null) return;
-                }
-                // Each permit of this source posts the next child of a fanout it already
-                // received, or receives one record. A budgeted permit becomes a permit object
-                // only for work that exists.
-                RawMulticastFanout fanout = pendingRawMulticast;
-                ClaimedRecord record = null;
-                if (fanout == null) {
-                    // Spec 08 §4.1 I2/I3: one transport turn claims the record and reads its
-                    // source peer, both owned by that lane.
-                    record = port.inStateLane(pumpClaim);
-                    if (record == null) {
-                        return;
-                    }
-                }
-                ZLinkApplicationJobQueue.Permit permit = grant;
-                grant = null;
-                if (budgeted) {
-                    try {
-                        permit = queue.takeRotationPermit();
+                    if (nextPermit != null) return true;
+                    if (budget > 0) {
+                        nextPermit = queue.takeRotationPermit();
                         budget--;
-                    } catch (RuntimeException | Error failure) {
-                        if (record != null) record.inbound().close();
-                        throw failure;
+                        return true;
                     }
                 }
-                try {
-                    if (fanout != null) {
-                        try (ZLinkApplicationJobContext.Scope ignored =
-                                ZLinkApplicationJobContext.enter(permit)) {
-                            continueRawMulticast(fanout);
-                        }
-                    } else {
-                        ZLinkApplicationJobContext.Scope scope;
-                        try {
-                            receivedBytes =
-                                    Math.addExact(
-                                            receivedBytes,
-                                            retainedBytes(record.inbound().received().parts()));
-                            scope =
-                                    permit == null
-                                            ? () -> {}
-                                            : ZLinkApplicationJobContext.enter(permit);
-                        } catch (RuntimeException | Error failure) {
-                            record.inbound().close();
-                            throw failure;
-                        }
-                        try (scope) {
-                            dispatch(record);
-                        }
-                    }
-                } finally {
-                    if (permit != null) {
-                        permit.abandonReservation();
-                    }
+                if (nextPermit != null) return true;
+                if (queue == null) return true;
+                nextPermit =
+                        queue.acquireOrResume(
+                                ZLinkJavaRawMeshNode.this::resumeReceiveOwner,
+                                permit -> drainIngressBatch(pumpSocket, permit),
+                                pendingReceiveAcquire,
+                                ZLinkApplicationJobQueue.Origin.REMOTE);
+                if (logicalClose.get() != null) {
+                    ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
+                    return false;
                 }
-                count++;
-                if (receivedBytes >= MAX_INGRESS_BATCH_BYTES
-                        || System.nanoTime() - startedAt >= MAX_INGRESS_BATCH_NANOS) {
-                    return;
+                return nextPermit != null;
+            }
+
+            void dispatchFanout() {
+                while (pendingRawMulticast != null && !exhausted() && acquirePermit()) {
+                    var permit = nextPermit;
+                    nextPermit = null;
+                    try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                        continueRawMulticast(pendingRawMulticast);
+                    } finally {
+                        if (permit != null) permit.abandonReservation();
+                    }
+                    count++;
                 }
             }
-        } finally {
-            if (grant != null) grant.abandonReservation();
-            if (budget > 0) {
-                budgetQueue.abandonRotationBudget(budget);
+
+            @Override
+            public Void get() {
+                while (!exhausted()
+                        && (nextPermit != null || budget > 0 || applicationJobQueue == null)) {
+                    if (nextPermit == null && budget > 0) {
+                        nextPermit = budgetQueue.takeRotationPermit();
+                        budget--;
+                    }
+                    var record = pumpClaim.get();
+                    if (record == null) break;
+                    records.add(record);
+                    permits[records.size() - 1] = nextPermit;
+                    nextPermit = null;
+                    receivedBytes =
+                            Math.addExact(
+                                    receivedBytes,
+                                    retainedBytes(record.inbound().received().parts()));
+                    count++;
+                    // Fanout children precede the next native record. Dispatch creates the
+                    // fanout outside the lane, so multicast ends this claim section.
+                    if (record.header() != null
+                            && record.header().command()
+                                    == ServiceWireConstants.COMMAND_LOGICAL_MULTICAST) break;
+                }
+                return null;
+            }
+
+            void dispatchClaimed() {
+                for (int index = 0; index < records.size(); index++) {
+                    if (logicalClose.get() != null) return;
+                    var record = records.set(index, null);
+                    var permit = permits[index];
+                    permits[index] = null;
+                    ZLinkApplicationJobContext.Scope scope;
+                    try {
+                        scope =
+                                permit == null
+                                        ? () -> {}
+                                        : ZLinkApplicationJobContext.enter(permit);
+                    } catch (RuntimeException | Error failure) {
+                        record.inbound().close();
+                        if (permit != null) permit.abandonReservation();
+                        throw failure;
+                    }
+                    try (scope) {
+                        dispatch(record);
+                    } finally {
+                        if (permit != null) permit.abandonReservation();
+                    }
+                }
+            }
+
+            @Override
+            public void close() {
+                for (int index = 0; index < records.size(); index++) {
+                    var record = records.get(index);
+                    if (record != null) record.inbound().close();
+                    var permit = permits[index];
+                    if (permit != null) permit.abandonReservation();
+                }
+                if (nextPermit != null) nextPermit.abandonReservation();
+                if (budget > 0) budgetQueue.abandonRotationBudget(budget);
+            }
+        }
+        rotationReceivePeer = null;
+        try (var rotation = new Rotation()) {
+            rotation.nextPermit = grant;
+            rotation.dispatchFanout();
+            if (!rotation.exhausted() && pendingRawMulticast == null && rotation.acquirePermit()) {
+                port.inStateLane(rotation);
+                rotation.dispatchClaimed();
             }
         }
     }
@@ -5492,6 +5554,19 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             byte[] head,
             ZLinkServiceM6AWireCodec.Header header,
             Runnable afterCommit) {}
+
+    static Object claimedRecordForTest(
+            ZLinkJavaRawServicePort.Inbound inbound,
+            Optional<ZLinkServiceTopologyRegistry.Peer> source,
+            byte[] head,
+            ZLinkServiceM6AWireCodec.Header header,
+            Runnable afterCommit) {
+        return new ClaimedRecord(inbound, source, head, header, afterCommit);
+    }
+
+    Object claimRecordForTest(ZLinkJavaRawServicePort.Inbound inbound) {
+        return claimRecord(inbound);
+    }
 
     private ClaimedRecord claimRecord(RouterSocket pumpSocket) {
         var inbound = port.receiveNow(pumpSocket);
@@ -7792,7 +7867,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             return () -> {
                 finishSelectedRouteObservation(routeChanges);
                 if (command == ServiceWireConstants.COMMAND_HELLO)
-                    sendLocalDescriptor(sourceRid, ServiceWireConstants.COMMAND_ADMIT);
+                    publishAdmissionResponse(sourceRid, command, null);
                 else if (command == ServiceWireConstants.COMMAND_ADMIT)
                     disconnectNotRequiredTransport(sourceRid);
                 if (disconnected || becameNotRequired) signalStateChanged(sourceRid);
@@ -7833,8 +7908,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         var receipt = liveness.admit(sourceRid, connectionId, System.nanoTime());
         topology.bindLiveness(sourceRid, receipt);
         receipt.recordReceived(System.nanoTime());
+        HelloExchange completedExchange =
+                command == ServiceWireConstants.COMMAND_ADMIT
+                        ? helloExchanges.get(sourceRid)
+                        : null;
         if (command == ServiceWireConstants.COMMAND_ADMIT) {
-            helloExchanges.remove(sourceRid);
             refreshAdmissionPending(nanoTime.getAsLong());
         }
         boolean changed =
@@ -7849,36 +7927,43 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             "ZLINK_FRAMEWORK_PEER_READY mesh=" + meshName + " peer=" + sourceRid);
                     signalStateChanged(sourceRid);
                 }
-                // A terminal ADMIT republishes the current descriptor when HELLO crossed SERVING.
-                sendLocalDescriptor(sourceRid, ServiceWireConstants.COMMAND_UPDATE);
             }
-            if (command == ServiceWireConstants.COMMAND_HELLO)
-                sendLocalDescriptor(sourceRid, ServiceWireConstants.COMMAND_ADMIT);
+            if (command == ServiceWireConstants.COMMAND_HELLO
+                    || command == ServiceWireConstants.COMMAND_ADMIT)
+                publishAdmissionResponse(sourceRid, command, completedExchange);
             if (changed) signalStateChanged(sourceRid);
         };
     }
 
     /**
      * Orders admission responses with descriptor publication. A crossing HELLO receives the
-     * outstanding exchange's snapshot; newer descriptor publication waits for ADMIT. The descriptor
-     * lane owns both snapshot creation and publication (wire-protocol §4).
+     * outstanding exchange's snapshot; its terminal ADMIT retires that exchange and publishes the
+     * current descriptor as UPDATE. The descriptor lane orders both with publication (wire-protocol
+     * §4).
      */
-    private void sendLocalDescriptor(RoutingId target, int command) {
+    private void publishAdmissionResponse(
+            RoutingId target, int receivedCommand, HelloExchange completedExchange) {
         inDescriptorStateLane(
                 () -> {
                     var descriptor = localDescriptor;
-                    var exchange = helloExchanges.get(target);
-                    if (command == ServiceWireConstants.COMMAND_ADMIT
-                            && exchange != null
-                            && exchange.hello != null) {
-                        descriptor =
-                                wire.decodeAdmission(
-                                        exchange.hello,
-                                        ServiceWireConstants.COMMAND_HELLO,
-                                        localDescriptor.nodeRoutingId());
+                    int responseCommand;
+                    if (receivedCommand == ServiceWireConstants.COMMAND_HELLO) {
+                        responseCommand = ServiceWireConstants.COMMAND_ADMIT;
+                        var exchange = helloExchanges.get(target);
+                        if (exchange != null && exchange.hello != null) {
+                            descriptor =
+                                    wire.decodeAdmission(
+                                            exchange.hello,
+                                            ServiceWireConstants.COMMAND_HELLO,
+                                            localDescriptor.nodeRoutingId());
+                        }
+                    } else {
+                        responseCommand = ServiceWireConstants.COMMAND_UPDATE;
+                        if (completedExchange != null)
+                            helloExchanges.remove(target, completedExchange);
                     }
                     return trySendAdmissionControl(
-                            target, List.of(wire.encodeAdmission(command, descriptor)));
+                            target, List.of(wire.encodeAdmission(responseCommand, descriptor)));
                 });
     }
 
