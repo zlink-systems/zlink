@@ -22,6 +22,7 @@ import type {
   ZLinkRawRouterPort
 } from '../backend/raw-binding-port';
 import { submitToRequestResult } from '../messaging/submission-result';
+import { copyPayloadBytes } from '../../contracts/Common/payload-slab';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
 import { SERVICE_WIRE_PREFIX_SIZE } from './service-wire-binary-primitives';
@@ -49,6 +50,7 @@ import {
   ServiceWireFrameworkErrorCode
 } from './service-wire-constants.generated';
 import {
+  decodeApplicationPayload,
   decodeApplicationPayloadView,
   decodeChannelRequestHeader,
   decodeChannelSendHeader,
@@ -1698,7 +1700,7 @@ export class RawServiceMeshRuntime {
       channelName === undefined
         ? encodeNodeRequestHeader(correlation)
         : encodeChannelRequestHeader(correlation, channelName);
-    const encodedPayload = this.applicationFrame(payload);
+    let encodedPayload = this.applicationFrame(payload);
     let selectedTargetNodeRoutingId = targetNodeRoutingId;
     if (
       selectedTargetNodeRoutingId !== this.descriptor.nodeRoutingId &&
@@ -1726,6 +1728,7 @@ export class RawServiceMeshRuntime {
       }
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
+      encodedPayload = copyPayloadBytes(encodedPayload);
       // The local admission path aborts its capacity wait on the terminal
       // Promise, so a local request always keeps the Promise entry.
       const pending =
@@ -1916,7 +1919,7 @@ export class RawServiceMeshRuntime {
   }
 
   private applicationPayload(payload: ServiceApplicationPayloadInput): ServiceApplicationPayload {
-    return Buffer.isBuffer(payload) ? decodeApplicationPayloadView(payload) : payload;
+    return Buffer.isBuffer(payload) ? decodeApplicationPayload(payload) : payload;
   }
 
   private admitPeer(

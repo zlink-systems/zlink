@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { allocatePayloadBytes } = require('../../packages/framework/dist/contracts/Common/payload-slab');
 
 const MODULE_ALLOCATION_FLAG = '--jitless';
 const {
@@ -382,6 +383,81 @@ test('creation payload decode borrows the encoded body without intermediate byte
     `Avoid copying the ${bodyBytes}-byte encoded body twice per decode.`
   );
 });
+
+test('remote reply decode and completion add no standalone fresh backing', (t) => {
+  const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+  const constants = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
+  const {
+    ZLinkNodeRawMeshBackend
+  } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+  const { closeMeshCompletion } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+  const slabReply = wire.encodeMultipartApplicationPayload(
+    [Buffer.from('remote reply')],
+    constants.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+    constants.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+  );
+  const bindingMultipartReply = Buffer.from(slabReply);
+  const slabStatefulReply = wire.encodeApplicationPayload({
+    packetName: 'reply',
+    contentType: 'application/octet-stream',
+    payload: Buffer.from('remote stateful reply')
+  });
+  const bindingStatefulReply = Buffer.from(slabStatefulReply);
+  const backend = new ZLinkNodeRawMeshBackend(
+    'mesh',
+    'source',
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined
+  );
+  const allocate = Buffer.allocUnsafeSlow;
+  let freshBackingCount = 0;
+  t.mock.method(Buffer, 'allocUnsafeSlow', function (length, ...args) {
+    freshBackingCount++;
+    return allocate.call(Buffer, length, ...args);
+  });
+
+  const statefulDecoded = wire.decodeApplicationPayload(bindingStatefulReply);
+  assert.equal(statefulDecoded.payload.toString(), 'remote stateful reply');
+  assert.notStrictEqual(statefulDecoded.payload.buffer, slabStatefulReply.buffer);
+  assert.notStrictEqual(statefulDecoded.payload.buffer, allocatePayloadBytes(1).buffer);
+  const statefulCompletion = materializeRemoteCompletion(
+    backend,
+    statefulDecoded,
+    1n
+  );
+  try {
+    assert.equal(statefulCompletion.parts[0].data().toString(), 'remote stateful reply');
+    assert.equal(freshBackingCount, 0);
+  } finally {
+    closeMeshCompletion(statefulCompletion);
+  }
+
+  const multipartDecoded = wire.decodeApplicationPayloadView(bindingMultipartReply);
+  const multipartCompletion = materializeRemoteCompletion(backend, multipartDecoded, 2n);
+  try {
+    assert.equal(multipartCompletion.parts[0].data().toString(), 'remote reply');
+    assert.equal(freshBackingCount, 0);
+  } finally {
+    closeMeshCompletion(multipartCompletion);
+  }
+});
+
+function materializeRemoteCompletion(backend, payload, operationLow) {
+  let completion;
+  backend.deliverCompletion(
+    { high: 1n, low: operationLow },
+    1,
+    { terminalResult: 0, failureCode: 0, payload },
+    (_terminal, materialize) => {
+      completion = materialize();
+    }
+  );
+  assert.ok(completion);
+  return completion;
+}
 
 test('JSON parser policies are immutable and reused without per-decode option objects', (t) => {
   const profilePath = require.resolve('@zlink-systems/stream-wire/internal/json');

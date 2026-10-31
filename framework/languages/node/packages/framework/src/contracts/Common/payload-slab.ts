@@ -16,7 +16,14 @@ export function allocatePayloadBytes(length: number): Buffer {
   }
   const bytes = slab.subarray(offset, offset + length);
   offset += Math.ceil(length / ALIGNMENT) * ALIGNMENT;
-  // Views stay internal to the Framework (service frames copied by the binding);
-  // never return them to application code, whose `.buffer` would reach the slab.
+  // Transient runtime frames only; local queues and application boundaries
+  // copy before they retain or expose these bytes.
   return bytes;
+}
+
+/** Copies bytes into an exact, standalone backing store with no Buffer pool. */
+export function copyPayloadBytes(bytes: Uint8Array): Buffer {
+  const copy = Buffer.allocUnsafeSlow(bytes.byteLength);
+  copy.set(bytes);
+  return copy;
 }
