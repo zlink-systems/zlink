@@ -1,7 +1,5 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locations.*;
@@ -33,18 +31,7 @@ final class ZLinkProviderOwnerLeaseRepository {
 
     CompletionStage<ZLinkOwnerLeaseReadResult> read(String ownerId) {
         requireOwner(ownerId);
-        return CompletableFuture.completedFuture(provider)
-                .thenCompose(store -> store.read(ownerKey(ownerId), active()))
-                .handle(
-                        (result, failure) -> {
-                            if (failure != null) {
-                                throw new ZLinkFrameworkException(
-                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                        "Location Store failed to read owner lease",
-                                        unwrap(failure));
-                            }
-                            return result;
-                        })
+        return ZLinkProviderStoreRead.read(provider, ownerKey(ownerId), active(), "owner lease")
                 .thenApply(
                         result -> {
                             if (result instanceof ZLinkStoreReadMissing) {

@@ -36,27 +36,94 @@ final class ZLinkCapacityMetricPollingTest {
     private static final String ACTIVE = "zlink.object.capacity.active";
 
     @Test
-    void listsAndCollectionOutsidePollingDoNotReadCapacity() throws Exception {
+    void descriptorProjectionReadsCapacityButCollectionDoesNot() throws Exception {
         try (var fixture = new Fixture(false, false)) {
             int reads = fixture.store.reads.get();
             for (int i = 0; i < 3; i++) fixture.descriptor();
+            assertEquals(reads + 3, fixture.store.reads.get());
+            int afterProjection = fixture.store.reads.get();
             for (int i = 0; i < 3; i++) fixture.metrics.observable(RESERVED, TAGS);
-            assertEquals(reads, fixture.store.reads.get());
+            assertEquals(afterProjection, fixture.store.reads.get());
+        }
+    }
+
+    @Test
+    void discoveryTickProjectsCapacityAndRunsLocalPollingWithoutCollectionReads() throws Exception {
+        try (var fixture = new Fixture(false, false)) {
+            int reads = fixture.store.reads.get();
+            fixture.discoveryTick();
+            assertEquals(reads + 2, fixture.store.reads.get());
+            int afterTick = fixture.store.reads.get();
+            assertEquals(0, fixture.metrics.observable(RESERVED, TAGS));
+            assertEquals(afterTick, fixture.store.reads.get());
         }
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void firstFailedReadDoesNotPublishAnUnconfirmedZero(boolean synchronous) throws Exception {
-        try (var fixture = new Fixture(true, synchronous)) {
-            assertFalse(fixture.metrics.hasObservable(RESERVED, TAGS));
-            assertFalse(fixture.metrics.hasObservable(ACTIVE, TAGS));
-            assertFalse(fixture.metrics.hasObservable("zlink.object.capacity.limit", TAGS));
-            assertReadError(fixture.metrics, 1);
-            fixture.store.fail = false;
-            fixture.tick();
-            assertTrue(fixture.metrics.hasObservable(RESERVED, TAGS));
-            assertEquals(0, fixture.metrics.observable(RESERVED, TAGS));
+        var store = new CountingStore(true, synchronous);
+        var repository = new ZLinkProviderLocationRepository(store.provider());
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                repository
+                                        .claimOwnerLease("first-poll-owner", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var descriptor =
+                new ZLinkMeshNodeDescriptor(
+                        MESH,
+                        RoutingId.from("first-poll-node"),
+                        1,
+                        1,
+                        "inproc://first-poll",
+                        Map.of(),
+                        1,
+                        List.of(
+                                new ZLinkObjectCapability(
+                                        ZLinkPlacementObjectKind.USER_SPOT,
+                                        "room",
+                                        ZLinkObjectMaintenancePolicyKind.RECREATE,
+                                        false,
+                                        8)),
+                        ZLinkMeshNodeObjectRole.SERVER,
+                        java.util.Optional.of("first-poll-entry"),
+                        100,
+                        new ZLinkPlacementCapacity(
+                                new ZLinkCapacityUsage(0, 0, 0),
+                                new ZLinkCapacityUsage(0, 0, 8),
+                                List.of(
+                                        new ZLinkSpotTypeCapacity(
+                                                ZLinkPlacementObjectKind.USER_SPOT,
+                                                "room",
+                                                new ZLinkCapacityUsage(0, 0, 8)))),
+                        new ZLinkActivationConcurrency(0, 64),
+                        java.util.Optional.empty(),
+                        systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState.SERVING,
+                        "first-poll-security",
+                        owner.ownerId(),
+                        owner.leaseGeneration(),
+                        java.time.Instant.now());
+        var key = new ZLinkMeshNodeDescriptorKey(MESH, descriptor.rid());
+        try (var observation = repository.registerCapacityObservation();
+                var metrics = ZLinkRuntimeMetricProbe.install()) {
+            repository
+                    .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .toCompletableFuture()
+                    .get();
+            repository.refreshCapacityMetrics(key).toCompletableFuture().get();
+            assertEquals(1, store.reads.get());
+            assertFalse(metrics.hasObservable(RESERVED, TAGS));
+            assertFalse(metrics.hasObservable(ACTIVE, TAGS));
+            assertFalse(metrics.hasObservable("zlink.object.capacity.limit", TAGS));
+            assertReadError(metrics, 1);
+            store.fail = false;
+            repository.refreshCapacityMetrics(key).toCompletableFuture().get();
+            assertEquals(2, store.reads.get());
+            assertTrue(metrics.hasObservable(RESERVED, TAGS));
+            assertEquals(0, metrics.observable(RESERVED, TAGS));
         }
     }
 
@@ -66,7 +133,7 @@ final class ZLinkCapacityMetricPollingTest {
             assertEquals(2, fixture.loops.size());
             for (var loop : fixture.loops) {
                 int reads = fixture.store.reads.get();
-                fixture.tick(loop);
+                fixture.poll(loop);
                 assertEquals(reads + 1, fixture.store.reads.get());
             }
         }
@@ -80,7 +147,7 @@ final class ZLinkCapacityMetricPollingTest {
             var reservation = reserve(otherHost, descriptor, "remote");
             assertEquals(0, fixture.metrics.observable(RESERVED, TAGS));
             int reads = fixture.store.reads.get();
-            fixture.tick();
+            fixture.poll();
             assertEquals(reads + 1, fixture.store.reads.get());
             assertEquals(1, fixture.metrics.observable(RESERVED, TAGS));
             assertEquals(0, fixture.metrics.observable(ACTIVE, TAGS));
@@ -104,7 +171,7 @@ final class ZLinkCapacityMetricPollingTest {
             assertEquals(1, fixture.metrics.observable(RESERVED, TAGS));
             fixture.store.fail = true;
             int reads = fixture.store.reads.get();
-            fixture.tick();
+            fixture.poll();
             assertEquals(reads + 1, fixture.store.reads.get());
             assertEquals(1, fixture.metrics.observable(RESERVED, TAGS));
             assertReadError(fixture.metrics, 1);
@@ -197,14 +264,22 @@ final class ZLinkCapacityMetricPollingTest {
                     .getFirst();
         }
 
-        void tick() throws Exception {
-            tick(loop);
+        void poll() throws Exception {
+            poll(loop);
         }
 
-        void tick(ZLinkAutoConnectLoop target) throws Exception {
+        @SuppressWarnings("unchecked")
+        void poll(ZLinkAutoConnectLoop target) throws Exception {
+            var refresh =
+                    (java.util.function.Supplier<CompletionStage<Void>>)
+                            field(target, "refreshCapacity");
+            refresh.get().toCompletableFuture().get(10, TimeUnit.SECONDS);
+        }
+
+        void discoveryTick() throws Exception {
             var method = ZLinkAutoConnectLoop.class.getDeclaredMethod("tick");
             method.setAccessible(true);
-            ((CompletionStage<?>) method.invoke(target))
+            ((CompletionStage<?>) method.invoke(loop))
                     .toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
         }
