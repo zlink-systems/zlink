@@ -111,6 +111,31 @@ result_t<void> validate_protocol_header (const envelope_header_t &header,
     return result_t<void>::success ();
 }
 
+bool valid_utf8 (std::string_view value) noexcept
+{
+    for (std::size_t index = 0; index < value.size ();) {
+        const auto lead = static_cast<unsigned char> (value[index++]);
+        if (lead < 0x80)
+            continue;
+        const auto remaining = lead >= 0xc2 && lead <= 0xdf   ? 1
+                               : lead >= 0xe0 && lead <= 0xef ? 2
+                               : lead >= 0xf0 && lead <= 0xf4 ? 3
+                                                              : 0;
+        if (remaining == 0 || value.size () - index < static_cast<std::size_t> (remaining))
+            return false;
+        const auto second = static_cast<unsigned char> (value[index]);
+        if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second >= 0xa0)
+            || (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second >= 0x90))
+            return false;
+        for (int part = 0; part < remaining; ++part) {
+            const auto byte = static_cast<unsigned char> (value[index++]);
+            if (byte < 0x80 || byte > 0xbf)
+                return false;
+        }
+    }
+    return true;
+}
+
 // The envelope has a fixed field order. Count the escaped bytes first, then
 // write directly into its native message; there is no header DOM or byte copy.
 class header_writer_t
@@ -195,31 +220,6 @@ class header_writer_t
     std::size_t size () const noexcept { return _size; }
 
   private:
-    static bool valid_utf8 (std::string_view value) noexcept
-    {
-        for (std::size_t index = 0; index < value.size ();) {
-            const auto lead = static_cast<unsigned char> (value[index++]);
-            if (lead < 0x80)
-                continue;
-            const auto remaining = lead >= 0xc2 && lead <= 0xdf   ? 1
-                                   : lead >= 0xe0 && lead <= 0xef ? 2
-                                   : lead >= 0xf0 && lead <= 0xf4 ? 3
-                                                                  : 0;
-            if (remaining == 0 || value.size () - index < static_cast<std::size_t> (remaining))
-                return false;
-            const auto second = static_cast<unsigned char> (value[index]);
-            if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second >= 0xa0)
-                || (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second >= 0x90))
-                return false;
-            for (int part = 0; part < remaining; ++part) {
-                const auto byte = static_cast<unsigned char> (value[index++]);
-                if (byte < 0x80 || byte > 0xbf)
-                    return false;
-            }
-        }
-        return true;
-    }
-
     char *_output = nullptr;
     std::string *_string_output = nullptr;
     std::size_t _size = 0;
@@ -447,6 +447,165 @@ struct header_scalar_t
     }
 };
 
+// Recognize only the byte spelling emitted by header_writer_t. A mismatch
+// leaves syntax and error reporting to the JSON SAX parser.
+class canonical_header_reader_t
+{
+  public:
+    explicit canonical_header_reader_t (std::string_view bytes) : _remaining (bytes) {}
+
+    bool consume (std::string_view text)
+    {
+        if (!_remaining.starts_with (text))
+            return false;
+        _remaining.remove_prefix (text.size ());
+        return true;
+    }
+
+    bool empty () const noexcept { return _remaining.empty (); }
+
+    bool string (std::string *output)
+    {
+        if (!consume ("\""))
+            return false;
+        std::size_t index = 0;
+        std::size_t decoded_size = 0;
+        bool escaped = false;
+        while (index < _remaining.size () && _remaining[index] != '"') {
+            const auto byte = static_cast<unsigned char> (_remaining[index++]);
+            if (byte < 0x20)
+                return false;
+            if (byte == '\\') {
+                char decoded;
+                if (!escape (_remaining, index, decoded))
+                    return false;
+                escaped = true;
+            }
+            ++decoded_size;
+        }
+        if (index == _remaining.size ())
+            return false;
+        const auto encoded = _remaining.substr (0, index);
+        if (!valid_utf8 (encoded))
+            return false;
+        if (output) {
+            if (!escaped) {
+                output->assign (encoded);
+            } else {
+                output->resize (decoded_size);
+                std::size_t source = 0;
+                std::size_t destination = 0;
+                while (source < encoded.size ()) {
+                    char decoded = encoded[source++];
+                    if (decoded == '\\')
+                        (void) escape (encoded, source, decoded);
+                    (*output)[destination++] = decoded;
+                }
+            }
+        }
+        _remaining.remove_prefix (index + 1);
+        return true;
+    }
+
+    bool required_string (header_scalar_t &value)
+    {
+        if (!string (&value.string))
+            return false;
+        value.type = header_value_t::string;
+        return true;
+    }
+
+    bool optional_string (header_scalar_t *value)
+    {
+        if (consume ("null")) {
+            if (value)
+                value->set_null ();
+            return true;
+        }
+        if (!string (value ? &value->string : nullptr))
+            return false;
+        if (value)
+            value->type = header_value_t::string;
+        return true;
+    }
+
+    bool number (header_scalar_t *value, bool nullable = false)
+    {
+        if (nullable && consume ("null")) {
+            if (value)
+                value->set_null ();
+            return true;
+        }
+        std::size_t index = _remaining.starts_with ("-") ? 1 : 0;
+        const auto digits = index;
+        while (index < _remaining.size () && _remaining[index] >= '0' && _remaining[index] <= '9')
+            ++index;
+        if (index == digits || (_remaining[digits] == '0' && (index - digits != 1 || digits != 0)))
+            return false;
+        int parsed = 0;
+        const auto result =
+          std::from_chars (_remaining.data (), _remaining.data () + index, parsed);
+        if (result.ec != std::errc () || result.ptr != _remaining.data () + index)
+            return false;
+        if (value)
+            value->set_number (parsed);
+        _remaining.remove_prefix (index);
+        return true;
+    }
+
+  private:
+    static bool escape (std::string_view bytes, std::size_t &index, char &decoded)
+    {
+        if (index == bytes.size ())
+            return false;
+        switch (bytes[index++]) {
+            case '"':
+                decoded = '"';
+                return true;
+            case '\\':
+                decoded = '\\';
+                return true;
+            case 'b':
+                decoded = '\b';
+                return true;
+            case 'f':
+                decoded = '\f';
+                return true;
+            case 'n':
+                decoded = '\n';
+                return true;
+            case 'r':
+                decoded = '\r';
+                return true;
+            case 't':
+                decoded = '\t';
+                return true;
+            case 'u': {
+                if (bytes.size () - index < 4 || bytes[index] != '0' || bytes[index + 1] != '0'
+                    || (bytes[index + 2] != '0' && bytes[index + 2] != '1'))
+                    return false;
+                const auto low = bytes[index + 3];
+                const auto nibble = low >= '0' && low <= '9'   ? low - '0'
+                                    : low >= 'a' && low <= 'f' ? low - 'a' + 10
+                                                               : -1;
+                if (nibble < 0)
+                    return false;
+                const auto code = (bytes[index + 2] - '0') * 16 + nibble;
+                if (code >= 0x20 || code == '\b' || code == '\f' || code == '\n' || code == '\r'
+                    || code == '\t')
+                    return false;
+                decoded = static_cast<char> (code);
+                index += 4;
+                return true;
+            }
+            default:
+                return false;
+        }
+    }
+
+    std::string_view _remaining;
+};
+
 class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
 {
   public:
@@ -538,6 +697,50 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
     {
         _parse_error = error.what ();
         return false;
+    }
+
+    bool read_canonical (std::string_view bytes)
+    {
+        canonical_header_reader_t reader (bytes);
+        if (!reader.consume ("{\"channelName\":") || !reader.required_string (_channel_name)
+            || !reader.consume (",\"contentType\":") || !reader.required_string (_content_type)
+            || !reader.consume (",\"correlationId\":") || !reader.optional_string (&_correlation_id)
+            || (_correlation_id.type == header_value_t::string && _correlation_id.string.empty ())
+            || !reader.consume (",\"deadline\":") || !reader.optional_string (&_deadline)
+            || !reader.consume (",\"errorCode\":") || !reader.optional_string (&_error_code)
+            || !reader.consume (",\"errorMessage\":") || !reader.optional_string (&_error_message)
+            || !reader.consume (",\"flowId\":")
+            || !reader.optional_string (_capture_flow ? &_flow_id : nullptr)
+            || !reader.consume (",\"flowOrigin\":")
+            || !reader.number (_capture_flow ? &_flow_origin : nullptr, true)
+            || !reader.consume (",\"formatMarker\":") || !reader.number (&_format_marker)
+            || !reader.consume (",\"kind\":") || !reader.number (&_kind)
+            || !reader.consume (",\"messageName\":") || !reader.required_string (_message_name)
+            || !reader.consume (",\"metadata\":{"))
+            return false;
+        if (!reader.consume ("}")) {
+            do {
+                std::string key;
+                if (!reader.string (&key) || !reader.consume (":") || key.empty ()
+                    || key.find ('\0') != std::string::npos
+                    || (!_metadata.empty () && key <= _metadata.rbegin ()->first))
+                    return false;
+                auto entry =
+                  _metadata.emplace_hint (_metadata.end (), std::move (key), std::string ());
+                if (!reader.string (&entry->second)
+                    || entry->second.find ('\0') != std::string::npos)
+                    return false;
+            } while (reader.consume (","));
+            if (!reader.consume ("}"))
+                return false;
+        }
+        if (!reader.consume (",\"source\":") || !reader.optional_string (&_source)
+            || !reader.consume (",\"topic\":") || !reader.optional_string (&_topic)
+            || !reader.consume ("}") || !reader.empty ())
+            return false;
+        _root_object = true;
+        _root_closed = true;
+        return true;
     }
 
     result_t<envelope_header_t> finish (std::optional<envelope_header_t> *rejection_context)
@@ -817,6 +1020,12 @@ envelope_codec_t::decode_header (const zlink::message_t &message,
         rejection_context->reset ();
     try {
         const auto bytes = message.bytes ();
+        {
+            header_sax_t canonical (capture_flow);
+            if (canonical.read_canonical (
+                  std::string_view (reinterpret_cast<const char *> (bytes.data ()), bytes.size ())))
+                return canonical.finish (rejection_context);
+        }
         header_sax_t sax (capture_flow);
         (void) nlohmann::json::sax_parse (bytes.begin (), bytes.end (), &sax);
         return sax.finish (rejection_context);
