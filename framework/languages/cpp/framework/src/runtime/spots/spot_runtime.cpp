@@ -13788,8 +13788,11 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
         })
         .get ();
     if (!materialized) {
-        const framework_exception_t error (framework_error_kind_t::not_found,
-                                           "Instance Spot activation target is not materialized");
+        const auto error = detail::with_failure_code (
+          detail::make_framework_origin_exception (
+            framework_error_kind_t::unavailable,
+            "Instance Spot activation target no longer holds its owner fence"),
+          static_cast<std::uint32_t> (runtime::protocol::framework_error_code::spotMoving));
         return task_t<zlink::message_t> (
           detail::result_access_t::failure<zlink::message_t> (error));
     }

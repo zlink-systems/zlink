@@ -906,7 +906,10 @@ void invalidate_stale_spot_route (runtime::spot_address_resolver_t &resolver,
     // Routing §2.2: only a stale route result invalidates the next call's cache.
     if (error
         && (error->kind () == framework_error_kind_t::not_found
-            || error->kind () == framework_error_kind_t::unavailable)
+            || error->kind () == framework_error_kind_t::unavailable
+            || detail::failure_code (*error)
+                 == static_cast<std::uint32_t> (
+                   runtime::protocol::framework_error_code::spotGenerationStale))
         && detail::error_origin (*error) != detail::error_origin_t::application)
         resolver.invalidate_spot_address (target);
 }
@@ -2250,7 +2253,11 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "in_mesh requires Instance Spot intent");
     }
-    const auto address = co_await resolver->resolve_spot_address ({}, target, intent.instance);
+    const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
+                                     ? timeout
+                                     : state->runtime->default_request_timeout;
+    const auto deadline = std::chrono::steady_clock::now () + effective_timeout;
+    auto address = co_await resolver->resolve_spot_address ({}, target, intent.instance);
 
     try {
         if (intent.instance) {
@@ -2265,48 +2272,40 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
                 throw framework_exception_t (framework_error_kind_t::not_configured,
                                              "Instance Spot activation runtime is not configured");
             }
-            const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
-                                             ? timeout
-                                             : state->runtime->default_request_timeout;
-            const auto deadline = std::chrono::steady_clock::now () + effective_timeout;
             const auto admission = (co_await detail::request_admission_source_t{})->task ();
-            std::optional<framework_exception_t> refused;
-            try {
-                co_return co_await detail::request_submission (
-                  activate (target, intent, address, packet_name, request_type, encode_payload,
-                            effective_timeout, metadata));
+            const auto remaining_timeout = [&deadline] {
+                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+                  deadline - std::chrono::steady_clock::now ());
+                if (remaining <= std::chrono::milliseconds::zero ())
+                    throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                                 "Instance Spot request deadline elapsed");
+                return remaining;
+            };
+            for (;;) {
+                const auto remaining = remaining_timeout ();
+                try {
+                    co_return co_await detail::request_submission (
+                      activate (target, intent, address, packet_name, request_type, encode_payload,
+                                remaining, metadata));
+                }
+                catch (const framework_exception_t &error) {
+                    // §9 follows authority only for a refusal before target admission.
+                    if (!admission.await_ready () || !admission.result ()
+                        || (detail::failure_code (error)
+                              != static_cast<std::uint32_t> (
+                                runtime::protocol::framework_error_code::spotMoving)
+                            && detail::failure_code (error)
+                                 != static_cast<std::uint32_t> (
+                                   runtime::protocol::framework_error_code::actorLocationStale)
+                            && detail::failure_code (error)
+                                 != static_cast<std::uint32_t> (
+                                   runtime::protocol::framework_error_code::spotGenerationStale)))
+                        throw;
+                }
+                resolver->invalidate_spot_address (target);
+                (void) remaining_timeout ();
+                address = co_await resolver->resolve_spot_address ({}, target, true);
             }
-            catch (const framework_exception_t &error) {
-                /* spotMoving is the owner's refusal of a stale Ready owner fence,
-                 * made before admission. Every other terminal, including one for a
-                 * message the owner accepted, ends the operation; an accepted
-                 * message is never placed again. The refusal continues as cold
-                 * activation only while the public reply still waits for this
-                 * operation: once admission failed, the refusal is already the
-                 * caller's terminal (Spot address messaging §5, terminal-once). */
-                if (!address || !admission.await_ready () || !admission.result ()
-                    || error.kind () != framework_error_kind_t::unavailable
-                    || detail::failure_code (error)
-                         != static_cast<std::uint32_t> (
-                           runtime::protocol::framework_error_code::spotMoving))
-                    throw;
-                refused = error;
-            }
-            /* Failover policy §4.4: after Close released authority, the next
-             * Instance intent message cold-activates. One authority read decides:
-             * Missing continues as cold activation within the operation deadline;
-             * any other authority keeps the refusal. */
-            resolver->invalidate_spot_address (target);
-            if (co_await resolver->resolve_spot_address ({}, target))
-                throw *refused;
-            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-              deadline - std::chrono::steady_clock::now ());
-            if (remaining <= std::chrono::milliseconds::zero ())
-                throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
-                                             "Instance Spot request deadline elapsed");
-            co_return co_await detail::request_submission (
-              activate (target, intent, std::nullopt, std::move (packet_name), request_type,
-                        std::move (encode_payload), remaining, std::move (metadata)));
         }
         if (!address) {
             throw framework_exception_t (framework_error_kind_t::not_found,

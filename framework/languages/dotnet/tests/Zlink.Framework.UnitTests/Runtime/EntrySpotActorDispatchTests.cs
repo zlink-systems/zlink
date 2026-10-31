@@ -15507,9 +15507,10 @@ public sealed partial class EntrySpotActorDispatchTests
             out bool created
         )
         {
-            _ = objectGeneration;
             _ = authorityOwnerGeneration;
-            return GetOrCreateSpot(targetSpotId, out created);
+            var spot = (CapturingSpot)GetOrCreateSpot(targetSpotId, out created);
+            spot.LifecycleGeneration = objectGeneration;
+            return spot;
         }
 
         public void SetLocalActorAuthority(

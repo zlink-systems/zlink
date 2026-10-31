@@ -56,6 +56,7 @@
         <Compile Include="Support/PerCallAllocation.cs"/>
         <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
+        <Compile Include="Runtime/InstanceIntentAuthorityFollowTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>

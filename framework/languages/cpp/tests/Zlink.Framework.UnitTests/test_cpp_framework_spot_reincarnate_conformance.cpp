@@ -54,7 +54,8 @@ enum class branch_t
     cold_activation_close,
     asynchronous_initialization,
     asynchronous_initialization_failure,
-    late_intent
+    late_intent,
+    late_intent_follow
 };
 
 bool initializer_is_held (branch_t branch)
@@ -166,7 +167,10 @@ struct evidence_t
     std::promise<void> journal_clear_entered;
     zf::task_completion_source_t<void> journal_clear_release;
     // late_intent: the Store holds the release Delete that Close step 3 decided.
-    std::promise<void> release_delete_entered;
+    std::optional<std::promise<void>> release_delete_entered{std::in_place};
+    std::optional<std::promise<void>> physical_refusal_observed{std::in_place};
+    std::uint32_t physical_refusal_code = 0;
+    zf::framework_error_kind_t physical_refusal_kind = zf::framework_error_kind_t::internal_failure;
     zf::task_completion_source_t<void> release_delete_release;
     std::promise<void> initializer_entered;
     zf::task_completion_source_t<void> initializer_release;
@@ -279,7 +283,8 @@ class observed_store_t final : public zf::location_store_t
             co_await _evidence->journal_clear_release.task ();
         }
         bool holds_release = false;
-        if (_evidence->branch == branch_t::late_intent) {
+        if (_evidence->branch == branch_t::late_intent
+            || _evidence->branch == branch_t::late_intent_follow) {
             std::lock_guard lock (_evidence->mutex);
             if (_evidence->closing_calls > 0)
                 for (const auto &mutation : request.mutations)
@@ -288,8 +293,16 @@ class observed_store_t final : public zf::location_store_t
                         holds_release = true;
         }
         if (holds_release) {
-            _evidence->release_delete_entered.set_value ();
-            co_await _evidence->release_delete_release.task ();
+            {
+                std::lock_guard lock (_evidence->mutex);
+                holds_release = _evidence->release_delete_entered.has_value ();
+                if (holds_release) {
+                    _evidence->release_delete_entered->set_value ();
+                    _evidence->release_delete_entered.reset ();
+                }
+            }
+            if (holds_release)
+                co_await _evidence->release_delete_release.task ();
         }
         auto result = co_await _inner->write (std::move (request));
         if (std::holds_alternative<zf::store_write_applied_t> (result)) {
@@ -702,9 +715,8 @@ class exercise_t final : public zf::hosted_service_t
         }
     }
 
-    // Close step 3 decides release with no Instance intent message waiting while the
-    // Store holds its Delete; an Instance intent request arriving in that window
-    // must be refused before admission with the owner fence code.
+    // Hold the release Delete to observe physical refusal separately from the
+    // Instance logical request that follows authority within its original deadline.
     void run_late_intent (zf::service_provider_t &services)
     {
         auto route = _app->advanced ().zlink ().route_client (
@@ -722,12 +734,10 @@ class exercise_t final : public zf::hosted_service_t
           locations.read_authority (zf::runtime::spot_authority_key (spot_id)).result ().value ();
         original_authority = std::get<zf::authority_snapshot_t> (initial);
         auto closing = _evidence->closing_entered.get_future ();
-        auto release_entered = _evidence->release_delete_entered.get_future ();
-        std::future<void> intent_arrived;
+        auto release_entered = _evidence->release_delete_entered->get_future ();
         {
             std::lock_guard lock (_evidence->mutex);
             _evidence->order.clear ();
-            intent_arrived = _evidence->intent_arrived->get_future ();
         }
         try {
             const auto accepted = route.request_to_spot (zf::spot_id_t (spot_id), close_request_t{})
@@ -739,24 +749,32 @@ class exercise_t final : public zf::hosted_service_t
             require_ready (closing, "public OnClosing did not start");
             _evidence->closing_release.complete (zf::result_t<void>::success ());
             require_ready (release_entered, "Close step 3 did not decide release");
-            auto intent = std::async (std::launch::async, [&] {
-                auto result = route.request_to_spot (zf::spot_id_t (spot_id), intent_request_t{})
-                                .instance_spot (stable_type)
-                                .timeout (request_timeout)
-                                .async<reply_t> ()
-                                .result ();
+            if (_evidence->branch == branch_t::late_intent_follow) {
+                auto refused = _evidence->physical_refusal_observed->get_future ();
+                auto intent = std::async (std::launch::async, [&] {
+                    return route.request_to_spot (zf::spot_id_t (spot_id), intent_request_t{})
+                      .instance_spot (stable_type)
+                      .timeout (request_timeout)
+                      .async<reply_t> ()
+                      .result ();
+                });
+                require_ready (refused, "late Instance request had no physical owner refusal");
+                _evidence->release_delete_release.complete (zf::result_t<void>::success ());
+                intent_result.emplace (intent.get ());
+            } else {
+                // A direct call without Instance intent exposes the physical refusal
+                // as public Unavailable; it does not perform authority following.
+                intent_result.emplace (
+                  route.request_to_spot (zf::spot_id_t (spot_id), intent_request_t{})
+                    .timeout (request_timeout)
+                    .async<reply_t> ()
+                    .result ());
+                _evidence->release_delete_release.complete (zf::result_t<void>::success ());
+            }
+            {
                 std::lock_guard lock (_evidence->mutex);
                 ++_evidence->terminals[intent_request_t::packet_name];
-                return result;
-            });
-            // The late message is either refused at once or waits in the owner FIFO.
-            const auto deadline = std::chrono::steady_clock::now () + request_timeout;
-            while (intent.wait_for (2ms) != std::future_status::ready
-                   && intent_arrived.wait_for (0ms) != std::future_status::ready)
-                if (std::chrono::steady_clock::now () > deadline)
-                    throw std::runtime_error ("late Instance intent request was not decided");
-            _evidence->release_delete_release.complete (zf::result_t<void>::success ());
-            intent_result.emplace (intent.get ());
+            }
             close_result.emplace (_evidence->close_completion->result ());
             const auto final = _store->inspect_authority ().result ().value ();
             if (const auto *snapshot = std::get_if<zf::authority_snapshot_t> (&final))
@@ -775,7 +793,8 @@ class exercise_t final : public zf::hosted_service_t
             run_cold_close (services);
             return;
         }
-        if (_evidence->branch == branch_t::late_intent) {
+        if (_evidence->branch == branch_t::late_intent
+            || _evidence->branch == branch_t::late_intent_follow) {
             run_late_intent (services);
             return;
         }
@@ -1134,6 +1153,22 @@ void configure_app (zf::app_t &app,
         zf::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
           options.configure_dispatch (),
           [evidence] (const zf::message_dispatch_error_event_t &event) {
+              if ((evidence->branch == branch_t::late_intent
+                   || evidence->branch == branch_t::late_intent_follow)
+                  && event.packet_name == intent_request_t::packet_name && event.exception) {
+                  try {
+                      std::rethrow_exception (event.exception);
+                  }
+                  catch (const zf::framework_exception_t &error) {
+                      std::lock_guard lock (evidence->mutex);
+                      if (evidence->physical_refusal_observed) {
+                          evidence->physical_refusal_code = zf::detail::failure_code (error);
+                          evidence->physical_refusal_kind = error.kind ();
+                          evidence->physical_refusal_observed->set_value ();
+                          evidence->physical_refusal_observed.reset ();
+                      }
+                  }
+              }
               if (event.packet_name != intent_send_t::packet_name || !event.error_message
                   || event.message_kind != zf::dispatch_message_kind_t::send)
                   return;
@@ -1569,9 +1604,6 @@ TEST (ZLinkFrameworkSpotReincarnateConformance, IntentAfterReleaseDecisionIsRefu
     ASSERT_NE (nullptr, exercise->intent_result->error ());
     EXPECT_EQ ("Unavailable", expect.at ("messageTerminal"));
     EXPECT_EQ (zf::framework_error_kind_t::unavailable, exercise->intent_result->error_kind ());
-    EXPECT_EQ ("spotMoving", expect.at ("messageFailureCode"));
-    EXPECT_EQ (static_cast<std::uint32_t> (zf::runtime::protocol::framework_error_code::spotMoving),
-               zf::detail::failure_code (*exercise->intent_result->error ()));
     EXPECT_FALSE (exercise->final_authority);
     EXPECT_EQ ("Missing", expect.at ("authority"));
     std::lock_guard lock (evidence->mutex);
@@ -1589,6 +1621,42 @@ TEST (ZLinkFrameworkSpotReincarnateConformance, IntentAfterReleaseDecisionIsRefu
             != expect.at ("order").end ())
             seen.push_back (event);
     EXPECT_EQ (expect.at ("order").get<std::vector<std::string>> (), seen);
+}
+
+TEST (ZLinkFrameworkSpotReincarnateConformance, IntentAfterReleaseDecisionFollowsCurrentAuthority)
+{
+    const auto &expect =
+      branch_fixture ("intent-after-release-decision-refused-before-admission").at ("expect");
+    auto evidence = std::make_shared<evidence_t> (branch_t::late_intent_follow);
+    auto store = std::make_shared<observed_store_t> (evidence);
+    auto relocations = std::make_shared<zf::runtime::in_memory_relocation_store_t> ();
+    auto app = zf::app_t::create ();
+    configure_app (app, evidence, store, relocations);
+    auto runner = std::make_unique<exercise_t> (app, evidence, store);
+    auto *exercise = runner.get ();
+    app.add_hosted_service (std::move (runner));
+    (void) app.run (0, nullptr);
+    ASSERT_TRUE (exercise->failure.empty ()) << exercise->failure;
+    EXPECT_EQ ("Unavailable", expect.at ("messageTerminal"));
+    EXPECT_EQ (zf::framework_error_kind_t::unavailable, evidence->physical_refusal_kind);
+    EXPECT_EQ ("spotMoving", expect.at ("messageFailureCode"));
+    EXPECT_EQ (static_cast<std::uint32_t> (zf::runtime::protocol::framework_error_code::spotMoving),
+               evidence->physical_refusal_code);
+    ASSERT_TRUE (exercise->intent_result);
+    ASSERT_TRUE (*exercise->intent_result);
+    EXPECT_NE (exercise->original_reply->generation, exercise->intent_result->value ().generation);
+    ASSERT_TRUE (exercise->final_authority);
+    EXPECT_EQ (exercise->final_authority->object_generation,
+               exercise->intent_result->value ().generation);
+    ASSERT_TRUE (exercise->close_result);
+    ASSERT_TRUE (*exercise->close_result);
+    EXPECT_TRUE (exercise->close_result->value ());
+    std::lock_guard lock (evidence->mutex);
+    EXPECT_EQ (1, evidence->closing_calls);
+    EXPECT_EQ (1, evidence->factory_calls - evidence->factory_calls_at_close);
+    ASSERT_EQ (1u, evidence->business_generations.size ());
+    EXPECT_EQ (exercise->intent_result->value ().generation,
+               evidence->business_generations.front ());
 }
 
 TEST (ZLinkFrameworkSpotReincarnateConformance, ColdActivationCloseWaitsForJournalTerminalClear)
