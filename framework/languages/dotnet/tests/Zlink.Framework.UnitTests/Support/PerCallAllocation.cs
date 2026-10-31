@@ -11,9 +11,21 @@ internal static class PerCallAllocation
 {
     public const int Windows = 8;
 
-    // A window that overlapped a GC pause is discarded and measured again, up to this
-    // many attempts per requested window.
-    private const int AttemptsPerWindow = 4;
+    // Background GC can charge unused allocation-context space to this thread's counter
+    // (dotnet/runtime#134724). Reserve space before measuring instead of discarding
+    // windows whose own allocations cause GC. Exhaustion still fails the measurement.
+    private readonly struct MeasurementRegion : IDisposable
+    {
+        public MeasurementRegion()
+        {
+            if (!GC.TryStartNoGCRegion(8 * 1024 * 1024))
+                throw new InvalidOperationException(
+                    "Could not reserve a GC-free measurement window."
+                );
+        }
+
+        public void Dispose() => GC.EndNoGCRegion();
+    }
 
     public static long MinWindow(
         Action action,
@@ -30,7 +42,7 @@ internal static class PerCallAllocation
     /// <summary>
     ///     <paramref name="action" /> receives the call index inside the window.
     ///     <paramref name="beforeWindow" /> and <paramref name="afterWindow" /> run outside the
-    ///     measured region with the attempt number, to create and release per-window state.
+    ///     measured region with the window number, to create and release per-window state.
     /// </summary>
     public static long MinWindow(
         Action<int> action,
@@ -41,31 +53,27 @@ internal static class PerCallAllocation
     )
     {
         var minimum = long.MaxValue;
-        var measured = 0;
-        for (var attempt = 0; measured < windows; attempt++)
+        for (var window = 0; window < windows; window++)
         {
-            if (attempt >= windows * AttemptsPerWindow)
-                throw new InvalidOperationException("Every measured window overlapped a GC pause.");
-            beforeWindow?.Invoke(attempt);
-            var pause = GC.GetTotalPauseDuration();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < callsPerWindow; index++)
-                action(index);
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            var paused = GC.GetTotalPauseDuration() != pause;
-            afterWindow?.Invoke(attempt);
-            if (paused)
-                continue;
+            beforeWindow?.Invoke(window);
+            long bytes;
+            using (new MeasurementRegion())
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                for (var index = 0; index < callsPerWindow; index++)
+                    action(index);
+                bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            }
+            afterWindow?.Invoke(window);
             minimum = Math.Min(minimum, bytes);
-            measured++;
         }
         return minimum;
     }
 
     /// <summary>
     ///     Two actions measured in alternating windows, so that both see the same JIT tiering
-    ///     and cache state, for tests that compare one against the other with Equal. A round
-    ///     counts only when neither window overlapped a GC pause.
+    ///     and cache state, for tests that compare one against the other with Equal. Both
+    ///     windows run in the same GC-free region.
     /// </summary>
     public static (long First, long Second) MinWindowPair(
         Action<int> first,
@@ -76,26 +84,19 @@ internal static class PerCallAllocation
     {
         var minimumFirst = long.MaxValue;
         var minimumSecond = long.MaxValue;
-        var measured = 0;
-        for (var attempt = 0; measured < windows; attempt++)
+        for (var window = 0; window < windows; window++)
         {
-            if (attempt >= windows * AttemptsPerWindow)
-                throw new InvalidOperationException("Every measured window overlapped a GC pause.");
-            var pause = GC.GetTotalPauseDuration();
+            using var region = new MeasurementRegion();
             var before = GC.GetAllocatedBytesForCurrentThread();
             for (var index = 0; index < callsPerWindow; index++)
                 first(index);
             var firstBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            var middlePause = GC.GetTotalPauseDuration();
             before = GC.GetAllocatedBytesForCurrentThread();
             for (var index = 0; index < callsPerWindow; index++)
                 second(index);
             var secondBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (middlePause != pause || GC.GetTotalPauseDuration() != pause)
-                continue;
             minimumFirst = Math.Min(minimumFirst, firstBytes);
             minimumSecond = Math.Min(minimumSecond, secondBytes);
-            measured++;
         }
         return (minimumFirst, minimumSecond);
     }
@@ -107,20 +108,14 @@ internal static class PerCallAllocation
     )
     {
         var minimum = long.MaxValue;
-        var measured = 0;
-        for (var attempt = 0; measured < windows; attempt++)
+        for (var window = 0; window < windows; window++)
         {
-            if (attempt >= windows * AttemptsPerWindow)
-                throw new InvalidOperationException("Every measured window overlapped a GC pause.");
-            var pause = GC.GetTotalPauseDuration();
+            using var region = new MeasurementRegion();
             var before = GC.GetAllocatedBytesForCurrentThread();
             for (var index = 0; index < callsPerWindow; index++)
                 await action();
             var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (GC.GetTotalPauseDuration() != pause)
-                continue;
             minimum = Math.Min(minimum, bytes);
-            measured++;
         }
         return minimum;
     }
