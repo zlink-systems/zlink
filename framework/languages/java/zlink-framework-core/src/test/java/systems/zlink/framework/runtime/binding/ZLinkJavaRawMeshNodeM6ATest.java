@@ -228,6 +228,203 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void decodeFailureRepliesOnlyWithCompleteCorrelationAndRequestToken() throws Exception {
+        RoutingId peerRid = RoutingId.from("decode-source");
+        RoutingId localRid = RoutingId.from("decode-target");
+        var wire = new ZLinkServiceM6AWireCodec();
+        var protocolErrors = new AtomicInteger();
+        var decodeDrops = new AtomicInteger();
+        Logger logger = Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
+        Handler diagnostics =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        if (record.getMessage()
+                                .startsWith("ProtocolError: rejected service record"))
+                            protocolErrors.incrementAndGet();
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(diagnostics);
+        try (var metrics =
+                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
+                                .install(
+                                        new systems.zlink.framework.runtime.internal.metrics
+                                                .ZLinkRuntimeMetrics.Sink() {
+                                            @Override
+                                            public void increment(
+                                                    String name,
+                                                    java.util.Map<String, String> tags) {
+                                                if (name.equals("zlink.mesh_node.messages.dropped")
+                                                        && "decode_error"
+                                                                .equals(tags.get("reason"))) {
+                                                    decodeDrops.incrementAndGet();
+                                                }
+                                            }
+                                        });
+                var context = Zlink.createContext();
+                var peerPort = new ZLinkJavaRawServicePort(context)) {
+            var port = new ZLinkJavaRawServicePort(context);
+            var router = port.openRouter(localRid, true);
+            var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane());
+            try (var node =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "mesh",
+                            port,
+                            router,
+                            descriptor(localRid),
+                            topology,
+                            java.util.Map.of(),
+                            Runnable::run)) {
+                var dispatched = new AtomicInteger();
+                node.startDispatch(
+                        record -> {
+                            dispatched.incrementAndGet();
+                            record.close();
+                        });
+                var peer = peerPort.openRouter(peerRid);
+                peerPort.ensureReceivePollerRegistered(peer);
+                peer.options().probe(true);
+                String endpoint = "inproc://decode-failure-" + java.util.UUID.randomUUID();
+                router.bind(endpoint);
+                peer.connect(endpoint);
+                for (int command :
+                        new int[] {
+                            ServiceWireConstants.COMMAND_HELLO, ServiceWireConstants.COMMAND_ADMIT
+                        }) {
+                    peerPort.send(
+                                    peer,
+                                    localRid,
+                                    List.of(wire.encodeAdmission(command, descriptor(peerRid))))
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS);
+                    node.dispatch(receiveDecodeRecord(port, router));
+                }
+                assertEquals(1, node.status().admittedPeerCount());
+                for (int command : new int[] {17, 19, 22, 25, 28}) {
+                    for (int flags : new int[] {0xff, 0}) {
+                        byte[] head = wire.encodeNodeRequestHeader(-1L, 0);
+                        head[3] = (byte) command;
+                        head[4] = (byte) flags;
+                        var response =
+                                peerPort.request(
+                                                peer,
+                                                localRid,
+                                                List.of(head),
+                                                Duration.ofSeconds(2),
+                                                null)
+                                        .toCompletableFuture();
+                        var incoming = receiveDecodeRecord(port, router);
+                        assertEquals(
+                                command, wire.decodeHeader(incoming.frames().getFirst()).command());
+                        assertNotNull(incoming.requestSequence());
+                        assertEquals(
+                                Long.parseUnsignedLong(
+                                        topology.peerFromOwner(peerRid)
+                                                .orElseThrow()
+                                                .connectionId(),
+                                        16),
+                                incoming.routeGeneration());
+                        node.dispatch(incoming);
+                        awaitDecodeCompletion(peerPort, peer, response);
+                        var reply = wire.decodeReplyHeader(response.get().getFirst());
+                        assertEquals(-1L, reply.correlation());
+                        assertEquals(104, reply.terminalResult());
+                        assertEquals(16, reply.failureCode());
+                        byte[] truncated = java.util.Arrays.copyOf(head, 12);
+                        var dropped =
+                                peerPort.request(
+                                                peer,
+                                                localRid,
+                                                List.of(truncated),
+                                                Duration.ofMillis(20),
+                                                null)
+                                        .toCompletableFuture();
+                        int beforeTruncated = protocolErrors.get();
+                        int dropsBeforeTruncated = decodeDrops.get();
+                        node.dispatch(receiveDecodeRecord(port, router));
+                        assertEquals(beforeTruncated + 1, protocolErrors.get());
+                        assertEquals(dropsBeforeTruncated + 1, decodeDrops.get());
+                        awaitDecodeCompletion(peerPort, peer, dropped);
+                        var failure =
+                                org.junit.jupiter.api.Assertions.assertThrows(
+                                        java.util.concurrent.ExecutionException.class,
+                                        () -> dropped.get(2, TimeUnit.SECONDS));
+                        var frameworkFailure =
+                                org.junit.jupiter.api.Assertions.assertInstanceOf(
+                                        systems.zlink.framework.errors.ZLinkFrameworkException
+                                                .class,
+                                        failure.getCause());
+                        assertEquals(
+                                systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                        .DEADLINE_EXCEEDED,
+                                frameworkFailure.kind());
+                        var transportFailure =
+                                org.junit.jupiter.api.Assertions.assertInstanceOf(
+                                        systems.zlink.contracts.errors.ZlinkRequestException.class,
+                                        frameworkFailure.getCause());
+                        assertEquals(
+                                systems.zlink.contracts.sockets.RequestResult.TIMED_OUT,
+                                transportFailure.getResult());
+                        peerPort.send(peer, localRid, List.of(head))
+                                .toCompletableFuture()
+                                .get(2, TimeUnit.SECONDS);
+                        int beforeOneWay = protocolErrors.get();
+                        int dropsBeforeOneWay = decodeDrops.get();
+                        node.dispatch(receiveDecodeRecord(port, router));
+                        assertEquals(beforeOneWay + 1, protocolErrors.get());
+                        assertEquals(dropsBeforeOneWay + 1, decodeDrops.get());
+                    }
+                }
+                assertEquals(0, dispatched.get());
+            }
+        } finally {
+            logger.removeHandler(diagnostics);
+        }
+    }
+
+    private static ZLinkJavaRawServicePort.Inbound receiveDecodeRecord(
+            ZLinkJavaRawServicePort port, RouterSocket router) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (!port.waitForReadable(router, Duration.ofNanos(deadline - System.nanoTime())))
+                continue;
+            var received = port.receiveNow(router);
+            assertNotNull(received);
+            if (!received.frames().isEmpty() && received.frames().getFirst().length != 0)
+                return received;
+            received.close();
+        }
+        throw new AssertionError("decode record was not received");
+    }
+
+    private static void awaitDecodeCompletion(
+            ZLinkJavaRawServicePort port, RouterSocket router, CompletableFuture<?> response) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (!response.isDone() && System.nanoTime() < deadline) {
+            port.waitForReady(router, Duration.ZERO);
+            try (var received = port.receiveNow(router)) {
+                if (received != null
+                        && !received.frames().isEmpty()
+                        && received.frames().getFirst().length != 0) {
+                    assertFalse(
+                            new ZLinkServiceM6AWireCodec()
+                                            .decodeHeader(received.frames().getFirst())
+                                            .command()
+                                    == ServiceWireConstants.COMMAND_REPLY,
+                            "one-way records must not produce ordinary replies");
+                }
+            }
+        }
+        assertTrue(response.isDone(), "the existing completion poller must finish the request");
+    }
+
+    @Test
     void handshakeAdmissionIsReadyBeforeAnyAck_PerTransportLivenessSection5() throws Exception {
         // 05-transport-liveness.ko.md:228: Ready has no probe-ACK prerequisite.
         RoutingId peerRid = RoutingId.from("handshake-ready-peer");
