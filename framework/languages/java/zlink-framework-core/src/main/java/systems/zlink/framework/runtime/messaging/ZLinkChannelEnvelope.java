@@ -10,6 +10,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
@@ -17,11 +18,13 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Shared cross-language channel/SPOT-route wire envelope: a two-part frame of {@code [JSON header,
@@ -46,6 +49,14 @@ public final class ZLinkChannelEnvelope {
             JsonFactory.builder().recyclerPool(JsonRecyclerPools.sharedBoundedPool()).build();
     private static final int CORRELATION_ID_MAX_BYTES = 64;
     private static final int CORRELATION_ID_MAX_CHARACTER = 0x7f;
+    private static final int MAX_DECODED_HEADER_CACHE_ENTRIES = 64;
+    private static final int MAX_SIMPLE_HEADER_CACHE_ENTRIES = 4096;
+    private static final int MAX_CACHEABLE_HEADER_BYTES = 1024;
+    private static final ZLinkStateLane CACHE_LANE = new ZLinkStateLane();
+    private static volatile HeaderCacheEntry[] decodedHeaderCache = new HeaderCacheEntry[0];
+    private static final ConcurrentHashMap<Header, byte[]> SIMPLE_HEADER_CACHE =
+            new ConcurrentHashMap<>();
+    private static final ArrayDeque<Header> simpleHeaderCacheOrder = new ArrayDeque<>();
 
     private ZLinkChannelEnvelope() {}
 
@@ -353,12 +364,62 @@ public final class ZLinkChannelEnvelope {
     }
 
     public static Message encodeHeader(Header header) {
-        return Message.from(encodeHeaderBytes(header));
+        return Message.from(encodeHeaderBytesInternal(header));
     }
 
-    /** Encodes the JSON header into heap storage, sized by a first counting pass. */
+    /** Returns an owned JSON header array; simple headers reuse an internal cached encoding. */
     public static byte[] encodeHeaderBytes(Header header) {
         validateFlowPair(header.flowId(), header.flowOrigin());
+        if (isSimpleHeader(header)) return getSimpleHeaderBytes(header).clone();
+        return encodeHeaderBytesUncached(header);
+    }
+
+    private static byte[] encodeHeaderBytesInternal(Header header) {
+        validateFlowPair(header.flowId(), header.flowOrigin());
+        if (isSimpleHeader(header)) {
+            return getSimpleHeaderBytes(header);
+        }
+        return encodeHeaderBytesUncached(header);
+    }
+
+    private static boolean isSimpleHeader(Header header) {
+        return (header.kind() == KIND_COMMAND || header.kind() == KIND_PUBLISH)
+                && header.correlationId() == null
+                && header.deadline() == null
+                && header.topic() == null
+                && header.errorCode() == null
+                && header.errorMessage() == null
+                && header.source() == null
+                && header.metadata().isEmpty()
+                && header.flowId() == null
+                && header.flowOrigin() == null;
+    }
+
+    private static byte[] getSimpleHeaderBytes(Header header) {
+        byte[] hit = SIMPLE_HEADER_CACHE.get(header);
+        if (hit != null) return hit;
+
+        var mutation =
+                CACHE_LANE.tryRunNow(
+                        () -> {
+                            byte[] cached = SIMPLE_HEADER_CACHE.get(header);
+                            if (cached != null) return cached;
+
+                            if (SIMPLE_HEADER_CACHE.size() >= MAX_SIMPLE_HEADER_CACHE_ENTRIES) {
+                                Header evicted = simpleHeaderCacheOrder.removeFirst();
+                                SIMPLE_HEADER_CACHE.remove(evicted);
+                            }
+                            byte[] encoded = encodeHeaderBytesUncached(header);
+                            SIMPLE_HEADER_CACHE.put(header, encoded);
+                            simpleHeaderCacheOrder.addLast(header);
+                            return encoded;
+                        });
+        return mutation == null
+                ? encodeHeaderBytesUncached(header)
+                : Objects.requireNonNull(mutation.toCompletableFuture().getNow(null));
+    }
+
+    private static byte[] encodeHeaderBytesUncached(Header header) {
         try {
             long size = writeHeader(header, null);
             if (size > Integer.MAX_VALUE)
@@ -379,7 +440,7 @@ public final class ZLinkChannelEnvelope {
      * storage until a transport writes or materializes it. Closing the list releases the body.
      */
     public static List<Message> encode(Header header, Message body) {
-        return ZLinkFrameworkMultipartView.encoded(encodeHeaderBytes(header), body);
+        return ZLinkFrameworkMultipartView.encoded(encodeHeaderBytesInternal(header), body);
     }
 
     /**
@@ -397,14 +458,102 @@ public final class ZLinkChannelEnvelope {
      * must outlive this call.
      */
     public static Header decodeHeader(ByteBuffer headerPart, boolean captureFlow) {
+        int start = headerPart == null ? 0 : headerPart.position();
+        int limit = headerPart == null ? 0 : headerPart.limit();
+        int length = limit - start;
+        boolean cacheableSize = headerPart != null && length <= MAX_CACHEABLE_HEADER_BYTES;
+        long hash = cacheableSize ? hashBytes(headerPart, start, limit) : 0;
+        if (cacheableSize) {
+            Header cached = findDecodedHeaderCacheEntry(headerPart, start, limit, hash);
+            if (cached != null) {
+                headerPart.position(limit);
+                return cached;
+            }
+        }
+
+        DecodedHeader decoded;
         try (JsonParser json = JSON.createParser(new BufferInputStream(headerPart))) {
-            return decodeHeader(json, captureFlow);
+            decoded = decodeHeader(json, captureFlow);
         } catch (Exception ex) {
             if (ex instanceof ZLinkFrameworkException frameworkError) {
                 throw frameworkError;
             }
             throw protocolError("invalid ZLink envelope header: " + ex.getMessage(), ex);
         }
+
+        if (cacheableSize && decoded.repeatable()) {
+            addDecodedHeaderCacheEntry(headerPart, start, limit, hash, decoded.header());
+        }
+        return decoded.header();
+    }
+
+    private static Header findDecodedHeaderCacheEntry(
+            ByteBuffer bytes, int start, int limit, long hash) {
+        for (HeaderCacheEntry entry : decodedHeaderCache) {
+            if (entry.hash() != hash || entry.bytes().length != limit - start) continue;
+            boolean equal = true;
+            for (int index = start, cachedIndex = 0; index < limit; index++, cachedIndex++) {
+                if (entry.bytes()[cachedIndex] != bytes.get(index)) {
+                    equal = false;
+                    break;
+                }
+            }
+            if (equal) return entry.header();
+        }
+        return null;
+    }
+
+    private static void addDecodedHeaderCacheEntry(
+            ByteBuffer bytes, int start, int limit, long hash, Header header) {
+        var mutation =
+                CACHE_LANE.tryRunNow(
+                        () -> {
+                            HeaderCacheEntry[] cache = decodedHeaderCache;
+                            for (HeaderCacheEntry entry : cache) {
+                                if (entry.hash() == hash
+                                        && bytesEqual(entry.bytes(), bytes, start, limit))
+                                    return null;
+                            }
+
+                            int nextSize =
+                                    Math.min(cache.length + 1, MAX_DECODED_HEADER_CACHE_ENTRIES);
+                            HeaderCacheEntry[] next = new HeaderCacheEntry[nextSize];
+                            if (cache.length == next.length) {
+                                System.arraycopy(cache, 1, next, 0, next.length - 1);
+                            } else {
+                                System.arraycopy(cache, 0, next, 0, cache.length);
+                            }
+                            next[next.length - 1] =
+                                    new HeaderCacheEntry(
+                                            copyBytes(bytes, start, limit), hash, header);
+                            decodedHeaderCache = next;
+                            return null;
+                        });
+        if (mutation != null) mutation.toCompletableFuture().getNow(null);
+    }
+
+    private static boolean bytesEqual(byte[] cached, ByteBuffer bytes, int start, int limit) {
+        if (cached.length != limit - start) return false;
+        for (int index = start, cachedIndex = 0; index < limit; index++, cachedIndex++) {
+            if (cached[cachedIndex] != bytes.get(index)) return false;
+        }
+        return true;
+    }
+
+    private static long hashBytes(ByteBuffer bytes, int start, int limit) {
+        long hash = 0xcbf29ce484222325L;
+        for (int index = start; index < limit; index++) {
+            hash = (hash ^ (bytes.get(index) & 0xffL)) * 0x100000001b3L;
+        }
+        return hash;
+    }
+
+    private static byte[] copyBytes(ByteBuffer bytes, int start, int limit) {
+        byte[] copy = new byte[limit - start];
+        for (int index = start, copyIndex = 0; index < limit; index++, copyIndex++) {
+            copy[copyIndex] = bytes.get(index);
+        }
+        return copy;
     }
 
     /**
@@ -568,7 +717,8 @@ public final class ZLinkChannelEnvelope {
         };
     }
 
-    private static Header decodeHeader(JsonParser json, boolean captureFlow) throws IOException {
+    private static DecodedHeader decodeHeader(JsonParser json, boolean captureFlow)
+            throws IOException {
         if (json.nextToken() != JsonToken.START_OBJECT) {
             throw protocolError("ZLink envelope header must be a JSON object", null);
         }
@@ -601,6 +751,7 @@ public final class ZLinkChannelEnvelope {
         int flowOriginValue = 0;
         boolean flowOriginIsIntOrNull = true;
         boolean hasFlowOrigin = false;
+        boolean hasFlowValue = false;
 
         try {
             while (json.nextToken() != JsonToken.END_OBJECT) {
@@ -715,6 +866,7 @@ public final class ZLinkChannelEnvelope {
                         }
                     }
                     case "flowId" -> {
+                        hasFlowValue |= value != JsonToken.VALUE_NULL;
                         if (captureFlow) {
                             flowIdIsStringOrNull = isStringOrNull(value);
                             flowId = value == JsonToken.VALUE_STRING ? json.getText() : null;
@@ -722,6 +874,7 @@ public final class ZLinkChannelEnvelope {
                         json.skipChildren();
                     }
                     case "flowOrigin" -> {
+                        hasFlowValue |= value != JsonToken.VALUE_NULL;
                         if (captureFlow) {
                             hasFlowOrigin = value != JsonToken.VALUE_NULL;
                             flowOriginIsIntOrNull =
@@ -801,7 +954,12 @@ public final class ZLinkChannelEnvelope {
             if (correlationId != null && !header.canCorrelateReply()) {
                 throw protocolError("ZLink envelope correlationId must be 1..64 byte ASCII", null);
             }
-            return header;
+            boolean repeatable =
+                    correlationId == null
+                            && deadline == null
+                            && !hasFlowValue
+                            && metadata.isEmpty();
+            return new DecodedHeader(header, repeatable);
         } catch (IOException | ZLinkFrameworkException invalidHeader) {
             // Only a complete JSON object can retain reply identifiers. Invalid
             // metadata and flow fields cannot be copied into the error reply.
@@ -844,6 +1002,10 @@ public final class ZLinkChannelEnvelope {
             throw protocolError("ZLink envelope flow id must be UUIDv7", null);
         }
     }
+
+    private record DecodedHeader(Header header, boolean repeatable) {}
+
+    private record HeaderCacheEntry(byte[] bytes, long hash, Header header) {}
 
     private static final class BufferInputStream extends InputStream {
         private final ByteBuffer input;
