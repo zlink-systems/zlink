@@ -193,10 +193,19 @@ int main ()
         if (codec.encode_header (header).to_string () != full_wire)
             return 183;
 
-        // The decoder remains a JSON parser: field order and unknown fields do
-        // not matter and duplicate members retain nlohmann's last-member result.
-        const auto reordered = codec.decode_header (zlink::message_t::from (
+        const auto duplicate_fields = codec.decode_header (zlink::message_t::from (
           R"({"unknown":{"nested":[1,true]},"metadata":{},"channelName":1,"formatMarker":242,"kind":3,"messageName":false,"contentType":"application/custom","correlationId":null,"deadline":null,"errorCode":null,"errorMessage":null,"flowId":null,"flowOrigin":null,"source":null,"topic":null,"channelName":"last","messageName":"last-message"})"));
+        if (duplicate_fields
+            || duplicate_fields.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error
+            || std::string (duplicate_fields.error ()->what ())
+                   .find ("duplicate envelope header field")
+                 == std::string::npos) {
+            return 176;
+        }
+        // Field order and unknown fields do not affect a valid header.
+        const auto reordered = codec.decode_header (zlink::message_t::from (
+          R"({"unknown":{"nested":[1,true]},"metadata":{},"formatMarker":242,"kind":3,"contentType":"application/custom","correlationId":null,"deadline":null,"errorCode":null,"errorMessage":null,"flowId":null,"flowOrigin":null,"source":null,"topic":null,"channelName":"last","messageName":"last-message"})"));
         if (!reordered || reordered.value ().kind != msg::message_kind_t::command
             || reordered.value ().channel_name != "last"
             || reordered.value ().message_name != "last-message"
@@ -238,9 +247,12 @@ int main ()
         }
         const auto duplicate_metadata = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":42,"metadata":{"last":"value"}})"));
-        if (!duplicate_metadata
-            || duplicate_metadata.value ().metadata
-                 != std::map<std::string, std::string>{{"last", "value"}}) {
+        if (duplicate_metadata
+            || duplicate_metadata.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error
+            || std::string (duplicate_metadata.error ()->what ())
+                   .find ("duplicate envelope header field")
+                 == std::string::npos) {
             return 179;
         }
         const auto empty_metadata_key = codec.decode_header (zlink::message_t::from (

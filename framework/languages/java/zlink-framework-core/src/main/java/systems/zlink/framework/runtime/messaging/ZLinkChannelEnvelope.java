@@ -49,6 +49,24 @@ public final class ZLinkChannelEnvelope {
             JsonFactory.builder().recyclerPool(JsonRecyclerPools.sharedBoundedPool()).build();
     private static final int CORRELATION_ID_MAX_BYTES = 64;
     private static final int CORRELATION_ID_MAX_CHARACTER = 0x7f;
+    // Registered header fields; a field seen twice in one object is a protocol error
+    // (spec 03-client-server-channel §envelope-header-structure).
+    private static final Map<String, Integer> HEADER_FIELD_BITS =
+            Map.ofEntries(
+                    Map.entry("formatMarker", 1 << 0),
+                    Map.entry("kind", 1 << 1),
+                    Map.entry("channelName", 1 << 2),
+                    Map.entry("messageName", 1 << 3),
+                    Map.entry("contentType", 1 << 4),
+                    Map.entry("correlationId", 1 << 5),
+                    Map.entry("deadline", 1 << 6),
+                    Map.entry("topic", 1 << 7),
+                    Map.entry("errorCode", 1 << 8),
+                    Map.entry("errorMessage", 1 << 9),
+                    Map.entry("source", 1 << 10),
+                    Map.entry("metadata", 1 << 11),
+                    Map.entry("flowId", 1 << 12),
+                    Map.entry("flowOrigin", 1 << 13));
     private static final int MAX_DECODED_HEADER_CACHE_ENTRIES = 64;
     private static final int MAX_SIMPLE_HEADER_CACHE_ENTRIES = 4096;
     private static final int MAX_CACHEABLE_HEADER_BYTES = 1024;
@@ -769,6 +787,7 @@ public final class ZLinkChannelEnvelope {
         boolean flowOriginIsIntOrNull = true;
         boolean hasFlowOrigin = false;
         boolean hasFlowValue = false;
+        int seenFields = 0;
 
         try {
             while (json.nextToken() != JsonToken.END_OBJECT) {
@@ -861,6 +880,9 @@ public final class ZLinkChannelEnvelope {
                                 if (values == null) {
                                     values = new LinkedHashMap<>();
                                 }
+                                if (values.containsKey(key)) {
+                                    throw protocolError("duplicate envelope metadata key", null);
+                                }
                                 values.put(
                                         key,
                                         metadataValue == JsonToken.VALUE_STRING
@@ -905,8 +927,16 @@ public final class ZLinkChannelEnvelope {
                         }
                         json.skipChildren();
                     }
-                    default -> json.skipChildren();
+                    default -> {
+                        json.skipChildren();
+                        continue;
+                    }
                 }
+                int fieldBit = HEADER_FIELD_BITS.get(field);
+                if ((seenFields & fieldBit) != 0) {
+                    throw protocolError("duplicate envelope header field", null);
+                }
+                seenFields |= fieldBit;
             }
 
             if (json.nextToken() != null) {

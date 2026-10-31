@@ -393,6 +393,7 @@ internal static class ZLinkEnvelopeCodec
         Dictionary<string, string>? metadata = null;
         string? metadataError = null;
         string? fieldError = null;
+        uint seenFields = 0;
         var complete = false;
         while (reader.Read())
         {
@@ -404,6 +405,13 @@ internal static class ZLinkEnvelopeCodec
             if (reader.TokenType != JsonTokenType.PropertyName)
                 throw new JsonException("ZLink envelope header property is invalid.");
             var field = ReadHeaderField(ref reader);
+            if (field != HeaderField.Unknown)
+            {
+                var bit = 1u << (int)field;
+                if ((seenFields & bit) != 0)
+                    throw new JsonException("duplicate envelope header field");
+                seenFields |= bit;
+            }
             if (!reader.Read())
                 throw new JsonException("ZLink envelope header value is missing.");
             switch (field)
@@ -557,6 +565,8 @@ internal static class ZLinkEnvelopeCodec
             try
             {
                 key = reader.GetString();
+                if (key is not null && !metadata.TryAdd(key, string.Empty))
+                    throw new JsonException("duplicate envelope metadata key");
             }
             catch (InvalidOperationException)
             {
@@ -587,39 +597,32 @@ internal static class ZLinkEnvelopeCodec
     private static HeaderField ReadHeaderField(ref Utf8JsonReader reader)
     {
         // Canonical field names fit on the stack. Escaped/long names still use
-        // the reader's unescaping and the original ordinal case-insensitive match.
+        // the reader's unescaping and the ordinal field-name match.
         Span<char> buffer = stackalloc char[14];
         ReadOnlySpan<char> name =
             reader.ValueSpan.Length <= buffer.Length
                 ? buffer[..reader.CopyString(buffer)]
                 : reader.GetString().AsSpan();
         // Length partitions keep the field mapping in one place while retaining
-        // the original ordinal case-insensitive property-name contract.
+        // the case-sensitive envelope property-name contract.
         return name.Length switch
         {
-            4 when name.Equals("kind", StringComparison.OrdinalIgnoreCase) => HeaderField.Kind,
-            5 when name.Equals("topic", StringComparison.OrdinalIgnoreCase) => HeaderField.Topic,
-            6 when name.Equals("source", StringComparison.OrdinalIgnoreCase) => HeaderField.Source,
-            6 when name.Equals("flowId", StringComparison.OrdinalIgnoreCase) => HeaderField.FlowId,
-            8 when name.Equals("deadline", StringComparison.OrdinalIgnoreCase) =>
-                HeaderField.Deadline,
-            8 when name.Equals("metadata", StringComparison.OrdinalIgnoreCase) =>
-                HeaderField.Metadata,
-            9 when name.Equals("errorCode", StringComparison.OrdinalIgnoreCase) =>
-                HeaderField.ErrorCode,
-            10 when name.Equals("flowOrigin", StringComparison.OrdinalIgnoreCase) =>
-                HeaderField.FlowOrigin,
-            11 when name.Equals("channelName", StringComparison.OrdinalIgnoreCase) =>
-                HeaderField.ChannelName,
-            11 when name.Equals("messageName", StringComparison.OrdinalIgnoreCase) =>
-                HeaderField.MessageName,
-            11 when name.Equals("contentType", StringComparison.OrdinalIgnoreCase) =>
-                HeaderField.ContentType,
-            12 when name.Equals("formatMarker", StringComparison.OrdinalIgnoreCase) =>
+            4 when name.Equals("kind", StringComparison.Ordinal) => HeaderField.Kind,
+            5 when name.Equals("topic", StringComparison.Ordinal) => HeaderField.Topic,
+            6 when name.Equals("source", StringComparison.Ordinal) => HeaderField.Source,
+            6 when name.Equals("flowId", StringComparison.Ordinal) => HeaderField.FlowId,
+            8 when name.Equals("deadline", StringComparison.Ordinal) => HeaderField.Deadline,
+            8 when name.Equals("metadata", StringComparison.Ordinal) => HeaderField.Metadata,
+            9 when name.Equals("errorCode", StringComparison.Ordinal) => HeaderField.ErrorCode,
+            10 when name.Equals("flowOrigin", StringComparison.Ordinal) => HeaderField.FlowOrigin,
+            11 when name.Equals("channelName", StringComparison.Ordinal) => HeaderField.ChannelName,
+            11 when name.Equals("messageName", StringComparison.Ordinal) => HeaderField.MessageName,
+            11 when name.Equals("contentType", StringComparison.Ordinal) => HeaderField.ContentType,
+            12 when name.Equals("formatMarker", StringComparison.Ordinal) =>
                 HeaderField.FormatMarker,
-            12 when name.Equals("errorMessage", StringComparison.OrdinalIgnoreCase) =>
+            12 when name.Equals("errorMessage", StringComparison.Ordinal) =>
                 HeaderField.ErrorMessage,
-            13 when name.Equals("correlationId", StringComparison.OrdinalIgnoreCase) =>
+            13 when name.Equals("correlationId", StringComparison.Ordinal) =>
                 HeaderField.CorrelationId,
             _ => HeaderField.Unknown,
         };

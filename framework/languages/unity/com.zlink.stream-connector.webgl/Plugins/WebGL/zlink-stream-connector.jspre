@@ -964,15 +964,15 @@ var ZlinkStreamConnectorBundle = (() => {
     }
     scan() {
       this.skipWhitespace();
-      this.scanValue();
+      this.scanValue([]);
       this.skipWhitespace();
       if (this.index !== this.text.length) this.fail("trailing data");
     }
-    scanValue() {
+    scanValue(path) {
       this.skipWhitespace();
       const token = this.text[this.index];
-      if (token === "{") return this.scanObject();
-      if (token === "[") return this.scanArray();
+      if (token === "{") return this.scanObject(path);
+      if (token === "[") return this.scanArray(path);
       if (token === '"') {
         this.scanString();
         return;
@@ -982,7 +982,7 @@ var ZlinkStreamConnectorBundle = (() => {
       if (token === "n") return this.scanLiteral("null");
       this.scanNumber();
     }
-    scanObject() {
+    scanObject(path) {
       var _a, _b;
       this.index++;
       this.skipWhitespace();
@@ -996,7 +996,11 @@ var ZlinkStreamConnectorBundle = (() => {
         if (this.text[this.index] !== '"') this.fail("object property name");
         const property = this.scanString();
         if (properties.has(property)) {
-          throw new SyntaxError(`framework-json-v1 duplicate property '${property}'.`);
+          if (this.options.onDuplicateProperty !== void 0) {
+            this.options.onDuplicateProperty(property, path);
+          } else {
+            throw new SyntaxError(`framework-json-v1 duplicate property '${property}'.`);
+          }
         }
         properties.add(property);
         if (((_b = (_a = this.options).rejectPropertyName) == null ? void 0 : _b.call(_a, property)) === true) {
@@ -1005,14 +1009,14 @@ var ZlinkStreamConnectorBundle = (() => {
         this.skipWhitespace();
         if (this.text[this.index] !== ":") this.fail("':' after object property");
         this.index++;
-        this.scanValue();
+        this.scanValue(this.options.onDuplicateProperty === void 0 ? path : [...path, property]);
         this.skipWhitespace();
         const delimiter = this.text[this.index++];
         if (delimiter === "}") return;
         if (delimiter !== ",") this.fail("',' or '}' after object property");
       }
     }
-    scanArray() {
+    scanArray(path) {
       this.index++;
       this.skipWhitespace();
       if (this.text[this.index] === "]") {
@@ -1020,7 +1024,7 @@ var ZlinkStreamConnectorBundle = (() => {
         return;
       }
       for (; ; ) {
-        this.scanValue();
+        this.scanValue(this.options.onDuplicateProperty === void 0 ? path : [...path, "[]"]);
         this.skipWhitespace();
         const delimiter = this.text[this.index++];
         if (delimiter === "]") return;
