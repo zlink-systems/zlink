@@ -282,8 +282,8 @@ class state_lane_t
         return result;
     }
 
-    // Keeps synchronous owner entry on the same FIFO lane without publishing
-    // a future when this caller can complete its own turn inline.
+    // The caller executes its own synchronous work in FIFO order. Only a
+    // contended entry waits for the existing drain to grant its turn.
     template <typename Work>
     auto run_sync (Work &&work) -> std::invoke_result_t<std::decay_t<Work> &>
     {
@@ -293,38 +293,54 @@ class state_lane_t
           std::conditional_t<std::is_reference_v<value_t>,
                              std::add_pointer_t<std::remove_reference_t<value_t>>, value_t>>;
         throw_if_reentrant ();
-        struct inline_turn_t
+        struct synchronous_turn_t
         {
             Work &work;
             std::optional<stored_t> result;
             std::exception_ptr error;
         } turn{work};
-        if (schedule_drain (true, [&turn] {
-                try {
-                    if constexpr (std::is_void_v<value_t>) {
-                        std::invoke (turn.work);
-                    } else if constexpr (std::is_reference_v<value_t>) {
-                        auto &&value = std::invoke (turn.work);
-                        turn.result.emplace (std::addressof (value));
-                    } else {
-                        turn.result.emplace (std::invoke (turn.work));
-                    }
+        const auto invoke_work = [&turn] {
+            try {
+                if constexpr (std::is_void_v<value_t>) {
+                    std::invoke (turn.work);
+                } else if constexpr (std::is_reference_v<value_t>) {
+                    auto &&value = std::invoke (turn.work);
+                    turn.result.emplace (std::addressof (value));
+                } else {
+                    turn.result.emplace (std::invoke (turn.work));
                 }
-                catch (...) {
-                    turn.error = std::current_exception ();
-                }
-            })) {
-            // Admission, current-lane scope and drain ownership have ended.
-            if (turn.error)
-                std::rethrow_exception (turn.error);
-            if constexpr (std::is_reference_v<value_t>)
-                return static_cast<value_t> (**turn.result);
-            else if constexpr (!std::is_void_v<value_t>)
-                return std::move (*turn.result);
-            else
-                return;
+            }
+            catch (...) {
+                turn.error = std::current_exception ();
+            }
+        };
+        if (!schedule_drain (true, invoke_work)) {
+            auto grant = std::make_shared<std::promise<void>> ();
+            auto granted = grant->get_future ();
+            if (!enqueue ({}, [grant] (std::exception_ptr error) {
+                    if (error)
+                        grant->set_exception (std::move (error));
+                    else
+                        grant->set_value ();
+                }))
+                throw std::runtime_error ("state lane is closed");
+            schedule_drain (true);
+            granted.get ();
+            {
+                const current_scope_t scope (this);
+                invoke_work ();
+            }
+            drain_loop ();
         }
-        return run (std::forward<Work> (work)).get ();
+        // Observe the result after leaving the lane scope and continuing its drain.
+        if (turn.error)
+            std::rethrow_exception (turn.error);
+        if constexpr (std::is_reference_v<value_t>)
+            return static_cast<value_t> (**turn.result);
+        else if constexpr (!std::is_void_v<value_t>)
+            return std::move (*turn.result);
+        else
+            return;
     }
 
     template <typename Work> auto run_checked (Work &&work)
@@ -434,8 +450,10 @@ class state_lane_t
   private:
     struct mailbox_item_t
     {
+        // An empty work callback represents a synchronous caller's turn grant.
+        // Its completion receives null on grant or the abandonment error.
         std::function<void ()> work;
-        std::function<void (std::exception_ptr)> abandon;
+        std::function<void (std::exception_ptr)> completion;
     };
 
     bool enqueue (std::function<void ()> work, std::function<void (std::exception_ptr)> abandon);
