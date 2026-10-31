@@ -96,3 +96,50 @@ test('request terminal relay uses the normalized authority StoreVersion', async 
   await finalize(runtime, stage);
   assert.deepEqual(observed, ['normalized-v2']);
 });
+
+for (const primary of [false, true]) {
+  for (const stored of [false, true]) {
+    test(`Actor publication cleanup observes only successful CAS results (primary=${primary}, stored=${stored})`, async () => {
+      const {
+        encodeAuthorityKey
+      } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
+      const key = encodeAuthorityKey('actor', 'returning-actor');
+      const observations = [];
+      const current = {
+        kind: 'snapshot',
+        payload: new Uint8Array(),
+        storeVersion: { value: 'before' },
+        allocation: { objectKind: 'actor' }
+      };
+      const runtime = new ZLinkHostServiceRelocationRuntime({
+        locationStore: () => ({
+          async readAuthority() {
+            return current;
+          },
+          async compareExchangeAuthority(actualKey, expected) {
+            assert.equal(actualKey.value, key.value);
+            assert.equal(expected.value, 'before');
+            return {
+              ...current,
+              kind: stored ? 'stored' : 'conflict',
+              storeVersion: { value: 'after' }
+            };
+          }
+        }),
+        observeActorAuthorityVersion: (actorId, version) => observations.push([actorId, version])
+      });
+      runtime.codec.read = () => ({ reference: {} });
+      runtime.codec.clear = () => new Uint8Array();
+      const envelope = { participants: [{ key: key.value, objectKind: 'actor' }] };
+      const operation = primary
+        ? runtime.clearTargetRelocationPublication(
+            { staging: { envelope, primaryAuthorityKey: key } },
+            current
+          )
+        : runtime.releaseParticipantAuthorities(envelope, 'different-primary');
+      if (stored) await operation;
+      else await assert.rejects(operation, /CAS failed|recovery pointer release failed/);
+      assert.deepEqual(observations, stored ? [['returning-actor', 'after']] : []);
+    });
+  }
+}
