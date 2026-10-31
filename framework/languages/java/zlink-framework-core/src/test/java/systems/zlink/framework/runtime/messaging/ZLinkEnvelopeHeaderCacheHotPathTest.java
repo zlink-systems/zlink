@@ -15,7 +15,6 @@ import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.testutil.PerCallAllocation;
 
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -204,7 +203,7 @@ final class ZLinkEnvelopeHeaderCacheHotPathTest {
                                     "Update"));
             ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(bytes), false);
         }
-        assertEquals(64, decodedCacheSize());
+        assertEquals(64, ZLinkChannelEnvelope.decodedHeaderCacheSize());
 
         for (int index = 0; index < 4100; index++) {
             try (Message ignored =
@@ -214,7 +213,7 @@ final class ZLinkEnvelopeHeaderCacheHotPathTest {
                                     "encode-bound-" + index,
                                     "Update"))) {}
         }
-        assertEquals(4096, simpleCacheSize());
+        assertEquals(4096, ZLinkChannelEnvelope.simpleHeaderCacheSize());
     }
 
     @Test
@@ -266,7 +265,7 @@ final class ZLinkEnvelopeHeaderCacheHotPathTest {
                 "warm header encoding allocated more than the owned Message baseline");
         assertTrue(decodedHeaderBytes <= calls * 16L, "warm decode allocated per header hit");
 
-        ZLinkStateLane lane = cacheLane();
+        ZLinkStateLane lane = ZLinkChannelEnvelope.headerCacheLane();
         CompletableFuture<Void> entered = new CompletableFuture<>();
         CompletableFuture<Void> release = new CompletableFuture<>();
         var blocked =
@@ -343,23 +342,5 @@ final class ZLinkEnvelopeHeaderCacheHotPathTest {
                 Map.of(),
                 null,
                 null);
-    }
-
-    private static int decodedCacheSize() throws ReflectiveOperationException {
-        Field field = ZLinkChannelEnvelope.class.getDeclaredField("decodedHeaderCache");
-        field.setAccessible(true);
-        return ((Object[]) field.get(null)).length;
-    }
-
-    private static int simpleCacheSize() throws ReflectiveOperationException {
-        Field field = ZLinkChannelEnvelope.class.getDeclaredField("SIMPLE_HEADER_CACHE");
-        field.setAccessible(true);
-        return ((Map<?, ?>) field.get(null)).size();
-    }
-
-    private static ZLinkStateLane cacheLane() throws ReflectiveOperationException {
-        Field field = ZLinkChannelEnvelope.class.getDeclaredField("CACHE_LANE");
-        field.setAccessible(true);
-        return (ZLinkStateLane) field.get(null);
     }
 }

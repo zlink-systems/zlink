@@ -1003,6 +1003,19 @@ public final class ZLinkChannelEnvelope {
         }
     }
 
+    /** Package view of the header caches for the cache bound tests. */
+    static int decodedHeaderCacheSize() {
+        return decodedHeaderCache.length;
+    }
+
+    static int simpleHeaderCacheSize() {
+        return SIMPLE_HEADER_CACHE.size();
+    }
+
+    static ZLinkStateLane headerCacheLane() {
+        return CACHE_LANE;
+    }
+
     private record DecodedHeader(Header header, boolean repeatable) {}
 
     private record HeaderCacheEntry(byte[] bytes, long hash, Header header) {}
