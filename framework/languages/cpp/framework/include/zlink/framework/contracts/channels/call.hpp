@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 
 namespace zlink
 {
@@ -193,19 +194,26 @@ class channel_request_call_t
   protected:
     template <typename TReply> request_task_t<TReply> start ()
     {
-        if (!_submit) {
+        if (!std::visit ([] (const auto &submit) { return static_cast<bool> (submit); }, _submit)) {
             return request_task_t<TReply> (
               result_t<TReply>::failure (framework_error_kind_t::protocol_error,
                                          "request call is not bound to a channel client"));
         }
-        /* `async()` and `yield()` are commonly called on a temporary returned
-         * by MessageBus::request(). The submit callable runs and returns
-         * before that temporary can be destroyed; every value the operation
-         * keeps afterwards is owned by the returned reply, never by this
-         * object. The reply is the selected operation's terminal decoded once
-         * (submit/completion §9, hot path E5); no task wraps it again. */
         try {
-            auto selected = _submit (_packet_name, _timeout, _metadata);
+            if (const auto *submit = std::get_if<1> (&_submit)) {
+                // Prepare the final reply before submission. The receiver owns every
+                // decoder until physical delivery, including after admission failure.
+                return detail::request_task_access_t::receive_public<TReply, zlink::message_t> (
+                  [&] (auto receiver) {
+                      (*submit) (_packet_name, _timeout, _metadata, std::move (receiver));
+                  },
+                  [serializers = _serializers] (const result_t<zlink::message_t> &reply) {
+                      return decode<TReply> (serializers, reply.value ());
+                  });
+            }
+            // Submission consumes temporary call parameters; its physical reply
+            // retains every borrowed value until terminal delivery.
+            auto selected = std::get<submit_fn_t> (_submit) (_packet_name, _timeout, _metadata);
             return detail::public_request_reply<TReply> (
               selected, [serializers = _serializers] (const result_t<zlink::message_t> &reply) {
                   return decode<TReply> (serializers, reply.value ());
@@ -234,12 +242,18 @@ class channel_request_call_t
     }
     request_task_t<zlink::message_t> async_raw ()
     {
-        if (!_submit) {
+        if (!std::visit ([] (const auto &submit) { return static_cast<bool> (submit); }, _submit)) {
             return request_task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
               framework_error_kind_t::protocol_error,
               "request call is not bound to a channel client"));
         }
-        return _submit (_packet_name, _timeout, _metadata);
+        if (const auto *submit = std::get_if<1> (&_submit)) {
+            return detail::request_task_access_t::receive_internal<zlink::message_t> (
+              [&] (auto receiver) {
+                  (*submit) (_packet_name, _timeout, _metadata, std::move (receiver));
+              });
+        }
+        return std::get<submit_fn_t> (_submit) (_packet_name, _timeout, _metadata);
     }
 
     const std::string &packet_name_value () const noexcept { return _packet_name; }
@@ -248,11 +262,27 @@ class channel_request_call_t
     serializer_registry_t *serializers () const noexcept { return _serializers; }
 
   private:
+    friend class route_client_t;
+    using receiver_submit_fn_t = std::function<void (const std::string &,
+                                                     std::chrono::milliseconds,
+                                                     const metadata_map_t &,
+                                                     detail::request_receiver_t<zlink::message_t>)>;
+
+    channel_request_call_t (detail::request_projection_t,
+                            std::string packet_name,
+                            serializer_registry_t *serializers,
+                            receiver_submit_fn_t submit) :
+        _packet_name (std::move (packet_name)),
+        _serializers (serializers),
+        _submit (std::in_place_index<1>, std::move (submit))
+    {
+    }
+
     std::string _packet_name;
     std::chrono::milliseconds _timeout{0};
     metadata_map_t _metadata;
     serializer_registry_t *_serializers = nullptr;
-    submit_fn_t _submit;
+    std::variant<submit_fn_t, receiver_submit_fn_t> _submit;
 };
 
 

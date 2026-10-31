@@ -882,20 +882,21 @@ class route_client_t
         auto state = _state;
         auto request_value = std::make_shared<TRequest> (std::move (request));
         return channel_request_call_t (
-          detail::message_name<TRequest> (), _serializers,
+          detail::request_projection_t{}, detail::message_name<TRequest> (), _serializers,
           [state, router_channel_id = std::move (router_channel_id),
            target_node_rid = std::move (target_node_rid),
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
-                           const channel_request_call_t::metadata_map_t &metadata)
-            -> request_task_t<zlink::message_t> {
+                           const channel_request_call_t::metadata_map_t &metadata,
+                           detail::request_receiver_t<zlink::message_t> receiver) {
               auto encode_payload = [request_value] (serializer_registry_t &serializers) {
                   return serializers.template get<TRequest> ().serialize_with_content_type (
                     *request_value);
               };
               // Erased submit consumes this encoder before its first suspension.
-              return submit_request_reply_message_erased (
-                state, router_channel_id, target_node_rid, packet_name,
-                std::type_index (typeid (TRequest)), std::ref (encode_payload), timeout, metadata);
+              submit_request_reply_message_erased (state, router_channel_id, target_node_rid,
+                                                   packet_name, std::type_index (typeid (TRequest)),
+                                                   std::ref (encode_payload), timeout, metadata,
+                                                   std::move (receiver));
           });
     }
 
@@ -989,7 +990,7 @@ class route_client_t
                              payload_encoder_t encode_payload,
                              const route_send_call_t::metadata_map_t &metadata);
 
-    static request_task_t<zlink::message_t>
+    static void
     submit_request_reply_message_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                                          std::string router_channel_id,
                                          zlink::routing_id_t target_node_rid,
@@ -997,7 +998,8 @@ class route_client_t
                                          std::type_index request_type,
                                          payload_encoder_t encode_payload,
                                          std::chrono::milliseconds timeout,
-                                         std::map<std::string, std::string> metadata);
+                                         std::map<std::string, std::string> metadata,
+                                         detail::request_receiver_t<zlink::message_t> receiver);
 
     static request_task_t<zlink::message_t> submit_channel_request_reply_message_erased (
       const std::shared_ptr<detail::route_client_state_t> &state,

@@ -26,6 +26,34 @@ struct public_request_projection_t
 {
 };
 
+// The selected operation delivers into the final reply. Codec owners compose
+// synchronous conversions here without adding asynchronous result states.
+template <typename T> struct request_receiver_t
+{
+    std::shared_ptr<task_completion_source_t<void>> admitted;
+    std::function<void (const result_t<T> &)> complete;
+
+    template <typename TInput, typename TProject>
+    request_receiver_t<TInput> project (TProject &&project)
+    {
+        return {std::move (admitted),
+                [deliver = std::move (complete), project = std::forward<TProject> (project)] (
+                  const result_t<TInput> &terminal) mutable {
+                    auto projected = [&] () -> result_t<T> {
+                        try {
+                            return project (terminal);
+                        }
+                        catch (...) {
+                            return current_exception_result<T> ();
+                        }
+                    }();
+                    deliver (projected);
+                }};
+    }
+
+    void observe (request_task_t<T> selected);
+};
+
 // This signal connects only the selected submission of the same operation.
 // Ordinary nested request awaits do not publish admission to their caller.
 template <typename T> struct request_submission_t
@@ -162,6 +190,56 @@ template <typename TReply> class request_task_t : public task_t<TReply>
         _physical_reply._release_turn_on_suspend = this->_release_turn_on_suspend;
     }
 
+    request_task_t (detail::request_projection_t,
+                    std::shared_ptr<task_completion_source_t<void>> admitted) :
+        task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
+        _physical_reply (this->_state),
+        _admitted (std::move (admitted))
+    {
+    }
+
+    request_task_t (detail::public_request_projection_t,
+                    std::shared_ptr<task_completion_source_t<void>> admitted) :
+        task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
+        _physical_reply (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
+        _admitted (std::move (admitted))
+    {
+        end_at_admission_failure ();
+    }
+
+    detail::request_receiver_t<TReply> receiver (detail::request_projection_t)
+    {
+        return {_admitted, [reply = this->_state] (const result_t<TReply> &result) {
+                    reply->complete (result);
+                }};
+    }
+
+    detail::request_receiver_t<TReply> receiver (detail::public_request_projection_t)
+    {
+        return receiver<TReply> (detail::public_request_projection_t{},
+                                 [] (const result_t<TReply> &result) { return result; });
+    }
+
+    template <typename TInput, typename TProject>
+    detail::request_receiver_t<TInput> receiver (detail::public_request_projection_t,
+                                                 TProject &&project)
+    {
+        return {_admitted, [reply = this->_state, physical = _physical_reply._state,
+                            project = std::forward<TProject> (project)] (
+                             const result_t<TInput> &input) mutable {
+                    auto projected = [&] () -> result_t<TReply> {
+                        try {
+                            return project (input);
+                        }
+                        catch (...) {
+                            return detail::current_exception_result<TReply> ();
+                        }
+                    }();
+                    physical->complete (projected);
+                    reply->complete (std::move (projected));
+                }};
+    }
+
     /* The reply of a selected request in this reply type (hot path E4·E5:
      * one operation, one terminal). The selected request keeps its admission;
      * its physical terminal completes this reply through `project`, which owns
@@ -200,21 +278,9 @@ template <typename TReply> class request_task_t : public task_t<TReply>
         _physical_reply (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
         _admitted (selected._admitted)
     {
-        detail::observe_task_terminal (
-          selected._physical_reply,
-          [reply = this->_state, physical = _physical_reply._state,
-           project = std::forward<TProject> (project)] (const auto &result) mutable {
-              auto projected = [&] () -> result_t<TReply> {
-                  try {
-                      return project (result);
-                  }
-                  catch (...) {
-                      return detail::current_exception_result<TReply> ();
-                  }
-              }();
-              physical->complete (projected);
-              reply->complete (std::move (projected));
-          });
+        auto terminal = receiver<TInput> (detail::public_request_projection_t{},
+                                          std::forward<TProject> (project));
+        detail::observe_task_terminal (selected._physical_reply, std::move (terminal.complete));
         end_at_admission_failure ();
     }
 
@@ -278,6 +344,31 @@ struct request_task_access_t
                                         std::forward<TProject> (project));
     }
 
+    template <typename T, typename TSubmit>
+    static request_task_t<T> receive_public (TSubmit &&submit)
+    {
+        return receive_public<T, T> (std::forward<TSubmit> (submit),
+                                     [] (const result_t<T> &result) { return result; });
+    }
+
+    template <typename TOutput, typename TInput, typename TSubmit, typename TProject>
+    static request_task_t<TOutput> receive_public (TSubmit &&submit, TProject &&project)
+    {
+        return receive<TOutput> (
+          public_request_projection_t{}, std::forward<TSubmit> (submit), [&] (auto &pending) {
+              return pending.template receiver<TInput> (public_request_projection_t{},
+                                                        std::forward<TProject> (project));
+          });
+    }
+
+    template <typename T, typename TSubmit>
+    static request_task_t<T> receive_internal (TSubmit &&submit)
+    {
+        return receive<T> (
+          request_projection_t{}, std::forward<TSubmit> (submit),
+          [] (auto &pending) { return pending.receiver (request_projection_t{}); });
+    }
+
     template <typename T>
     static request_task_t<T> reschedule (request_task_t<T> task, task_scheduler_t scheduler)
     {
@@ -288,7 +379,38 @@ struct request_task_access_t
         task._admission_scheduler = std::move (scheduler);
         return task;
     }
+
+  private:
+    template <typename T, typename TTag, typename TSubmit, typename TReceiver>
+    static request_task_t<T> receive (TTag tag, TSubmit &&submit, TReceiver &&make_receiver)
+    {
+        auto admitted = std::make_shared<task_completion_source_t<void>> ();
+        request_task_t<T> pending (tag, admitted);
+        auto receiver = std::forward<TReceiver> (make_receiver) (pending);
+        try {
+            std::forward<TSubmit> (submit) (std::move (receiver));
+        }
+        catch (...) {
+            const auto failure = current_exception_result<T> ();
+            admitted->complete (result_access_t::failure<void> (failure.exception ()));
+            // The submitter may already have moved the receiver into a decoder.
+            pending.receiver (tag).complete (failure);
+        }
+        return pending;
+    }
 };
+
+template <typename T> void request_receiver_t<T>::observe (request_task_t<T> selected)
+{
+    if (request_task_access_t::admission_source (selected) != admitted) {
+        auto acceptance = selected.admitted ();
+        observe_task_terminal (acceptance, [source = admitted] (const result_t<void> &result) {
+            source->complete (result);
+        });
+    }
+    auto physical = request_task_access_t::physical_reply (selected);
+    observe_task_terminal (physical, std::move (complete));
+}
 
 // The selected child represents this same submitted call; infrastructure
 // lookups are awaited directly instead of using this explicit connection.
