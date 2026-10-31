@@ -22,10 +22,10 @@ import java.util.concurrent.CompletableFuture;
 
 public final class ZLinkSerialTurnAllocationTest {
     private static final int UNFILTERED_DISPATCHES = 1000;
-    // HEAD440cf6a4fa dispatch loop: 40881 objects / 1580976 bytes over 1000 dispatches.
+    // #1673 dispatch loop: 39881 objects / 1556976 bytes over 1000 dispatches.
     // Round each per-dispatch mean to the nearest integer; .5 rounds up (Math.round).
-    private static final long EXPECTED_OBJECTS_PER_DISPATCH = 41;
-    private static final long EXPECTED_BYTES_PER_DISPATCH = 1581;
+    private static final long EXPECTED_OBJECTS_PER_DISPATCH = 40;
+    private static final long EXPECTED_BYTES_PER_DISPATCH = 1557;
     private static final String UNFILTERED_WINDOW_EVENT = "systems.zlink.UnfilteredDispatchWindow";
 
     @Name(UNFILTERED_WINDOW_EVENT)

@@ -144,7 +144,10 @@ public interface ZLinkHandlerActivator {
         Object resolve(Class<?> dependencyType);
     }
 
-    final class MutableServices implements ZLinkHandlerActivator {
+    final class MutableServices
+            implements ZLinkHandlerActivator,
+                    ZLinkTypeAwareHandlerActivator,
+                    ZLinkTypeAwareHandlerActivator.RuntimeServiceLookup {
         private final Map<Class<?>, Object> services = new LinkedHashMap<>();
         private volatile Map<Class<?>, Object> serviceIndex = Map.of();
         private final ZLinkHandlerActivator fallback;
@@ -238,6 +241,24 @@ public interface ZLinkHandlerActivator {
         @Override
         public Activation openActivation() {
             return new ServicesActivation(fallback.openActivation());
+        }
+
+        @Override
+        public Activation reusableActivation(
+                Class<?> handlerType,
+                ZLinkTypeAwareHandlerActivator.RuntimeServiceLookup runtimeServices) {
+            if (runtimeServices != ZLinkTypeAwareHandlerActivator.RuntimeServiceLookup.NONE
+                    || findRuntimeService(handlerType) != null) {
+                return null;
+            }
+            return fallback instanceof ZLinkTypeAwareHandlerActivator typeAware
+                    ? typeAware.reusableActivation(handlerType, this)
+                    : null;
+        }
+
+        @Override
+        public boolean contains(Class<?> serviceType) {
+            return findRuntimeService(serviceType) != null;
         }
 
         private final class ServicesActivation implements Activation {
