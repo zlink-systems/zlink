@@ -10,8 +10,11 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
@@ -61,7 +64,7 @@ final class ZLinkProviderAuthorityRepository {
     private static final byte AGGREGATE_COMMITTED = 2;
     private static final int AGGREGATE_COUNTER_RETRY_LIMIT = 64;
     private static final Duration AGGREGATE_COUNTER_RETRY_WINDOW = Duration.ofSeconds(5);
-    private final ZLinkLocationStore provider;
+    private final CapacityMetricProvider provider;
     private final java.util.concurrent.ConcurrentHashMap<ZLinkStoreKey, CapacityMetricSource>
             capacityMetrics = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -94,6 +97,38 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkStoreKey key = capacityKey(descriptor);
         if (!capacityMetrics.containsKey(key)) return CompletableFuture.completedFuture(null);
         return provider.read(key, () -> false).thenAccept(ignored -> {});
+    }
+
+    CompletionStage<ZLinkMeshNodeDescriptor> projectCapacity(ZLinkMeshNodeDescriptor descriptor) {
+        var key = new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid());
+        return provider.readAvailable(capacityKey(key))
+                .thenApply(
+                        read -> {
+                            var record =
+                                    read instanceof ZLinkStoreReadFound found
+                                            ? decodeCapacity(found.value().bytes())
+                                            : CapacityRecord.empty();
+                            return new ZLinkMeshNodeDescriptor(
+                                    descriptor.meshName(),
+                                    descriptor.rid(),
+                                    descriptor.lifecycleGeneration(),
+                                    descriptor.descriptorRevision(),
+                                    descriptor.endpoint(),
+                                    descriptor.channelWeights(),
+                                    descriptor.applicationVersion(),
+                                    descriptor.objectCapabilities(),
+                                    descriptor.objectRole(),
+                                    descriptor.entrySpotId(),
+                                    descriptor.placementWeight(),
+                                    record.project(descriptor.capacity()),
+                                    descriptor.activationConcurrency(),
+                                    descriptor.maintenanceWave(),
+                                    descriptor.state(),
+                                    descriptor.securityIdentity(),
+                                    descriptor.ownerId(),
+                                    descriptor.leaseGeneration(),
+                                    descriptor.updatedAt());
+                        });
     }
 
     private void updateCapacityMetrics(ZLinkStoreKey key, CapacityRecord confirmed) {
@@ -146,12 +181,12 @@ final class ZLinkProviderAuthorityRepository {
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_ACTIVE,
                     actors,
-                    () -> current.actorActive());
+                    () -> current.actorUsage(descriptor.capacity().actors().limit()).active());
             observe(
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_RESERVED,
                     actors,
-                    () -> current.actorPending());
+                    () -> current.actorUsage(descriptor.capacity().actors().limit()).reserved());
             observe(
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_LIMIT,
@@ -161,12 +196,12 @@ final class ZLinkProviderAuthorityRepository {
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_ACTIVE,
                     spots,
-                    () -> current.spotActive());
+                    () -> current.spotUsage(descriptor.capacity().spots().limit()).active());
             observe(
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_RESERVED,
                     spots,
-                    () -> current.spotPending());
+                    () -> current.spotUsage(descriptor.capacity().spots().limit()).reserved());
             observe(
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_LIMIT,
@@ -190,12 +225,12 @@ final class ZLinkProviderAuthorityRepository {
                         systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                                 .SPOT_TYPE_CAPACITY_ACTIVE,
                         tags,
-                        () -> current.types().getOrDefault(typeKey, TypeCounter.ZERO).active());
+                        () -> current.typeUsage(typeKey, type.usage().limit()).active());
                 observe(
                         systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                                 .SPOT_TYPE_CAPACITY_RESERVED,
                         tags,
-                        () -> current.types().getOrDefault(typeKey, TypeCounter.ZERO).pending());
+                        () -> current.typeUsage(typeKey, type.usage().limit()).reserved());
                 observe(
                         systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                                 .SPOT_TYPE_CAPACITY_LIMIT,
@@ -230,17 +265,23 @@ final class ZLinkProviderAuthorityRepository {
         public CompletionStage<ZLinkStoreReadResult> read(
                 ZLinkStoreKey key,
                 systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-            return delegate.read(key, cancellation)
-                    .thenApply(
-                            result -> {
-                                if (capacityMetrics.containsKey(key))
-                                    updateCapacityMetrics(
-                                            key,
-                                            result instanceof ZLinkStoreReadFound found
-                                                    ? decodeCapacity(found.value().bytes())
-                                                    : CapacityRecord.empty());
-                                return result;
-                            });
+            return delegate.read(key, cancellation).thenApply(result -> confirmRead(key, result));
+        }
+
+        CompletionStage<ZLinkStoreReadResult> readAvailable(ZLinkStoreKey key) {
+            return ZLinkProviderStoreRead.read(delegate, key, () -> false, "capacity")
+                    .thenApply(result -> confirmRead(key, result));
+        }
+
+        private ZLinkStoreReadResult confirmRead(ZLinkStoreKey key, ZLinkStoreReadResult result) {
+            if (capacityMetrics.containsKey(key)) {
+                updateCapacityMetrics(
+                        key,
+                        result instanceof ZLinkStoreReadFound found
+                                ? decodeCapacity(found.value().bytes())
+                                : CapacityRecord.empty());
+            }
+            return result;
         }
 
         @Override
@@ -957,6 +998,22 @@ final class ZLinkProviderAuthorityRepository {
             String key,
             String expectedStoreVersion,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        return releaseEndedReservation(key, expectedStoreVersion, cancellation, null);
+    }
+
+    CompletionStage<Boolean> releaseEndedReservation(
+            ZLinkObjectReservationRequest request,
+            String expectedStoreVersion,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        return releaseEndedReservation(
+                request.authorityKey(), expectedStoreVersion, cancellation, request);
+    }
+
+    private CompletionStage<Boolean> releaseEndedReservation(
+            String key,
+            String expectedStoreVersion,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
+            ZLinkObjectReservationRequest request) {
         ZLinkStoreKey rowKey = authorityKey(key);
         return provider.read(rowKey, cancellation)
                 .thenCompose(
@@ -965,45 +1022,31 @@ final class ZLinkProviderAuthorityRepository {
                                     || !found.value()
                                             .version()
                                             .value()
-                                            .equals(expectedStoreVersion)) return completed(false);
-                            return tryReclaimStaleAuthority(
-                                            rowKey,
-                                            found,
-                                            decode(found.value().bytes()),
-                                            cancellation)
-                                    .thenApply(result -> result == StaleAuthorityReclaim.RECLAIMED);
-                        });
-    }
-
-    private CompletionStage<StaleAuthorityReclaim> tryReclaimStaleAuthority(
-            ZLinkStoreKey authorityKey,
-            ZLinkStoreReadFound authority,
-            AuthorityRecord current,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        return tryReclaimStaleAuthority(authorityKey, authority, current, cancellation, null);
-    }
-
-    CompletionStage<Boolean> releaseEndedReservation(
-            ZLinkObjectReservationRequest request,
-            String expectedStoreVersion,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        var key = authorityKey(request.authorityKey());
-        return provider.read(key, cancellation)
-                .thenCompose(
-                        read -> {
-                            if (!(read instanceof ZLinkStoreReadFound found)
-                                    || !found.value()
-                                            .version()
-                                            .value()
-                                            .equals(expectedStoreVersion)) return completed(false);
+                                            .equals(expectedStoreVersion)) {
+                                return completed(false);
+                            }
                             var current = decode(found.value().bytes());
-                            if (current.allocation().objectKind() != request.objectKind()
-                                    || !current.allocation()
-                                            .stableType()
-                                            .equals(request.stableType())) return completed(false);
+                            if (request != null
+                                    && (current.allocation().objectKind() != request.objectKind()
+                                            || !current.allocation()
+                                                    .stableType()
+                                                    .equals(request.stableType()))) {
+                                return completed(false);
+                            }
                             return tryReclaimStaleAuthority(
-                                            key, found, current, cancellation, request)
-                                    .thenApply(result -> result == StaleAuthorityReclaim.RECLAIMED);
+                                            rowKey, found, current, cancellation, request)
+                                    .thenCompose(
+                                            result ->
+                                                    result == StaleAuthorityReclaim.CONFLICT
+                                                            ? releaseEndedReservation(
+                                                                    key,
+                                                                    expectedStoreVersion,
+                                                                    cancellation,
+                                                                    request)
+                                                            : completed(
+                                                                    result
+                                                                            == StaleAuthorityReclaim
+                                                                                    .RECLAIMED));
                         });
     }
 
@@ -4827,6 +4870,37 @@ final class ZLinkProviderAuthorityRepository {
 
         static CapacityRecord empty() {
             return new CapacityRecord(0, 0, 0, 0, Map.of());
+        }
+
+        ZLinkCapacityUsage actorUsage(int limit) {
+            return new ZLinkCapacityUsage(actorActive, actorPending, limit);
+        }
+
+        ZLinkCapacityUsage spotUsage(int limit) {
+            return new ZLinkCapacityUsage(spotActive, spotPending, limit);
+        }
+
+        ZLinkCapacityUsage typeUsage(String key, int limit) {
+            var counter = types.getOrDefault(key, TypeCounter.ZERO);
+            return new ZLinkCapacityUsage(counter.active(), counter.pending(), limit);
+        }
+
+        ZLinkPlacementCapacity project(ZLinkPlacementCapacity configured) {
+            return new ZLinkPlacementCapacity(
+                    actorUsage(configured.actors().limit()),
+                    spotUsage(configured.spots().limit()),
+                    configured.spotTypes().stream()
+                            .map(
+                                    type ->
+                                            new ZLinkSpotTypeCapacity(
+                                                    type.objectKind(),
+                                                    type.stableType(),
+                                                    typeUsage(
+                                                            typeKey(
+                                                                    type.objectKind(),
+                                                                    type.stableType()),
+                                                            type.usage().limit())))
+                            .toList());
         }
 
         int typeCount(ZLinkSpotTypeCapacityDelta delta) {

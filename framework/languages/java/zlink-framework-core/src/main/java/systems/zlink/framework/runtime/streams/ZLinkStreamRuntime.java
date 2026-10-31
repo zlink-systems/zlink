@@ -142,6 +142,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ConcurrentHashMap.newKeySet();
     private volatile boolean draining;
 
+    int sessionContextCount() {
+        return sessionContexts.size();
+    }
+
     private <T> T inStateLane(Supplier<T> work) {
         return stateLane.awaitTurn(work);
     }
