@@ -627,6 +627,7 @@ wait_dispatch_errors (std::vector<zlink::framework::message_dispatch_error_event
 void clear_dispatch_errors (std::vector<zlink::framework::message_dispatch_error_event_t> &events,
                             std::mutex &mutex)
 {
+    (void) wait_dispatch_errors (events, mutex);
     std::lock_guard lock (mutex);
     events.clear ();
 }

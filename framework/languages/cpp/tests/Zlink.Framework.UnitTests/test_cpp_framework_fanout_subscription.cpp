@@ -160,28 +160,41 @@ class gate_handler_t
     gate_scope_t &_scope;
 };
 
-class gate_publish_client_t final : public zlink::framework::hosted_service_t
+class gate_publish_client_t final
 {
   public:
     explicit gate_publish_client_t (zlink::framework::app_t &app) : _app (&app) {}
 
-    zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
+    void prepare (zlink::framework::service_provider_t &services)
+    {
+        auto &runtime = services.get_required<zlink::framework::fanout_runtime_t> ();
+        for (const auto *channel : {"gate-a", "gate-b"}) {
+            auto ready = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+            auto observation = runtime.observe (channel, 1, [ready] (const auto &event) {
+                if (event.status.is_ready)
+                    ready->complete (zlink::framework::result_t<void>::success ());
+            });
+            // CTest owns the fixture deadline; observe readiness without another timer.
+            ready->task ().result ().value ();
+            observation->close ();
+        }
+    }
+
+    zlink::framework::task_t<void> start ()
     {
         auto publisher = _app->advanced ().zlink ().publisher ();
-        (void) services;
         auto first = gate_state->first_started.get_future ();
         auto other = gate_state->other_started.get_future ();
         auto later = gate_state->later_completed.get_future ();
-        for (int attempt = 0; attempt < 80 && !first_received; ++attempt) {
-            try {
-                co_await publisher.publish ("gate-a", "gate", gate_event_t{1}).async ();
-                first_submitted = true;
-            }
-            catch (const zlink::framework::framework_exception_t &error) {
-                last_error = error.what ();
-            }
-            first_received = first.wait_for (25ms) == std::future_status::ready;
+        try {
+            co_await publisher.publish ("gate-a", "gate", gate_event_t{1}).async ();
+            first_submitted = true;
         }
+        catch (const zlink::framework::framework_exception_t &error) {
+            last_error = error.what ();
+        }
+        // Preserve the previous 80 * 25 ms receive budget without republishing.
+        first_received = first.wait_for (2s) == std::future_status::ready;
         if (first_received) {
             try {
                 co_await publisher.publish ("gate-a", "gate", gate_event_t{2}).async ();
@@ -211,11 +224,8 @@ class gate_publish_client_t final : public zlink::framework::hosted_service_t
                 }
             }
         }
-        prepared.set_value ();
         co_return;
     }
-
-    void stop () noexcept override {}
 
     bool first_submitted = false;
     bool first_received = false;
@@ -227,7 +237,6 @@ class gate_publish_client_t final : public zlink::framework::hosted_service_t
     bool later_completed = false;
     bool terminal_completed_once = false;
     bool terminal_repeated = false;
-    std::promise<void> prepared;
     std::string last_error;
 
   private:
@@ -557,22 +566,21 @@ TEST (CppFrameworkFanoutSubscription, AsyncHandlersStartInFifoAndOwnTheirTermina
         auto app = zlink::framework::app_t::create ();
         auto store = std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
         configure_gate_app (app, store);
-        auto service = std::make_unique<gate_publish_client_t> (app);
-        auto *client = service.get ();
-        app.add_hosted_service (std::move (service));
+        auto client = std::make_unique<gate_publish_client_t> (app);
 
-        auto prepared = client->prepared.get_future ();
         int exit_code = -1;
         std::jthread host ([&] (std::stop_token stop) {
             std::stop_callback request_stop (stop, [&] { app.request_stop (); });
             exit_code = app.run (0, nullptr);
         });
-        const auto observed = prepared.wait_for (5s) == std::future_status::ready;
-        EXPECT_TRUE (observed);
         const auto ready_deadline = std::chrono::steady_clock::now () + 2s;
         while (!app.is_ready () && std::chrono::steady_clock::now () < ready_deadline)
             std::this_thread::sleep_for (1ms);
-        EXPECT_TRUE (app.is_ready ());
+        ASSERT_TRUE (app.is_ready ());
+        auto provider = app.advanced ().services ().build_provider ();
+        client->prepare (provider);
+        const auto observed = client->start ().result_for (5s);
+        EXPECT_TRUE (observed && *observed);
         {
             std::lock_guard lock (gate_state->mutex);
             EXPECT_EQ (gate_state->starts, (std::vector<int>{1, 2}));
@@ -649,20 +657,22 @@ TEST (CppFrameworkFanoutSubscription, ForcedShutdownCancelsOwnedCompletionWait)
     auto store = std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
     configure_gate_app (app, store);
     auto service = std::make_unique<gate_publish_client_t> (app);
-    auto prepared = service->prepared.get_future ();
-    app.add_hosted_service (std::move (service));
     int exit_code = -1;
     std::promise<void> run_exited;
     auto exited = run_exited.get_future ();
-    std::jthread host ([&] {
+    std::jthread host ([&] (std::stop_token stop) {
+        std::stop_callback request_stop (stop, [&] { app.request_stop (); });
         exit_code = app.run (0, nullptr);
         run_exited.set_value ();
     });
-    EXPECT_EQ (prepared.wait_for (5s), std::future_status::ready);
     const auto ready_deadline = std::chrono::steady_clock::now () + 2s;
     while (!app.is_ready () && std::chrono::steady_clock::now () < ready_deadline)
         std::this_thread::sleep_for (1ms);
-    EXPECT_TRUE (app.is_ready ());
+    ASSERT_TRUE (app.is_ready ());
+    auto provider = app.advanced ().services ().build_provider ();
+    service->prepare (provider);
+    const auto observed = service->start ().result_for (5s);
+    EXPECT_TRUE (observed && *observed);
     EXPECT_EQ (gate_state->scopes_live.load (), 1);
     auto shutdown = app.shutdown (100ms);
     EXPECT_FALSE (shutdown.result_for (20ms));
