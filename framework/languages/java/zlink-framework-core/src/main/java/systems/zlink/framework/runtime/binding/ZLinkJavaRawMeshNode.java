@@ -6351,122 +6351,120 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         ZLinkApplicationJobContext.QueuedOwnership applicationJob =
                 ZLinkApplicationJobContext.transferToQueuedJob();
         try {
-            resolveAcceptedAuthorities(inbound)
-                    .whenCompleteAsync(
-                            (authorities, failure) -> {
-                                try (ZLinkApplicationJobContext.Scope ignored =
-                                        ZLinkApplicationJobContext.enterQueued(applicationJob)) {
-                                    if (failure != null || authorities.isEmpty()) {
-                                        replySpotFailure(
-                                                inbound,
-                                                header,
-                                                SOURCE_OWNER_UNAVAILABLE[0],
-                                                SOURCE_OWNER_UNAVAILABLE[1]);
-                                        inbound.close();
-                                        return;
-                                    }
-                                    AcceptedAuthorities acceptedAuthorities =
-                                            authorities.orElseThrow();
-                                    List<Message> messages = null;
-                                    String contentType;
-                                    try {
-                                        messages = decodeApplicationMessages(payload);
-                                        contentType = applicationContentType(messages);
-                                    } catch (RuntimeException invalidPayload) {
-                                        if (messages != null) {
-                                            messages.forEach(Message::close);
-                                        }
-                                        replySpotFailure(inbound, header, 104, 12);
-                                        inbound.close();
-                                        return;
-                                    }
-                                    ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
-                                    int acceptedRecordSizeHint =
-                                            (int)
-                                                    Math.min(
-                                                            Integer.MAX_VALUE,
-                                                            applicationPayloadBytes(messages)
-                                                                    + metadata.length
-                                                                    + 512L);
-                                    boolean accepted =
-                                            ((ZLinkJavaRawSpotNode) spotNode())
-                                                    .enqueueRemoteSpotLazy(
-                                                            acceptedAuthorities.source(),
-                                                            header,
-                                                            metadata,
-                                                            () ->
-                                                                    ZLinkServiceFrozenRecordCodec
-                                                                            .encodeSpot(
-                                                                                    acceptedAuthorities
-                                                                                            .source(),
-                                                                                    acceptedAuthorities
-                                                                                            .targetOwner(),
-                                                                                    header,
-                                                                                    metadata,
-                                                                                    wire
-                                                                                            .encodeApplicationPayload(
-                                                                                                    payload)),
-                                                            acceptedRecordSizeHint,
-                                                            messages,
-                                                            contentType,
-                                                            replyParts -> {
-                                                                if (!terminal.tryWin(
-                                                                        ZLinkTerminalWinner.Cause
-                                                                                .RESPONSE)) {
-                                                                    replyParts.forEach(
-                                                                            Message::close);
-                                                                    return;
-                                                                }
-                                                                try {
-                                                                    port.replyMessages(
-                                                                            requireStarted(),
-                                                                            inbound.source(),
-                                                                            inbound
-                                                                                    .requestSequence(),
-                                                                            encodeApplicationFrames(
-                                                                                    wire
-                                                                                            .encodeReplyHeader(
-                                                                                                    header
-                                                                                                            .correlation(),
-                                                                                                    0,
-                                                                                                    0),
-                                                                                    null,
-                                                                                    replyParts));
-                                                                } finally {
-                                                                    replyParts.forEach(
-                                                                            Message::close);
-                                                                }
-                                                            },
-                                                            relayFailure -> {
-                                                                if (!terminal.tryWin(
-                                                                        ZLinkTerminalWinner.Cause
-                                                                                .FAILURE)) {
-                                                                    return;
-                                                                }
-                                                                // Relay the received/classified
-                                                                // pair instead of a fixed
-                                                                // 102+1 (spec
-                                                                // 32-framework-error-model:83-92).
-                                                                int[] pair =
-                                                                        relayedFailurePair(
-                                                                                relayFailure);
-                                                                replySpotFailure(
-                                                                        inbound, header, pair[0],
-                                                                        pair[1]);
-                                                            },
-                                                            inbound::close);
-                                    if (!accepted) {
-                                        messages.forEach(Message::close);
-                                        replySpotFailure(inbound, header, 102, 1);
-                                        inbound.close();
-                                    }
-                                } finally {
-                                    if (applicationJob != null) {
-                                        applicationJob.close();
-                                    }
+            CompletionStage<Optional<AcceptedAuthorities>> acceptance;
+            try {
+                acceptance = resolveAcceptedAuthorities(inbound);
+            } catch (RuntimeException failure) {
+                acceptance = CompletableFuture.failedFuture(failure);
+            }
+            acceptance.whenCompleteAsync(
+                    (authorities, failure) -> {
+                        try (ZLinkApplicationJobContext.Scope ignored =
+                                ZLinkApplicationJobContext.enterQueued(applicationJob)) {
+                            if (failure != null || authorities.isEmpty()) {
+                                int[] pair =
+                                        failure == null
+                                                ? SOURCE_OWNER_UNAVAILABLE
+                                                : ZLinkRequestFailureMapping.outgoing(failure);
+                                replySpotFailure(inbound, header, pair[0], pair[1]);
+                                inbound.close();
+                                return;
+                            }
+                            AcceptedAuthorities acceptedAuthorities = authorities.orElseThrow();
+                            List<Message> messages = null;
+                            String contentType;
+                            try {
+                                messages = decodeApplicationMessages(payload);
+                                contentType = applicationContentType(messages);
+                            } catch (RuntimeException invalidPayload) {
+                                if (messages != null) {
+                                    messages.forEach(Message::close);
                                 }
-                            },
-                            applicationDispatch);
+                                replySpotFailure(inbound, header, 104, 12);
+                                inbound.close();
+                                return;
+                            }
+                            ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
+                            int acceptedRecordSizeHint =
+                                    (int)
+                                            Math.min(
+                                                    Integer.MAX_VALUE,
+                                                    applicationPayloadBytes(messages)
+                                                            + metadata.length
+                                                            + 512L);
+                            boolean accepted =
+                                    ((ZLinkJavaRawSpotNode) spotNode())
+                                            .enqueueRemoteSpotLazy(
+                                                    acceptedAuthorities.source(),
+                                                    header,
+                                                    metadata,
+                                                    () ->
+                                                            ZLinkServiceFrozenRecordCodec
+                                                                    .encodeSpot(
+                                                                            acceptedAuthorities
+                                                                                    .source(),
+                                                                            acceptedAuthorities
+                                                                                    .targetOwner(),
+                                                                            header,
+                                                                            metadata,
+                                                                            wire
+                                                                                    .encodeApplicationPayload(
+                                                                                            payload)),
+                                                    acceptedRecordSizeHint,
+                                                    messages,
+                                                    contentType,
+                                                    replyParts -> {
+                                                        if (!terminal.tryWin(
+                                                                ZLinkTerminalWinner.Cause
+                                                                        .RESPONSE)) {
+                                                            replyParts.forEach(Message::close);
+                                                            return;
+                                                        }
+                                                        try {
+                                                            port.replyMessages(
+                                                                    requireStarted(),
+                                                                    inbound.source(),
+                                                                    inbound.requestSequence(),
+                                                                    encodeApplicationFrames(
+                                                                            wire.encodeReplyHeader(
+                                                                                    header
+                                                                                            .correlation(),
+                                                                                    0,
+                                                                                    0),
+                                                                            null,
+                                                                            replyParts));
+                                                        } finally {
+                                                            replyParts.forEach(Message::close);
+                                                        }
+                                                    },
+                                                    relayFailure -> {
+                                                        if (!terminal.tryWin(
+                                                                ZLinkTerminalWinner.Cause
+                                                                        .FAILURE)) {
+                                                            return;
+                                                        }
+                                                        // Relay the received/classified
+                                                        // pair instead of a fixed
+                                                        // 102+1 (spec
+                                                        // 32-framework-error-model:83-92).
+                                                        int[] pair =
+                                                                relayedFailurePair(relayFailure);
+                                                        replySpotFailure(
+                                                                inbound, header, pair[0], pair[1]);
+                                                    },
+                                                    inbound::close);
+                            if (!accepted) {
+                                messages.forEach(Message::close);
+                                replySpotFailure(inbound, header, 102, 1);
+                                inbound.close();
+                            }
+                        } finally {
+                            if (applicationJob != null) {
+                                applicationJob.close();
+                            }
+                        }
+                    },
+                    applicationDispatch);
         } catch (RuntimeException rejected) {
             if (applicationJob != null) {
                 applicationJob.close();
