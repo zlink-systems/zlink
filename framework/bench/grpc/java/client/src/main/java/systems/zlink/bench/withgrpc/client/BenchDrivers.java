@@ -5,6 +5,7 @@ package systems.zlink.bench.withgrpc.client;
 import systems.zlink.bench.withgrpc.shared.BenchHttpApplication;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
 import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
+import systems.zlink.contracts.sockets.SubmitResult;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -12,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -181,6 +183,11 @@ public final class BenchDrivers {
             throws Exception {
         if (!"request-serial".equals(trigger.pattern())
                 && operation instanceof RawStack.RawOperation raw) {
+            if ("send-saturation".equals(trigger.pattern())
+                    && raw instanceof RawStack.RawSendOperation send) {
+                runRawSendSaturation(trigger, send, headerPhase, source, resources);
+                return trigger.sendConcurrency();
+            }
             runRaw(trigger, raw, headerPhase, source, resources);
             return 1;
         }
@@ -261,9 +268,9 @@ public final class BenchDrivers {
                         pending.remove(completion);
                     });
 
-            if (submission.result() == systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
+            if (submission.result() == SubmitResult.BACKPRESSURED) {
                 admissionPending = submission.admitted();
-            } else if (submission.result() != systems.zlink.contracts.sockets.SubmitResult.OK) {
+            } else if (submission.result() != SubmitResult.OK) {
                 throw new IllegalStateException("raw submit returned " + submission.result());
             }
             try {
@@ -286,6 +293,167 @@ public final class BenchDrivers {
             // Per-operation callbacks own success/error accounting. A drain that
             // is not done in time is recorded below as abandoned work.
         }
+        source.freezeTerminal();
+    }
+
+    /**
+     * Send-saturation uses one logical worker per configured stream. Socket submission and
+     * BACKPRESSURED admission are serialized by one gate; the caller thread owns the completion
+     * poller, as RawBenchTransport.DriveAsync does for the .NET raw row.
+     */
+    private void runRawSendSaturation(
+            BenchHttpApplication.Trigger trigger,
+            RawStack.RawSendOperation operation,
+            byte phase,
+            SourceMetrics source,
+            ClientResources resources)
+            throws InterruptedException {
+        long deadline = source.activeDeadline;
+        long drainDeadline =
+                deadline + TimeUnit.MILLISECONDS.toNanos(options.drainBoundMs);
+        long pollerCpuStart = resources.beginSubmit();
+        AtomicLong sequence = new AtomicLong();
+        AtomicInteger remainingWorkers = new AtomicInteger(trigger.sendConcurrency());
+        CompletableFuture<Void> workersDone = new CompletableFuture<>();
+        Semaphore submissionGate = new Semaphore(1);
+        Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
+        List<Thread> workers = new ArrayList<>(trigger.sendConcurrency());
+
+        for (int index = 0; index < trigger.sendConcurrency(); index++) {
+            Thread worker =
+                    Thread.ofPlatform()
+                            .name("bench-stream-" + index)
+                            .start(
+                                    () -> {
+                                        long cpuStart = resources.beginSubmit();
+                                        try {
+                                            while (BenchMetricHeader.nowNs() < deadline) {
+                                                long value = sequence.getAndIncrement();
+                                                long started = source.begin();
+                                                RawStack.PreparedSend prepared = null;
+                                                try {
+                                                    prepared =
+                                                            operation.prepareRaw(
+                                                                    trigger.payloadBytes(),
+                                                                    phase,
+                                                                    value);
+                                                    long remaining =
+                                                            drainDeadline
+                                                                    - BenchMetricHeader.nowNs();
+                                                    if (remaining <= 0
+                                                            || !submissionGate.tryAcquire(
+                                                                    remaining,
+                                                                    TimeUnit.NANOSECONDS)) {
+                                                        break;
+                                                    }
+                                                    try {
+                                                        if (BenchMetricHeader.nowNs()
+                                                                >= drainDeadline) {
+                                                            break;
+                                                        }
+                                                        RawStack.PreparedSend preparedForSubmit =
+                                                                prepared;
+                                                        prepared = null;
+                                                        RawStack.RawSubmission submission =
+                                                                operation.submitRaw(
+                                                                        preparedForSubmit);
+                                                        if (submission.result()
+                                                                        != SubmitResult.OK
+                                                                && submission.result()
+                                                                        != SubmitResult.BACKPRESSURED) {
+                                                            source.complete(
+                                                                    started,
+                                                                    new IllegalStateException(
+                                                                            "raw send submit returned "
+                                                                                    + submission
+                                                                                            .result()));
+                                                            continue;
+                                                        }
+
+                                                        CompletableFuture<Void> completion =
+                                                                submission.completion();
+                                                        pending.add(completion);
+                                                        completion.whenComplete(
+                                                                (ignored, error) -> {
+                                                                    source.complete(started, error);
+                                                                    pending.remove(completion);
+                                                                });
+
+                                                        if (submission.result()
+                                                                == SubmitResult.BACKPRESSURED) {
+                                                            long admissionWait =
+                                                                    drainDeadline
+                                                                            - BenchMetricHeader
+                                                                                    .nowNs();
+                                                            if (admissionWait > 0) {
+                                                                try {
+                                                                    submission
+                                                                            .admitted()
+                                                                            .get(
+                                                                                    admissionWait,
+                                                                                    TimeUnit.NANOSECONDS);
+                                                                } catch (ExecutionException
+                                                                        | TimeoutException
+                                                                        | CancellationException ignored) {
+                                                                    // The completion callback records errors; unresolved
+                                                                    // admission remains abandoned after the drain bound.
+                                                                }
+                                                            }
+                                                        }
+                                                    } finally {
+                                                        submissionGate.release();
+                                                    }
+                                                } catch (InterruptedException interrupted) {
+                                                    Thread.currentThread().interrupt();
+                                                    break;
+                                                } catch (RuntimeException error) {
+                                                    source.complete(started, error);
+                                                } finally {
+                                                    if (prepared != null) {
+                                                        prepared.close();
+                                                    }
+                                                }
+                                            }
+                                        } finally {
+                                            resources.addSubmitCpuNs(
+                                                    ClientResources.currentThreadCpuNs() - cpuStart);
+                                            if (remainingWorkers.decrementAndGet() == 0) {
+                                                workersDone.complete(null);
+                                            }
+                                        }
+                                    });
+            workers.add(worker);
+        }
+
+        while (!workersDone.isDone()) {
+            long remaining = drainDeadline - BenchMetricHeader.nowNs();
+            if (remaining <= 0) {
+                break;
+            }
+            try {
+                operation.await(
+                        workersDone,
+                        Duration.ofNanos(Math.min(COMPLETION_POLL_INTERVAL_NS, remaining)));
+            } catch (ExecutionException impossible) {
+                throw new IllegalStateException("send workers failed unexpectedly", impossible);
+            }
+        }
+        for (Thread worker : workers) {
+            worker.join();
+        }
+
+        List<CompletableFuture<Void>> outstanding = new ArrayList<>(pending);
+        CompletableFuture<Void> settled =
+                CompletableFuture.allOf(outstanding.toArray(CompletableFuture[]::new));
+        long remaining = drainDeadline - BenchMetricHeader.nowNs();
+        if (remaining > 0) {
+            try {
+                operation.await(settled, Duration.ofNanos(remaining));
+            } catch (ExecutionException ignored) {
+                // Per-send callbacks own success/error accounting.
+            }
+        }
+        resources.addSubmitCpuNs(ClientResources.currentThreadCpuNs() - pollerCpuStart);
         source.freezeTerminal();
     }
 
