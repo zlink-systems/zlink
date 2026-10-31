@@ -488,6 +488,12 @@ jobs:
             echo "--- probe: curl -v profile ---"; curl -v --max-time 10 http://127.0.0.1:5480/players/p1/profile || true
             echo "--- probe: curl -v match-queue ---"; curl -v --max-time 10 -X POST "http://127.0.0.1:5480/match-queues/probe" -H 'Content-Type: application/json' -d '{"playerId":"probe"}' || true
             echo "--- probe: listeners ---"; ss -ltnp || true
+            echo "--- probe: redis keys ---"
+            printf '*2\r\n$4\r\nKEYS\r\n$21\r\nzlink-tutorial-node:*\r\n' | timeout 5 nc -q1 127.0.0.1 6379 | head -80 || true
+            echo "--- probe: redis info ---"
+            printf '*2\r\n$4\r\nINFO\r\n$6\r\nserver\r\n' | timeout 5 nc -q1 127.0.0.1 6379 | grep -E 'redis_version|tcp_port' || true
+            echo "--- probe: redis TIME vs date ---"
+            printf '*1\r\n$4\r\nTIME\r\n' | timeout 5 nc -q1 127.0.0.1 6379 || true; date +%s
             echo "--- probe: node and packages ---"; node -v; npm ls @zlink-systems/zlink @zlink-systems/framework @zlink-systems/framework-locations-redis 2>&1 | head -20
             echo "--- probe: server.log ---"; cat server.log || true
             echo "--- probe: client.log ---"; cat client.log || true
