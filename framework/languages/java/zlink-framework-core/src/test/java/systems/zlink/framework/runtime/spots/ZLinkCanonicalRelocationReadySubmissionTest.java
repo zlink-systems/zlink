@@ -42,7 +42,6 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -238,7 +237,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         assertInstanceOf(java.util.concurrent.TimeoutException.class, readyTimeout.getCause());
         assertEquals(
                 0,
-                attemptCount(timedOutSource, "sources"),
+                timedOutSource.attemptCountsForTest().sources(),
                 "READY timeout must release the canonical source attempt");
 
         CompletableFuture<byte[]> overlappingPrepare = new CompletableFuture<>();
@@ -261,7 +260,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         assertThrows(ExecutionException.class, () -> shortWaiter.get(200, TimeUnit.MILLISECONDS));
         assertEquals(
                 1,
-                attemptCount(overlappingSource, "sources"),
+                overlappingSource.attemptCountsForTest().sources(),
                 "a duplicate waiter timeout must not remove the owner attempt");
         var overlapping =
                 ZLinkCanonicalRelocationProtocol.decodePrepare(
@@ -287,7 +286,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 .join();
         assertEquals(
                 1,
-                attemptCount(overlappingSource, "sources"),
+                overlappingSource.attemptCountsForTest().sources(),
                 "the CUTOVER submit terminal is not settlement: the source keeps its attempt"
                         + " until authority settles (spec 28 §4.4)");
 
@@ -402,7 +401,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 0,
                 aggregateAborts.get(),
                 "the exact immutable Prepare fence remains retryable rather than terminal ABORTED");
-        assertEquals(1, attemptCount(target.get(), "targets"));
+        assertEquals(1, target.get().attemptCountsForTest().targets());
         assertEquals(0, retainedExpiry.size(), "the target must not choose a Restore expiry");
 
         var changed =
@@ -463,7 +462,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                 .join());
         assertEquals(
                 1,
-                attemptCount(source.get(), "sources"),
+                source.get().attemptCountsForTest().sources(),
                 "a failed CUTOVER submission is not a terminal: the source retains the attempt"
                         + " and its boundary batch until authority settles (spec 28 §4.4)");
         assertEquals(
@@ -471,7 +470,8 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                 commits.get(),
                 "the cutover wait is a Warning only: no target CAS without a verified CUTOVER");
         assertEquals(0, targetEndpoint.published.get(), "dispatch stays closed without CUTOVER");
-        assertEquals(1, attemptCount(target.get(), "targets"), "the target keeps its staging");
+        assertEquals(
+                1, target.get().attemptCountsForTest().targets(), "the target keeps its staging");
         //  The source resends the retained CUTOVER; its verification alone enables the CAS.
         target.get()
                 .apply(
@@ -489,14 +489,14 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                         .toCompletableFuture()
                         .get(2, TimeUnit.SECONDS),
                 "the source confirms the target commit from the Location Store");
-        assertEquals(0, attemptCount(source.get(), "sources"));
+        assertEquals(0, source.get().attemptCountsForTest().sources());
         assertEquals(
                 0,
-                attemptCount(target.get(), "targets"),
+                target.get().attemptCountsForTest().targets(),
                 "a terminal target publication must release its active attempt");
         assertEquals(
                 1,
-                attemptCount(target.get(), "terminalTargets"),
+                target.get().attemptCountsForTest().terminalTargets(),
                 "the exact terminal identity remains as a bounded tombstone");
         int stagedBeforeTerminalDuplicate = targetEndpoint.staged.get();
         target.get()
@@ -544,8 +544,8 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
         assertEquals(
                 1, retainedExpiry.size(), "only the terminal tombstone has a cleanup schedule");
         retainedExpiry.forEach(value -> value.cleanup().run());
-        assertEquals(0, attemptCount(target.get(), "targets"));
-        assertEquals(0, attemptCount(target.get(), "terminalTargets"));
+        assertEquals(0, target.get().attemptCountsForTest().targets());
+        assertEquals(0, target.get().attemptCountsForTest().terminalTargets());
         assertThrows(
                 CompletionException.class,
                 () ->
@@ -830,17 +830,6 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                                             throw new UnsupportedOperationException(
                                                     method.getName());
                                 });
-    }
-
-    private static int attemptCount(
-            ZLinkCanonicalRelocationStateMachine machine, String fieldName) {
-        try {
-            Field field = ZLinkCanonicalRelocationStateMachine.class.getDeclaredField(fieldName);
-            field.setAccessible(true);
-            return ((Map<?, ?>) field.get(machine)).size();
-        } catch (ReflectiveOperationException failure) {
-            throw new AssertionError(failure);
-        }
     }
 
     private record ScheduledExpiry(Instant deadline, Runnable cleanup) {}

@@ -49,13 +49,16 @@ final class ZLinkJavaSourceTransportOwnerTest {
                                             case "close", "shutdown" -> null;
                                             default -> throw new AssertionError(method.getName());
                                         });
-        var context = new ZLinkJavaContext(nativeContext);
-        try (var node =
-                (ZLinkJavaRawMeshNode)
-                        new ZLinkJavaMeshBackendAdapter().createMeshNode(context, "owner-mesh")) {
-            var field = ZLinkJavaRawMeshNode.class.getDeclaredField("port");
-            field.setAccessible(true);
-            var port = (ZLinkJavaRawServicePort) field.get(node);
+        try (var port = new ZLinkJavaRawServicePort(nativeContext);
+                var node =
+                        ZLinkJavaRawMeshNodeTesting.create(
+                                "owner-mesh",
+                                port,
+                                null,
+                                null,
+                                null,
+                                java.util.Map.of(),
+                                Runnable::run)) {
             var socket = port.openRouter(RoutingId.from("owner-source"));
             var selectedOwner = node.sourceTransportLane();
             selectedOwner
