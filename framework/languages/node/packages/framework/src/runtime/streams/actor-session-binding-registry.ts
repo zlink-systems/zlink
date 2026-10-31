@@ -1,3 +1,4 @@
+import { ZLinkStreamHeaderFlags, type ZLinkStreamFrameHeader } from './protocol';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
@@ -407,6 +408,32 @@ export class ZLinkActorSessionBindingRegistry<
 
   async route(actorId: string): Promise<ZLinkActorSessionRoute<TContext, TActor> | undefined> {
     return await this.lane.run(() => this.routeCore(actorId));
+  }
+
+  async submitReply<T>(
+    context: TContext,
+    header: ZLinkStreamFrameHeader,
+    submit: (header: ZLinkStreamFrameHeader) => Promise<T>
+  ): Promise<T> {
+    const { submission } = await this.lane.run(() => {
+      const current =
+        header.actorSlot === undefined ||
+        [...this.routes.values()].some(
+          (route) => route.context === context && route.actorSlot === header.actorSlot
+        );
+      return {
+        submission: submit(
+          current
+            ? header
+            : {
+                ...header,
+                actorSlot: undefined,
+                flags: header.flags & ~ZLinkStreamHeaderFlags.HasActorSlot
+              }
+        )
+      };
+    });
+    return await submission;
   }
 
   /** Registers a current binding's frame in the same turn that can retire its slot. */

@@ -2659,6 +2659,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-contract;stream;stream-session"
     TIER contract
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_reply_after_unbound
+    COMMAND test_cpp_framework_stream_framework --reply-unbound
+    LABELS "framework-unit;framework-contract;stream;reply"
+    TIER contract
+    TIMEOUT 30)
   target_link_libraries(test_cpp_framework_stream_framework PRIVATE
     opentelemetry-cpp::metrics
     zlink::stream_connector)

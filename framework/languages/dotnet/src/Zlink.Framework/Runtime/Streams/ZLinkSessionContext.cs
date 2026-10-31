@@ -30,7 +30,7 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     }
 
     private ZLinkSessionStreamTransport Transport =>
-        _transport ??= new ZLinkSessionStreamTransport(_stream, TraceWritten);
+        _transport ??= new ZLinkSessionStreamTransport(this, _stream, TraceWritten);
 
     internal ZLinkFrameworkRuntime Runtime { get; }
 
@@ -157,11 +157,16 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     internal ValueTask SendActorUnboundAsync(ushort slot) =>
         ZLinkStreamControlFrames.SendActorUnboundAsync(_stream, slot, CancellationToken.None);
 
-    internal async ValueTask<ZLinkOneWaySubmitResult> SubmitAsync(Message payload)
+    internal async ValueTask<ZLinkOneWaySubmitResult> SubmitAsync(
+        Message payload,
+        ZlinkStreamHeader header
+    )
     {
         try
         {
-            await Transport.SubmitAsync(payload, CancellationToken.None).ConfigureAwait(false);
+            await Transport
+                .SubmitReplyAsync(header, payload, CancellationToken.None)
+                .ConfigureAwait(false);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
         catch (ZlinkSubmitException error)

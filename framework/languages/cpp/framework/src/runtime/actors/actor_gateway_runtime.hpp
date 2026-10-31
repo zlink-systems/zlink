@@ -189,6 +189,12 @@ class session_actor_manager_access_t
                              std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder);
     static std::optional<session_actor_t> find_slot (session_actor_manager_t &manager,
                                                      std::uint16_t actor_slot);
+    static task_t<void> submit_terminal (
+      const stream_t &stream,
+      const stream_header_t &header,
+      const zlink::message_t &payload,
+      const std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>
+        &submit);
     static void disconnect (session_actor_manager_t &manager) noexcept;
     static task_t<void> disconnect_async (
       session_actor_manager_t &manager,
@@ -198,6 +204,10 @@ class session_actor_manager_access_t
       std::function<std::optional<runtime::stateful::stream_binding_t> (const actor_ref_t &,
                                                                         std::uint64_t)> snapshot,
       std::function<task_t<void> (runtime::stateful::stream_binding_t)> cleanup);
+
+  private:
+    static std::optional<session_actor_t> find_slot_on_lane (session_actor_manager_t &manager,
+                                                             std::uint16_t actor_slot);
 };
 
 struct relayed_frame_t

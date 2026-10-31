@@ -105,6 +105,68 @@ test('stream header codec round-trips actor slots and rejects malformed slot fie
   );
 });
 
+for (const kind of [
+  connector.ZlinkStreamMessageKind.Response,
+  connector.ZlinkStreamMessageKind.Error
+]) {
+  test(`slotless terminal ${kind} after unbound completes the pending actor request`, async () => {
+    const transportFactory = new MemoryTransportFactory();
+    const instance = createStreamConnector({
+      endpoint: 'ws://127.0.0.1:19000',
+      transportFactory,
+      dispatchMode: connector.ZlinkStreamDispatchMode.Manual,
+      heartbeat: { enabled: false },
+      reconnect: { enabled: false }
+    });
+    await instance.connect();
+    transportFactory.connection.pushFrame(
+      actorControlFrame('$zlink.actor.bound', [1, 0, 7, 1, 97])
+    );
+    await instance.dispatch();
+    const actor = instance.actor('a');
+    const pending = actor
+      .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array([1]) })
+      .packetName('LateReply')
+      .submitEncoded();
+    const observed = pending.then(
+      (value) => ({ value }),
+      (error) => ({ error })
+    );
+    const request = protocolCodecs.ZlinkStreamFrameCodec.decode(
+      transportFactory.connection.frames.at(-1)
+    );
+    const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(request.header);
+    transportFactory.connection.pushFrame(actorControlFrame('$zlink.actor.unbound', [1, 0, 7]));
+    transportFactory.connection.pushFrame(
+      protocolCodecs.ZlinkStreamFrameCodec.encode(
+        protocolCodecs.ZlinkStreamHeaderCodec.encode({
+          kind,
+          codec: connector.ZlinkStreamCodec.Json,
+          flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+          requestSeq: header.requestSeq,
+          name: '',
+          metadata: connector.ZlinkStreamMetadataMap.empty
+        }),
+        new TextEncoder().encode(
+          kind === connector.ZlinkStreamMessageKind.Response
+            ? '{"done":true}'
+            : '{"code":"InvalidOperation","message":"ended"}'
+        )
+      )
+    );
+    await instance.dispatch();
+    const result = await observed;
+    assert.equal(actor.isBound, false);
+    if (kind === connector.ZlinkStreamMessageKind.Response) {
+      assert.ok(result.value);
+    } else {
+      assert.ok(result.error);
+      assert.equal(result.error.error.code, connector.ZlinkStreamErrorCode.RemoteError);
+    }
+    assert.equal(instance.state, connector.ZlinkStreamConnectionState.Connected);
+  });
+}
+
 test('bound actor controls project handles messages and outbound actor slots', async () => {
   const transportFactory = new MemoryTransportFactory();
   const instance = createStreamConnector({

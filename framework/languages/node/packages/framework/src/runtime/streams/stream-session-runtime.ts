@@ -1,3 +1,4 @@
+import { requireOneWayCompletion } from '../messaging/submission-result';
 import type { RoutingId, ZLinkMessageSerializer, ZLinkSession } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
@@ -63,7 +64,6 @@ import { ZLinkSessionSerialExecutor } from './session-serial-executor';
 import { ownedMessage } from './stream-message-utils';
 import { normalizeStreamLiveness } from '../../contracts/Configuration/RegistrationNormalizers';
 
-const ZLINK_SEND_DONT_WAIT = 1;
 const ZLINK_RECV_DONT_WAIT = 1;
 const ZLINK_STREAM_RECEIVE_FRAME_BATCH_LIMIT = 64;
 const ZLINK_STREAM_ACTOR_BINDING_REPLACEMENT_CLOSE_DELAY_MS = 100;
@@ -694,22 +694,18 @@ export class ZLinkStreamSessionRuntime {
       // record (spec 26 §2.2) and confuse the peer's reply matching.
       return;
     }
-    const message = this.context.createJsonReplyFrameMessage(
-      header,
-      ZLinkStreamMessageKind.Error,
-      new Map(),
-      false,
-      boundSessionErrorPayload(error)
-    );
     try {
-      if (!this.context.stream.writeRaw(message, ZLINK_SEND_DONT_WAIT)) {
-        throw new Error('Client stream error reply send failed.');
-      }
+      const result = await this.context.submitReply(
+        header,
+        ZLinkStreamMessageKind.Error,
+        new Map(),
+        false,
+        boundSessionErrorPayload(error)
+      );
+      requireOneWayCompletion(result, 'Client stream error reply');
       this.traceFrameWritten(ZLinkStreamMessageKind.Error, header.name, header.correlationId);
     } catch (replyError) {
       this.options.onError?.(replyError);
-    } finally {
-      message.close();
     }
   }
 

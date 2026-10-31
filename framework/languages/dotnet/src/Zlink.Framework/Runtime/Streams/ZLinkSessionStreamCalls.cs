@@ -44,7 +44,7 @@ internal abstract class ZLinkSessionStreamCallBase<TMessage>(
                 CreateHeader(codec, flags, messageName, metadata, context.CurrentDispatchContext),
             out var header
         );
-        var result = await context.SubmitAsync(frame).ConfigureAwait(false);
+        var result = await context.SubmitAsync(frame, header).ConfigureAwait(false);
         if (result.Status == ZLinkOneWaySubmitStatus.Submitted)
             context.TraceWritten(header);
         return result;
