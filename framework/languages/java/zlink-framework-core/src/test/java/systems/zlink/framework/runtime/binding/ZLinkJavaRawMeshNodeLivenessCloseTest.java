@@ -22,6 +22,93 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
     private static final Duration OBSERVE_WINDOW = Duration.ofSeconds(2);
     private static final Duration POLL_WAIT = Duration.ofMillis(10);
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void expiryFinishesBatchBeforeReportingDisconnectFailure(boolean missing) throws Exception {
+        try (var context = Zlink.createContext()) {
+            var port = new ZLinkJavaRawServicePort(context);
+            var local = descriptor(RoutingId.from("batch-local"));
+            var topology = new ZLinkServiceTopologyRegistry(local, port.stateLane());
+            var calls = new java.util.ArrayList<RoutingId>();
+            var failure =
+                    new systems.zlink.contracts.errors.ZlinkConnectException(
+                            missing
+                                    ? systems.zlink.contracts.errors.ConnectResult.NOT_FOUND
+                                    : systems.zlink.contracts.errors.ConnectResult.INTERNAL_ERROR,
+                            5);
+            var router =
+                    (systems.zlink.contracts.sockets.RouterSocket)
+                            java.lang.reflect.Proxy.newProxyInstance(
+                                    systems.zlink.contracts.sockets.RouterSocket.class
+                                            .getClassLoader(),
+                                    new Class<?>[] {
+                                        systems.zlink.contracts.sockets.RouterSocket.class
+                                    },
+                                    (proxy, method, args) -> {
+                                        if (method.getName().equals("disconnectRid")) {
+                                            calls.add((RoutingId) args[0]);
+                                            if (calls.size() == 1) throw failure;
+                                        }
+                                        return null;
+                                    });
+            try (var node =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "liveness-close",
+                            port,
+                            router,
+                            local,
+                            topology,
+                            java.util.Map.of(),
+                            Runnable::run)) {
+                var rids =
+                        List.of(
+                                RoutingId.from("expired-a"),
+                                RoutingId.from("expired-b"),
+                                RoutingId.from("expired-c"));
+                for (var rid : rids) {
+                    assertEquals(
+                            ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                            topology.admit(
+                                    descriptor(rid),
+                                    "route:" + rid,
+                                    ServiceWireConstants.COMMAND_ADMIT));
+                    topology.bindLiveness(
+                            rid, node.livenessForTest().admit(rid, "route:" + rid, 0));
+                }
+                var signals = new AtomicInteger();
+                var initial = new java.util.concurrent.CompletableFuture<Void>();
+                var cleaned = new java.util.concurrent.CompletableFuture<Void>();
+                try (var observation =
+                        node.onStateChanged(
+                                () -> {
+                                    int count = signals.incrementAndGet();
+                                    if (count == 1) initial.complete(null);
+                                    if (count == 4) cleaned.complete(null);
+                                })) {
+                    initial.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                    if (missing)
+                        assertDoesNotThrow(
+                                () -> node.tickLiveness(Duration.ofSeconds(15).toNanos()));
+                    else
+                        assertSame(
+                                failure,
+                                assertThrows(
+                                        RuntimeException.class,
+                                        () -> node.tickLiveness(Duration.ofSeconds(15).toNanos())));
+                    assertEquals(new java.util.HashSet<>(rids), new java.util.HashSet<>(calls));
+                    assertEquals(3, calls.size());
+                    cleaned.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                    assertEquals(4, signals.get());
+                    assertTrue(topology.peers().isEmpty());
+                    assertEquals(0, node.livenessForTest().size());
+                    node.tickLiveness(Duration.ofSeconds(16).toNanos());
+                    assertEquals(3, calls.size());
+                    assertEquals(4, signals.get());
+                }
+            }
+        }
+    }
+
     @Test
     void expiryRemovesPhysicalTargetAndSettlesPendingSendOnce() throws Exception {
         verify(false, false);

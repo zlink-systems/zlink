@@ -309,6 +309,12 @@ generation. It does not reconstruct the selected route from the order of monitor
 
 Orderly close and transport disconnect don't wait 15 seconds. A late ACK or frame from a previous physical connection cannot change the new connection state. The framework processes Spot, Actor, and Channel messages as Core returns them without a second generation decision.
 
+Even if the physical disconnect of an expired peer fails, the runtime completes that peer's
+local admission and pending-operation cleanup and notifications, then processes the remaining
+expired peers in the same tick. `NOT_FOUND` is accepted as an already completed termination.
+Other errors are passed to the existing runtime error reporting path after independent cleanup
+finishes, preserving their original causes.
+
 One peer's failure doesn't turn the whole host `Error`. Other ready peers and the local
 [Owner](../00-foundation/02-glossary.en.md#owner) — the MeshNode that actually runs the Actor or
 Spot on this host and manages its application queue — keep processing. Without a ready peer, the result of a Channel call follows [the Framework API channel selection result](../00-foundation/06-framework-api.en.md#channel-selection-result).

@@ -56,6 +56,7 @@ namespace
 {
 std::atomic_bool fail_next_disconnect_rid{false};
 std::atomic_int injected_disconnect_rid_calls{0};
+std::atomic<zlink_connect_result_t> injected_disconnect_result{ZLINK_CONNECT_INTERNAL_ERROR};
 
 using disconnect_rid_fn_t = zlink_connect_result_t (*) (void *, const zlink_routing_id_t *);
 
@@ -75,7 +76,7 @@ extern "C" zlink_connect_result_t zlink_disconnect_rid (void *socket,
     if (fail_next_disconnect_rid.exchange (false, std::memory_order_acq_rel)) {
         injected_disconnect_rid_calls.fetch_add (1, std::memory_order_relaxed);
         errno = EIO;
-        return ZLINK_CONNECT_INTERNAL_ERROR;
+        return injected_disconnect_result.load (std::memory_order_relaxed);
     }
     return native_disconnect_rid () (socket, peer_rid);
 }
@@ -4349,7 +4350,7 @@ void verify_liveness_without_selected_route ()
 }
 
 #if !defined(_WIN32)
-void verify_liveness_propagates_binding_failure ()
+void verify_liveness_propagates_binding_failure (bool missing = false)
 {
     auto context = std::make_shared<zlink::context_t> ();
     mesh::raw_mesh_node_owner_t source (
@@ -4358,12 +4359,32 @@ void verify_liveness_propagates_binding_failure ()
       context);
     source.start ();
     const auto remote = descriptor ("liveness-terminated-target");
+    auto second = descriptor ("liveness-terminated-second");
+    auto third = descriptor ("liveness-terminated-third");
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-    assert (source.admit_peer (remote, bytes ("terminated-route"), now)
-            == mesh::peer_admission_result_t::admitted);
+    std::vector<zlink::framework::task_t<bool>> pending;
+    std::vector<std::future<foundation::operation_terminal_t>> terminals;
+    for (const auto &peer : {remote, second, third}) {
+        assert (
+          source.topology ().admit (peer, bytes ("terminated-route"), now, protocol::command::hello)
+          == mesh::peer_admission_result_t::admitted);
+        auto terminal = std::make_shared<std::promise<foundation::operation_terminal_t>> ();
+        terminals.push_back (terminal->get_future ());
+        pending.push_back (source.request_to_node (
+          peer.node_routing_id, {"PendingCleanup", "application/json", bytes ("request")}, 2s,
+          [terminal] (auto result, auto) { terminal->set_value (result); }));
+    }
+    assert (source.pending_operation_count () == 3);
+    int notifications = 0;
+    source.topology ().set_change_handler ([&] {
+        ++notifications;
+        assert (source.topology ().peers ().empty ());
+    });
     const auto timeout_at =
       source.liveness ().connection (remote.node_routing_id)->deadline.load ();
     const auto prior_injections = injected_disconnect_rid_calls.load (std::memory_order_relaxed);
+    injected_disconnect_result.store (
+      missing ? ZLINK_CONNECT_NOT_FOUND : ZLINK_CONNECT_INTERNAL_ERROR, std::memory_order_relaxed);
     fail_next_disconnect_rid.store (true, std::memory_order_release);
     bool observed = false;
     try {
@@ -4374,7 +4395,17 @@ void verify_liveness_propagates_binding_failure ()
         assert (error.result () == zlink::connect_result_t::internal_error);
         assert (error.internal_errno () == EIO);
     }
-    assert (observed);
+    assert (observed == !missing);
+    assert (source.topology ().peers ().empty ());
+    assert (notifications == 3);
+    assert (source.pending_operation_count () == 0);
+    for (auto &terminal : terminals)
+        assert (terminal.get () == foundation::operation_terminal_t::route_unavailable);
+    for (auto &request : pending)
+        assert (!request.result ());
+    assert (await_task (source.tick_liveness (timeout_at + 1s)).timed_out_nodes.empty ());
+    assert (notifications == 3);
+    source.topology ().set_change_handler ({});
     assert (injected_disconnect_rid_calls.load (std::memory_order_relaxed) == prior_injections + 1);
     source.close ();
 }
@@ -4752,6 +4783,7 @@ int main (int argc, char **argv)
         verify_liveness_without_selected_route ();
 #if !defined(_WIN32)
         verify_liveness_propagates_binding_failure ();
+        verify_liveness_propagates_binding_failure (true);
 #endif
         return 0;
     }
