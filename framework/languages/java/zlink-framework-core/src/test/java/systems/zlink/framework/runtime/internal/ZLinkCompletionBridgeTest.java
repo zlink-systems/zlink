@@ -19,6 +19,91 @@ import java.util.function.BiConsumer;
 
 final class ZLinkCompletionBridgeTest {
     @Test
+    void completeAsyncSkipsSupplierWhenAlreadyCompletedLikeJdk() {
+        for (boolean bridge : new boolean[] {false, true}) {
+            CompletableFuture<String> caller =
+                    bridge
+                            ? ZLinkCompletionBridge.newCancellationFuture()
+                            : new CompletableFuture<>();
+            var calls = new AtomicInteger();
+            caller.complete("original");
+
+            assertSame(
+                    caller,
+                    caller.completeAsync(
+                            () -> {
+                                calls.incrementAndGet();
+                                return "late";
+                            },
+                            Runnable::run));
+
+            assertEquals(0, calls.get(), "supplier after completion; bridge=" + bridge);
+            assertEquals("original", caller.join());
+        }
+    }
+
+    @Test
+    void completeAsyncSkipsSupplierWhenCancelledBeforeExecutionLikeJdk() {
+        for (boolean bridge : new boolean[] {false, true}) {
+            CompletableFuture<String> caller =
+                    bridge
+                            ? ZLinkCompletionBridge.newCancellationFuture()
+                            : new CompletableFuture<>();
+            var calls = new AtomicInteger();
+            var executor = new ArrayDeque<Runnable>();
+
+            assertSame(
+                    caller,
+                    caller.completeAsync(
+                            () -> {
+                                calls.incrementAndGet();
+                                return "late";
+                            },
+                            executor::add));
+            assertEquals(1, executor.size());
+            assertTrue(caller.cancel(false));
+            executor.remove().run();
+
+            assertEquals(0, calls.get(), "supplier after cancellation; bridge=" + bridge);
+            assertTrue(caller.isCancelled());
+        }
+    }
+
+    @Test
+    void completeAsyncStillFinishesTerminalObserverAndCancellationForwarding() {
+        for (boolean cancelled : new boolean[] {false, true}) {
+            var observations = new AtomicInteger();
+            var failure = new AtomicReference<Throwable>();
+            var caller =
+                    ZLinkCompletionBridge.<String>newCancellationFuture(
+                            (completed, error) -> {
+                                observations.incrementAndGet();
+                                failure.set(error);
+                            });
+            var waiter = new CompletableFuture<Void>();
+            var cancellation = new CancellationException("supplier cancelled");
+            ZLinkCompletionBridge.forwardCancellation(caller, waiter);
+
+            caller.completeAsync(
+                    () -> {
+                        if (cancelled) throw cancellation;
+                        return "reply";
+                    },
+                    Runnable::run);
+
+            assertEquals(1, observations.get());
+            assertEquals(cancelled, waiter.isCancelled());
+            if (cancelled) {
+                assertSame(cancellation, failure.get());
+                assertTrue(caller.isCancelled());
+            } else {
+                assertNull(failure.get());
+                assertEquals("reply", caller.join());
+            }
+        }
+    }
+
+    @Test
     void cancellationUsesTheDeliveredTerminalWithoutRereadingCallerState() {
         for (int terminal = 0; terminal < 4; terminal++) {
             var reads = new AtomicInteger();

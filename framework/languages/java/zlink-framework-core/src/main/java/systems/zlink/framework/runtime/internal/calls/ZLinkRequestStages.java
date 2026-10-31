@@ -77,7 +77,7 @@ public final class ZLinkRequestStages {
             CompletionStage<Void> current = admitted;
             if (current != null) return current;
             CompletableFuture<Void> view =
-                    admission.isDone() ? admission : new CompletableFuture<>();
+                    admission.isDone() ? admission : ZLinkCompletionBridge.newCancellationFuture();
             if (!ADMITTED.compareAndSet(this, null, view)) return admitted;
             if (view != admission) ZLinkServiceCompletionDispatcher.deliver(admission, view);
             return view;
