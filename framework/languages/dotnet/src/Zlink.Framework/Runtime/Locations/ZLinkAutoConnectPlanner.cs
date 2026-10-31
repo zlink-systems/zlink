@@ -97,12 +97,7 @@ internal static class ZLinkAutoConnectPlanner
 
     private static bool IsSelf(ZLinkAutoConnectLocal local, ZLinkMeshNodeDescriptor descriptor)
     {
-        if (local.NodeRid is { Size: > 0 } localRid && localRid.Equals(descriptor.Rid))
-        {
-            return true;
-        }
-
-        return string.Equals(descriptor.Endpoint, local.Endpoint, StringComparison.Ordinal);
+        return local.NodeRid is { Size: > 0 } localRid && localRid.Equals(descriptor.Rid);
     }
 
     /// <summary>

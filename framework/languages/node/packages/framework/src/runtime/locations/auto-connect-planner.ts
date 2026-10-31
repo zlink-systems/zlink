@@ -130,14 +130,11 @@ function targetOf(peer: ZLinkPeerLocation): ZLinkAutoConnectTarget {
 }
 
 function isAutoConnectSelf(local: ZLinkAutoConnectLocal, peer: ZLinkPeerLocation): boolean {
-  if (
+  return (
     local.nodeRid !== undefined &&
     peer.nodeRid !== undefined &&
     routingIdsEqual(local.nodeRid, peer.nodeRid)
-  ) {
-    return true;
-  }
-  return peer.endpoint === local.endpoint;
+  );
 }
 
 function shouldDialAutoConnectPeer(local: ZLinkAutoConnectLocal, peer: ZLinkPeerLocation): boolean {

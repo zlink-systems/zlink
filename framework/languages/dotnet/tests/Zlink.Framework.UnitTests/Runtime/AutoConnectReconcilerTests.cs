@@ -7,6 +7,48 @@ public sealed class AutoConnectReconcilerTests
 {
     private static readonly TimeSpan LeaseTtl = TimeSpan.FromSeconds(15);
 
+    [Theory]
+    [InlineData("remote", true, 1)]
+    [InlineData("remote", false, 0)]
+    [InlineData("local", true, 0)]
+    public async Task SameEndpoint_UsesRidAndOwnerLease(string rid, bool live, int expected)
+    {
+        var time = new ManualTimeProvider();
+        var store = new ZLinkInMemoryLocationStore(time);
+        var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
+        var owner = await store.ClaimLiveOwnerAsync("peer-owner", TimeSpan.FromSeconds(30));
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await store.UpdateMeshNodeAsync(
+                    Descriptor(rid, "tcp://shared:1") with
+                    {
+                        LeaseGeneration = owner.LeaseGeneration,
+                    },
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
+        if (!live)
+        {
+            time.Advance(TimeSpan.FromSeconds(30));
+        }
+        var resolver = new ZLinkStoreLocationResolvers(
+            store,
+            new ZLinkOwnerLeaseTracker(store, options, time)
+        );
+        var peers = await resolver.ListLiveMeshNodesAsync("play", CancellationToken.None);
+        Assert.Equal(live ? 1 : 0, peers.Count);
+        var local = Local(
+            ZLinkLocationAutoConnectType.ClientServer,
+            ZLinkLocationRole.Dealer,
+            "local",
+            "tcp://shared:1"
+        );
+        Assert.Equal(expected, ZLinkAutoConnectPlanner.ComputeDesired(local, peers).Count);
+        Assert.Equal(expected, ZLinkAutoConnectPlanner.CountDiscoveredPeers(local, peers));
+    }
+
     [Fact]
     public async Task Immediate_peer_reconcile_refreshes_only_the_requested_connection()
     {
