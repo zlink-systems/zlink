@@ -724,7 +724,7 @@ test('auto-connect reconciler publishes local row diffs handover and stays fail-
   assert.deepEqual(calls.slice(-1), ['disconnect:tcp://remote:owner-restarted']);
   assert.equal((await store.listPeers({ endpoint: 'tcp://local' })).length, 1);
   await runtime.stop();
-  assert.equal((await store.listPeers({ endpoint: 'tcp://local' })).length, 0);
+  assert.equal((await store.listPeers({ endpoint: 'tcp://local' })).length, 1);
 });
 
 test('auto-connect reconciler does not mark a target active when executor skips dial', async () => {

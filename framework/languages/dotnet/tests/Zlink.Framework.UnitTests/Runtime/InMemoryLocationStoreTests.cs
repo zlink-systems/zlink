@@ -140,11 +140,11 @@ public sealed class InMemoryLocationStoreTests
         );
         var removed = await store.RemoveAllByOwnerAsync(ownerAToken);
 
-        Assert.Equal(1, removed);
-        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+        Assert.Equal(2, removed);
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
             await store.ReadAuthorityAsync(AuthorityKey("actor-1"))
         );
-        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
             await store.ReadAuthorityAsync(AuthorityKey("actor-2"))
         );
         Assert.IsType<ZLinkAuthorityReadResult.Found>(
@@ -153,7 +153,7 @@ public sealed class InMemoryLocationStoreTests
     }
 
     [Fact]
-    public async Task RemoveAllByOwner_Removes_All_Kinds_For_The_Owner()
+    public async Task ForceStop2646_Sweep_Removes_Authority_And_Preserves_Publisher_Descriptors()
     {
         var (store, _) = await CreateStoreWithLiveOwnersAsync(OwnerA, OwnerB);
         var descriptorA = MeshNode(OwnerA, endpoint: "tcp://127.0.0.1:5001", nodeRid: "node-a");
@@ -205,8 +205,8 @@ public sealed class InMemoryLocationStoreTests
 
         var removed = await store.RemoveAllByOwnerAsync(ownerAToken);
 
-        Assert.Equal(4, removed);
-        Assert.DoesNotContain(
+        Assert.Equal(1, removed);
+        Assert.Contains(
             (await store.ListMeshNodesAsync("play", default)).Items,
             row => row.OwnerId == OwnerA
         );
@@ -214,9 +214,9 @@ public sealed class InMemoryLocationStoreTests
             (await store.ListMeshNodesAsync("play", default)).Items,
             row => row.OwnerId == OwnerB
         );
-        Assert.Empty((await store.ListClientServersAsync("orders", default)).Items);
-        Assert.Empty((await store.ListFanoutPublishersAsync("events", default)).Items);
-        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+        Assert.Single((await store.ListClientServersAsync("orders", default)).Items);
+        Assert.Single((await store.ListFanoutPublishersAsync("events", default)).Items);
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
             await store.ReadAuthorityAsync(AuthorityKey("actor-a"))
         );
         Assert.IsType<ZLinkAuthorityReadResult.Found>(

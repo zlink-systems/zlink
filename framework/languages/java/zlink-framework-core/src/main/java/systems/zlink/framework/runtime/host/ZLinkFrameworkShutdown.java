@@ -2,14 +2,12 @@ package systems.zlink.framework.runtime.host;
 
 import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -42,21 +40,18 @@ final class ZLinkFrameworkShutdown {
     }
 
     private CompletionStage<Void> withinDeadline(Supplier<CompletionStage<Void>> action) {
-        long remaining = Duration.between(Instant.now(), deadline).toNanos();
-        if (remaining <= 0L) {
+        if (!Instant.now().isBefore(deadline)) {
             return CompletableFuture.failedFuture(
                     new TimeoutException("host shutdown deadline expired"));
         }
-        CompletableFuture<Void> completion = new CompletableFuture<>();
-        action.get()
-                .whenComplete(
-                        (ignored, failure) -> {
-                            if (failure == null) completion.complete(null);
-                            else completion.completeExceptionally(failure);
-                        });
-        return completion.orTimeout(
-                Math.max(0L, Duration.between(Instant.now(), deadline).toNanos()),
-                TimeUnit.NANOSECONDS);
+        return action.get()
+                .thenCompose(
+                        ignored ->
+                                Instant.now().isBefore(deadline)
+                                        ? CompletableFuture.completedFuture(null)
+                                        : CompletableFuture.failedFuture(
+                                                new TimeoutException(
+                                                        "host shutdown deadline expired")));
     }
 
     static CompletionStage<Void> atStage(String stage, Supplier<CompletionStage<Void>> action) {

@@ -83,6 +83,55 @@ void publish_mesh_node (in_memory_location_repository_t &store,
 }
 
 
+TEST (ZLinkFrameworkInMemoryLocationStore, ForceStop2646SweepPreservesDescriptorsAndOtherOwners)
+{
+    using namespace zlink::framework;
+    in_memory_location_repository_t store;
+    const auto owner = claim_owner (store, "cleanup-owner");
+    const auto other = claim_owner (store, "other-owner");
+    publish_mesh_node (store, "cleanup-node", owner);
+    publish_mesh_node (store, "other-node", other);
+    for (const auto &token : {owner, other}) {
+        object_reserve_request_t request{
+          .key = {placement_object_kind_t::actor, token.owner_id},
+          .intent = {.stable_type = "player",
+                     .request_content_reference = "root",
+                     .request_encoded_size = 4},
+          .target = {.mesh_name = "play",
+                     .node_rid = node_rid_t::from_string (
+                       token.owner_id == owner.owner_id ? "cleanup-node" : "other-node"),
+                     .node_lifecycle_generation = 1,
+                     .owner = token},
+          .creating_payload = {std::byte{1}},
+          .capacity_bundle = {.actor_slots = 1}};
+        ASSERT_TRUE (
+          std::holds_alternative<object_reserved_t> (store.reserve (request).result ().value ()));
+    }
+    EXPECT_EQ (
+      0,
+      store.remove_all_by_owner ({owner.owner_id, owner.lease_generation + 1}).result ().value ());
+    EXPECT_EQ (1, store.remove_all_by_owner (owner).result ().value ());
+    EXPECT_EQ (2u, store.list_mesh_nodes ("play").result ().value ().items.size ());
+    EXPECT_TRUE (std::holds_alternative<authority_missing_t> (
+      store.read_authority (actor_authority_key (owner.owner_id)).result ().value ()));
+    EXPECT_TRUE (std::holds_alternative<authority_snapshot_t> (
+      store.read_authority (actor_authority_key (other.owner_id)).result ().value ()));
+    EXPECT_TRUE (std::holds_alternative<owner_lease_found_t> (
+      store.read_owner_lease (owner.owner_id).result ().value ()));
+    ASSERT_TRUE (std::holds_alternative<owner_lease_released_t> (
+      store.release_owner_lease (other).result ().value ()));
+    const auto replacement = claim_owner (store, other.owner_id);
+    ASSERT_NE (other.lease_generation, replacement.lease_generation);
+    EXPECT_EQ (0, store.remove_all_by_owner (other).result ().value ());
+    EXPECT_TRUE (std::holds_alternative<authority_snapshot_t> (
+      store.read_authority (actor_authority_key (other.owner_id)).result ().value ()));
+    EXPECT_TRUE (std::holds_alternative<owner_lease_stale_t> (
+      store.release_owner_lease (other).result ().value ()));
+    const auto live =
+      std::get<owner_lease_found_t> (store.read_owner_lease (other.owner_id).result ().value ());
+    EXPECT_EQ (replacement.lease_generation, live.token.lease_generation);
+}
+
 TEST (ZLinkFrameworkInMemoryLocationStore,
       AuthorityRetargetPreservesExactOwnerAndMovesActiveCapacity)
 {
@@ -973,8 +1022,8 @@ TEST (ZLinkFrameworkInMemoryLocationStore, FanoutPublisherRowsFenceIdentityRevis
                    owner_b)
                  .result ()
                  .value ());
-    EXPECT_EQ (1u, store.remove_all_by_owner (owner_c).result ().value ());
-    EXPECT_TRUE (store.list_fanout_publishers ("events").result ().value ().items.empty ());
+    EXPECT_EQ (0u, store.remove_all_by_owner (owner_c).result ().value ());
+    EXPECT_EQ (1u, store.list_fanout_publishers ("events").result ().value ().items.size ());
 }
 
 TEST (ZLinkFrameworkInMemoryLocationStore, FanoutPublisherPageStopsAtFourMiB)
@@ -1027,7 +1076,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, FanoutPublisherPageStopsAtFourMiB)
                           .value ();
     EXPECT_EQ (1000u, first.items.size () + second.items.size ());
     EXPECT_FALSE (second.continuation_token.has_value ());
-    EXPECT_EQ (1000, store.remove_all_by_owner (owner).result ().value ());
+    EXPECT_EQ (0, store.remove_all_by_owner (owner).result ().value ());
 }
 
 TEST (ZLinkFrameworkInMemoryLocationStore, SignedWeightBoundariesAreValidatedWithoutNarrowing)

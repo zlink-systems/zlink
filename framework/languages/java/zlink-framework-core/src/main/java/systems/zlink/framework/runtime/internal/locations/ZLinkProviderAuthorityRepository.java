@@ -2725,17 +2725,27 @@ final class ZLinkProviderAuthorityRepository {
 
     CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner) {
         Objects.requireNonNull(owner, "owner");
-        return removeAllByOwner(owner, null, 0L, 0);
+        return removeAllByOwner(owner, () -> false);
+    }
+
+    CompletionStage<Long> removeAllByOwner(
+            ZLinkLocationOwnerToken owner,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        return removeAllByOwner(owner, null, 0L, 0, cancellation);
     }
 
     private CompletionStage<Long> removeAllByOwner(
             ZLinkLocationOwnerToken owner,
             ZLinkStoreScanCursor cursor,
             long removed,
-            int restartCount) {
+            int restartCount,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        if (cancellation.isCancellationRequested())
+            return failed(
+                    new java.util.concurrent.TimeoutException("host shutdown deadline expired"));
         return provider.scan(
                         new ZLinkStoreScanRequest(AUTHORITY_PREIMAGE_PREFIX, cursor, 1000),
-                        () -> false)
+                        cancellation)
                 .thenCompose(
                         result -> {
                             if (result instanceof ZLinkStoreScanExpired) {
@@ -2744,7 +2754,8 @@ final class ZLinkProviderAuthorityRepository {
                                             new IllegalStateException(
                                                     "authority cleanup scan repeatedly expired"));
                                 }
-                                return removeAllByOwner(owner, null, removed, restartCount + 1);
+                                return removeAllByOwner(
+                                        owner, null, removed, restartCount + 1, cancellation);
                             }
                             ZLinkStoreScanPage page = ((ZLinkStoreScanPageResult) result).value();
                             List<ZLinkStoreCondition> conditions = new ArrayList<>();
@@ -2762,9 +2773,13 @@ final class ZLinkProviderAuthorityRepository {
                                 }
                             }
                             if (!mutations.isEmpty()) {
+                                if (cancellation.isCancellationRequested())
+                                    return failed(
+                                            new java.util.concurrent.TimeoutException(
+                                                    "host shutdown deadline expired"));
                                 return provider.write(
                                                 new ZLinkStoreWriteRequest(conditions, mutations),
-                                                () -> false)
+                                                cancellation)
                                         .thenCompose(
                                                 write -> {
                                                     if (write instanceof ZLinkStoreWriteApplied) {
@@ -2773,7 +2788,8 @@ final class ZLinkProviderAuthorityRepository {
                                                                 page.nextCursor(),
                                                                 Math.addExact(
                                                                         removed, mutations.size()),
-                                                                restartCount);
+                                                                restartCount,
+                                                                cancellation);
                                                     }
                                                     if (restartCount >= 8) {
                                                         return failed(
@@ -2783,11 +2799,15 @@ final class ZLinkProviderAuthorityRepository {
                                                                                 + " conflicted"));
                                                     }
                                                     return removeAllByOwner(
-                                                            owner, null, removed, restartCount + 1);
+                                                            owner,
+                                                            null,
+                                                            removed,
+                                                            restartCount + 1,
+                                                            cancellation);
                                                 });
                             }
                             return continueOwnerCleanupScan(
-                                    owner, page.nextCursor(), removed, restartCount);
+                                    owner, page.nextCursor(), removed, restartCount, cancellation);
                         });
     }
 
@@ -2795,10 +2815,11 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkLocationOwnerToken owner,
             ZLinkStoreScanCursor cursor,
             long removed,
-            int restartCount) {
+            int restartCount,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         return cursor == null
                 ? completed(removed)
-                : removeAllByOwner(owner, cursor, removed, restartCount);
+                : removeAllByOwner(owner, cursor, removed, restartCount, cancellation);
     }
 
     private CompletionStage<List<LoadedParticipant>> loadParticipants(

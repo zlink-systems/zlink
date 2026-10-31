@@ -3992,9 +3992,13 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostReconcilesRouteMeshCo
     EXPECT_EQ (connected.end (),
                std::find (connected.begin (), connected.end (), "inproc://route-invalid-dealer"));
 
-    ASSERT_EQ (1, store->remove_all_by_owner (live_owner_token (*store, "owner-route-remote"))
-                    .result ()
-                    .value ());
+    ASSERT_EQ (
+      location_write_status_t::stored,
+      store
+        ->remove_mesh_node ({"route.mesh", zlink::routing_id_t::from ("route-a-remote-node")},
+                            live_owner_token (*store, "owner-route-remote"))
+        .result ()
+        .value ());
     EXPECT_TRUE (wait_until ([&] {
         const auto connections = route.list_connections ();
         return std::find (connections.begin (), connections.end (), "inproc://route-remote")
@@ -4004,10 +4008,13 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostReconcilesRouteMeshCo
     }));
 
     service.stop ();
-    ASSERT_EQ (1,
-               store->remove_all_by_owner (live_owner_token (*store, "owner-route-invalid-dealer"))
-                 .result ()
-                 .value ());
+    ASSERT_EQ (
+      location_write_status_t::stored,
+      store
+        ->remove_mesh_node ({"route.mesh", zlink::routing_id_t::from ("route-dealer-peer")},
+                            live_owner_token (*store, "owner-route-invalid-dealer"))
+        .result ()
+        .value ());
     runtime->stop ();
 }
 
@@ -4172,9 +4179,13 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
                                                   "inproc://route-drain-remote"));
     }
 
-    ASSERT_EQ (1, store->remove_all_by_owner (live_owner_token (*store, "owner-route-drain-remote"))
-                    .result ()
-                    .value ());
+    ASSERT_EQ (
+      location_write_status_t::stored,
+      store
+        ->remove_mesh_node ({"route.drain", zlink::routing_id_t::from ("route-z-drain-remote")},
+                            live_owner_token (*store, "owner-route-drain-remote"))
+        .result ()
+        .value ());
     EXPECT_TRUE (wait_until ([&] {
         const auto connections = route.list_connections ();
         return std::find (connections.begin (), connections.end (), "inproc://route-drain-remote")
@@ -4250,10 +4261,13 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostUsesRouteMeshInitiato
     lower_service.stop ();
     lower_runtime->stop ();
 
-    ASSERT_EQ (1,
-               store->remove_all_by_owner (live_owner_token (*store, "owner-route-higher-remote"))
-                 .result ()
-                 .value ());
+    ASSERT_EQ (
+      location_write_status_t::stored,
+      store
+        ->remove_mesh_node ({"route.lower", zlink::routing_id_t::from ("route-z-remote-node")},
+                            live_owner_token (*store, "owner-route-higher-remote"))
+        .result ()
+        .value ());
 
     auto higher_runtime =
       std::make_shared<location_runtime_t> (*store, options, "owner-route-higher-local");
@@ -4309,9 +4323,13 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostUsesRouteMeshInitiato
 
     higher_service.stop ();
     higher_runtime->stop ();
-    ASSERT_EQ (1, store->remove_all_by_owner (live_owner_token (*store, "owner-route-lower-remote"))
-                    .result ()
-                    .value ());
+    ASSERT_EQ (
+      location_write_status_t::stored,
+      store
+        ->remove_mesh_node ({"route.higher", zlink::routing_id_t::from ("route-a-remote-node")},
+                            live_owner_token (*store, "owner-route-lower-remote"))
+        .result ()
+        .value ());
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, AppStreamHostStartsAndStopsTcpListener)

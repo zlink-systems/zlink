@@ -191,7 +191,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
 
     internal async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
-        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _lifecycleGate.WaitAsync().ConfigureAwait(false);
         try
         {
             var stop = await _lane
@@ -242,16 +242,19 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 {
                     if (stop.Value.OwnerToken is { } token)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         await ObserveStoreAsync(
                                 () => _store.RemoveAllByOwnerAsync(token, cancellationToken),
                                 "release"
                             )
                             .ConfigureAwait(false);
+                        cancellationToken.ThrowIfCancellationRequested();
                         _ = await ObserveStoreAsync(
                                 () => _store.ReleaseOwnerLeaseAsync(token, cancellationToken),
                                 "release"
                             )
                             .ConfigureAwait(false);
+                        cancellationToken.ThrowIfCancellationRequested();
                     }
                     await _lane
                         .RunAsync(() =>
@@ -329,12 +332,14 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
 
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (cleanup.Value is { } token)
                     _ = await ObserveStoreAsync(
                             () => _store.ReleaseOwnerLeaseAsync(token, cancellationToken),
                             "release"
                         )
                         .ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 await _lane
                     .RunAsync(() =>
                     {
@@ -346,7 +351,8 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             catch (Exception exception)
             {
                 RecordStoreFailure(exception.Message);
-                StartHeartbeatAfterCleanupFailure();
+                if (!cancellationToken.IsCancellationRequested)
+                    StartHeartbeatAfterCleanupFailure();
                 throw;
             }
             await _lane.RunAsync(() => _ownerCleanedForDrain = true).ConfigureAwait(false);
@@ -502,10 +508,9 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            // Drain cleanup removes every row owned by this runtime before it
-            // releases the owner lease. Auto-connect teardown still needs to
-            // disconnect sockets, but its per-descriptor delete is then
-            // already complete and must not require the released lease again.
+            // Owner cleanup releases the lifecycle lease and preserves publisher
+            // descriptors. Teardown after that release only closes local resources;
+            // it cannot delete the descriptor using another lifecycle's lease.
             var token = await _lane
                 .RunAsync(() =>
                 {

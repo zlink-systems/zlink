@@ -332,13 +332,15 @@ class location_runtime_t
                     auto pending = request ();
                     const auto completed = detail::observe_task_result_for (
                       pending, remaining_until (deadline_at), std::stop_token{});
-                    if (!completed)
+                    if (!completed) {
+                        pending.result ().value ();
                         throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
                                                                "owner lease cleanup timed out");
+                    }
                     completed->value ();
                 };
-                await_cleanup ([&] { return _store->remove_all_by_owner (*token); });
-                await_cleanup ([&] { return _store->release_owner_lease (*token); });
+                await_cleanup ([&] { return _store->remove_all_by_owner (*token, deadline_at); });
+                await_cleanup ([&] { return _store->release_owner_lease (*token, deadline_at); });
                 _lane.run_checked ([this] { clear_owner_lease_on_lane (); }).get ();
             }
             return true;
@@ -881,7 +883,7 @@ class location_runtime_t
                 if (remaining <= std::chrono::milliseconds::zero ()) {
                     record_failure ("owner lease cancellation release timed out");
                 } else {
-                    auto release_task = _store->release_owner_lease (*token);
+                    auto release_task = _store->release_owner_lease (*token, deadline_at);
                     const auto released = release_task.result_for (remaining);
                     if (!released) {
                         record_failure ("owner lease cancellation release timed out");

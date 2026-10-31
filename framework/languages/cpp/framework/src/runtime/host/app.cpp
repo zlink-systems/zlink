@@ -4195,7 +4195,7 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
                      : shutdown_force_reason_t::teardown_failed);
     }
 
-    if (std::holds_alternative<shutdown_completed_t> (result)) {
+    {
         try {
             auto provider = state.services.build_provider ();
             if (auto location_runtime = provider.get<runtime::location_runtime_t> ()) {
@@ -4264,8 +4264,11 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
               lock, deadline_at, [&] { return state.teardown_complete; });
         }
     }
-    if (!teardown_completed)
+    if (!teardown_completed) {
         state.termination_operation.cleanup_cancellation.request_stop ();
+        std::unique_lock lock (state.termination_teardown_mutex);
+        state.termination_teardown_changed.wait (lock, [&] { return state.teardown_complete; });
+    }
     if (!teardown_completed && terminal.outcome == termination_outcome_t::stopped) {
         terminal.outcome = termination_outcome_t::force_stopped;
         terminal.reason = termination_reason_t::deadline_exceeded;
