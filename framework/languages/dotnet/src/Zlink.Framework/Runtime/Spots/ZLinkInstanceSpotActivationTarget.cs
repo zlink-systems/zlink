@@ -923,7 +923,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     .ReleaseEndedReservationAsync(
                         entry.Key,
                         snapshot.StoreVersion,
-                        cancellationToken
+                        creationRecovery: null,
+                        cancellationToken: cancellationToken
                     )
                     .ConfigureAwait(false)
             )
