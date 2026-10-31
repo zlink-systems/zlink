@@ -620,7 +620,7 @@ class socket_base_t : public own_t,
     // with the final owner-progress lease so neither side stops an executor
     // that the other has just adopted.
     int acquire_monitor_async_command_processing ();
-    void release_monitor_async_command_processing (bool wait_for_quiescence_);
+    void release_monitor_async_command_processing ();
     void request_unowned_async_command_processing_stop (
       bool wait_for_quiescence_ = false);
     bool stop_unowned_async_command_processing_at_idle ();
