@@ -17,6 +17,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
@@ -187,6 +188,61 @@ final class ZLinkSerialExecutionQueueTest {
             release.complete(null);
             owner.close();
             foreign.close();
+        }
+    }
+
+    @Test
+    void cancellingManagedHandlerDispatchKeepsSharedHandlerStageAvailable() throws Exception {
+        var executor = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        var sharedReply = new CompletableFuture<String>();
+        var handler = new SharedFutureHandler(sharedReply);
+        var invocation =
+                ZLinkHandlerMethodInvoker.prepare(
+                        SharedFutureHandler.class.getMethod("handle"), List.of());
+        var firstManaged = new AtomicReference<CompletableFuture<Object>>();
+
+        var firstDispatch =
+                queue.enqueue(
+                                () -> {
+                                    var managed =
+                                            ZLinkSerialExecutionQueue.manageCurrentInTurn(
+                                                    invocation.invoke(handler));
+                                    firstManaged.set(managed.toCompletableFuture());
+                                    return managed.thenApply(ignored -> null);
+                                },
+                                null)
+                        .toCompletableFuture();
+        try {
+            executor.take().run();
+            assertTrue(firstManaged.get().cancel(false));
+            assertFalse(sharedReply.isDone());
+            assertTrue(firstDispatch.isCompletedExceptionally());
+
+            var secondManaged = new AtomicReference<CompletableFuture<Object>>();
+            var secondStarted = new CompletableFuture<Void>();
+            var secondDispatch =
+                    queue.enqueue(
+                                    () -> {
+                                        var managed =
+                                                ZLinkSerialExecutionQueue.manageCurrentInTurn(
+                                                        invocation.invoke(handler));
+                                        secondManaged.set(managed.toCompletableFuture());
+                                        secondStarted.complete(null);
+                                        return managed.thenApply(ignored -> null);
+                                    },
+                                    null)
+                            .toCompletableFuture();
+            executor.runUntil(secondStarted);
+
+            assertFalse(sharedReply.isDone());
+            sharedReply.complete("reply");
+            executor.runUntil(secondDispatch);
+            secondDispatch.get(3, TimeUnit.SECONDS);
+            assertEquals("reply", secondManaged.get().get(3, TimeUnit.SECONDS));
+        } finally {
+            sharedReply.complete("cleanup");
+            queue.close();
         }
     }
 
@@ -2898,6 +2954,18 @@ final class ZLinkSerialExecutionQueueTest {
                 ZLinkExecutionLanePolicy.generic(),
                 ZLinkSerialExecutionQueue.DEFAULT_LIFECYCLE_BURST_LIMIT,
                 budget);
+    }
+
+    private static final class SharedFutureHandler {
+        private final CompletionStage<String> reply;
+
+        private SharedFutureHandler(CompletionStage<String> reply) {
+            this.reply = reply;
+        }
+
+        public CompletionStage<String> handle() {
+            return reply;
+        }
     }
 
     private static final class CountingExecutor implements Executor {

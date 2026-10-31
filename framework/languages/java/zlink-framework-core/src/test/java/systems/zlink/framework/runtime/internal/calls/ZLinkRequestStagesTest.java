@@ -4,18 +4,122 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
+
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 class ZLinkRequestStagesTest {
+    @Test
+    void cancellationForwardingDoesNotCreateAnAdmissionDependentStage() {
+        var reply = new CompletableFuture<String>();
+        var admission = ZLinkCompletionBridge.<Void>newCancellationFuture();
+
+        ZLinkRequestStages.observe(reply, admission);
+
+        assertEquals(
+                0,
+                admission.getNumberOfDependents(),
+                "admission cancellation should use the existing terminal future");
+        assertTrue(admission.cancel(false));
+        assertTrue(reply.isCancelled());
+    }
+
+    @Test
+    void cancellationExceptionCompletionStillForwardsCancellation() {
+        var caller = ZLinkCompletionBridge.<String>newCancellationFuture();
+        var waiter = new CompletableFuture<Void>();
+        ZLinkCompletionBridge.forwardCancellation(caller, waiter);
+
+        assertTrue(caller.completeExceptionally(new CancellationException()));
+        assertTrue(waiter.isCancelled());
+    }
+
+    @Test
+    void cancellationDoesNotCallCancelOnAnAlreadyCompletedWaiter() {
+        class TrackingFuture extends CompletableFuture<Void> {
+            private int cancellationCalls;
+
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) {
+                cancellationCalls++;
+                return super.cancel(mayInterruptIfRunning);
+            }
+        }
+        var caller = new CompletableFuture<Void>();
+        var waiter = new TrackingFuture();
+        waiter.complete(null);
+        ZLinkCompletionBridge.forwardCancellation(caller, waiter);
+
+        assertTrue(caller.cancel(false));
+        assertEquals(0, waiter.cancellationCalls);
+    }
+
+    @Test
+    void terminalObserverDoesNotAddACompletionStageAndRunsOnceOnCancellation() {
+        var observations = new AtomicInteger();
+        var cancellation = new AtomicReference<Throwable>();
+        var result =
+                ZLinkCompletionBridge.<String>newCancellationFuture(
+                        (completed, failure) -> {
+                            assertTrue(completed.isCancelled());
+                            cancellation.set(failure);
+                            observations.incrementAndGet();
+                        });
+
+        assertEquals(0, result.getNumberOfDependents());
+        assertTrue(result.cancel(false));
+        assertEquals(1, observations.get());
+        assertInstanceOf(CancellationException.class, cancellation.get());
+    }
+
+    @Test
+    void throwingTerminalObserverDoesNotBreakCompletionOrDependents() {
+        var result =
+                ZLinkCompletionBridge.<String>newCancellationFuture(
+                        (completed, failure) -> {
+                            throw new IllegalStateException("observer failure");
+                        });
+        var dependentCalls = new AtomicInteger();
+        result.thenRun(dependentCalls::incrementAndGet);
+
+        assertTrue(result.complete("reply"));
+        assertEquals(1, dependentCalls.get());
+    }
+
+    @Test
+    void timeoutMethodsFinishTheExistingTerminalFutureWithoutAddingAStage() throws Exception {
+        var timeout = new CompletableFuture<Throwable>();
+        var timedOut =
+                ZLinkCompletionBridge.<String>newCancellationFuture(
+                        (completed, failure) -> timeout.complete(failure));
+        timedOut.orTimeout(0, TimeUnit.MILLISECONDS);
+
+        assertThrows(CompletionException.class, timedOut::join);
+        assertInstanceOf(TimeoutException.class, timeout.get(5, TimeUnit.SECONDS));
+        assertEquals(0, timedOut.getNumberOfDependents());
+
+        var completion = new CompletableFuture<Throwable>();
+        var completed =
+                ZLinkCompletionBridge.<String>newCancellationFuture(
+                        (future, failure) -> completion.complete(failure));
+        assertSame(completed, completed.completeOnTimeout("fallback", 0, TimeUnit.MILLISECONDS));
+        assertEquals("fallback", completed.join());
+        assertNull(completion.get(5, TimeUnit.SECONDS));
+        assertEquals(0, completed.getNumberOfDependents());
+    }
+
     @Test
     void successfulReplyCompletesMissingAdmissionObservation() {
         var reply = new CompletableFuture<String>();
