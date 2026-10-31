@@ -13,6 +13,7 @@ import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.beans.factory.config.DependencyDescriptor;
+import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.beans.factory.support.AutowireCandidateResolver;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.core.DefaultParameterNameDiscoverer;
@@ -38,6 +39,7 @@ import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.handlers.ZLinkStreamPacket;
 import systems.zlink.framework.handlers.ZLinkStreamRaw;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkTypeAwareHandlerActivator;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
@@ -67,7 +69,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
+final class ZLinkSpringHandlerFactory
+        implements ZLinkHandlerActivator, ZLinkTypeAwareHandlerActivator {
     private static final String CLOSE_METHOD_NAME = "close";
     private static final String PRE_DESTROY_ANNOTATION_CLASS_NAME = "jakarta.annotation.PreDestroy";
     private static final String ACTIVATION_BEAN_NAME_SUFFIX = "#zlinkActivation";
@@ -103,8 +106,25 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
 
     @Override
     public PreparedConstruction prepareConstruction(Class<?> type, Set<Class<?>> runtimeServices) {
-        HandlerPlan plan = createHandlerPlan(type, runtimeServices);
+        HandlerConstruction plan =
+                createHandlerConstruction(handlerRegistration(type), runtimeServices);
         return (activation, resolver) -> activation.createPrepared(plan, resolver);
+    }
+
+    @Override
+    public Activation reusableActivation(
+            Class<?> handlerType,
+            ZLinkTypeAwareHandlerActivator.RuntimeServiceLookup runtimeServices) {
+        HandlerPlan plan = handlerPlans.get(handlerType);
+        if (plan == null || plan.singletonBeanName == null) {
+            return null;
+        }
+        for (Class<?> dependencyType : plan.constructorDependencies) {
+            if (runtimeServices.contains(dependencyType)) {
+                return null;
+            }
+        }
+        return plan.reusableActivation;
     }
 
     private String validateDependency(DependencyDescriptor parameter) {
@@ -279,33 +299,24 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
 
         @Override
         public Object create(Class<?> handlerType, DependencyResolver dependencyResolver) {
-            return create(handlerType, handlerPlan(handlerType), dependencyResolver);
+            return create(handlerPlan(handlerType), dependencyResolver);
         }
 
         @Override
         public Object createPrepared(Object construction, DependencyResolver resolver) {
-            if (construction instanceof HandlerPlan plan) {
-                return create(plan.constructor().constructor().getDeclaringClass(), plan, resolver);
+            if (construction instanceof HandlerConstruction plan) {
+                return create(plan, resolver);
             }
             return Activation.super.createPrepared(construction, resolver);
         }
 
-        private Object create(
-                Class<?> handlerType, HandlerPlan plan, DependencyResolver dependencyResolver) {
+        private Object create(HandlerConstruction plan, DependencyResolver dependencyResolver) {
             if (closed) {
                 throw new IllegalStateException("Spring handler activation is closed");
             }
             ConstructorPlan constructor = plan.constructor();
-            try {
-                Object[] arguments = resolveArguments(constructor, dependencyResolver);
-                Object instance = constructor.constructor().newInstance(arguments);
-                beanFactory.autowireBean(instance);
-                return beanFactory.initializeBean(instance, plan.metadata().beanName());
-            } catch (ReflectiveOperationException failure) {
-                throw new IllegalStateException(
-                        "failed to construct Framework-owned handler: " + handlerType.getName(),
-                        unwrap(failure));
-            }
+            Object[] arguments = resolveArguments(constructor, dependencyResolver);
+            return constructHandler(plan, arguments);
         }
 
         private Object[] resolveArguments(
@@ -383,10 +394,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
             return arguments;
         }
 
-        /**
-         * A shortcut that names an already created singleton resolves to that instance; Spring's
-         * resolution would return the same object, so no per-dispatch descriptor is built.
-         */
+        /** A prepared singleton shortcut resolves directly by bean name. */
         private Object createdSingleton(String shortcut) {
             return shortcut != null
                             && beanFactory instanceof ConfigurableListableBeanFactory configurable
@@ -440,8 +448,74 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         }
     }
 
-    private HandlerPlan handlerPlan(Class<?> handlerType) {
-        // Keep the bound mapping callback off the prepared dispatch path.
+    private final class SharedSpringActivation implements Activation {
+        private final HandlerConstruction construction;
+
+        private SharedSpringActivation(HandlerConstruction construction) {
+            this.construction = construction;
+        }
+
+        @Override
+        public Object create(Class<?> handlerType) {
+            if (handlerType != construction.registration().handlerType) {
+                throw new IllegalArgumentException(
+                        "shared handler activation belongs to "
+                                + construction.registration().handlerType.getName());
+            }
+            ConstructorPlan constructor = construction.constructor();
+            ParameterPlan[] parameters = constructor.parameters();
+            Object[] arguments = parameters.length == 0 ? null : new Object[parameters.length];
+            for (int index = 0; index < parameters.length; index++) {
+                ParameterPlan parameter = parameters[index];
+                if (parameter.descriptor() == null || parameter.shortcut() == null) {
+                    throw new IllegalStateException(
+                            "shared handler construction has a scoped dependency");
+                }
+                arguments[index] = beanFactory.getBean(parameter.shortcut());
+            }
+            return constructHandler(construction, arguments);
+        }
+
+        @Override
+        public void destroy(Object instance) {
+            destroyOwned(instance);
+        }
+
+        @Override
+        public void close() {}
+    }
+
+    private Object constructHandler(HandlerConstruction construction, Object[] arguments) {
+        Class<?> handlerType = construction.registration().handlerType;
+        try {
+            Object instance = construction.constructor().constructor().newInstance(arguments);
+            beanFactory.autowireBean(instance);
+            return beanFactory.initializeBean(
+                    instance, construction.registration().metadata.beanName());
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException(
+                    "failed to construct Framework-owned handler: " + handlerType.getName(),
+                    unwrap(failure));
+        }
+    }
+
+    private HandlerConstruction handlerPlan(Class<?> handlerType) {
+        HandlerPlan registration = handlerRegistration(handlerType);
+        HandlerConstruction prepared = registration.defaultConstruction;
+        if (prepared != null) {
+            return prepared;
+        }
+        synchronized (registration) {
+            prepared = registration.defaultConstruction;
+            if (prepared == null) {
+                prepared = createHandlerConstruction(registration, Set.of());
+                registration.defaultConstruction = prepared;
+            }
+        }
+        return prepared;
+    }
+
+    private HandlerPlan handlerRegistration(Class<?> handlerType) {
         HandlerPlan prepared = handlerPlans.get(handlerType);
         if (prepared != null) {
             return prepared;
@@ -450,12 +524,65 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     }
 
     private HandlerPlan createHandlerPlan(Class<?> handlerType) {
-        return createHandlerPlan(handlerType, Set.of());
+        HandlerMetadata metadata = HANDLER_METADATA.get(handlerType);
+        SingletonHandlerRegistration singleton = singletonHandlerRegistration(handlerType);
+        return new HandlerPlan(
+                handlerType, metadata, singleton.beanName(), singleton.constructorDependencies());
     }
 
-    private HandlerPlan createHandlerPlan(Class<?> handlerType, Set<Class<?>> runtimeServices) {
+    private SingletonHandlerRegistration singletonHandlerRegistration(Class<?> handlerType) {
+        if (!isZLinkManagedType(handlerType)
+                || handlerType.isInterface()
+                || java.lang.reflect.Modifier.isAbstract(handlerType.getModifiers())
+                || !(beanFactory instanceof ConfigurableListableBeanFactory configurable)) {
+            return SingletonHandlerRegistration.NOT_REUSABLE;
+        }
+        String[] candidates =
+                BeanFactoryUtils.beanNamesForTypeIncludingAncestors(
+                        configurable, handlerType, true, false);
+        if (candidates.length != 1) {
+            return SingletonHandlerRegistration.NOT_REUSABLE;
+        }
+        String beanName = candidates[0];
+        if (!configurable.containsBeanDefinition(beanName) || !configurable.isSingleton(beanName)) {
+            return SingletonHandlerRegistration.NOT_REUSABLE;
+        }
+        var definition = configurable.getBeanDefinition(beanName);
+        if (!(definition instanceof AbstractBeanDefinition abstractDefinition)) {
+            return SingletonHandlerRegistration.NOT_REUSABLE;
+        }
+        boolean factoryMethod = definition.getFactoryMethodName() != null;
+        boolean supplier = abstractDefinition.getInstanceSupplier() != null;
+        boolean directHandler =
+                abstractDefinition.hasBeanClass()
+                        && abstractDefinition.getBeanClass() == handlerType;
+        if (!factoryMethod && !supplier && !directHandler) {
+            return SingletonHandlerRegistration.NOT_REUSABLE;
+        }
+        Class<?> candidateType = configurable.getType(beanName, false);
+        if (candidateType == null || !handlerType.isAssignableFrom(candidateType)) {
+            return SingletonHandlerRegistration.NOT_REUSABLE;
+        }
+        if (configurable.containsSingleton(beanName)
+                && !handlerType.isInstance(configurable.getBean(beanName))) {
+            return SingletonHandlerRegistration.NOT_REUSABLE;
+        }
+        List<Constructor<?>> constructors = HANDLER_METADATA.get(handlerType).constructors();
+        if (constructors.isEmpty()) {
+            return SingletonHandlerRegistration.NOT_REUSABLE;
+        }
+        List<Class<?>> constructorDependencies =
+                constructors.stream()
+                        .flatMap(constructor -> Arrays.stream(constructor.getParameterTypes()))
+                        .distinct()
+                        .toList();
+        return new SingletonHandlerRegistration(beanName, constructorDependencies);
+    }
+
+    private HandlerConstruction createHandlerConstruction(
+            HandlerPlan registration, Set<Class<?>> runtimeServices) {
         RuntimeException failure = null;
-        HandlerMetadata metadata = HANDLER_METADATA.get(handlerType);
+        HandlerMetadata metadata = registration.metadata;
         for (Constructor<?> constructor : metadata.constructors()) {
             try {
                 Parameter[] parameters = constructor.getParameters();
@@ -478,7 +605,14 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                                     descriptor,
                                     shortcut);
                 }
-                return new HandlerPlan(new ConstructorPlan(constructor, plans), metadata);
+                var constructorPlan = new ConstructorPlan(constructor, plans);
+                var construction = new HandlerConstruction(constructorPlan, registration);
+                if (registration.singletonBeanName != null
+                        && hasOnlySingletonConstructorDependencies(constructorPlan)
+                        && registration.reusableActivation == null) {
+                    registration.reusableActivation = new SharedSpringActivation(construction);
+                }
+                return construction;
             } catch (NoSuchBeanDefinitionException unavailable) {
                 failure = unavailable;
             }
@@ -486,13 +620,83 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         if (failure != null) {
             throw failure;
         }
-        throw new IllegalStateException("No public constructor: " + handlerType.getName());
+        throw new IllegalStateException(
+                "No public constructor: " + registration.handlerType.getName());
+    }
+
+    private boolean hasOnlySingletonConstructorDependencies(ConstructorPlan constructor) {
+        for (ParameterPlan parameter : constructor.parameters()) {
+            if (parameter.descriptor() == null
+                    || parameter.shortcut() == null
+                    || isLazyDependency(parameter.descriptor(), parameter.shortcut())
+                    || !isKnownSingletonDependency(parameter.shortcut(), parameter.type())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isLazyDependency(DependencyDescriptor descriptor, String beanName) {
+        if (!(beanFactory instanceof DefaultListableBeanFactory source)) {
+            return false;
+        }
+        return source.getAutowireCandidateResolver()
+                        .getLazyResolutionProxyClass(descriptor, beanName)
+                != null;
+    }
+
+    private boolean isKnownSingletonDependency(String beanName, Class<?> dependencyType) {
+        if (!(beanFactory instanceof ConfigurableListableBeanFactory configurable)
+                || !configurable.isSingleton(beanName)
+                || !configurable.containsBeanDefinition(beanName)) {
+            return false;
+        }
+        var definition = configurable.getBeanDefinition(beanName);
+        if (!(definition instanceof AbstractBeanDefinition abstractDefinition)) {
+            return false;
+        }
+        boolean factoryMethod = definition.getFactoryMethodName() != null;
+        boolean supplier = abstractDefinition.getInstanceSupplier() != null;
+        boolean directDependency =
+                abstractDefinition.hasBeanClass()
+                        && dependencyType.isAssignableFrom(abstractDefinition.getBeanClass());
+        if (!factoryMethod && !supplier && !directDependency) {
+            return false;
+        }
+        Class<?> candidateType = configurable.getType(beanName, false);
+        return candidateType != null && dependencyType.isAssignableFrom(candidateType);
     }
 
     private record HandlerMetadata(
             List<Constructor<?>> constructors, String beanName, boolean springInvokesClose) {}
 
-    private record HandlerPlan(ConstructorPlan constructor, HandlerMetadata metadata) {}
+    private static final class HandlerPlan {
+        private final Class<?> handlerType;
+        private final HandlerMetadata metadata;
+        private final String singletonBeanName;
+        private final List<Class<?>> constructorDependencies;
+        private volatile HandlerConstruction defaultConstruction;
+        private volatile Activation reusableActivation;
+
+        private HandlerPlan(
+                Class<?> handlerType,
+                HandlerMetadata metadata,
+                String singletonBeanName,
+                List<Class<?>> constructorDependencies) {
+            this.handlerType = handlerType;
+            this.metadata = metadata;
+            this.singletonBeanName = singletonBeanName;
+            this.constructorDependencies = constructorDependencies;
+        }
+    }
+
+    private record SingletonHandlerRegistration(
+            String beanName, List<Class<?>> constructorDependencies) {
+        private static final SingletonHandlerRegistration NOT_REUSABLE =
+                new SingletonHandlerRegistration(null, List.of());
+    }
+
+    private record HandlerConstruction(ConstructorPlan constructor, HandlerPlan registration) {}
 
     private record ConstructorPlan(Constructor<?> constructor, ParameterPlan[] parameters) {}
 

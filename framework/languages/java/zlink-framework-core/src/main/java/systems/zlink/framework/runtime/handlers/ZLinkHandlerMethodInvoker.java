@@ -185,6 +185,7 @@ public final class ZLinkHandlerMethodInvoker {
             return arguments;
         }
 
+        @SuppressWarnings("unchecked")
         public CompletionStage<Object> invoke(Object handler, Object... values) {
             Object[] arguments = arguments(values);
             ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
@@ -194,7 +195,7 @@ public final class ZLinkHandlerMethodInvoker {
             try {
                 Object result = method.invoke(handler, arguments);
                 if (result instanceof CompletionStage<?> stage) {
-                    return stage.thenApply(value -> (Object) value);
+                    return (CompletionStage<Object>) stage;
                 }
                 return CompletableFuture.completedFuture(result);
             } catch (IllegalAccessException | InvocationTargetException ex) {
