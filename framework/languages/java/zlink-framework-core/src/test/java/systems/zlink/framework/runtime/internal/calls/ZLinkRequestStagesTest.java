@@ -99,22 +99,24 @@ class ZLinkRequestStagesTest {
     }
 
     @Test
-    void timeoutMethodsFinishTheExistingTerminalFutureWithoutAddingAStage() {
-        var timeout = new AtomicReference<Throwable>();
+    void timeoutMethodsFinishTheExistingTerminalFutureWithoutAddingAStage() throws Exception {
+        var timeout = new CompletableFuture<Throwable>();
         var timedOut =
                 ZLinkCompletionBridge.<String>newCancellationFuture(
-                        (completed, failure) -> timeout.set(failure));
+                        (completed, failure) -> timeout.complete(failure));
         timedOut.orTimeout(0, TimeUnit.MILLISECONDS);
 
         assertThrows(CompletionException.class, timedOut::join);
-        assertInstanceOf(TimeoutException.class, timeout.get());
+        assertInstanceOf(TimeoutException.class, timeout.get(5, TimeUnit.SECONDS));
         assertEquals(0, timedOut.getNumberOfDependents());
 
+        var completion = new CompletableFuture<Throwable>();
         var completed =
                 ZLinkCompletionBridge.<String>newCancellationFuture(
-                        (future, failure) -> assertNull(failure));
+                        (future, failure) -> completion.complete(failure));
         assertSame(completed, completed.completeOnTimeout("fallback", 0, TimeUnit.MILLISECONDS));
         assertEquals("fallback", completed.join());
+        assertNull(completion.get(5, TimeUnit.SECONDS));
         assertEquals(0, completed.getNumberOfDependents());
     }
 

@@ -251,6 +251,52 @@ final class ZLinkSpringHandlerFactoryTest {
     }
 
     @Test
+    void nestedRuntimeServiceOverrideHasTheSamePrecedenceInTypedAndRegularActivation() {
+        var beans = new DefaultListableBeanFactory();
+        var springDependency = new FieldDependency("spring");
+        beans.registerBeanDefinition(
+                "fieldDependency",
+                new RootBeanDefinition(FieldDependency.class, () -> springDependency));
+        var definition = new RootBeanDefinition(RuntimeOverrideHandler.class);
+        definition.setAutowireMode(AbstractBeanDefinition.AUTOWIRE_CONSTRUCTOR);
+        beans.registerBeanDefinition("runtimeOverrideHandler", definition);
+        try (var context = new AnnotationConfigApplicationContext(beans)) {
+            context.refresh();
+            var factory = new ZLinkSpringHandlerFactory(context.getBeanFactory());
+            factory.prepare(RuntimeOverrideHandler.class);
+            var runtimeDependency = new FieldDependency("runtime");
+            var services =
+                    ZLinkHandlerActivator.services(ZLinkHandlerActivator.services(factory))
+                            .add(FieldDependency.class, runtimeDependency);
+            services.prepare(RuntimeOverrideHandler.class);
+
+            var regularActivation = ZLinkHandlerInstanceOwner.openActivation(services);
+            var regularHandler =
+                    (RuntimeOverrideHandler)
+                            ZLinkHandlerInstanceOwner.createSingle(
+                                    regularActivation, RuntimeOverrideHandler.class);
+            try {
+                assertSame(runtimeDependency, regularHandler.dependency);
+            } finally {
+                ZLinkHandlerInstanceOwner.closeSingle(regularActivation, regularHandler);
+            }
+
+            var typedActivation =
+                    ZLinkHandlerInstanceOwner.openActivation(
+                            services, RuntimeOverrideHandler.class);
+            var typedHandler =
+                    (RuntimeOverrideHandler)
+                            ZLinkHandlerInstanceOwner.createSingle(
+                                    typedActivation, RuntimeOverrideHandler.class);
+            try {
+                assertSame(runtimeDependency, typedHandler.dependency);
+            } finally {
+                ZLinkHandlerInstanceOwner.closeSingle(typedActivation, typedHandler);
+            }
+        }
+    }
+
+    @Test
     void lazyConstructorDependencyRemainsLazyOnThePerDispatchActivationPath() {
         LazyConstructorHandler.reset();
         LazyDependency.created.set(0);

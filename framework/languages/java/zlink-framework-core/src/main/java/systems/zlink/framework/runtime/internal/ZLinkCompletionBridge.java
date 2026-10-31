@@ -155,6 +155,7 @@ public final class ZLinkCompletionBridge {
             // JDK AsyncSupply completes internally and bypasses complete().
             executor.execute(
                     () -> {
+                        if (isDone()) return;
                         try {
                             complete(supplier.get());
                         } catch (Throwable failure) {

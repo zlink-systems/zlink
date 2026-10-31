@@ -245,8 +245,10 @@ public interface ZLinkHandlerActivator {
 
         @Override
         public Activation reusableActivation(
-                Class<?> handlerType, ZLinkTypeAwareHandlerActivator.RuntimeServiceLookup ignored) {
-            if (findRuntimeService(handlerType) != null) {
+                Class<?> handlerType,
+                ZLinkTypeAwareHandlerActivator.RuntimeServiceLookup runtimeServices) {
+            if (runtimeServices != ZLinkTypeAwareHandlerActivator.RuntimeServiceLookup.NONE
+                    || findRuntimeService(handlerType) != null) {
                 return null;
             }
             return fallback instanceof ZLinkTypeAwareHandlerActivator typeAware
