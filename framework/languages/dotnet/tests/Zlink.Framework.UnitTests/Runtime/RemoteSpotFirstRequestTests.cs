@@ -25,15 +25,20 @@ public sealed class RemoteSpotFirstRequestTests
     [Fact]
     public async Task Actual_connection_refusal_ends_request_before_its_deadline()
     {
-        // A bound TCP socket that never listens rejects connections and remains reserved
-        // for this test. This is a transport failure rather than an orderly owner close.
-        using var refused = new Socket(
-            AddressFamily.InterNetwork,
-            System.Net.Sockets.SocketType.Stream,
-            ProtocolType.Tcp
-        );
-        refused.Bind(new IPEndPoint(IPAddress.Loopback, 0));
-        var endpoint = $"tcp://127.0.0.1:{((IPEndPoint)refused.LocalEndPoint!).Port}";
+        // Release the port before connecting: a bound, non-listening TCP socket
+        // drops incoming SYNs on macOS instead of refusing the connection.
+        string endpoint;
+        using (
+            var reservation = new Socket(
+                AddressFamily.InterNetwork,
+                System.Net.Sockets.SocketType.Stream,
+                ProtocolType.Tcp
+            )
+        )
+        {
+            reservation.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            endpoint = $"tcp://127.0.0.1:{((IPEndPoint)reservation.LocalEndPoint!).Port}";
+        }
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var requester = new ZLinkManagedMeshNode(context, "connection-refusal");
         var target = RoutingId.From("unreachable-owner");
@@ -57,10 +62,11 @@ public sealed class RemoteSpotFirstRequestTests
         );
         Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, error.Result);
         Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(30));
-        Assert.Equal(
-            ConnectionAttemptState.AttemptFailed,
-            requester.ObservePeerRoute(target).Attempt?.State
-        );
+        var attempt = requester.ObservePeerRoute(target).Attempt;
+        Assert.NotNull(attempt);
+        Assert.Equal(ConnectionAttemptState.AttemptFailed, attempt.Value.State);
+        Assert.Equal(ConnectionFailureKind.Refused, attempt.Value.LastFailure.Kind);
+        Assert.Equal(ConnectionFailureStage.Transport, attempt.Value.LastFailure.Stage);
     }
 
     [Fact]
