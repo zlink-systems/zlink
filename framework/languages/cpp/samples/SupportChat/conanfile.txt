@@ -1,6 +1,6 @@
 [requires]
 zlink/0.17.5
-zlink-framework/0.30.3
+zlink-framework/0.31.0
 
 [generators]
 CMakeDeps
