@@ -88,7 +88,7 @@ struct contract_zmp_monitor_t
     }
     bool next (zlink::socket_monitor_event_record_t *record_)
     {
-        if (!runtime.dequeue_worker_event_nowait (record_))
+        if (!runtime.copy_worker_event (record_))
             return false;
         runtime.complete_worker_event ();
         return true;

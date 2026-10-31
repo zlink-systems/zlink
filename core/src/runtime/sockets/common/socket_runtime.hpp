@@ -31,6 +31,7 @@ class io_thread_t;
 class mailbox_t;
 class socket_base_t;
 class socket_lifecycle_coordinator_t;
+class control_runtime_t;
 
 enum
 {
@@ -268,7 +269,6 @@ struct socket_monitor_runtime_t
         event_accounted_bytes (0),
         queue_stop (false),
         task_id (0),
-        task_running (false),
         owns_async_command_processing (false)
     {
     }
@@ -297,10 +297,12 @@ struct socket_monitor_runtime_t
       uint64_t generation_);
     void reset_worker_state (uint64_t hwm_bytes_, uint64_t event_accounted_bytes_);
     void start_task (uint64_t task_id_);
-    bool dequeue_worker_event_nowait (socket_monitor_event_record_t *out_);
-    void requeue_worker_event_front (const socket_monitor_event_record_t &record_);
+    bool copy_worker_event (socket_monitor_event_record_t *out_);
+    void retry_worker_events (control_runtime_t *runtime_);
     void complete_worker_event ();
-    void enqueue_worker_event (const socket_monitor_event_record_t &record_);
+    void enqueue_worker_event (const socket_monitor_event_record_t &record_,
+                               control_runtime_t *runtime_);
+    uint64_t retire_task ();
     void stop_task ();
 
     void *socket;
@@ -321,13 +323,15 @@ struct socket_monitor_runtime_t
     uint64_t event_accounted_bytes;
     bool queue_stop;
     uint64_t task_id;
-    bool task_running;
     // A raw monitor can bootstrap the socket command executor while the
     // application waits only on monitor events. The lease ends with that
     // monitor unless a longer-lived async consumer explicitly takes it over.
     std::atomic<bool> owns_async_command_processing;
     std::set<std::string> ready_connections;
     std::map<std::string, uint8_t> transport_pair_ready_lanes;
+
+  private:
+    void schedule_worker_task_locked (control_runtime_t *runtime_, uint32_t delay_ms_);
 };
 
 // Socket receive state is C2: public attempts, whole records, readiness and
