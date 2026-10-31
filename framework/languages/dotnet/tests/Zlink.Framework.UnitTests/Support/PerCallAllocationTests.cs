@@ -39,4 +39,101 @@ public sealed class PerCallAllocationTests
         );
         Assert.Equal(0, bytes);
     }
+
+    [Theory]
+    [InlineData("single", 0)]
+    [InlineData("single", 16 * 1024)]
+    [InlineData("pair", 0)]
+    [InlineData("pair", 16 * 1024)]
+    [InlineData("async", 0)]
+    [InlineData("async", 16 * 1024)]
+    public async Task Measures_every_call_without_gc_accounting_noise(string mode, int payloadSize)
+    {
+        const int calls = 128;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        if (payloadSize != 0)
+            _sink = new byte[payloadSize];
+        var expected = (GC.GetAllocatedBytesForCurrentThread() - before) * calls;
+
+        void Allocate()
+        {
+            Assert.True(
+                System.Runtime.GCSettings.LatencyMode == System.Runtime.GCLatencyMode.NoGCRegion
+            );
+            if (payloadSize != 0)
+                _sink = new byte[payloadSize];
+        }
+
+        switch (mode)
+        {
+            case "single":
+                Assert.Equal(expected, PerCallAllocation.MinWindow(Allocate, calls));
+                break;
+            case "pair":
+                var pair = PerCallAllocation.MinWindowPair(_ => Allocate(), _ => Allocate(), calls);
+                Assert.Equal(expected, pair.First);
+                Assert.Equal(expected, pair.Second);
+                break;
+            case "async":
+                Assert.Equal(
+                    expected,
+                    await PerCallAllocation.MinWindowAsync(
+                        () =>
+                        {
+                            Allocate();
+                            return ValueTask.CompletedTask;
+                        },
+                        calls
+                    )
+                );
+                break;
+        }
+    }
+
+    [Theory]
+    [InlineData("single")]
+    [InlineData("pair")]
+    [InlineData("async")]
+    public async Task Rejects_a_collection_inside_the_measurement(string mode)
+    {
+        switch (mode)
+        {
+            case "single":
+                Assert.Throws<InvalidOperationException>(() =>
+                    PerCallAllocation.MinWindow(() => GC.Collect(), 1)
+                );
+                break;
+            case "pair":
+                Assert.Throws<InvalidOperationException>(() =>
+                    PerCallAllocation.MinWindowPair(_ => { }, _ => GC.Collect(), 1)
+                );
+                break;
+            case "async":
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    PerCallAllocation.MinWindowAsync(
+                        () =>
+                        {
+                            GC.Collect();
+                            return ValueTask.CompletedTask;
+                        },
+                        1
+                    )
+                );
+                break;
+        }
+        Assert.Equal(0, PerCallAllocation.MinWindow(() => { }, 1));
+    }
+
+    [Fact]
+    public void Releases_the_region_when_the_action_throws()
+    {
+        var failure = new InvalidOperationException("action failed");
+        Assert.Same(
+            failure,
+            Assert.Throws<InvalidOperationException>(() =>
+                PerCallAllocation.MinWindow(() => throw failure, 1)
+            )
+        );
+        Assert.Equal(0, PerCallAllocation.MinWindow(() => { }, 1));
+    }
 }
