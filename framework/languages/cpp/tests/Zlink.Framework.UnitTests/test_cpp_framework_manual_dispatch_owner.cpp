@@ -266,8 +266,7 @@ struct pending_filter_t
     fifo_handler_t &state;
 };
 
-fw::task_t<std::vector<zlink::message_t>>
-native_reply (zlink::async_result_t<std::vector<zlink::message_t>> pending)
+template <typename T> fw::task_t<T> native_result (zlink::async_result_t<T> pending)
 {
     co_return co_await std::move (pending);
 }
@@ -367,6 +366,7 @@ struct native_manual_fixture_t
 
     void request (int value, std::string packet = "request", std::optional<std::string> body = {})
     {
+        constexpr auto timeout = std::chrono::seconds (2);
         messaging::envelope_header_t header;
         header.channel_name = "manual";
         header.kind = messaging::message_kind_t::request;
@@ -377,12 +377,14 @@ struct native_manual_fixture_t
                    header, zlink::message_t::from (*body))
                : messaging::envelope_codec_t{}.encode_parts (header, payload_t{value}, serializers);
         auto messages = std::move (parts).take_items ();
-        replies.push_back (native_reply (client->request ()
-                                           .message (messages[0])
-                                           .message (messages[1])
-                                           .timeout (std::chrono::seconds (2))
-                                           .async ()
-                                           .reply));
+        auto submission =
+          client->request ().message (messages[0]).message (messages[1]).timeout (timeout).async ();
+        // Confirm local admission before submitting the next FIFO request.
+        auto admitted = native_result (std::move (submission.admitted)).result_for (timeout);
+        if (!admitted)
+            throw std::runtime_error ("native request admission timed out");
+        admitted->value ();
+        replies.push_back (native_result (std::move (submission.reply)));
     }
 
     void dump_diagnostics () const
@@ -584,7 +586,7 @@ TEST (ManualDispatchOwner, NativeFailureMatrixSettlesPermitsScopesAndOriginalRep
       {"manual", "default",
        static_cast<std::uint32_t> (fw::runtime::dispatch_limits::receive_batch_bytes)}));
     auto admission =
-      native_reply (fixture.client->request ().message (hello).timeout (2s).async ().reply);
+      native_result (fixture.client->request ().message (hello).timeout (2s).async ().reply);
     auto admitted = admission.result ();
     ASSERT_TRUE (admitted);
     ASSERT_EQ (1u, admitted.value ().size ());
@@ -612,7 +614,7 @@ TEST (ManualDispatchOwner, NativeFailureMatrixSettlesPermitsScopesAndOriginalRep
     auto marker = zlink::message_t::from (
       protocol::encode_liveness (protocol::command::livenessProbe, marker_probe_id));
     auto acknowledged =
-      native_reply (fixture.client->request ().message (marker).timeout (2s).async ().reply);
+      native_result (fixture.client->request ().message (marker).timeout (2s).async ().reply);
     auto marker_reply = acknowledged.result ();
     ASSERT_TRUE (marker_reply);
     ASSERT_EQ (1u, marker_reply.value ().size ());
@@ -622,6 +624,8 @@ TEST (ManualDispatchOwner, NativeFailureMatrixSettlesPermitsScopesAndOriginalRep
     ASSERT_EQ (marker_probe_id, marker_ack.probe_id);
     ASSERT_EQ (6u, fixture.jobs->snapshot ().queued_application_jobs);
     ASSERT_EQ (6u, fixture.server->pending_messages ());
+    ASSERT_TRUE (fixture.held->wait_for_pending_work (1, 2s))
+      << "owner submission did not become pending";
     ASSERT_EQ (1u, fixture.held->pending_work ());
     fixture.held->run_all ();
     EXPECT_EQ ((std::vector<int>{1, 3, 4, 5, 6}), state.pipeline_entries);
