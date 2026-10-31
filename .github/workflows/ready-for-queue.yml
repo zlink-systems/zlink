@@ -81,23 +81,12 @@ jobs:
           echo "Selected languages: cpp=$cpp dotnet=$dotnet java=$java node=$node core_version_changed=$core_version_changed"
 
   core-release-exists:
-    name: Core release exists
+    name: core-release
     needs: gate
     if: needs.gate.result == 'success'
-    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
-    steps:
-      - name: Core version unchanged
-        if: needs.gate.outputs.core_version_changed != 'true'
-        run: echo "Core version is unchanged; release check succeeds."
-
-      - uses: actions/checkout@v5
-        if: needs.gate.outputs.core_version_changed == 'true'
-
-      - name: Check published Core release
-        if: needs.gate.outputs.core_version_changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/check-core-release-exists.sh
+    uses: ./.github/workflows/core-release-check.yml
+    with:
+      core_version_changed: ${{ needs.gate.outputs.core_version_changed }}
 
   framework-cpp:
     name: framework-cpp

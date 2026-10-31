@@ -19,7 +19,7 @@ queue_rules:
       - base=main
       - label=merge-queue
       - -draft
-      - check-success=Core release exists
+      - check-success=core-release / Core release exists
       - check-success=framework-dotnet / dotnet-release-gate
       - check-success=framework-node / node-release-gate
       - check-success=framework-java / linux-x64 / Java 25
