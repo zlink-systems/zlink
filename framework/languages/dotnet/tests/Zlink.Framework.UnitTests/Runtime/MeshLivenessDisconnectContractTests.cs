@@ -73,6 +73,7 @@ public sealed partial class StatefulServiceRuntimeTests
         owner.SetBind("tcp://127.0.0.1:0");
         owner.Start();
         using var peer = context.CreateDealerSocket();
+        using var completions = new TestCompletionPollerDriver(peer);
         var rid = RoutingId.From("control-failure-peer");
         const string peerEndpoint = "inproc://control-failure-peer";
         peer.SetRoutingId(rid);
