@@ -285,6 +285,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     }
 
   private:
+    friend struct location_auto_connect_test_access_t;
     struct target_t
     {
         std::string key;
@@ -544,7 +545,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (!source.available () || descriptor.mesh_name != loop.mesh_name
                 || descriptor.endpoint.empty ()
                 || (loop.local_rid && descriptor.rid.to_hex () == loop.local_rid->to_hex ())
-                || (!loop.local_endpoint.empty () && descriptor.endpoint == loop.local_endpoint)
                 || descriptor.state == framework_runtime_state_t::stopped
                 || descriptor.state == framework_runtime_state_t::error)
                 continue;

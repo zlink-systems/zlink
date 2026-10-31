@@ -773,7 +773,7 @@ final class ZLinkStoreLocationResolversTest {
     }
 
     @Test
-    void autoConnectPeerDiscoveryExcludesExpiredMeshOwnerLeases() {
+    void sameEndpointUsesRidAndOwnerLease() {
         ZLinkMeshNodeDescriptor live =
                 meshNodeDescriptor("mesh", RoutingId.from("live"), "live-owner");
         ZLinkMeshNodeDescriptor expired =
@@ -799,7 +799,12 @@ final class ZLinkStoreLocationResolversTest {
                                                                             NOW.plusSeconds(30),
                                                                             NOW))
                                                             : CompletableFuture.completedFuture(
-                                                                    new ZLinkOwnerLeaseMissing());
+                                                                    new ZLinkOwnerLeaseFound(
+                                                                            new ZLinkLocationOwnerToken(
+                                                                                    "expired-owner",
+                                                                                    1),
+                                                                            NOW,
+                                                                            NOW));
                                             default ->
                                                     throw new UnsupportedOperationException(
                                                             method.getName());
@@ -819,6 +824,22 @@ final class ZLinkStoreLocationResolversTest {
         assertEquals(
                 List.of(RoutingId.from("live")),
                 peers.stream().map(ZLinkAutoConnectPeer::nodeRid).toList());
+        var local =
+                new ZLinkAutoConnectPlanner.Local(
+                        ZLinkAutoConnectType.ROUTE_MESH,
+                        "mesh",
+                        ZLinkLocationRole.ROUTER,
+                        RoutingId.from("aaa-local"),
+                        live.endpoint());
+        assertEquals(1, ZLinkAutoConnectPlanner.computeDesired(local, peers).size());
+        var self =
+                new ZLinkAutoConnectPlanner.Local(
+                        ZLinkAutoConnectType.ROUTE_MESH,
+                        "mesh",
+                        ZLinkLocationRole.ROUTER,
+                        live.rid(),
+                        live.endpoint());
+        assertEquals("self", ZLinkAutoConnectPlanner.decideAll(self, peers).get(0).skipReason());
     }
 
     private static ZLinkMeshNodeDescriptor meshNodeDescriptor(
