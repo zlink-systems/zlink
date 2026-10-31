@@ -97,6 +97,88 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         );
     }
 
+    [Theory]
+    [InlineData((byte)17)]
+    [InlineData((byte)19)]
+    [InlineData((byte)22)]
+    [InlineData((byte)25)]
+    [InlineData((byte)28)]
+    public async Task Decode_failure_request_returns_protocol_terminal(byte command)
+    {
+        await using var fixture = await WireAdmissionFixture.CreateAsync();
+        var request = fixture.CreateRequest();
+        var head = new byte[13];
+        head[0] = 0x5a;
+        head[1] = 0x4d;
+        head[2] = 1;
+        head[3] = command;
+        head[4] = 0xff;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(
+            head.AsSpan(5),
+            request.Correlation
+        );
+        var reply = await fixture.SendAsync(request, head);
+        AssertTerminal(
+            reply,
+            RequestResult.ProtocolError,
+            ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
+        );
+    }
+
+    [Fact]
+    public async Task Decode_failure_truncated_correlation_drops_and_one_way_has_no_reply()
+    {
+        await using var fixture = await WireAdmissionFixture.CreateAsync();
+        var request = fixture.CreateRequest();
+        byte[] head = [0x5a, 0x4d, 1, 19, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        await fixture.AssertDiscardedAsync(head);
+        await fixture.AssertOneWayDiscardedAsync(head.Concat(new byte[] { 0xff }).ToArray());
+        var validCorrelation = head.Concat(new byte[] { 0xff }).ToArray();
+        AssertTerminal(
+            await fixture.SendAsync(request, validCorrelation),
+            RequestResult.ProtocolError,
+            ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
+        );
+    }
+
+    [Fact]
+    public void Decode_failure_recovery_requires_schema_command_and_complete_nonzero_correlation()
+    {
+        foreach (byte command in new byte[] { 17, 19, 22, 25, 26, 27, 28, 38, 47, 48, 49, 54 })
+        {
+            byte[] head =
+            [
+                0x5a,
+                0x4d,
+                1,
+                command,
+                0xff,
+                0xff,
+                0xff,
+                0xff,
+                0xff,
+                0xff,
+                0xff,
+                0xff,
+                0xff,
+            ];
+            Assert.True(
+                ServiceWireConstants.TryRecoverRequestCorrelation(head, out var correlation)
+            );
+            Assert.Equal(ulong.MaxValue, correlation);
+            Assert.False(
+                ServiceWireConstants.TryRecoverRequestCorrelation(head.AsSpan(0, 12), out _)
+            );
+            head.AsSpan(5).Clear();
+            Assert.False(ServiceWireConstants.TryRecoverRequestCorrelation(head, out _));
+        }
+        foreach (byte command in new byte[] { 16, 18, 20, 21, 24, 255 })
+        {
+            byte[] head = [0x5a, 0x4d, 1, command, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+            Assert.False(ServiceWireConstants.TryRecoverRequestCorrelation(head, out _));
+        }
+    }
+
     private static ActorJoinRequest CreateDirectRequest(
         RoutingId sourceRid,
         RoutingId targetRid,
@@ -452,6 +534,41 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                 .Reply;
             Assert.Equal(1, _sourcePoller.Wait(_sourceEvents, TimeSpan.FromSeconds(2)));
             return await replyTask;
+        }
+
+        internal async Task AssertDiscardedAsync(byte[] head)
+        {
+            await using var monitor = Runtime.GetSpotNodeRuntime(MeshName).Node.OpenMeshMonitor();
+            var errors = monitor.Status().ProtocolErrors;
+            using var message = Message.From(head);
+            var pending = _source
+                .Request()
+                .Message(message)
+                .Timeout(TimeSpan.FromMilliseconds(20))
+                .Async(CancellationToken.None)
+                .Reply;
+            Assert.Equal(1, _sourcePoller.Wait(_sourceEvents, TimeSpan.FromSeconds(2)));
+            var failure = await Assert.ThrowsAsync<ZlinkRequestException>(() => pending);
+            Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, failure.Result);
+            AssertTerminal(
+                await SendAsync(CreateRequest(), head.Concat(new byte[] { 0xff }).ToArray()),
+                RequestResult.ProtocolError,
+                ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
+            );
+            Assert.True(monitor.Status().ProtocolErrors >= errors + 2);
+        }
+
+        internal async Task AssertOneWayDiscardedAsync(byte[] head)
+        {
+            using var message = Message.From(head);
+            await _source.Send().Message(message).Async(CancellationToken.None).Admitted;
+            AssertTerminal(
+                await SendAsync(CreateRequest(), head),
+                RequestResult.ProtocolError,
+                ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
+            );
+            using var unexpected = Received.Create();
+            Assert.False(_source.Recv(unexpected, RecvFlags.DontWait));
         }
 
         public async ValueTask DisposeAsync()

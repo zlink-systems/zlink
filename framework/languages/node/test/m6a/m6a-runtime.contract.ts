@@ -1302,6 +1302,59 @@ test('raw protocol errors reply when correlation is recoverable and always repor
   runtime.close();
 });
 
+test('#2512 malformed requests recover only schema correlations and original reply paths', () => {
+  const observed: Array<{ request: boolean; replied: boolean }> = [];
+  const runtime = rawServiceRuntime({
+    descriptor: descriptor('decode-target'),
+    onProtocolError: (event) => observed.push(event)
+  });
+  runtime.start();
+  try {
+    const internals = runtime as unknown as {
+      reportProtocolError(received: {
+        sourceRid: string;
+        requestSeq?: bigint;
+        parts: readonly Buffer[];
+        reply?(parts: readonly Uint8Array[]): void;
+      }): void;
+    };
+    // Schema request bodies all begin with nonzero-u64 correlation. Flags and the
+    // remaining body are deliberately malformed; neither invalidates that field.
+    for (const command of [17, 19, 22, 25, 26, 27, 28, 38, 47, 48, 49, 54]) {
+      const head = Buffer.alloc(13);
+      head.set([0x5a, 0x4d, 1, command, 0xff]);
+      head.writeBigUInt64BE(0xffffffffffffffffn, 5);
+      for (const mode of ['request', 'truncated', 'zero', 'one-way', 'no-token'] as const) {
+        let replies = 0;
+        const bytes = mode === 'truncated' ? head.subarray(0, 12) : Buffer.from(head);
+        if (mode === 'zero') bytes.fill(0, 5);
+        internals.reportProtocolError({
+          sourceRid: 'decode-source',
+          ...(mode === 'one-way' ? {} : { requestSeq: 1n }),
+          parts: [bytes],
+          ...(mode === 'no-token'
+            ? {}
+            : {
+                reply(parts: readonly Uint8Array[]) {
+                  ++replies;
+                  assert.deepEqual(decodeReplyHeader(parts[0]!), {
+                    correlation: 0xffffffffffffffffn,
+                    terminalResult: 104,
+                    failureCode: 16,
+                    tail: Buffer.alloc(0)
+                  });
+                }
+              })
+        });
+        assert.equal(replies, mode === 'request' ? 1 : 0, `${command}/${mode}`);
+        assert.equal(observed.at(-1)!.replied, replies === 1);
+      }
+    }
+  } finally {
+    runtime.close();
+  }
+});
+
 test('unsequenced canonical actorJoin(28) drops with ProtocolError observation and no reply', async () => {
   type UnsequencedReceived = {
     readonly sourceRid: string;

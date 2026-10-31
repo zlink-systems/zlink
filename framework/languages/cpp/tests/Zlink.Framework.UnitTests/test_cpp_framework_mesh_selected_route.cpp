@@ -334,6 +334,96 @@ TEST (CppFrameworkMeshSelectedRoute, ShutdownCompletesUnsubmittedAdmission)
     target.close ();
 }
 
+TEST (CppFrameworkDecodeFailure, RepliesOnlyWithCompleteCorrelationAndRequestToken)
+{
+    mesh::raw_mesh_node_owner_t target (options ("decode-target", 301));
+    target.start ();
+    zlink::router_socket_t remote (target.context ());
+    remote.set_routing_id (zlink::routing_id_t::from ("decode-source"));
+    remote.options ().linger (0ms);
+    remote.bind ("tcp://127.0.0.1:0");
+    backend::raw_route_port_t port (remote);
+    ASSERT_TRUE (target.connect_peer (remote.options ().last_endpoint ()));
+    std::optional<backend::raw_received_t> hello;
+    ASSERT_TRUE (pump_until ({&target}, [&] {
+        if (!hello)
+            hello = port.try_receive ();
+        return hello.has_value ();
+    }));
+    auto peer = options ("decode-source", 401).descriptor;
+    peer.advertised_endpoint = remote.options ().last_endpoint ();
+    ASSERT_TRUE (port
+                   .send (bytes ("decode-target"),
+                          {protocol::encode_route_mesh_admission (protocol::command::admit, peer)})
+                   .result ()
+                   .value ());
+    ASSERT_TRUE (pump_until ({&target}, [&] {
+        const auto admitted = target.topology ().peer (peer.node_routing_id);
+        return admitted && admitted->ready;
+    }));
+    for (const auto command : {17, 19, 22, 25, 28}) {
+        auto head = protocol::encode_node_request_header (UINT64_MAX);
+        head[3] = static_cast<std::uint8_t> (command);
+        head[4] = 0xff;
+        auto request = port.request (bytes ("decode-target"), {head}, 2s);
+        bool rejected = false;
+        ASSERT_TRUE (pump_until ({}, [&] {
+            (void) target.observe_routes ();
+            rejected =
+              std::move (target.pump_one (std::chrono::steady_clock::now ())).result ().value ()
+                == mesh::raw_mesh_pump_result_t::protocol_error
+              || rejected;
+            (void) port.poll (0ms);
+            return request.await_ready ();
+        }));
+        ASSERT_TRUE (rejected);
+        const auto &completion = request.result ().value ();
+        ASSERT_EQ (zlink::request_result_t::ok, completion.terminal);
+        ASSERT_EQ (1u, completion.parts.size ());
+        const auto reply =
+          protocol::decode_reply_header (protocol::message_bytes (completion.parts.front ()));
+        EXPECT_EQ (UINT64_MAX, reply.correlation);
+        EXPECT_EQ (104u, reply.terminal_result);
+        EXPECT_EQ (16u, reply.failure_code);
+        EXPECT_EQ (
+          0u, target.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application));
+
+        head.resize (12);
+        auto truncated = port.request (bytes ("decode-target"), {head}, 20ms);
+        rejected = false;
+        ASSERT_TRUE (pump_until ({}, [&] {
+            (void) target.observe_routes ();
+            rejected =
+              std::move (target.pump_one (std::chrono::steady_clock::now ())).result ().value ()
+                == mesh::raw_mesh_pump_result_t::protocol_error
+              || rejected;
+            (void) port.poll (0ms);
+            return truncated.await_ready ();
+        }));
+        EXPECT_TRUE (rejected);
+        ASSERT_TRUE (truncated.result ());
+        EXPECT_EQ (zlink::request_result_t::timed_out, truncated.result ().value ().terminal);
+    }
+    auto one_way = protocol::encode_node_request_header (UINT64_MAX);
+    one_way[4] = 0xff;
+    ASSERT_TRUE (port.send (bytes ("decode-target"), {one_way}).result ().value ());
+    bool rejected = false;
+    ASSERT_TRUE (pump_until ({}, [&] {
+        (void) target.observe_routes ();
+        rejected =
+          std::move (target.pump_one (std::chrono::steady_clock::now ())).result ().value ()
+            == mesh::raw_mesh_pump_result_t::protocol_error
+          || rejected;
+        return rejected;
+    }));
+    // The service never synthesizes a one-way reply; a subsequent request is
+    // also a FIFO barrier proving the rejected record entered no mailbox.
+    ASSERT_FALSE (port.try_receive ());
+    EXPECT_EQ (0u,
+               target.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application));
+    target.close ();
+}
+
 enum class remote_hello_t
 {
     none,

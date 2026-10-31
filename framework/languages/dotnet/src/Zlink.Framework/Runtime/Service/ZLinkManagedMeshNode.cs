@@ -7048,7 +7048,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     received.Send
                 );
             if (!processed)
-                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                RejectProtocolRecord(received, sourceRid);
             return false;
         }
         if (
@@ -7060,7 +7060,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
         )
         {
-            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+            RejectProtocolRecord(received, sourceRid);
             return false;
         }
         switch (recordCommand)
@@ -7092,30 +7092,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 {
                     // Command 28 owns a Core request window. A one-way ingress has
                     // no opaque reply capability on which command 20 can terminate it.
-                    Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                    RejectProtocolRecord(received, sourceRid);
                     return false;
                 }
-                var nativeReply = received.Reply();
                 var canonical = ZLinkMeshRecordAdapters.TryDecodeCanonicalActorJoin(
                     received.Parts,
                     _meshName
                 );
                 if (canonical is null)
                 {
-                    if (TryReadCanonicalActorJoinCorrelation(head, out var correlation))
-                        SendCanonicalActorJoinTerminal(
-                            sourceRid,
-                            nativeReply,
-                            correlation,
-                            RequestResult.ProtocolError,
-                            (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
-                        );
+                    RejectProtocolRecord(received, sourceRid);
                     return false;
                 }
                 return ProcessCanonicalActorJoin(
                     sourceRid,
                     sourceGeneration,
-                    nativeReply,
+                    received.Reply(),
                     canonical.Request,
                     ref ownership
                 );
@@ -7176,7 +7168,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     || received.ReplyToken is null
                 )
                 {
-                    Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                    RejectProtocolRecord(received, sourceRid);
                     return false;
                 }
                 ProcessUserSpotOperation(
@@ -7205,7 +7197,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     || received.ReplyToken is null
                 )
                 {
-                    Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                    RejectProtocolRecord(received, sourceRid);
                     return false;
                 }
                 ProcessActorCreateOperation(
@@ -7258,7 +7250,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                 )
                 {
-                    Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+                    RejectProtocolRecord(received, sourceRid);
                     return false;
                 }
                 var multicastMetadata = logicalMulticast.HasMetadata
@@ -7307,7 +7299,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
         )
         {
-            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+            RejectProtocolRecord(received, sourceRid);
             return false;
         }
 
@@ -7320,7 +7312,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
         )
         {
-            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+            RejectProtocolRecord(received, sourceRid);
             return false;
         }
         var metadata = application.HasMetadata ? received.Parts[1].ToArray() : null;
@@ -7336,7 +7328,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // RouteMesh 11 requests use Core's request window. Accepting the old
             // raw request envelope would put its reply back on the Application
             // connection and reintroduce the ingress/completion dependency.
-            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+            RejectProtocolRecord(received, sourceRid);
             return false;
         }
         var kind = application.Command switch
@@ -7596,18 +7588,32 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return false;
     }
 
-    private static bool TryReadCanonicalActorJoinCorrelation(
-        ReadOnlySpan<byte> head,
-        out ulong correlation
-    )
+    private void RejectProtocolRecord(Received received, RoutingId sourceRid)
     {
-        correlation = 0;
-        if (head.Length < 13)
-            return false;
-        correlation = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(
-            head.Slice(5, sizeof(ulong))
+        Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+        if (
+            received.MessageType != ReceivedMessageType.Request
+            || received.ReplyToken is null
+            || received.Parts.Count == 0
+            || !ServiceWireConstants.TryRecoverRequestCorrelation(
+                received.Parts[0].AsReadOnlySpan(),
+                out var correlation
+            )
+        )
+            return;
+        SubmitPreparedNativeReply(
+            PrepareNativeReply(
+                sourceRid,
+                received.Reply(),
+                [
+                    ZLinkServiceWireCodec.EncodeReply(
+                        correlation,
+                        (int)RequestResult.ProtocolError,
+                        (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
+                    ),
+                ]
+            )
         );
-        return correlation != 0;
     }
 
     private SubmitResult SendCanonicalActorJoinTerminal(

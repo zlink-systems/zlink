@@ -4000,12 +4000,16 @@ void verify_actor_join_wrong_source_generation_is_fenced ()
     join_thread.join ();
 
     assert (source_settled.load (std::memory_order_acquire));
-    // Fenced on the receiver: the originate side never gets a reply and
-    // times out — and the typed outcome must classify that timeout as
-    // deadline_exceeded (spec 32 §5), not a false "accepted"/"rejected"
-    // and not an unclassified transport failure.
-    assert (!outcome.reply);
-    assert (outcome.failure == mesh::actor_join_wire_failure_t::deadline_exceeded);
+    // Wire protocol §2 terminates this protocol rejection on the original
+    // request reply path; the source fence still prevents admission.
+    assert (outcome.reply);
+    assert (outcome.reply->header.correlation == request.correlation);
+    assert (outcome.reply->header.terminal_result
+            == static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError));
+    assert (outcome.reply->header.failure_code
+            == static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError));
+    assert (!outcome.reply->spot);
+    assert (!outcome.application_reply);
 
     source.close ();
     target.close ();
