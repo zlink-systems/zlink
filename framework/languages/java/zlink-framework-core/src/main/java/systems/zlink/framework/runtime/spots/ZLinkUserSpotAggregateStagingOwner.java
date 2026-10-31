@@ -1039,6 +1039,10 @@ final class ZLinkUserSpotAggregateStagingOwner {
             assert (debugProbe = new AsyncDrainProbe()) != null;
         }
 
+        List<AsyncDrainProbe.Pending> pendingDrainWork() {
+            return inStateLane(this, debugProbe::pending);
+        }
+
         int actorCount() {
             return request.actors().size();
         }
