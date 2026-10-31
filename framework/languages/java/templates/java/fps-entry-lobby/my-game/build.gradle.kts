@@ -1,5 +1,5 @@
-extra["frameworkVersion"] = "0.30.3"
-extra["bindingVersion"] = "1.20.0"
+extra["frameworkVersion"] = "0.31.0"
+extra["bindingVersion"] = "1.21.0"
 subprojects {
     apply(plugin = "java-library")
     extensions.configure<JavaPluginExtension> { toolchain.languageVersion.set(JavaLanguageVersion.of(25)) }

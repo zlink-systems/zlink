@@ -2,7 +2,7 @@
 
 ## Project and commands
 
-This Java 25 project runs a Session gateway, Match hosts A and B, and a Redis Location Store. Entry Spots forward players to the fixed Matchmaking User Spot; same-mode players enter dynamic Room User Spots. Public Framework and connector versions are pinned to 0.30.3 in `gradle/libs.versions.toml`. The [README](README.md) owns execution and deployment instructions. [zlink.structure.json](zlink.structure.json) describes the topology and scenario order.
+This Java 25 project runs a Session gateway, Match hosts A and B, and a Redis Location Store. Entry Spots forward players to the fixed Matchmaking User Spot; same-mode players enter dynamic Room User Spots. Public Framework and connector versions are pinned to 0.31.0 in `gradle/libs.versions.toml`. The [README](README.md) owns execution and deployment instructions. [zlink.structure.json](zlink.structure.json) describes the topology and scenario order.
 
 Run commands from this project root with Docker Compose v2 and Linux containers:
 

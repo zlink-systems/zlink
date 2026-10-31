@@ -19,7 +19,7 @@ flowchart LR
 
 Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for the default run.
 
-Public Framework 0.30.3 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.30.3` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
+Public Framework 0.31.0 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.31.0` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
 
 ## Build
 
@@ -95,9 +95,9 @@ Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenar
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.31.0 packages.
 
-This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.30.3 adds a typed Session reply API (#1785), and the template has not switched to it.
+This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.31.0 adds a typed Session reply API (#1785), and the template has not switched to it.
 
 The `update` scenario verifies that a fresh Actor joins Zone A on the replacement node and accepts movement after replacement (`e2e/scenarios.hpp`). Existing relocated players remain on Zone B.
 

@@ -40,6 +40,7 @@ Framework 0.31.0 uses Node.js binding 1.21.0 and Core 1.21.0.
 
 - Moving private member access in test code to public paths has progressed through its ninth pass for Node, Java, and .NET. The remaining scope continues in the next release. This does not affect product behavior. (#2309)
 - On Windows, when the mailbox signaler falls back from AF_UNIX datagram to stream, creating and deleting a temporary path for each socket costs about 2.5 ms. The fix ships in the next Core release. (#3053)
+- In the public `mmo-world-channels` template, the first `ChannelView` sometimes does not arrive after a player joins a channel, so the update scenario times out (about half of runs on 0.31.0; not reproduced on 0.30.3). This is fixed in 0.32.0. Until then the Node templates stay pinned to 0.30.3. (#3344)
 
 ## Installation
 
