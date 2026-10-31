@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
@@ -500,6 +501,7 @@ public sealed class StreamSessionForcedCleanupTests
             Assert.Equal("stream-corr-17", response.CorrelationId);
             Assert.Equal(flowId, response.FlowId);
 
+            await WaitUntilAsync(() => loggerFactory.Messages.Count >= 3);
             var lines = loggerFactory.Messages.ToArray();
             Assert.Equal(3, lines.Length);
             Assert.Collection(
@@ -587,6 +589,7 @@ public sealed class StreamSessionForcedCleanupTests
             var frame = await socket.SentFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.Null(DecodeStreamHeader(frame).CorrelationId);
 
+            await WaitUntilAsync(() => loggerFactory.Messages.Count >= 3);
             var lines = loggerFactory.Messages.ToArray();
             Assert.Equal(3, lines.Length);
             Assert.Collection(
@@ -2282,7 +2285,7 @@ public sealed class StreamSessionForcedCleanupTests
     {
         public List<string> Categories { get; } = [];
 
-        public List<string> Messages { get; } = [];
+        public ConcurrentQueue<string> Messages { get; } = new();
 
         public void AddProvider(ILoggerProvider provider) => _ = provider;
 
@@ -2295,7 +2298,7 @@ public sealed class StreamSessionForcedCleanupTests
         public void Dispose() { }
     }
 
-    private sealed class StreamFlowLogger(List<string> messages) : ILogger
+    private sealed class StreamFlowLogger(ConcurrentQueue<string> messages) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull => null;
@@ -2308,7 +2311,7 @@ public sealed class StreamSessionForcedCleanupTests
             TState state,
             Exception? exception,
             Func<TState, Exception?, string> formatter
-        ) => messages.Add(formatter(state, exception));
+        ) => messages.Enqueue(formatter(state, exception));
     }
 
     private static void EmitJson<TMessage>(
