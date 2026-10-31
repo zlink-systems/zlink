@@ -661,7 +661,19 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
     {
         if (_depth == 1) {
             _member = member (value);
+            if (_member != header_member_t::none) {
+                const auto bit = 1u << static_cast<unsigned> (_member);
+                if ((_seen_fields & bit) != 0) {
+                    _parse_error = "duplicate envelope header field";
+                    return false;
+                }
+                _seen_fields |= bit;
+            }
         } else if (_depth == _metadata_object_depth) {
+            if (!_metadata.emplace (value, std::string{}).second) {
+                _parse_error = "duplicate envelope metadata key";
+                return false;
+            }
             _metadata_key = std::move (value);
         }
         return true;
@@ -924,20 +936,12 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
 
     void set_metadata_value (std::string value)
     {
-        _invalid_metadata_keys.erase (std::remove (_invalid_metadata_keys.begin (),
-                                                   _invalid_metadata_keys.end (), _metadata_key),
-                                      _invalid_metadata_keys.end ());
-        const auto existing = _metadata.find (_metadata_key);
-        if (existing != _metadata.end ())
-            existing->second = std::move (value);
-        else
-            _metadata.emplace (std::move (_metadata_key), std::move (value));
+        _metadata.at (_metadata_key) = std::move (value);
         _metadata_key.clear ();
     }
 
     void set_metadata_invalid ()
     {
-        _metadata.erase (_metadata_key);
         _invalid_metadata_keys.push_back (std::move (_metadata_key));
         _metadata_key.clear ();
     }
@@ -974,6 +978,7 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
                                                        + std::string (reason));
     }
 
+    unsigned _seen_fields = 0;
     bool _capture_flow;
     std::size_t _depth = 0;
     std::size_t _metadata_object_depth = 0;
