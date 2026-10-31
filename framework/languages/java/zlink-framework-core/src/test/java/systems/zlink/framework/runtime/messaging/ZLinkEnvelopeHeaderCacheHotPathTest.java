@@ -13,10 +13,13 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.testutil.PerCallAllocation;
 
 import java.nio.ByteBuffer;
+import java.nio.ReadOnlyBufferException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -309,6 +312,23 @@ final class ZLinkEnvelopeHeaderCacheHotPathTest {
             release.complete(null);
             blocked.toCompletableFuture().join();
             if (!lookup.isDone()) lookup.get(3, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void sharedEncodedHeaderBytesAreExposedReadOnly() {
+        ZLinkChannelEnvelope.Header command =
+                simpleHeader(ZLinkChannelEnvelope.KIND_COMMAND, "orders", "ReadOnlyHeader");
+        try (Message first = Message.from(new byte[] {1});
+                Message second = Message.from(new byte[] {2})) {
+            List<Message> firstParts = ZLinkChannelEnvelope.encode(command, first);
+            List<Message> secondParts = ZLinkChannelEnvelope.encode(command, second);
+            ByteBuffer header = ZLinkFrameworkMultipartView.buffer(firstParts, 0);
+            assertTrue(header.isReadOnly());
+            assertThrows(ReadOnlyBufferException.class, () -> header.put(0, (byte) '#'));
+            assertEquals(
+                    ZLinkFrameworkMultipartView.buffer(firstParts, 0),
+                    ZLinkFrameworkMultipartView.buffer(secondParts, 0));
         }
     }
 

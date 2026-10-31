@@ -462,8 +462,12 @@ public final class ZLinkChannelEnvelope {
         int limit = headerPart == null ? 0 : headerPart.limit();
         int length = limit - start;
         boolean cacheableSize = headerPart != null && length <= MAX_CACHEABLE_HEADER_BYTES;
-        long hash = cacheableSize ? hashBytes(headerPart, start, limit) : 0;
-        if (cacheableSize) {
+        // Correlated request/reply headers are never cached, so their length rarely matches an
+        // entry; hash only when some cached header has the same length.
+        long hash = cacheableSize && hasDecodedHeaderOfLength(length)
+                ? hashBytes(headerPart, start, limit)
+                : 0;
+        if (hash != 0) {
             Header cached = findDecodedHeaderCacheEntry(headerPart, start, limit, hash);
             if (cached != null) {
                 headerPart.position(limit);
@@ -482,9 +486,21 @@ public final class ZLinkChannelEnvelope {
         }
 
         if (cacheableSize && decoded.repeatable()) {
-            addDecodedHeaderCacheEntry(headerPart, start, limit, hash, decoded.header());
+            addDecodedHeaderCacheEntry(
+                    headerPart,
+                    start,
+                    limit,
+                    hash != 0 ? hash : hashBytes(headerPart, start, limit),
+                    decoded.header());
         }
         return decoded.header();
+    }
+
+    private static boolean hasDecodedHeaderOfLength(int length) {
+        for (HeaderCacheEntry entry : decodedHeaderCache) {
+            if (entry.bytes().length == length) return true;
+        }
+        return false;
     }
 
     private static Header findDecodedHeaderCacheEntry(
