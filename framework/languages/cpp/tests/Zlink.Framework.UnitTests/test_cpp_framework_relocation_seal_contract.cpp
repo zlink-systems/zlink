@@ -1698,12 +1698,18 @@ TEST (FrameworkRelocationSealContract, throwing_claim_consumer_returns_all_credi
     }
 }
 
-TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_returns_transferred_suffix)
+TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_record)
 {
+    auto failures = std::make_shared<runtime::runtime_failure_collector_t> ();
+    const auto injected = std::make_exception_ptr (std::runtime_error ("dispatch failed"));
+    unsigned reported = 0;
+    failures->bind_runtime_reporter ([&] (auto error) {
+        EXPECT_EQ (error, injected);
+        ++reported;
+    });
     auto host = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
-        .descriptor = test_descriptor ("ordinary-batch"),
-        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+        .descriptor = test_descriptor ("ordinary-batch"), .runtime_failures = failures}});
     auto &mailbox = host->transport ().mailbox ();
     const auto enqueue = [&] {
         mesh::service_mailbox_record_t original;
@@ -1717,15 +1723,17 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_returns_transfe
     };
     for (int index = 0; index < 64; ++index)
         enqueue ();
-    unsigned started = 0, rejected = 0;
+    unsigned started = 0, rejected = 0, calls = 0;
     auto failed = host->dispatch_application_owner (
       "node",
-      [] (const auto &, const auto &, auto) { throw std::runtime_error ("dispatch failed"); },
+      [&] (const auto &, const auto &, auto) {
+          ++calls;
+          std::rethrow_exception (injected);
+      },
       [&] { ++started; }, [&] { ++rejected; });
-    const auto &failure = failed.result ();
-    EXPECT_FALSE (failure);
-    EXPECT_THROW (failure.value (), std::runtime_error);
-    EXPECT_EQ (failure.error (), nullptr);
+    EXPECT_TRUE (failed.result ().value ());
+    EXPECT_EQ (calls, 64u);
+    EXPECT_EQ (reported, 64u);
     EXPECT_EQ (started, 64u);
     EXPECT_EQ (rejected, 64u);
     EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
@@ -2541,69 +2549,109 @@ TEST (FrameworkRelocationSealContract, native_preparation_outcomes_preserve_cont
     }
 }
 
-TEST (FrameworkRelocationSealContract,
-      native_claim_suffix_failure_settles_once_after_ready_or_pending)
+TEST (FrameworkRelocationSealContract, native_claim_target_failure_settles_only_failed_record)
 {
     using namespace zlink::framework::runtime;
     for (const bool local : {false, true}) {
         for (const bool deferred : {false, true}) {
-            auto host = std::make_shared<host::public_host_runtime_t> (
-              host::host_options_t{mesh::raw_mesh_node_options_t{
-                .descriptor = test_descriptor ("native-suffix"),
-                .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
-            host->configure_stateful_dispatch ([] (const auto &) {
-                return task_t<std::optional<stateful::accepted_record_authority_t>> (
-                  result_t<std::optional<stateful::accepted_record_authority_t>>::success (
-                    stateful::accepted_record_authority_t{{"requester", 3, {2}, 1}, 3}));
-            });
-            const stateful::object_ref_t spot{
-              stateful::object_kind_t::user_spot, "suffix", 1, 1, "mesh", "source"};
-            const auto created = begin_reserved_object (host->objects (), spot, "room", {});
-            ASSERT_EQ (created.error, stateful::stateful_error_t::none);
-            ASSERT_EQ (host->objects ().commit_create (created.attempt),
-                       stateful::stateful_error_t::none);
-            using target_t = std::shared_ptr<serial_application_target_t>;
-            task_completion_source_t<target_t> release;
-            unsigned preparations = 0;
-            host->configure_relocation_gate (
-              {},
-              [&] (std::string, std::optional<protocol::spot_route_fence_t>) -> task_t<target_t> {
-                  ++preparations;
-                  if (preparations == 2)
-                      throw std::runtime_error ("suffix target failed");
-                  if (deferred)
-                      return release.task ();
-                  return task_t<target_t> (
-                    result_t<target_t>::success (std::make_shared<serial_application_target_t> ()));
-              });
-            std::vector<mesh::service_mailbox_record_t> originals;
-            for (unsigned index = 1; index <= 3; ++index)
-                originals.push_back (local ? local_native_spot_record (*host, spot, index)
-                                           : native_spot_record (*host, spot, index, std::nullopt));
-            const auto claim = zlink::framework::test::publish_stateful_claims (
-              host->transport (), spot, std::move (originals));
-            unsigned dispatched = 0;
-            auto pending = host::public_host_runtime_test_access_t::dispatch_claim (
-              *host, claim, [&] (const auto &, const auto &record, auto) {
-                  ++dispatched;
-                  ASSERT_TRUE (record.application_record);
-                  record.application_record->release_native_claim ();
-              });
-            if (deferred) {
-                EXPECT_FALSE (pending.await_ready ());
-                EXPECT_EQ (claim->outstanding (), 3u);
-                release.complete (
-                  result_t<target_t>::success (std::make_shared<serial_application_target_t> ()));
+            for (const unsigned failed : {1u, 2u, 3u}) {
+                for (const unsigned failure_kind : {0u, 1u, 2u}) {
+                    const bool cancelled = failure_kind == 1;
+                    const bool shutdown = failure_kind == 2;
+                    SCOPED_TRACE (::testing::Message ()
+                                  << "local=" << local << " deferred=" << deferred
+                                  << " failed=" << failed << " failure_kind=" << failure_kind);
+                    auto failures = std::make_shared<runtime_failure_collector_t> ();
+                    std::vector<std::exception_ptr> reported;
+                    failures->bind_runtime_reporter (
+                      [&] (auto error) { reported.push_back (error); });
+                    const auto error =
+                      shutdown
+                        ? std::make_exception_ptr (detail::make_framework_origin_exception (
+                            framework_error_kind_t::shutting_down, "target admission closed"))
+                      : cancelled
+                        ? detail::make_cancellation_exception ("target preparation cancelled")
+                        : std::make_exception_ptr (
+                            std::runtime_error ("target preparation failed"));
+                    auto host = std::make_shared<host::public_host_runtime_t> (
+                      host::host_options_t{mesh::raw_mesh_node_options_t{
+                        .descriptor = test_descriptor ("native-target-failure"),
+                        .runtime_failures = failures}});
+                    host->configure_stateful_dispatch ([] (const auto &) {
+                        return task_t<std::optional<stateful::accepted_record_authority_t>> (
+                          result_t<std::optional<stateful::accepted_record_authority_t>>::success (
+                            stateful::accepted_record_authority_t{{"requester", 3, {2}, 1}, 3}));
+                    });
+                    const stateful::object_ref_t spot{
+                      stateful::object_kind_t::user_spot, "suffix", 1, 1, "mesh", "source"};
+                    const auto created = begin_reserved_object (host->objects (), spot, "room", {});
+                    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+                    ASSERT_EQ (host->objects ().commit_create (created.attempt),
+                               stateful::stateful_error_t::none);
+                    using target_t = std::shared_ptr<serial_application_target_t>;
+                    task_completion_source_t<target_t> release;
+                    unsigned preparations = 0;
+                    host->configure_relocation_gate (
+                      {},
+                      [&] (std::string,
+                           std::optional<protocol::spot_route_fence_t>) -> task_t<target_t> {
+                          if (++preparations == failed || (shutdown && preparations > failed)) {
+                              if (deferred)
+                                  return release.task ();
+                              std::rethrow_exception (error);
+                          }
+                          return task_t<target_t> (result_t<target_t>::success (
+                            std::make_shared<serial_application_target_t> ()));
+                      });
+                    std::vector<mesh::service_mailbox_record_t> originals;
+                    std::vector<std::uint64_t> expected;
+                    for (unsigned index = 1; index <= 3; ++index) {
+                        originals.push_back (
+                          local ? local_native_spot_record (*host, spot, index)
+                                : native_spot_record (*host, spot, index, std::nullopt));
+                        if (shutdown ? index < failed : index != failed)
+                            expected.push_back (index);
+                    }
+                    const auto claim = zlink::framework::test::publish_stateful_claims (
+                      host->transport (), spot, std::move (originals));
+                    std::vector<std::uint64_t> dispatched;
+                    unsigned rejected = 0;
+                    auto pending = host::public_host_runtime_test_access_t::dispatch_claim (
+                      *host, claim, [&] (const auto &, const auto &record, auto) {
+                          ASSERT_TRUE (record.application_record);
+                          const auto *failure = std::get_if<framework_exception_t> (
+                            &record.application_record->target->context);
+                          if (failure) {
+                              EXPECT_TRUE (shutdown);
+                              EXPECT_EQ (failure->kind (), framework_error_kind_t::shutting_down);
+                              ++rejected;
+                          } else {
+                              dispatched.push_back (record.operation_id.low);
+                          }
+                          record.application_record->release_native_claim ();
+                      });
+                    if (deferred) {
+                        EXPECT_FALSE (pending.await_ready ());
+                        EXPECT_EQ (preparations, failed);
+                        EXPECT_EQ (dispatched.size (), failed - 1);
+                        EXPECT_EQ (claim->outstanding (), 4u - failed);
+                        release.complete (detail::result_access_t::failure<target_t> (error));
+                    }
+                    EXPECT_EQ (pending.result ().value (), shutdown ? 3u : 2u);
+                    EXPECT_EQ (preparations, 3u);
+                    EXPECT_EQ (dispatched, expected);
+                    EXPECT_EQ (rejected, shutdown ? 4u - failed : 0u);
+                    ASSERT_EQ (reported.size (), shutdown ? 0u : 1u);
+                    if (!shutdown)
+                        EXPECT_EQ (reported.front (), error);
+                    EXPECT_EQ (claim->outstanding (), 0u);
+                    EXPECT_FALSE (host->transport ().mailbox ().release (*claim));
+                    EXPECT_EQ (host->transport ().mailbox ().pending_messages (
+                                 mesh::service_mailbox_domain_t::application),
+                               0u);
+                    host->close ();
+                }
             }
-            EXPECT_THROW (pending.result ().value (), std::runtime_error);
-            EXPECT_EQ (preparations, 2u);
-            EXPECT_EQ (dispatched, 1u);
-            EXPECT_EQ (claim->outstanding (), 0u);
-            EXPECT_FALSE (host->transport ().mailbox ().release (*claim));
-            EXPECT_EQ (host->transport ().mailbox ().pending_messages (
-                         mesh::service_mailbox_domain_t::application),
-                       0u);
-            host->close ();
         }
     }
 }
