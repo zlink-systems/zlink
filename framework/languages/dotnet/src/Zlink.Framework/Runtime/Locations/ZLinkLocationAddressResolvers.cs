@@ -1,3 +1,4 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
@@ -317,6 +318,10 @@ internal static class ZLinkSpotHandleRequestExecution
     // Unavailable must not invalidate the cached route. Local failures
     // (Unspecified origin: resolution, transport) keep invalidating as before.
     internal static bool IsStaleRoute(ZLinkFrameworkException error) =>
-        error.Kind is ZLinkFrameworkErrorKind.NotFound or ZLinkFrameworkErrorKind.Unavailable
+        (
+            error.Kind is ZLinkFrameworkErrorKind.NotFound or ZLinkFrameworkErrorKind.Unavailable
+            || error.FrameworkFailureCode
+                == (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
+        )
         && error.Origin != ZLinkErrorOrigin.Application;
 }

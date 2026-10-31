@@ -77,7 +77,13 @@ public interface SpotTransportAddressResolver {
         }
         return cause instanceof ZLinkFrameworkException error
                 && (error.kind() == ZLinkFrameworkErrorKind.NOT_FOUND
-                        || error.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE)
+                        || error.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE
+                        || systems.zlink.framework.runtime.internal.backend
+                                        .ZLinkRequestFailureMapping.causeCode(error)
+                                == (int)
+                                        systems.zlink.framework.runtime.protocol
+                                                .ServiceWireConstants
+                                                .FRAMEWORK_ERROR_SPOT_GENERATION_STALE)
                 && ZLinkFrameworkErrorOrigin.isFramework(error);
     }
 }
