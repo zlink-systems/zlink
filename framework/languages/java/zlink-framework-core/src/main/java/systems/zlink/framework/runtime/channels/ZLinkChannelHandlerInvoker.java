@@ -437,7 +437,7 @@ final class ZLinkChannelHandlerInvoker {
             Runnable beforeHandler,
             Function<CompletionStage<Object>, CompletionStage<T>> finish) {
         if (filterTypes.isEmpty()) {
-            var activation = ZLinkHandlerInstanceOwner.openActivation(handlerFactory);
+            var activation = ZLinkHandlerInstanceOwner.openActivation(handlerFactory, handlerType);
             Object handler = ZLinkHandlerInstanceOwner.createSingle(activation, handlerType);
             try {
                 return finish.apply(

@@ -354,8 +354,9 @@ final class RouteRequestCall implements ZLinkRequestCall {
     public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
         if (duplicate != null)
-            return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
-        requestAdmission = new CompletableFuture<>();
+            return ZLinkRequestStages.observe(
+                    duplicate, ZLinkCompletionBridge.newCancellationFuture());
+        requestAdmission = ZLinkCompletionBridge.newCancellationFuture();
         return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
     }
 
@@ -501,9 +502,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
 
     private <TReply> CompletableFuture<TReply> requestResult(
             ZLinkRequestMetrics.Series metric, long started) {
-        CompletableFuture<TReply> result = new CompletableFuture<>();
-        result.whenComplete(
-                (ignored, error) -> {
+        return ZLinkCompletionBridge.newCancellationFuture(
+                (result, error) -> {
                     completeMetric(metric, started, error);
                     ZLinkMessageFlowTracer.TerminalTracePoint terminal =
                             runtime.flow().beginRequestTerminal(error, result);
@@ -523,7 +523,6 @@ final class RouteRequestCall implements ZLinkRequestCall {
                                         null));
                     }
                 });
-        return result;
     }
 
     private void completeMetric(
@@ -888,8 +887,9 @@ final class ChannelRequestCall implements ZLinkRequestCall {
     public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
         if (duplicate != null)
-            return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
-        requestAdmission = new CompletableFuture<>();
+            return ZLinkRequestStages.observe(
+                    duplicate, ZLinkCompletionBridge.newCancellationFuture());
+        requestAdmission = ZLinkCompletionBridge.newCancellationFuture();
         return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
     }
 
@@ -1048,9 +1048,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
 
     private <TReply> CompletableFuture<TReply> requestResult(
             ZLinkDispatchErrorSurface surface, ZLinkRequestMetrics.Series metric, long started) {
-        CompletableFuture<TReply> result = new CompletableFuture<>();
-        result.whenComplete(
-                (ignored, error) -> {
+        return ZLinkCompletionBridge.newCancellationFuture(
+                (result, error) -> {
                     completeMetric(metric, started, error);
                     ZLinkMessageFlowTracer.TerminalTracePoint terminal =
                             runtime.flow().beginRequestTerminal(error, result);
@@ -1072,8 +1071,6 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                                         null));
                     }
                 });
-
-        return result;
     }
 
     private void completeMetric(
