@@ -7,6 +7,7 @@ const UNSIGNED_64_MAX = (1n << 64n) - 1n;
 
 export interface FrameworkJsonParseOptions {
   readonly rejectPropertyName?: (name: string) => boolean;
+  readonly onDuplicateProperty?: (name: string, path: readonly string[]) => void;
 }
 
 export function stringifyFrameworkJsonV1(
@@ -235,16 +236,16 @@ class JsonPropertyScanner {
 
   scan(): void {
     this.skipWhitespace();
-    this.scanValue();
+    this.scanValue([]);
     this.skipWhitespace();
     if (this.index !== this.text.length) this.fail('trailing data');
   }
 
-  private scanValue(): void {
+  private scanValue(path: readonly string[]): void {
     this.skipWhitespace();
     const token = this.text[this.index];
-    if (token === '{') return this.scanObject();
-    if (token === '[') return this.scanArray();
+    if (token === '{') return this.scanObject(path);
+    if (token === '[') return this.scanArray(path);
     if (token === '"') {
       this.scanString();
       return;
@@ -255,7 +256,7 @@ class JsonPropertyScanner {
     this.scanNumber();
   }
 
-  private scanObject(): void {
+  private scanObject(path: readonly string[]): void {
     this.index++;
     this.skipWhitespace();
     if (this.text[this.index] === '}') {
@@ -268,7 +269,11 @@ class JsonPropertyScanner {
       if (this.text[this.index] !== '"') this.fail('object property name');
       const property = this.scanString();
       if (properties.has(property)) {
-        throw new SyntaxError(`framework-json-v1 duplicate property '${property}'.`);
+        if (this.options.onDuplicateProperty !== undefined) {
+          this.options.onDuplicateProperty(property, path);
+        } else {
+          throw new SyntaxError(`framework-json-v1 duplicate property '${property}'.`);
+        }
       }
       properties.add(property);
       if (this.options.rejectPropertyName?.(property) === true) {
@@ -277,7 +282,7 @@ class JsonPropertyScanner {
       this.skipWhitespace();
       if (this.text[this.index] !== ':') this.fail("':' after object property");
       this.index++;
-      this.scanValue();
+      this.scanValue(this.options.onDuplicateProperty === undefined ? path : [...path, property]);
       this.skipWhitespace();
       const delimiter = this.text[this.index++];
       if (delimiter === '}') return;
@@ -285,7 +290,7 @@ class JsonPropertyScanner {
     }
   }
 
-  private scanArray(): void {
+  private scanArray(path: readonly string[]): void {
     this.index++;
     this.skipWhitespace();
     if (this.text[this.index] === ']') {
@@ -293,7 +298,7 @@ class JsonPropertyScanner {
       return;
     }
     for (;;) {
-      this.scanValue();
+      this.scanValue(this.options.onDuplicateProperty === undefined ? path : [...path, '[]']);
       this.skipWhitespace();
       const delimiter = this.text[this.index++];
       if (delimiter === ']') return;

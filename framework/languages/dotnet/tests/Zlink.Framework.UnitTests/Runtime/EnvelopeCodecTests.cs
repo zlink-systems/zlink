@@ -6,6 +6,97 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class EnvelopeCodecTests
 {
+    [Theory]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","formatMarker":242}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","kind":3}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","channelName":"c"}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","messageName":"m"}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","contentType":null,"contentType":null}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","correlationId":null,"correlationId":null}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","deadline":null,"deadline":null}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","topic":null,"topic":null}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","errorCode":null,"errorCode":null}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","errorMessage":null,"errorMessage":null}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","source":null,"source":null}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","flowId":null,"flowId":null}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","flowOrigin":null,"flowOrigin":null}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{},"metadata":{}}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","k\u0069nd":3}""",
+        "duplicate envelope header field"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"a":"first","\u0061":"last"}}""",
+        "duplicate envelope metadata key"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"a":null,"\u0061":"last"}}""",
+        "duplicate envelope metadata key"
+    )]
+    [InlineData(
+        """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"a":{},"\u0061":"last"}}""",
+        "duplicate envelope metadata key"
+    )]
+    public void EnvelopeDuplicatesRejectKnownFieldsAndMetadata(string json, string reason)
+    {
+        using var wire = Message.From(json);
+        var error = Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(wire, false)
+        );
+        Assert.Contains(reason, error.Message);
+    }
+
+    [Fact]
+    public void EnvelopeDuplicatesIgnoreUnknownFields()
+    {
+        using var wire = Message.From(
+            """{"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","Kind":false,"Kind":[],"unknown":{"a":1,"a":2},"unknown":[{"kind":1,"kind":2}],"kind\u0000":1,"kind\u0000":2}"""
+        );
+        Assert.Equal("c", ZLinkEnvelopeCodec.DecodeHeader(wire, false).ChannelName);
+    }
+
     [Fact]
     public void Received_header_rejects_invalid_utf8_as_protocol_error()
     {
@@ -203,7 +294,7 @@ public sealed class EnvelopeCodecTests
         Assert.Equal(ZLinkFlowOrigin.Application, decoded.FlowOrigin);
 
         using var missingMarker = Message.From(
-            "{\"Kind\":3,\"ChannelName\":\"play\",\"MessageName\":\"Move\",\"ContentType\":\"application/json\"}"
+            "{\"kind\":3,\"channelName\":\"play\",\"messageName\":\"Move\",\"contentType\":\"application/json\"}"
         );
         Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
             ZLinkEnvelopeCodec.DecodeHeader(missingMarker)
@@ -214,9 +305,9 @@ public sealed class EnvelopeCodecTests
     public void Off_decode_strips_flow_without_validating_observation_fields()
     {
         using var encoded = Message.From(
-            "{\"FormatMarker\":242,\"Kind\":3,\"ChannelName\":\"play\","
-                + "\"MessageName\":\"Move\",\"ContentType\":\"application/json\","
-                + "\"FlowId\":\"not-a-uuid\",\"FlowOrigin\":3}"
+            "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"play\","
+                + "\"messageName\":\"Move\",\"contentType\":\"application/json\","
+                + "\"flowId\":\"not-a-uuid\",\"flowOrigin\":3}"
         );
 
         Assert.Throws<ZLinkEnvelopeProtocolException>(() =>

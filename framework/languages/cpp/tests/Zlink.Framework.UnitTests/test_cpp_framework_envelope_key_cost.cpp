@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace
 {
@@ -103,8 +104,7 @@ TEST (EnvelopeKeyCost, ExistingFieldAndUnknownKeySemanticsArePreserved)
                               ",\"" + std::string (4096, 'x') + "\":0",
                               std::string (R"(,"kind\u0000suffix":false,"channelName\u0000":[])"),
                               std::string (R"(,"flowId":{},"flowOrigin":[])"),
-                              std::string (R"(,"kind":false,"kind":1)"),
-                              std::string (R"(,"channelName":false,"channelName":"c")")}) {
+                              std::string (R"(,"unknown":1,"unknown":2)")}) {
         const auto decoded = decode (header (extra));
         ASSERT_TRUE (decoded) << extra;
         EXPECT_EQ (decoded.value ().kind, msg::message_kind_t::request);
@@ -115,4 +115,57 @@ TEST (EnvelopeKeyCost, ExistingFieldAndUnknownKeySemanticsArePreserved)
     EXPECT_FALSE (decode (header (R"(,"channelName":false)")));
     EXPECT_FALSE (
       decode (R"({"formatMarker":242,"kind\u0000":1,"channelName":"c","messageName":"m"})"));
+}
+
+TEST (EnvelopeDuplicates, RejectsKnownFieldsAndMetadata)
+{
+    const std::pair<const char *, const char *> cases[] = {
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","formatMarker":242})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","kind":3})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","channelName":"c"})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","messageName":"m"})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","contentType":null,"contentType":null})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","correlationId":null,"correlationId":null})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","deadline":null,"deadline":null})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","topic":null,"topic":null})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","errorCode":null,"errorCode":null})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","errorMessage":null,"errorMessage":null})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","source":null,"source":null})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","flowId":null,"flowId":null})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","flowOrigin":null,"flowOrigin":null})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{},"metadata":{}})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","k\u0069nd":3})",
+       "duplicate envelope header field"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"a":"first","\u0061":"last"}})",
+       "duplicate envelope metadata key"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"a":null,"\u0061":"last"}})",
+       "duplicate envelope metadata key"},
+      {R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"a":{},"\u0061":"last"}})",
+       "duplicate envelope metadata key"}};
+    for (const auto &[json, reason] : cases) {
+        const auto result = decode (json);
+        ASSERT_FALSE (result) << json;
+        EXPECT_EQ (result.error ()->kind (),
+                   zlink::framework::framework_error_kind_t::protocol_error);
+        EXPECT_NE (std::string (result.error ()->what ()).find (reason), std::string::npos);
+    }
+}
+TEST (EnvelopeDuplicates, IgnoresUnknownFields)
+{
+    EXPECT_TRUE (decode (
+      R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","Kind":false,"Kind":[],"unknown":{"a":1,"a":2},"unknown":[{"kind":1,"kind":2}],"kind\u0000":1,"kind\u0000":2})"));
 }
