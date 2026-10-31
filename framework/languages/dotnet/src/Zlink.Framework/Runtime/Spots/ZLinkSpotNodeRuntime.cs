@@ -803,7 +803,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
-        bool durable = false,
         ZLinkRequestAdmission? requestAdmission = null
     )
     {
@@ -816,7 +815,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     timeout,
                     cancellationToken,
                     metadata,
-                    durable,
                     requestAdmission: requestAdmission
                 )
                 .ConfigureAwait(false);
