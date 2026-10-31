@@ -105,6 +105,10 @@ export class ApplicationJobRecordLease implements ApplicationJobPermitPort {
     private permit: ApplicationJobPermitPort | undefined
   ) {}
 
+  reacquire(signal: AbortSignal): Promise<ApplicationJobPermitPort> {
+    return this.shared.acquirePermit(signal);
+  }
+
   get origin(): ApplicationJobOrigin {
     return this.shared.origin;
   }
