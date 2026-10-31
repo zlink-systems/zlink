@@ -1,13 +1,96 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
+using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed partial class StatefulServiceRuntimeTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task LivenessDisconnect_FinishesExpiredBatchBeforeReporting(
+        bool missing,
+        bool reporting
+    )
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var failure = new ZlinkConnectException(
+            missing
+                ? ZlinkConnectException.ErrorCode.NotFound
+                : ZlinkConnectException.ErrorCode.InternalError
+        );
+        var captured = new CapturingMeshSocketContext(context) { DisconnectFailure = failure };
+        using var socket = captured.CreateRouterSocket();
+        var peers = new Dictionary<RoutingId, ZLinkMeshPeer>();
+        await using var owner = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            peersByRid: peers,
+            directRequestSocket: socket
+        );
+        var rids = new[]
+        {
+            RoutingId.From("expired-a"),
+            RoutingId.From("expired-b"),
+            RoutingId.From("expired-c"),
+        };
+        foreach (var rid in rids)
+            peers.Add(
+                rid,
+                new ZLinkMeshPeer(1)
+                {
+                    RoutingId = rid,
+                    PhysicalRoutingId = rid,
+                    RouteGeneration = 1,
+                    Admitted = true,
+                    State = MeshPeerState.Admitted,
+                    Liveness = new ZLinkServiceLiveness(0),
+                }
+            );
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(_ => { });
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var reported = new List<Exception>();
+        runtime.ErrorSink.UnhandledCallbackException += reported.Add;
+        if (reporting)
+            owner.SetLogicalMulticastDispatchErrors(
+                new ZLinkDispatchErrorReporter(
+                    runtime.Registration.DispatchOptions,
+                    runtime: runtime
+                ),
+                "mesh"
+            );
+        using var monitor = owner.OpenMonitor();
+        var error = Record.Exception(() => TickLiveness(owner, 15 * Stopwatch.Frequency));
+        Assert.Empty(peers);
+        Assert.Equal(3, captured.DisconnectRidCalls);
+        var closed = new List<RoutingId>();
+        while (monitor.Recv(RecvFlags.DontWait) is { } observed)
+            if (observed.Kind == MeshMonitorEventKind.PeerClosed)
+                closed.Add(observed.PeerRid);
+        Assert.Equal(rids.OrderBy(rid => rid.ToString()), closed.OrderBy(rid => rid.ToString()));
+        if (missing || reporting)
+            Assert.Null(error);
+        else
+            Assert.Same(failure, error);
+        if (reporting && !missing)
+            Assert.Same(failure, Assert.Single(reported));
+        else
+            Assert.Empty(reported);
+        TickLiveness(owner, 16 * Stopwatch.Frequency);
+        Assert.Equal(3, captured.DisconnectRidCalls);
+        Assert.Null(monitor.Recv(RecvFlags.DontWait));
+    }
+
     [Fact]
     public Task ControlSendNotConnected_KeepsAdmissionUntilSelectedRouteEnds() =>
         VerifyControlSendFailureAsync(
