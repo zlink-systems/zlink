@@ -244,6 +244,9 @@ public sealed class JoinCallbackSendTests
         await trace.WaitAsync("publicJoinCompleted");
         await trace.WaitAsync("targetLifecycleCompleted");
         Assert.True(target.Runtime.TryGetActorState(actorId, out var targetState));
+        await targetState
+            .Handoff.WaitForTargetReplayCompletionAsync(CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
         _ = await target.Runtime.JoinActorEntrySpotAsync(
             Assert.IsType<BehaviorActor>(targetState.Actor),
             ZLinkMessage.Empty,

@@ -1073,6 +1073,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             Assert.Equal(0, node.PendingOperationCount);
             Assert.Equal(0, node.PendingCanonicalRelocationPrepareCount);
             Assert.Equal(0, context.NativeRequests);
+            await WaitForSelectedRouteAsync(node, target).WaitAsync(TimeSpan.FromSeconds(5));
             peer.RouteGeneration = node.ObservePeerRoute(target).SelectedGeneration;
             peer.Admitted = true;
             node.AddChannel("after-expiry");
@@ -1411,6 +1412,15 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         }
     }
 
+    private static async Task WaitForSelectedRouteAsync(ZLinkManagedMeshNode node, RoutingId target)
+    {
+        while (node.ObservePeerRoute(target).SelectedGeneration == 0)
+        {
+            node.SignalReceiveOwner();
+            await Task.Yield();
+        }
+    }
+
     private sealed class CanonicalPhysicalRequest : IAsyncDisposable
     {
         private readonly IContext _native = Systems.Zlink.Zlink.CreateContext();
@@ -1495,20 +1505,12 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
 
         internal async Task MakeReadyAsync()
         {
-            await WaitRouteAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await WaitForSelectedRouteAsync(Node, _peer.RoutingId)
+                .WaitAsync(TimeSpan.FromSeconds(5));
             _peer.RouteGeneration = Node.ObservePeerRoute(_peer.RoutingId).SelectedGeneration;
             _peer.Admitted = true;
             Node.AddChannel("physical-ready");
             Assert.NotEqual(0UL, Node.ObservePeerRoute(_peer.RoutingId).ReadyGeneration);
-
-            async Task WaitRouteAsync()
-            {
-                while (Node.ObservePeerRoute(_peer.RoutingId).SelectedGeneration == 0)
-                {
-                    Node.SignalReceiveOwner();
-                    await Task.Yield();
-                }
-            }
         }
 
         internal void AdvanceClock(TimeSpan elapsed)
