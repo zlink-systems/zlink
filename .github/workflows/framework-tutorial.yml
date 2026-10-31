@@ -484,6 +484,14 @@ jobs:
               sleep 1
             fi
           done
+          if [ "${streak}" -lt 3 ]; then
+            echo "--- probe: curl -v profile ---"; curl -v --max-time 10 http://127.0.0.1:5480/players/p1/profile || true
+            echo "--- probe: curl -v match-queue ---"; curl -v --max-time 10 -X POST "http://127.0.0.1:5480/match-queues/probe" -H 'Content-Type: application/json' -d '{"playerId":"probe"}' || true
+            echo "--- probe: listeners ---"; ss -ltnp || true
+            echo "--- probe: node and packages ---"; node -v; npm ls @zlink-systems/zlink @zlink-systems/framework @zlink-systems/framework-locations-redis 2>&1 | head -20
+            echo "--- probe: server.log ---"; cat server.log || true
+            echo "--- probe: client.log ---"; cat client.log || true
+          fi
           [ "${streak}" -ge 3 ] || fail "the two Node processes never connected"
 
           profile=$(curl -sf http://127.0.0.1:5480/players/p1/profile)
