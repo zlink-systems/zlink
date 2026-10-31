@@ -158,11 +158,9 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeInfrastructureProgressTest.java": {
-    "reason": "의도된 내부 시험: permit 고갈 때 drainIngressBatch(null)가 native receive에 진입하지 않는지 검사한다. 미확인: backpressure에 걸린 동일 liveness completion을 public ingress로 보류·관찰하는 fixture.",
+    "reason": "의도된 내부 시험: router sendHwm을 1로 막고 sendLiveness·encodeLiveness를 직접 호출해, 막힌 peer가 있어도 다른 peer의 infrastructure 진행이 계속되는지 검사한다. 미확인: 같은 막힘을 public API로 만드는 fixture.",
     "accesses": {
-      "4b5ca86be76aebc8d3733a8f1734f9eb7f06000554fbd0ece5d2f01405d1072d": 1,
       "5da108f730fefc70a4125d422a02e752e98cd7ff250bd158ca6efe2df0b332a3": 1,
-      "7067b29f22db207ebf65ad814bbcc62afe1219f4c06d7bc7df15d88ad960b20a": 1,
       "f23727bbeae32d801923639a0453f2fbdfea54ee7e299410fa640e555d80368d": 1,
       "f66d689a58bac0d9d98dba02368238b04120c37090a931318f6994cf950a6f71": 1
     }
@@ -191,13 +189,6 @@
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
       "7271639c976e434f18e5f5436418ea45ef1016772ddfaec98c2e76e0e9083a1a": 1
-    }
-  },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodePumpTest.java": {
-    "reason": "의도된 내부 시험: receive rotation executor 재제출 횟수와 pending permit grant의 실행 위치를 측정한다.",
-    "accesses": {
-      "6593742c1b3a7163b5c6608754f2f508ce8d0db33fa38373f6abd945b26e7cdb": 1,
-      "dfef80c78f2bac9c85558a56ebac0463cf150a2c198e27573ddfbf6ea4afb99d": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeRouteEndTest.java": {

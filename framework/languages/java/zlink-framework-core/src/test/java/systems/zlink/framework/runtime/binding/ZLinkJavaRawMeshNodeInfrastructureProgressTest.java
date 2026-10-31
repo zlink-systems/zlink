@@ -118,26 +118,20 @@ final class ZLinkJavaRawMeshNodeInfrastructureProgressTest {
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "infra-progress")) {
             node.setApplicationJobQueue(queue);
-            var pump = ZLinkJavaRawMeshNode.class.getDeclaredField("pump");
-            pump.setAccessible(true);
-            pump.set(node, executor);
-            Method drain =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "drainIngressBatch", RouterSocket.class);
-            drain.setAccessible(true);
+            node.pumpForTest(executor);
             var ticks = new AtomicInteger();
             // No socket is needed: a pre-receive permit must prevent native receive.
             var round =
                     executor.submit(
                             () -> {
-                                drain.invoke(node, new Object[] {null});
+                                node.drainIngressBatchForTest(null);
                                 node.tickLiveness(System.nanoTime());
                                 ticks.incrementAndGet();
                                 return null;
                             });
             round.get(1, TimeUnit.SECONDS);
             assertEquals(1, ticks.get());
-            drain.invoke(node, new Object[] {null});
+            node.drainIngressBatchForTest(null);
             assertEquals(1, queue.snapshot().capacityWaitCount());
         } finally {
             executor.shutdownNow();
