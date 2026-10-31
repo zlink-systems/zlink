@@ -44,6 +44,19 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
         return activator.openActivation();
     }
 
+    public static ZLinkHandlerActivator.Activation openActivation(
+            ZLinkHandlerActivator activator, Class<?> handlerType) {
+        if (activator instanceof ZLinkTypeAwareHandlerActivator typeAware) {
+            ZLinkHandlerActivator.Activation reusable =
+                    typeAware.reusableActivation(
+                            handlerType, ZLinkTypeAwareHandlerActivator.RuntimeServiceLookup.NONE);
+            if (reusable != null) {
+                return reusable;
+            }
+        }
+        return openActivation(activator);
+    }
+
     /** Creates a single dispatch handler and releases its scope if creation fails. */
     public static Object createSingle(
             ZLinkHandlerActivator.Activation activation, Class<?> handlerType) {

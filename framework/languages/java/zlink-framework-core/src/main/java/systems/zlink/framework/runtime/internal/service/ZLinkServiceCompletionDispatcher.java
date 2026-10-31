@@ -25,7 +25,7 @@ public final class ZLinkServiceCompletionDispatcher {
     /** Reuses an existing completion turn; other sources start an independent pool turn. */
     public static <T> CompletionStage<T> deliver(CompletionStage<T> source) {
         if (source.toCompletableFuture().isDone()) return source;
-        var caller = new CompletableFuture<T>();
+        var caller = ZLinkCompletionBridge.<T>newCancellationFuture();
         deliver(source, caller);
         return caller;
     }
