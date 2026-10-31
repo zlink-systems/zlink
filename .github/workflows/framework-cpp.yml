@@ -41,6 +41,22 @@ on:
 #      - "scripts/local-package/sync-version.py"
   workflow_dispatch:
   workflow_call:
+    inputs:
+      skip_tests:
+        description: Succeed without running tests when this language has no changed paths.
+        required: false
+        type: boolean
+        default: false
+      queue_checks_only:
+        description: Run the checks used to admit a pull request to the merge queue.
+        required: false
+        type: boolean
+        default: false
+      concurrency_key:
+        description: Unique concurrency key supplied by the calling workflow.
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only;
@@ -54,7 +70,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ inputs.concurrency_key || github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -75,17 +91,24 @@ jobs:
     # ["self-hosted","linux","x64"]) moves this job to a self-hosted runner;
     # without it the job stays on the GitHub-hosted image. Mergify branches,
     # manual runs and main cache warming never run untrusted fork code.
-    runs-on: ${{ vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.skip_tests && (vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04') || vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
+      - name: Confirm unchanged language
+        if: ${{ inputs.skip_tests }}
+        run: echo "No changed cpp paths; tests are not required."
+
       - uses: actions/checkout@v5
+        if: ${{ !inputs.skip_tests }}
 
       - name: Cache apt packages
+        if: ${{ !inputs.skip_tests }}
         uses: ./.github/actions/main-cache
         with:
           path: ${{ env.APT_CACHE_DIR }}
           key: framework-cpp-apt-${{ runner.os }}-24.04-${{ runner.arch }}-v1
 
       - name: Install system dependencies
+        if: ${{ !inputs.skip_tests }}
         run: |
           set -euo pipefail
           mkdir -p "${APT_CACHE_DIR}"
@@ -105,6 +128,7 @@ jobs:
       # Install OpenTelemetry and the async Redis client with its libuv CMake
       # config from the vcpkg graph. Other ports stay on the system toolchain path.
       - name: Resolve the runner vcpkg
+        if: ${{ !inputs.skip_tests }}
         id: vcpkg
         run: |
           set -euo pipefail
@@ -117,6 +141,7 @@ jobs:
           echo "revision=${revision}" >> "${GITHUB_OUTPUT}"
 
       - name: Cache Framework C++ vcpkg dependencies
+        if: ${{ !inputs.skip_tests }}
         id: linux-vcpkg-cache
         uses: ./.github/actions/main-cache
         with:
@@ -124,7 +149,7 @@ jobs:
           key: framework-cpp-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg.outputs.revision }}-${{ hashFiles('framework/languages/cpp/vcpkg.json') }}-v2
 
       - name: Install Framework C++ vcpkg dependencies
-        if: steps.linux-vcpkg-cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.skip_tests && (steps.linux-vcpkg-cache.outputs.cache-hit != 'true') }}
         run: |
           set -euo pipefail
           "${VCPKG_ROOT}/vcpkg" install \
@@ -134,6 +159,7 @@ jobs:
             --clean-after-build
 
       - name: Build the checkout Core package
+        if: ${{ !inputs.skip_tests }}
         run: |
           set -euo pipefail
           core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
@@ -150,6 +176,7 @@ jobs:
             --parallel "${BUILD_PARALLEL}" --target install
 
       - name: Build the checkout C++ binding package
+        if: ${{ !inputs.skip_tests }}
         env:
           ZLINK_BINDING_BUILD_JOBS: "2"
         run: |
@@ -160,11 +187,13 @@ jobs:
             "${ZLINK_LOCAL_PACKAGE_ROOT}/install/zlink-core/${core_version}"
 
       - name: Setup sccache
+        if: ${{ !inputs.skip_tests }}
         uses: mozilla-actions/sccache-action@v0.0.9
         with:
           version: v0.19.0
 
       - name: Cache Framework C++ compiler outputs
+        if: ${{ !inputs.skip_tests }}
         uses: ./.github/actions/main-cache
         with:
           path: ${{ env.SCCACHE_DIR }}
@@ -172,6 +201,7 @@ jobs:
           restore-keys: framework-cpp-sccache-${{ runner.os }}-${{ runner.arch }}-ubuntu24-gcc-sccache019-v1-
 
       - name: Configure and build Framework C++ tests
+        if: ${{ !inputs.skip_tests }}
         working-directory: framework/languages/cpp
         run: |
           set -euo pipefail
@@ -185,6 +215,7 @@ jobs:
           sccache --show-stats
 
       - name: Run Framework C++ unit and contract tests
+        if: ${{ !inputs.skip_tests }}
         working-directory: framework/languages/cpp
         run: |
           # No test is excluded. sample_parity and layout_contract were once
@@ -195,8 +226,8 @@ jobs:
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
-    # Windows runs on schedule, manual and release runs; merge-queue batches check Linux only.
-    if: ${{ !startsWith(github.ref_name, 'mergify/merge-queue/') }}
+    # Windows runs on schedule, manual and release runs; queue batches and queue checks use Linux only.
+    if: ${{ !inputs.skip_tests && !inputs.queue_checks_only && !startsWith(github.ref_name, 'mergify/merge-queue/') }}
     # Same rule as the Linux job, with its own variable.
     runs-on: ${{ vars.ZLINK_CPP_WINDOWS_RUNNER && fromJSON(vars.ZLINK_CPP_WINDOWS_RUNNER) || 'windows-2022' }}
     env:
