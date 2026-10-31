@@ -1541,6 +1541,9 @@ test('outbound stateful routes use resolved authority generations and never obje
           ? { descriptor: { lifecycleGeneration: 7n } }
           : undefined
     },
+    peerLifecycleGeneration(this: RawServiceMeshRuntime, nodeRid: string) {
+      return this.topology.peer(nodeRid)?.descriptor.lifecycleGeneration;
+    },
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() {
@@ -2546,6 +2549,9 @@ test('remote Entry Spot actor join derives the well-known node route fence', asy
       peer: (nodeRid: string) =>
         nodeRid === 'entry-node' ? { descriptor: { lifecycleGeneration: 7n } } : undefined
     },
+    peerLifecycleGeneration(this: RawServiceMeshRuntime, nodeRid: string) {
+      return this.topology.peer(nodeRid)?.descriptor.lifecycleGeneration;
+    },
     mailbox: {
       tryEnqueue: () => true
     },
@@ -2601,7 +2607,11 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   const relayed: Array<{ readonly target: string; readonly parts: readonly Buffer[] }> = [];
   const restored: unknown[] = [];
   const replies: Buffer[][] = [];
+  const operations = new OperationRegistry<readonly Uint8Array[]>();
   const raw = {
+    beginInfrastructureRequest(timeoutMs: number) {
+      return operations.register(timeoutMs);
+    },
     mailbox: {
       tryEnqueue(record: unknown) {
         restored.push(record);
