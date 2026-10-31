@@ -28,6 +28,7 @@ internal sealed class ZLinkProcessExecutionPool
     private readonly LinkedList<ApplicationSource> _ready = [];
     private readonly HashSet<ReceiveSource> _receiveReady = [];
     private readonly Worker[] _workers;
+    private readonly LinkedList<Worker> _idle = [];
     private readonly TaskCompletionSource _joined = new(
         TaskCreationOptions.RunContinuationsAsynchronously
     );
@@ -37,6 +38,25 @@ internal sealed class ZLinkProcessExecutionPool
     private int _remainingWorkers;
     private bool _stopping;
     private Exception? _failure;
+#if DEBUG
+    private int _parkedWorkers;
+    private long _applicationWakes;
+    private long _receiverWakes;
+    private long _wakeRequests;
+
+    internal readonly record struct ParkingSnapshot(
+        int Parked,
+        long WakeRequests,
+        long ApplicationWakes,
+        long ReceiverWakes
+    );
+
+    private ParkingSnapshot GetParkingSnapshot()
+    {
+        lock (_gate)
+            return new(_parkedWorkers, _wakeRequests, _applicationWakes, _receiverWakes);
+    }
+#endif
 
     private static readonly TimeSpan ReceiveWakeInterval = TimeSpan.FromTicks(1);
     private const int WakeFireCount = 1;
@@ -50,7 +70,10 @@ internal sealed class ZLinkProcessExecutionPool
         _workers = new Worker[WorkerCount];
         _remainingWorkers = 1;
         for (var index = 0; index < _workers.Length; index++)
-            _workers[index] = new Worker { Receiving = index == 0, Idle = index != 0 };
+        {
+            var worker = new Worker { Receiving = index == 0 };
+            _workers[index] = worker;
+        }
         _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
             StartAsync(factory, previousGeneration)
         );
@@ -114,10 +137,13 @@ internal sealed class ZLinkProcessExecutionPool
     private void JoinExitedWorkers()
     {
         foreach (var worker in _workers)
+        {
             if (worker.Thread is { } thread)
                 thread.Join();
             else
                 worker.Turn.Dispose();
+            worker.Wake.Dispose();
+        }
         if (_failure is { } error)
             _joined.TrySetException(error);
         else
@@ -171,7 +197,7 @@ internal sealed class ZLinkProcessExecutionPool
         }
         _sources.Clear();
         foreach (var application in _applications)
-            application.FailUnderLock(_failure);
+            application.FailUnderLock();
         _registrations.Clear();
         _dirty.Clear();
         _resuming.Clear();
@@ -180,7 +206,7 @@ internal sealed class ZLinkProcessExecutionPool
             source.DeadlineIndex = -1;
         _deadlines.Clear();
         _ready.Clear();
-        Monitor.PulseAll(_gate);
+        NotifyAllUnderLock();
         return continuations;
     }
 
@@ -244,8 +270,8 @@ internal sealed class ZLinkProcessExecutionPool
         {
             var source = new ApplicationSource(pool, turn, report, maximumConcurrentTurns);
             pool._applications.Add(source);
-            if (pool._failure is { } failure)
-                source.FailUnderLock(failure);
+            if (pool._failure is not null)
+                source.FailUnderLock();
             return source;
         }
     }
@@ -254,13 +280,55 @@ internal sealed class ZLinkProcessExecutionPool
     {
         if (--_references != 0)
             return Task.CompletedTask;
+        if (_stopping)
+            return _joined.Task;
         _stopping = true;
         WakeUnderLock();
-        Monitor.PulseAll(_gate);
+        NotifyAllUnderLock();
         return _joined.Task;
     }
 
     private void WakeUnderLock() => _wake?.Start(ReceiveWakeInterval, WakeFireCount);
+
+    private void NotifyWorkerUnderLock(Worker worker)
+    {
+#if DEBUG
+        _wakeRequests++;
+#endif
+        worker.Wake.Set();
+    }
+
+    private void NotifyAllUnderLock()
+    {
+        foreach (var worker in _workers)
+            NotifyWorkerUnderLock(worker);
+    }
+
+    private void DispatchApplicationsUnderLock(Worker? currentWorker = null)
+    {
+        while (!_stopping && _idle.First is { } entry)
+        {
+            var application = TakeApplicationUnderLock();
+            if (application is null)
+                return;
+            var worker = entry.Value;
+            _idle.Remove(entry);
+            worker.Application = application;
+            if (!ReferenceEquals(worker, currentWorker))
+                NotifyWorkerUnderLock(worker);
+        }
+    }
+
+    private void ReleaseWorkerUnderLock(Worker worker)
+    {
+        if (worker.IdleEntry.List is not null)
+            _idle.Remove(worker.IdleEntry);
+        if (worker.Application is { } reserved)
+        {
+            worker.Application = null;
+            reserved.CompleteUnderLock();
+        }
+    }
 
     private void RunWorker(Worker worker)
     {
@@ -269,21 +337,49 @@ internal sealed class ZLinkProcessExecutionPool
         {
             while (true)
             {
-                ApplicationSource? application = null;
+                ApplicationSource? application;
+                bool park;
                 lock (_gate)
                 {
-                    while (
-                        !worker.Receiving
-                        && (application = TakeApplicationUnderLock()) is null
-                        && !_stopping
-                    )
-                    {
-                        worker.Idle = true;
-                        Monitor.Wait(_gate);
-                    }
-                    worker.Idle = false;
                     if (_stopping && (!worker.Receiving || _poller is null))
                         return;
+                    if (!worker.Receiving && worker.Application is null)
+                    {
+                        // Most recently idle first: a finishing worker takes queued work without a wake.
+                        if (worker.IdleEntry.List is null)
+                            _idle.AddFirst(worker.IdleEntry);
+                        DispatchApplicationsUnderLock(worker);
+                    }
+                    application = worker.Application;
+                    worker.Application = null;
+                    park = !worker.Receiving && application is null;
+#if DEBUG
+                    if (park)
+                        _parkedWorkers++;
+#endif
+                }
+                if (park)
+                {
+#if DEBUG
+                    try
+                    {
+                        worker.Wake.WaitOne();
+                    }
+                    finally
+                    {
+                        lock (_gate)
+                        {
+                            _parkedWorkers--;
+                            if (worker.Receiving)
+                                _receiverWakes++;
+                            else
+                                _applicationWakes++;
+                        }
+                    }
+#else
+                    worker.Wake.WaitOne();
+#endif
+                    continue;
                 }
                 if (worker.Receiving)
                 {
@@ -297,7 +393,11 @@ internal sealed class ZLinkProcessExecutionPool
                         _receiving = null;
                     }
                     if (_stopping)
+                    {
+                        lock (_gate)
+                            application?.CompleteUnderLock();
                         return;
+                    }
                 }
                 application?.Run(worker.Turn);
             }
@@ -312,11 +412,13 @@ internal sealed class ZLinkProcessExecutionPool
                     _failure ??= failure;
                     _stopping = true;
                     WakeUnderLock();
-                    Monitor.PulseAll(_gate);
+                    NotifyAllUnderLock();
                 }
         }
         finally
         {
+            lock (_gate)
+                ReleaseWorkerUnderLock(worker);
             try
             {
                 worker.Turn.Dispose();
@@ -328,7 +430,7 @@ internal sealed class ZLinkProcessExecutionPool
                     _failure ??= failure;
                     _stopping = true;
                     WakeUnderLock();
-                    Monitor.PulseAll(_gate);
+                    NotifyAllUnderLock();
                 }
             }
             finally
@@ -384,7 +486,7 @@ internal sealed class ZLinkProcessExecutionPool
                     }
                     worker.Receiving = false;
                     terminating = true;
-                    Monitor.PulseAll(_gate);
+                    NotifyAllUnderLock();
                 }
                 if (!terminating)
                 {
@@ -475,26 +577,19 @@ internal sealed class ZLinkProcessExecutionPool
             readySources.Clear();
             lock (_gate)
             {
-                if (_ready.Count == 0)
+                if (_ready.Count == 0 || _idle.First is null)
                     continue;
                 var application = TakeApplicationUnderLock();
                 if (application is null)
                     continue;
-                foreach (var replacement in _workers)
-                {
-                    if (!replacement.Idle)
-                        continue;
-                    // Reservation is exclusive before the old receiver runs any application.
-                    replacement.Idle = false;
-                    replacement.Receiving = true;
-                    worker.Receiving = false;
-                    Monitor.PulseAll(_gate);
-                    return application;
-                }
-                // No idle resource: the current worker keeps the receive role.
-                application.Running--;
-                _ready.AddLast(application.ReadyEntry);
-                Monitor.PulseAll(_gate);
+                var replacementEntry = _idle.First!;
+                var replacement = replacementEntry.Value;
+                _idle.Remove(replacementEntry);
+                // The reservation excludes application assignment before the old receiver runs.
+                replacement.Receiving = true;
+                worker.Receiving = false;
+                NotifyWorkerUnderLock(replacement);
+                return application;
             }
         }
     }
@@ -632,7 +727,11 @@ internal sealed class ZLinkProcessExecutionPool
         internal Thread? Thread;
         internal readonly ApplicationTurn Turn = new();
         internal bool Receiving;
-        internal bool Idle;
+        internal readonly AutoResetEvent Wake = new(false);
+        internal readonly LinkedListNode<Worker> IdleEntry;
+        internal ApplicationSource? Application;
+
+        internal Worker() => IdleEntry = new(this);
     }
 
     internal sealed class Registration(
@@ -898,6 +997,9 @@ internal sealed class ZLinkProcessExecutionPool
         int maximumConcurrentTurns
     ) : IAsyncDisposable
     {
+#if DEBUG
+        internal ParkingSnapshot Parking => pool.GetParkingSnapshot();
+#endif
         private readonly TaskCompletionSource _drained = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -929,9 +1031,8 @@ internal sealed class ZLinkProcessExecutionPool
             }
         }
 
-        internal void FailUnderLock(Exception failure)
+        internal void FailUnderLock()
         {
-            _failure ??= failure;
             _closing = true;
             if (ReadyEntry.List is not null)
                 pool._ready.Remove(ReadyEntry);
@@ -944,14 +1045,13 @@ internal sealed class ZLinkProcessExecutionPool
             {
                 if (_closing)
                     return;
-                if (ReadyEntry.List is null)
-                {
-                    ReadyEntry.Value = this;
-                    pool._ready.AddLast(ReadyEntry);
-                }
+                if (ReadyEntry.List is not null)
+                    return;
+                ReadyEntry.Value = this;
+                pool._ready.AddLast(ReadyEntry);
                 if (!ReferenceEquals(_receiving, pool))
                 {
-                    Monitor.PulseAll(pool._gate);
+                    pool.DispatchApplicationsUnderLock();
                     pool.WakeUnderLock();
                 }
             }
@@ -1040,7 +1140,7 @@ internal sealed class ZLinkProcessExecutionPool
         {
             if (!_closing || ReadyEntry.List is not null || Running != 0 || _retained != 0)
                 return;
-            if (_failure is { } error)
+            if ((_failure ?? pool._failure) is { } error)
                 _drained.TrySetException(error);
             else
                 _drained.TrySetResult();
@@ -1049,13 +1149,16 @@ internal sealed class ZLinkProcessExecutionPool
         private void Complete()
         {
             lock (pool._gate)
-            {
-                Running--;
-                CompleteDrainedUnderLock();
-                Monitor.PulseAll(pool._gate);
-                if (ReadyEntry.List is not null)
-                    pool.WakeUnderLock();
-            }
+                CompleteUnderLock();
+        }
+
+        internal void CompleteUnderLock()
+        {
+            Running--;
+            CompleteDrainedUnderLock();
+            pool.DispatchApplicationsUnderLock();
+            if (ReadyEntry.List is not null)
+                pool.WakeUnderLock();
         }
 
         public ValueTask DisposeAsync()

@@ -3,8 +3,8 @@ using System.Diagnostics;
 namespace Zlink.Framework.Runtime.Dispatch;
 
 // The transport-liveness contract bounds one receive turn on all three axes.
-// A first record is admitted even when it is larger than the byte limit; an
-// individual record cannot be split by this layer.
+// A first record is admitted even after the time limit or beyond the byte
+// limit: scheduling delay must not prevent progress, and records cannot split.
 internal static class ZLinkReceiveBatchBudget
 {
     internal const int MaximumRecords = 64;
@@ -13,9 +13,12 @@ internal static class ZLinkReceiveBatchBudget
 
     internal static bool IsExhausted(int records, long bytes, long startedAt)
     {
-        return records >= MaximumRecords
-            || bytes >= MaximumBytes
-            || ElapsedMilliseconds(startedAt) >= MaximumMilliseconds;
+        return records != 0
+            && (
+                records >= MaximumRecords
+                || bytes >= MaximumBytes
+                || ElapsedMilliseconds(startedAt) >= MaximumMilliseconds
+            );
     }
 
     internal static bool WouldExceed(int records, long bytes, long nextBytes, long startedAt)

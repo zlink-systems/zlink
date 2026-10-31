@@ -14,6 +14,249 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
     private const int SignalCount = 1000;
     private static readonly TimeSpan TestGuard = TimeSpan.FromSeconds(5);
 
+#if DEBUG
+    [Fact]
+    public async Task ClosingSourceObservesWorkerFailureBeforeReceiverCleanup()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshWorkerWaitCostTests),
+                nameof(ClosingSourceObservesWorkerFailureBeforeReceiverCleanup)
+            )
+        )
+            return;
+
+        var poller = new MeshReceiveWakeTests.ControlledReceivePoller();
+        var receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() => poller);
+        var entered = new TaskCompletionSource<Thread>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var source = ZLinkProcessExecutionPool.CreateApplicationSource(
+            _ =>
+            {
+                entered.TrySetResult(Thread.CurrentThread);
+                return new ValueTask(completion.Task);
+            },
+            error => Assert.Fail(error.ToString())
+        );
+        Task? disposal = null;
+        try
+        {
+            await poller.FirstWait.Task.WaitAsync(TestGuard);
+            source.Signal();
+            var worker = await entered.Task.WaitAsync(TestGuard);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => source.Parking.Parked == ZLinkProcessExecutionPool.ApplicationWorkerCount,
+                    TestGuard
+                )
+            );
+            disposal = source.DisposeAsync().AsTask();
+            worker.Interrupt();
+            Assert.True(worker.Join(TestGuard));
+            completion.TrySetResult();
+            await Assert.ThrowsAsync<ThreadInterruptedException>(() =>
+                source.Completion.WaitAsync(TestGuard)
+            );
+        }
+        finally
+        {
+            completion.TrySetResult();
+            poller.ReleaseWait();
+            var sourceFailure = await Record.ExceptionAsync(() =>
+                (disposal ?? source.DisposeAsync().AsTask()).WaitAsync(TestGuard)
+            );
+            if (sourceFailure is not null)
+                Assert.IsType<ThreadInterruptedException>(sourceFailure);
+            await Assert.ThrowsAsync<ThreadInterruptedException>(() =>
+                receiver.DisposeAsync().AsTask().WaitAsync(TestGuard)
+            );
+        }
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(2, false)]
+    [InlineData(1, true)]
+    [InlineData(2, true)]
+    public async Task ProcessPoolReservationsRespectSourceConcurrencyAndDrainQueuedTurn(
+        int capacity,
+        bool asynchronous
+    )
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshWorkerWaitCostTests),
+                nameof(ProcessPoolReservationsRespectSourceConcurrencyAndDrainQueuedTurn)
+            )
+        )
+            return;
+
+        var poller = new MeshReceiveWakeTests.ControlledReceivePoller();
+        var receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() => poller);
+        using var release = new SemaphoreSlim(0);
+        var entered = Channel.CreateUnbounded<int>();
+        var calls = 0;
+        var running = 0;
+        var failures = new ConcurrentQueue<Exception>();
+        var source = ZLinkProcessExecutionPool.CreateApplicationSource(
+            async _ =>
+            {
+                var active = Interlocked.Increment(ref running);
+                try
+                {
+                    Assert.InRange(active, 1, capacity);
+                    entered.Writer.TryWrite(Interlocked.Increment(ref calls));
+                    if (asynchronous)
+                        await release.WaitAsync().ConfigureAwait(false);
+                    else
+                        release.Wait();
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref running);
+                }
+            },
+            failures.Enqueue,
+            maximumConcurrentTurns: capacity
+        );
+        try
+        {
+            await poller.FirstWait.Task.WaitAsync(TestGuard);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => source.Parking.Parked == ZLinkProcessExecutionPool.ApplicationWorkerCount,
+                    TestGuard
+                )
+            );
+            for (var index = 1; index <= capacity; index++)
+            {
+                source.Signal();
+                Assert.Equal(index, await entered.Reader.ReadAsync().AsTask().WaitAsync(TestGuard));
+            }
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                        source.Parking.Parked
+                        == ZLinkProcessExecutionPool.ApplicationWorkerCount
+                            - (asynchronous ? 0 : capacity),
+                    TestGuard
+                )
+            );
+            var before = source.Parking.WakeRequests;
+            for (var index = 0; index < 100; index++)
+                source.Signal();
+            Assert.Equal(before, source.Parking.WakeRequests);
+            Assert.Equal(capacity, Volatile.Read(ref calls));
+            release.Release();
+            Assert.Equal(
+                capacity + 1,
+                await entered.Reader.ReadAsync().AsTask().WaitAsync(TestGuard)
+            );
+            var needsWake =
+                asynchronous || ZLinkProcessExecutionPool.ApplicationWorkerCount > capacity;
+            Assert.Equal(before + (needsWake ? 1 : 0), source.Parking.WakeRequests);
+            release.Release(capacity);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => source.Parking.Parked == ZLinkProcessExecutionPool.ApplicationWorkerCount,
+                    TestGuard
+                )
+            );
+            Assert.Equal(capacity + 1, Volatile.Read(ref calls));
+            Assert.Empty(failures);
+        }
+        finally
+        {
+            release.Release(capacity + 2);
+            poller.ReleaseWait();
+            await source.DisposeAsync().AsTask().WaitAsync(TestGuard);
+            await receiver.DisposeAsync().AsTask().WaitAsync(TestGuard);
+        }
+    }
+
+    [Fact]
+    public async Task ProcessPoolWakesOnlyTheWorkerReservedForAnApplicationTurn()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshWorkerWaitCostTests),
+                nameof(ProcessPoolWakesOnlyTheWorkerReservedForAnApplicationTurn)
+            )
+        )
+            return;
+
+        var poller = new MeshReceiveWakeTests.ControlledReceivePoller();
+        var receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() => poller);
+        using var release = new SemaphoreSlim(0);
+        var entered = Channel.CreateUnbounded<int>();
+        var calls = 0;
+        var failures = new ConcurrentQueue<Exception>();
+        var source = ZLinkProcessExecutionPool.CreateApplicationSource(
+            _ =>
+            {
+                entered.Writer.TryWrite(Interlocked.Increment(ref calls));
+                release.Wait();
+                return ValueTask.CompletedTask;
+            },
+            failures.Enqueue
+        );
+        try
+        {
+            await poller.FirstWait.Task.WaitAsync(TestGuard);
+            Parked(ZLinkProcessExecutionPool.ApplicationWorkerCount);
+            var initial = source.Parking;
+            for (var index = 1; index <= 8; index++)
+            {
+                source.Signal();
+                Assert.Equal(index, await entered.Reader.ReadAsync().AsTask().WaitAsync(TestGuard));
+                Parked(ZLinkProcessExecutionPool.ApplicationWorkerCount - 1);
+                Assert.Equal(index, source.Parking.WakeRequests - initial.WakeRequests);
+                release.Release();
+                Parked(ZLinkProcessExecutionPool.ApplicationWorkerCount);
+                Assert.Equal(index, source.Parking.WakeRequests - initial.WakeRequests);
+            }
+            source.Signal();
+            Assert.Equal(9, await entered.Reader.ReadAsync().AsTask().WaitAsync(TestGuard));
+            Parked(ZLinkProcessExecutionPool.ApplicationWorkerCount - 1);
+            var capped = source.Parking.WakeRequests;
+            for (var index = 0; index < 100; index++)
+                source.Signal();
+            Assert.Equal(capped, source.Parking.WakeRequests);
+            Assert.Equal(9, Volatile.Read(ref calls));
+            release.Release();
+            Assert.Equal(10, await entered.Reader.ReadAsync().AsTask().WaitAsync(TestGuard));
+            release.Release();
+            Parked(ZLinkProcessExecutionPool.ApplicationWorkerCount);
+            Assert.Equal(10, Volatile.Read(ref calls));
+            Assert.Equal(initial.ReceiverWakes, source.Parking.ReceiverWakes);
+            output.WriteLine(
+                $"requested application wakes={source.Parking.WakeRequests - initial.WakeRequests}; actual application wakes={source.Parking.ApplicationWakes - initial.ApplicationWakes}; receiver wakes={source.Parking.ReceiverWakes - initial.ReceiverWakes}; turns={calls}"
+            );
+            Assert.Empty(failures);
+        }
+        finally
+        {
+            release.Release(16);
+            poller.ReleaseWait();
+            await source.DisposeAsync().AsTask().WaitAsync(TestGuard);
+            await receiver.DisposeAsync().AsTask().WaitAsync(TestGuard);
+        }
+
+        void Parked(int count) =>
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => source.Parking is var snapshot && snapshot.Parked == count,
+                    TestGuard
+                ),
+                $"Expected {count} parked workers; observed {source.Parking}."
+            );
+    }
+#endif
+
     [Fact]
     public async Task PoolSensitiveFixturesOwnTheirLifetimesWithAnotherSourceAlive()
     {
