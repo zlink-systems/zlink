@@ -20,6 +20,8 @@
     <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' != 'true'">0.31.0</ZLinkSampleFrameworkVersion>
     <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true'">true</ZLinkSampleUseLocalSource>
     <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == ''">false</ZLinkSampleUseLocalSource>
+    <!-- Solution builds strip Configuration from outside references; local source references must inherit it. -->
+    <ShouldUnsetParentConfigurationAndPlatform Condition="'$(ZLinkSampleUseLocalSource)' == 'true'">false</ShouldUnsetParentConfigurationAndPlatform>
   </PropertyGroup>
 
   <ItemGroup>
@@ -40,7 +42,8 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(ZLinkSampleUseLocalSource)' == 'true'">
-    <ProjectReference Include="@(ZLinkFrameworkReference->'%(ProjectPath)')" />
+    <ProjectReference Include="@(ZLinkFrameworkReference->'%(ProjectPath)')"
+                      AdditionalProperties="ShouldUnsetParentConfigurationAndPlatform=false" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(ZLinkSampleUseLocalSource)' != 'true'">
