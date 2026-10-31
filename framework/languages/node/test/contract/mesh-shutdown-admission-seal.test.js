@@ -5,6 +5,44 @@ const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/
 const framework = require('../../packages/framework/dist/internal');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
+test('discovery resumes pending HELLO when owner lease admission reopens', async (t) => {
+  const meshName = `peer-discovery-${process.pid}`;
+  const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
+    builder.addRouteMesh(meshName).listen(`inproc://${meshName}`).routingId('discovering-node');
+  });
+  const { host, admission } = createRelayHost({ registration });
+  let ownerOpen = false;
+  try {
+    await host.start();
+    t.mock.method(admission, 'ownerAdmissionOpen', () => ownerOpen);
+    const backend = host.spotNodeRuntime.meshNode(meshName);
+    const raw = backend.runtime;
+    const sent = [];
+    t.mock.method(raw.router, 'routesSnapshot', () => [
+      { routingId: 'peer', routeGeneration: 1n }
+    ]);
+    t.mock.method(raw.router, 'submitSend', (_target, parts) => {
+      sent.push(wire.decodeHeader(parts[0]).command);
+      return { result: SubmitResult.Ok, admitted: Promise.resolve() };
+    });
+    const discovered = {
+      nodeRoutingId: 'peer', endpoint: 'inproc://peer',
+      securityIdentity: 'default', lifecycleGeneration: 1n
+    };
+    await raw.observeSelectedRoutes();
+    backend.expectPeer(discovered);
+    assert.deepEqual(sent, [], 'owner lease admission blocks the first HELLO');
+    ownerOpen = true;
+    backend.expectPeer(discovered);
+    assert.deepEqual(sent, [wire.M6aServiceWireCommand.hello],
+      'the existing discovery observation resumes the pending first HELLO');
+    admission.seal(meshName);
+    backend.expectPeer(discovered);
+    assert.deepEqual(sent, [wire.M6aServiceWireCommand.hello],
+      'discovery cannot bypass shutdown admission');
+  } finally { await host.stop(); }
+});
+
 for (const withChannel of [true, false]) {
   test(`host shutdown seals raw mesh Hello and preserves Draining Update (channel=${withChannel})`, async (t) => {
     const meshName = `shutdown-seal-${withChannel}-${process.pid}`;
