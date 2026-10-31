@@ -188,7 +188,6 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
-        bool durable = false,
         ZLinkRequestAdmission? requestAdmission = null
     ) =>
         ValueTask.FromException<ZLinkBackendRouteReceived>(
