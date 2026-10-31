@@ -21,13 +21,10 @@ import java.util.concurrent.TimeUnit;
 final class ZLinkJavaConnectionFailureRequestTest {
     @Test
     void actualConnectionRefusalTerminatesJoinBeforeItsOriginalDeadline() throws Exception {
-        final String endpoint;
-        // Closing an actual listener leaves no endpoint to accept the Core connection attempt.
-        try (var listener = new ServerSocket(0)) {
-            endpoint = "tcp://127.0.0.1:" + listener.getLocalPort();
-        }
-        try (var context = Zlink.createContext();
+        try (var listener = new ServerSocket(0);
+                var context = Zlink.createContext();
                 var source = new ZLinkJavaRawMeshNode(context, "failed-owner")) {
+            var endpoint = "tcp://127.0.0.1:" + listener.getLocalPort();
             var owner = RoutingId.from("closed-owner");
             source.setRoutingId(RoutingId.from("join-source"));
             source.setBind("tcp://127.0.0.1:0");
@@ -40,6 +37,8 @@ final class ZLinkJavaConnectionFailureRequestTest {
                             ZLinkMeshNodeObjectRole.SERVER)
                     .toCompletableFuture()
                     .join();
+            // Release the refusal target only after the source has bound its ephemeral port.
+            listener.close();
             source.connectPeer(endpoint, owner);
             var join =
                     new ZLinkInternalMeshNode.CanonicalActorJoinRequest(
@@ -67,7 +66,15 @@ final class ZLinkJavaConnectionFailureRequestTest {
             Throwable failure =
                     (Throwable)
                             CompletableFuture.anyOf(observed, checkpoint).get(6, TimeUnit.SECONDS);
-            assertNotNull(failure, "Core connection refusal must end Join before its 30s deadline");
+            assertNotNull(
+                    failure,
+                    () ->
+                            "Core connection refusal must end Join before its 30s deadline"
+                                    + " (target="
+                                    + endpoint
+                                    + ", source="
+                                    + source.status().localEndpoint()
+                                    + ")");
             while (failure instanceof java.util.concurrent.CompletionException
                     && failure.getCause() != null) failure = failure.getCause();
             assertEquals(
