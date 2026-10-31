@@ -595,13 +595,25 @@ Seal 뒤 source ingress hold는 commit된 Message Follow route로 relay한다.
 | Object role Mesh 후보가 없거나 여러 개인 create와 cold activation | §3·§4의 typed error(`NotConfigured`·`InvalidOperation`·`NotFound`)로 끝난다. |
 | Instance intent가 없는 Spot direct send·request의 target authority가 `Missing` 또는 `Creating`이다 | `NotFound`다. |
 | `ActorRef`·`SpotRef`로 지정한 control의 generation이 current generation과 다르다(direct message는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)대로 generation을 비교하지 않는다) | `InvalidOperation`이다. |
-| [owner fence](../00-foundation/02-glossary.ko.md#owner-fence)가 다르다 | `Unavailable`이다. |
+| [owner fence](../00-foundation/02-glossary.ko.md#owner-fence)가 다르다 | Instance intent가 있는 Spot direct request는 아래 authority 추종 절차를 따른다. 그 밖의 작업은 `Unavailable`이다. |
 | `Closing` owner에 작업이 도착했거나 resolver가 `Closing` authority를 확인했다 | User Spot `GetOrCreate`는 §3.2를 따른다. Instance intent가 있는 작업은 그 owner node로 보내며 §7 3단계에 따라 새 generation에서 실행된다. 그 밖의 작업은 `Missing`과 같은 `NotFound`다. |
 | `Draining` owner에 신규 admission을 요청했다 | `ShuttingDown`이다. |
 | Relocation seal 이후 source route로 ingress가 도착했다 | 거부하지 않고 relocation hold에 보관한다. |
 | `Relocating`이지만 아직 seal하지 않은 unit에 message가 도착했다 | 기존 owner admission을 유지해 수락한다. |
 | Request가 실패했다 | 다른 Spot ID, MeshName이나 owner로 우회하지 않는다. |
 | Owner가 expired다 | 신규 message·timer admission과 location update를 수행할 수 없다. |
+
+Instance intent가 있는 Spot direct request가 target queue admission 전에 owner fence 불일치나
+`SpotMoving` 같은 stale route 오류로 거부되면, Framework는 같은 logical request와 terminal entry를
+유지하고 원래 deadline 안에서 authority를 다시 조회한다. `Missing`이면 cold activation하고,
+`Ready`이면 현재 owner로 보내며, `Creating`·`Closing`이면 각 상태의 대상 선택·대기 규칙을 따른다.
+다시 admission 전 stale route로 거부되면 같은 절차를 반복한다. 횟수 상한은 두지 않으며 원래
+deadline이 지나면 `DeadlineExceeded` 또는 해당 언어의 기존 timeout typed 결과로 완료한다.
+다른 실패는 해당 typed 결과로 완료한다.
+
+이 절차는 admission 전 stale route에 대해 현재 authority를 따르는 전달 절차이며, 표의
+“Request가 실패했다” 이후 다른 owner로 우회하는 동작이 아니다. Binding operation 자체를
+재제출하지 않으며, 이미 수락된 message와 timeout·cancellation·disconnect에는 적용하지 않는다.
 
 관측 정보는 global Spot ID, current [MeshName](../00-foundation/02-glossary.ko.md#meshname), ObjectGeneration,
 resolve·cache 결과, creation attempt, cold activation·close·maintenance operation kind,

@@ -714,13 +714,27 @@ After seal, the source ingress hold is relayed via the committed Message Follow 
 | Create and cold activation with no or multiple object-role Mesh candidates | Ends with a §3/§4 typed error (`NotConfigured`/`InvalidOperation`/`NotFound`). |
 | The target authority of a Spot direct send or request without Instance intent is `Missing` or `Creating` | `NotFound`. |
 | The generation of a control addressed by `ActorRef`/`SpotRef` differs from the current generation (a direct message doesn't compare generations, per [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not)) | `InvalidOperation`. |
-| The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | `Unavailable`. |
+| The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | A Spot direct request with Instance intent follows the authority-following procedure below. Other operations get `Unavailable`. |
 | Work reached a `Closing` owner, or the resolver observed `Closing` authority | User Spot `GetOrCreate` follows §3.2. Work with Instance intent is sent to that owner node and runs on the new generation per §7 step 3. All other work gets `NotFound`, the same as `Missing`. |
 | New admission requested on a `Draining` owner | `ShuttingDown`. |
 | Ingress arrives on the source route after a relocation seal | Not rejected — retained in the relocation hold. |
 | A message arrives at a `Relocating` unit not yet sealed | Accepted, keeping existing owner admission. |
 | A request failed | Not bypassed by a different Spot ID, MeshName, or owner. |
 | Owner is expired | Can't perform new message/timer admission or a location update. |
+
+If a Spot direct request with Instance intent is refused before target queue admission because of
+an owner-fence mismatch or a stale route error such as `SpotMoving`, the Framework rereads authority
+within the original deadline, preserving the same logical request and terminal entry. `Missing`
+starts cold activation; `Ready` sends to the current owner; `Creating` and `Closing` follow their
+respective target selection and waiting rules. Another pre-admission stale-route refusal repeats
+this procedure. There is no attempt limit: the original deadline bounds the procedure. On expiry,
+the request completes with `DeadlineExceeded` or the language's existing typed timeout result.
+Other failures complete with their corresponding typed result.
+
+This is a delivery procedure that follows current authority after a pre-admission stale-route
+refusal, rather than a detour to another owner after “Request failed” in the table. It does not
+resubmit a binding operation itself and does not apply to already accepted messages, timeout,
+cancellation, or disconnect.
 
 Observability information distinguishes the global Spot ID, current
 [MeshName](../00-foundation/02-glossary.en.md#meshname), ObjectGeneration, resolve/cache

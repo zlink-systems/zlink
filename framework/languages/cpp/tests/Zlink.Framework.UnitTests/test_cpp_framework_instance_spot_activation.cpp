@@ -33,6 +33,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <future>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -673,7 +675,11 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CloseFromRequestReturnsReplyBeforeCl
           payload.to_bytes (), {}, true, "close-request-2", provider, serializers, [] {})
         .result ();
     ASSERT_FALSE (second);
-    EXPECT_EQ (zlink::framework::framework_error_kind_t::not_found, second.error_kind ());
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable, second.error_kind ());
+    ASSERT_NE (nullptr, second.error ());
+    EXPECT_EQ (static_cast<std::uint32_t> (
+                 zlink::framework::runtime::protocol::framework_error_code::spotMoving),
+               zlink::framework::detail::failure_code (*second.error ()));
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation,
@@ -1175,7 +1181,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingRequestUsesDefaultTimeoutForC
                           .result ();
 
     EXPECT_FALSE (result);
-    EXPECT_EQ (std::chrono::seconds (30), observed_timeout);
+    // Spot address messaging §9 preserves the original deadline across resolution.
+    EXPECT_GT (observed_timeout, std::chrono::milliseconds::zero ());
+    EXPECT_LE (observed_timeout, std::chrono::seconds (30));
 }
 
 void verify_reserve_loser (bool expire_deadline, bool one_way)
@@ -1676,107 +1684,155 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalKeepsRouteUntilI
     EXPECT_EQ (3, resolver.reads.load ());
 }
 
-// Failover policy §4.4: an Instance intent request whose cached Ready route the
-// owner fence refused before admission reads the authority once. Missing continues
-// as cold activation; a present authority or another terminal ends the operation.
-TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorityOnce)
+// Spot address messaging §9: authority following stays within one logical request.
+TEST (ZLinkFrameworkInstanceSpotActivation, AuthorityFollowConformance)
 {
-    namespace messaging = zlink::framework::runtime::messaging;
-    using zlink::framework::framework_error_kind_t;
-    using zlink::framework::runtime::spot_address_t;
-
-    class authority_resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
+    namespace fw = zlink::framework;
+    namespace messaging = fw::runtime::messaging;
+    using fw::runtime::spot_address_t;
+    auto root = std::filesystem::path (__FILE__).parent_path ();
+    while (!std::filesystem::exists (root / "framework/runtime/conformance/spot-close-v1.json")) {
+        ASSERT_NE (root, root.parent_path ());
+        root = root.parent_path ();
+    }
+    std::ifstream input (root / "framework/runtime/conformance/spot-close-v1.json");
+    const auto fixture = nlohmann::json::parse (input);
+    class creating_repository_t final : public fw::runtime::in_memory_location_repository_t
     {
       public:
-        zlink::framework::task_t<std::optional<spot_address_t>>
-        resolve_spot_address (std::string, std::string) override
+        fw::task_t<fw::authority_read_result_t> read_authority (fw::authority_key_t,
+                                                                std::stop_token = {}) override
         {
-            if (cached)
-                co_return cached;
-            ++authority_reads;
-            co_return authority;
+            fw::authority_snapshot_t snapshot;
+            snapshot.store_version = "same-attempt";
+            snapshot.object_generation = 3;
+            snapshot.authority_owner_generation = 4;
+            snapshot.owner = {"owner", 1};
+            snapshot.payload = fw::runtime::encode_instance_spot_authority_payload (
+              {.state = fw::runtime::instance_spot_authority_state_t::cold_activating,
+               .stable_type = "player-quest",
+               .spot_id = "player-alice",
+               .owner_id = "owner",
+               .owner_lease_generation = 1,
+               .mesh_name = "gamequest",
+               .node_rid = fw::node_rid_t::from_string ("new-owner"),
+               .node_generation = 3});
+            snapshot.allocation.state = fw::placement_allocation_state_t::reserved;
+            snapshot.allocation.object_kind = fw::placement_object_kind_t::instance_spot;
+            snapshot.allocation.stable_type = "player-quest";
+            snapshot.allocation.target = {"gamequest", fw::node_rid_t::from_string ("new-owner"), 3,
+                                          snapshot.owner};
+            snapshot.pending_creation.emplace ().reservation_id = "same-attempt";
+            co_return snapshot;
         }
-
-        void invalidate_spot_address (std::string_view) override { cached.reset (); }
-
-        void invalidate_all_routes_after_store_recovery () override { cached.reset (); }
-
+    };
+    class authority_resolver_t final : public fw::runtime::spot_address_resolver_t
+    {
+      public:
+        fw::task_t<std::optional<spot_address_t>> resolve_spot_address (std::string,
+                                                                        std::string) override
+        {
+            ++reads;
+            if (reads > 1 && creating) {
+                creating_repository_t repository;
+                fw::runtime::store_location_resolvers_t resolver (repository);
+                co_return co_await resolver.resolve_spot_address ({}, "player-alice", true);
+            }
+            co_return reads == 1 ? cached : authority;
+        }
+        void invalidate_spot_address (std::string_view) override { ++invalidations; }
+        void invalidate_all_routes_after_store_recovery () override {}
         std::optional<spot_address_t> cached;
         std::optional<spot_address_t> authority;
-        int authority_reads = 0;
+        bool creating = false;
+        int reads = 0;
+        int invalidations = 0;
     };
-
     const messaging::request_failure_mapper_t mapper;
-    // The owner's Ready owner-fence refusal, and the Unavailable terminal of a message
-    // the owner accepted (a relocating host ending the Instance intent messages it kept).
-    const auto refusal = *mapper.target_failure_reply (
-      framework_error_kind_t::unavailable,
-      static_cast<std::uint32_t> (
-        zlink::framework::runtime::protocol::framework_error_code::spotMoving));
-    const auto accepted = *mapper.target_failure_reply (framework_error_kind_t::unavailable);
-    struct case_t
-    {
-        messaging::request_wire_failure_t owner_failure;
-        bool authority_present;
-        bool replied;
-        std::vector<bool> cached_routes;
-        int authority_reads;
-    };
-    for (const auto &scenario :
-         {case_t{refusal, false, true, {true, false}, 1}, case_t{refusal, true, false, {true}, 1},
-          case_t{accepted, false, false, {true}, 0}}) {
-        zlink::framework::serializer_registry_t serializers;
-        zlink::framework::zlink_builder_t builder =
-          zlink::framework::test::runtime_failure_builder ();
-        auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
+    for (const auto &scenario : fixture.at ("authorityFollowCases")) {
+        const auto failure_code = scenario.value ("failureCode", 34u);
+        const auto refusal = *mapper.target_failure_reply (
+          failure_code == 33 ? fw::framework_error_kind_t::invalid_operation
+                             : fw::framework_error_kind_t::unavailable,
+          failure_code);
+        SCOPED_TRACE (scenario.at ("name").get<std::string> ());
+        fw::serializer_registry_t serializers;
+        auto builder = fw::test::runtime_failure_builder ();
+        auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
         runtime.bind_serializers (serializers);
-        const spot_address_t route{"gamequest", zlink::routing_id_t::from ("quest-mission"),
-                                   "player-alice", 7};
-        const auto resolver_owner = std::make_shared<authority_resolver_t> ();
-        auto &resolver = *resolver_owner;
-        resolver.cached = route;
-        if (scenario.authority_present)
-            resolver.authority = route;
-        runtime.bind_spot_address_resolver (resolver_owner);
-        std::vector<bool> cached_routes;
+        auto resolver = std::make_shared<authority_resolver_t> ();
+        resolver->cached =
+          spot_address_t{"gamequest", zlink::routing_id_t::from ("old-owner"), "player-alice", 7};
+        if (scenario.at ("authority") == "Ready") {
+            resolver->authority = *resolver->cached;
+            resolver->authority->node_rid = zlink::routing_id_t::from ("new-owner");
+        }
+        resolver->creating = scenario.at ("authority") == "Creating";
+        runtime.bind_spot_address_resolver (resolver);
+        int attempts = 0;
+        const int refusals = scenario.at ("refusals");
+        std::optional<std::chrono::milliseconds> previous_remaining;
         runtime.bind_instance_spot_activator (
           [] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
-              std::chrono::system_clock::time_point)
-            -> zlink::framework::task_t<zlink::framework::result_t<void>> {
-              co_return zlink::framework::result_t<void>::failure (
-                framework_error_kind_t::internal_failure, "unused one-way activation");
+              std::chrono::system_clock::time_point) -> fw::task_t<fw::result_t<void>> {
+              co_return fw::result_t<void>::failure (fw::framework_error_kind_t::internal_failure,
+                                                     "unused send");
           },
-          [&] (const auto &, const auto &, const std::optional<spot_address_t> &cached_route,
-               std::string, std::type_index, auto, std::chrono::milliseconds,
-               auto) -> zlink::framework::request_task_t<zlink::message_t> {
-              co_await zlink::framework::detail::request_admitted_t{};
-              cached_routes.push_back (cached_route.has_value ());
-              if (cached_route)
-                  co_return zlink::framework::detail::result_access_t::failure<zlink::message_t> (
-                    mapper.reply_header_exception (scenario.owner_failure.terminal_result,
-                                                   scenario.owner_failure.failure_code,
-                                                   "Instance Spot request"));
-              co_return zlink::framework::result_t<zlink::message_t>::success (
-                zlink::framework::detail::encoded_payload_to_raw (
+          [&] (const auto &, const auto &, const std::optional<spot_address_t> &route, std::string,
+               std::type_index, auto, std::chrono::milliseconds remaining,
+               auto) -> fw::request_task_t<zlink::message_t> {
+              co_await fw::detail::request_admitted_t{};
+              ++attempts;
+              EXPECT_EQ (attempts, resolver->reads);
+              if (previous_remaining)
+                  EXPECT_LE (remaining, *previous_remaining);
+              previous_remaining = remaining;
+              if (attempts > 1 && route)
+                  EXPECT_EQ (zlink::routing_id_t::from ("new-owner"), route->node_rid);
+              if (refusals < 0 || attempts <= refusals)
+                  co_return fw::detail::result_access_t::failure<zlink::message_t> (
+                    mapper.reply_header_exception (refusal.terminal_result, refusal.failure_code,
+                                                   "owner fence"));
+              co_return fw::result_t<zlink::message_t>::success (
+                fw::detail::encoded_payload_to_raw (
                   serializers.get<reply_t> ().serialize (reply_t{9})));
           });
-
-        const auto reply = builder.route_client (serializers)
-                             .request_to_spot ("player-alice", request_t{1})
-                             .instance_spot ("player-quest")
-                             .async<reply_t> ()
-                             .result ();
-        EXPECT_EQ (scenario.replied, static_cast<bool> (reply));
-        if (reply) {
+        // The no-intent branch uses the ordinary direct request transport.
+        runtime.bind_spot_mesh_transport (
+          "gamequest",
+          [] (const auto &, const auto &, std::uint64_t, auto) -> fw::task_t<fw::result_t<void>> {
+              co_return fw::result_t<void>::failure (fw::framework_error_kind_t::internal_failure,
+                                                     "unused send");
+          },
+          [&] (const auto &, const auto &, std::uint64_t, messaging::message_parts_t,
+               std::chrono::milliseconds)
+            -> fw::request_task_t<fw::result_t<messaging::message_parts_t>> {
+              ++attempts;
+              throw mapper.reply_header_exception (refusal.terminal_result, refusal.failure_code,
+                                                   "owner fence");
+              co_return fw::result_t<messaging::message_parts_t>::success ({});
+          });
+        auto call =
+          builder.route_client (serializers).request_to_spot ("player-alice", request_t{1});
+        if (scenario.at ("intent").get<bool> ())
+            call.instance_spot ("player-quest");
+        call.timeout (refusals < 0 ? std::chrono::milliseconds (20)
+                                   : std::chrono::milliseconds (1000));
+        const auto reply = call.async<reply_t> ().result ();
+        if (scenario.at ("terminal") == "reply") {
+            ASSERT_TRUE (reply);
             EXPECT_EQ (9, reply.value ().value);
+            EXPECT_EQ (refusals + 1, attempts);
+            EXPECT_EQ (refusals + 1, resolver->reads);
         } else {
-            EXPECT_EQ (framework_error_kind_t::unavailable, reply.error_kind ());
-            ASSERT_TRUE (reply.error ());
-            EXPECT_EQ (scenario.owner_failure.failure_code,
-                       zlink::framework::detail::failure_code (*reply.error ()));
+            ASSERT_FALSE (reply);
+            EXPECT_EQ (scenario.at ("terminal") == "DeadlineExceeded"
+                         ? fw::framework_error_kind_t::deadline_exceeded
+                         : fw::framework_error_kind_t::unavailable,
+                       reply.error_kind ());
+            if (refusals >= 0)
+                EXPECT_EQ (1, attempts);
         }
-        EXPECT_EQ (scenario.cached_routes, cached_routes);
-        EXPECT_EQ (scenario.authority_reads, resolver.authority_reads);
     }
 }
 

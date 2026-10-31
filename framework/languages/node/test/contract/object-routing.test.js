@@ -880,16 +880,15 @@ test('Spot address requests preserve the original route failure after invalidati
 });
 
 // Failover policy §4.4: only the owner's pre-admission owner-fence refusal
-// (SpotMoving) lets an Instance intent request read authority once more; a
-// Missing answer activates a new incarnation. Everything else keeps the first
-// terminal.
+// (SpotMoving) lets an Instance intent request follow current authority.
+// Missing activates a new incarnation; Ready sends to its current owner.
 for (const terminalKind of ['SpotMoving', 'RequestTargetNotFound']) {
   for (const instanceIntent of [true, false]) {
     for (const nextAuthority of ['changed', 'missing', 'unchanged']) {
       const rereads = instanceIntent && terminalKind === 'SpotMoving';
       const reactivates = rereads && nextAuthority === 'missing';
       test(`Instance Spot ${terminalKind} from a cached Ready route ${
-        reactivates ? 'activates a new incarnation' : 'keeps the first terminal'
+        rereads ? 'follows current authority' : 'keeps the first terminal'
       } when authority becomes ${nextAuthority} (instanceIntent=${instanceIntent})`, async () => {
         class Lookup {}
         const route = {
@@ -931,7 +930,8 @@ for (const terminalKind of ['SpotMoving', 'RequestTargetNotFound']) {
             },
             requestToSpot() { return prepareZLinkRequestReply((async () => {
               requests += 1;
-              throw terminal;
+              if (requests === 1 || !rereads) throw terminal;
+              return { activated: false };
             })(), identityRequestReply); }
           },
           meshNames: () => ['play'],
@@ -971,11 +971,13 @@ for (const terminalKind of ['SpotMoving', 'RequestTargetNotFound']) {
           });
         if (reactivates) {
           assert.deepEqual(await call(), { activated: true });
+        } else if (rereads) {
+          assert.deepEqual(await call(), { activated: false });
         } else {
           await assert.rejects(call, (error) => error === terminal);
         }
         assert.equal(resolves, rereads ? 2 : 1);
-        assert.equal(requests, 1);
+        assert.equal(requests, rereads && !reactivates ? 2 : 1);
         assert.equal(invalidated, 1);
         assert.equal(coldSubmits, reactivates ? 1 : 0);
       });

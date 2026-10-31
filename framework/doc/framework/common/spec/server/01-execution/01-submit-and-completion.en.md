@@ -275,7 +275,7 @@ relocation PREPARE) do the same. Each language decides this in one logical reque
 - Once a binding operation starts, neither an application request nor a lifecycle request resubmits the same
   operation. Connection loss, handover, a selected-route change, and a lost reply end with the binding's typed
   result. Relocation relay and cutover batches and Store authority settlement follow their own transaction
-  contracts and aren't implemented as request restarts.
+  contracts and aren't implemented as request restarts. The authority-following procedure after a pre-admission stale-route refusal of an Instance-intent request follows [Spot address messaging §9](../03-spot-actor/06-spot-address-messaging.en.md#9-failure-and-observability), retaining the same terminal entry.
 - The wait of a one-way send is defined by [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout), and
   this rule doesn't apply to it.
 

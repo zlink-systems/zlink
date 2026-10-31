@@ -263,55 +263,53 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     return this.requests.request(timeoutMs, call.signal, async (requestOperation) => {
       const deadline = createSpotAddressDeadline(requestOperation, call.signal);
       try {
-        const resolution = await waitRequestReply(
-          this.resolveExisting(spotId, deadline.signal, call),
-          'Spot address resolve',
-          requestOperation,
-          () => deadline.close()
-        );
-        const existing =
-          resolution !== undefined && !('kind' in resolution) ? resolution : undefined;
-        if (resolution !== undefined && 'kind' in resolution)
-          call = this.reactivationCall(resolution, call);
-        deadline.requireRemaining();
-        if (existing === undefined) {
-          return await this.requestToMissingInstance(spotId, request, call, deadline, resolution);
-        }
-        this.validateExisting(existing, call);
-        try {
-          return await this.requestToExistingSpot(spotId, request, call, existing, deadline);
-        } catch (error) {
-          if (isSpotRouteRefreshError(error)) {
-            this.options.resolver()?.invalidate?.(spotId);
-          }
-          // Failover policy §4.4: SpotMoving is the owner's Ready owner-fence
-          // refusal, made before admission. With Instance intent, one authority
-          // read under the same deadline decides: Missing means Close released
-          // the incarnation, so the request activates a new one. Any other
-          // answer, and any message the owner admitted, keeps this terminal.
-          if (
-            call.instanceSpot &&
-            isOwnerFenceRefusal(error) &&
-            (await waitRequestReply(
-              this.resolveExisting(spotId, deadline.signal),
-              'Spot address resolve',
-              requestOperation,
-              () => deadline.close()
-            )) === undefined
-          ) {
-            deadline.requireRemaining();
-            return await this.requestToMissingInstance(spotId, request, call, deadline);
-          }
-          this.reportInstanceRequestError(
-            spotId,
-            request,
-            error,
-            existing.routerChannelId,
-            existing.targetNodeRid,
-            existing.stableType,
-            addressedInstanceErrorReason(error)
+        for (;;) {
+          deadline.requireRemaining();
+          const resolution = await waitRequestReply(
+            this.resolveExisting(spotId, deadline.signal, call),
+            'Spot address resolve',
+            requestOperation,
+            () => deadline.close()
           );
-          throw error;
+          const existing =
+            resolution !== undefined && !('kind' in resolution) ? resolution : undefined;
+          if (resolution !== undefined && 'kind' in resolution)
+            call = this.reactivationCall(resolution, call);
+          deadline.requireRemaining();
+          try {
+            if (existing === undefined) {
+              return await this.requestToMissingInstance(
+                spotId,
+                request,
+                call,
+                deadline,
+                resolution
+              );
+            }
+            this.validateExisting(existing, call);
+            return await this.requestToExistingSpot(spotId, request, call, existing, deadline);
+          } catch (error) {
+            if (
+              (existing !== undefined || isPreAdmissionStaleRoute(error)) &&
+              isSpotRouteRefreshError(error)
+            ) {
+              this.options.resolver()?.invalidate?.(spotId);
+            }
+            // §9 keeps admission-before-stale-route handling in this logical request.
+            if (call.instanceSpot && isPreAdmissionStaleRoute(error)) continue;
+            if (existing !== undefined) {
+              this.reportInstanceRequestError(
+                spotId,
+                request,
+                error,
+                existing.routerChannelId,
+                existing.targetNodeRid,
+                existing.stableType,
+                addressedInstanceErrorReason(error)
+              );
+            }
+            throw error;
+          }
         }
       } catch (error) {
         if (
@@ -348,9 +346,13 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       existing.stableType,
       existing.targetNodeRid
     );
-    const reply = await waitRequestReply(
-      mapZLinkRequestReply(
-        this.options.routed.requestToSpot<TReply>(existing, request, {
+    // The address request owns the terminal entry. Observe the wire stage so
+    // a pre-admission refusal can reach the authority decision in §9.
+    const stage = new Promise<TReply>((resolve, reject) => {
+      const result = this.options.routed.requestToSpot<TReply>(
+        existing,
+        request,
+        {
           instanceSpot: call.instanceSpot,
           timeoutMs: deadline.requireRemaining(),
           deadlineMs: deadline.deadlineMs,
@@ -358,11 +360,15 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           metadata: call.metadata,
           onAdmitted: call.onAdmitted,
           requestOperation: deadline.operation
-        })
-      ),
-      'Spot request',
-      deadline.operation
-    );
+        },
+        {
+          operationCompleted: (_id, value) => resolve(value as TReply),
+          operationFailed: (_id, error) => reject(error)
+        }
+      );
+      if (result.operation === undefined) void mapZLinkRequestReply(result).then(resolve, reject);
+    });
+    const reply = await waitRequestReply(stage, 'Spot request', deadline.operation);
     this.traceInstanceAddress(
       ZLinkMessageFlowOutcome.ReplyReceived,
       ZLinkDispatchMessageKind.Request,
@@ -778,19 +784,19 @@ function isSpotRouteRefreshError(error: unknown): error is ZLinkFrameworkExcepti
   if (!(error instanceof ZLinkFrameworkException)) return false;
   const kind = internalFrameworkErrorKind(error);
   return (
+    isPreAdmissionStaleRoute(error) ||
     kind === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound ||
-    kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale ||
-    kind === ZLinkFrameworkInternalErrorKind.SpotMoving ||
     kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound ||
-    kind === ZLinkFrameworkInternalErrorKind.ActorLocationStale ||
     kind === ZLinkFrameworkInternalErrorKind.RouteNotConnected
   );
 }
 
-function isOwnerFenceRefusal(error: unknown): boolean {
+function isPreAdmissionStaleRoute(error: unknown): boolean {
   return (
     error instanceof ZLinkFrameworkException &&
-    internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.SpotMoving
+    (internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.SpotMoving ||
+      internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.ActorLocationStale ||
+      internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.SpotGenerationStale)
   );
 }
 
