@@ -1651,10 +1651,6 @@ The state and final result of host commands are defined by
 defines the order in which the Location runtime cleans up Store records and in-process
 resources.
 
-The Framework finds descriptor and owner-lease deletion candidates via a
-same-point-in-time list read. It re-reads each key and only deletes multiple records
-together if the version first read is unchanged.
-
 An Actor/Spot's current location record is only removed by an explicit `Delete` or a conditional
 release in [§6.1](#61-read-and-cas).
 `Delete` verifies `StoreVersion`, current owner, and space in use. An object's location
@@ -1671,9 +1667,10 @@ the Store. Section 4.1 defines the rule that prevents targeting it. Fixed RID li
 defined by [MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid). The two
 cleanup paths are independent and operate with different lifetimes.
 
-If the deadline passes, a `ForceStopped` result completes exactly once. Timers, Store
-callbacks, reconnection work, and observers must not outlive the runtime resources the
-Framework owns.
+The owner lease is released with the same token held by the terminating lifecycle.
+Cleanup does not reread and release another lifecycle's lease. The time boundary for Store
+cleanup and the return boundary of `ForceStopped` follow
+[Host shutdown §14](05-host-relocation-flow.en.md#14-the-race-between-shutdown-and-relocate).
 
 ## 12. Implementation and Contract-Test Verification Requirements
 

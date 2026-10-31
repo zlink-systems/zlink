@@ -9,6 +9,33 @@ namespace Zlink.Framework.UnitTests;
 public sealed class LocationRuntimeTests
 {
     [Fact]
+    public async Task ForceStop2646_Expired_Stop_Closes_Local_Heartbeat_Without_Store_Work()
+    {
+        var store = new ZLinkInMemoryLocationStore();
+        var ownerStore = new CancelingOwnerCleanupStore(store);
+        var runtime = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions
+            {
+                OwnerLeaseRenewInterval = TimeSpan.FromHours(1),
+                OwnerLeaseTtl = TimeSpan.FromHours(2),
+            },
+            ownerStore
+        );
+        await runtime.StartAsync(RoutingId.From("expired-stop"));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            runtime.StopAsync(cancellation.Token).AsTask()
+        );
+        Assert.False(runtime.GetHealthSnapshot().Healthy);
+        Assert.False(ownerStore.RemovalStarted.Task.IsCompleted);
+        Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
+            await store.ReadOwnerLeaseAsync(runtime.OwnerId)
+        );
+        await runtime.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Owner_Lease_Renew_Tracks_Health_And_Recovers_After_Store_Failure()
     {
         var time = new ManualTimeProvider();
@@ -267,13 +294,13 @@ public sealed class LocationRuntimeTests
         Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
             await store.ReadOwnerLeaseAsync(runtime.OwnerId)
         );
-        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
             await store.ReadAuthorityAsync(new ZLinkAuthorityKey("actor:play:actor-1"))
         );
-        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
             await store.ReadAuthorityAsync(new ZLinkAuthorityKey("spot:play:spot-1"))
         );
-        Assert.Empty((await store.ListMeshNodesAsync("play", default)).Items);
+        Assert.Single((await store.ListMeshNodesAsync("play", default)).Items);
     }
 
     [Fact]
@@ -358,13 +385,13 @@ public sealed class LocationRuntimeTests
         Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
             await store.ReadOwnerLeaseAsync(runtime.OwnerId)
         );
-        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
             await store.ReadAuthorityAsync(new ZLinkAuthorityKey("actor:play:actor-1"))
         );
-        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
             await store.ReadAuthorityAsync(new ZLinkAuthorityKey("spot:play:spot-drain"))
         );
-        Assert.Empty((await store.ListMeshNodesAsync("play", default)).Items);
+        Assert.Single((await store.ListMeshNodesAsync("play", default)).Items);
         await runtime.StopAsync();
     }
 

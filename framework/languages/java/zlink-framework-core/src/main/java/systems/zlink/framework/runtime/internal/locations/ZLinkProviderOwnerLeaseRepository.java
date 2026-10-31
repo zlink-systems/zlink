@@ -85,9 +85,18 @@ final class ZLinkProviderOwnerLeaseRepository {
     }
 
     CompletionStage<ZLinkOwnerLeaseReleaseResult> release(ZLinkLocationOwnerToken token) {
+        return release(token, active());
+    }
+
+    CompletionStage<ZLinkOwnerLeaseReleaseResult> release(
+            ZLinkLocationOwnerToken token,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(token, "token");
         ZLinkStoreKey key = ownerKey(token.ownerId());
-        return provider.read(key, active())
+        if (cancellation.isCancellationRequested())
+            return CompletableFuture.failedFuture(
+                    new java.util.concurrent.TimeoutException("host shutdown deadline expired"));
+        return provider.read(key, cancellation)
                 .thenCompose(
                         current -> {
                             if (!(current instanceof ZLinkStoreReadFound found)
@@ -96,13 +105,17 @@ final class ZLinkProviderOwnerLeaseRepository {
                                             != token.leaseGeneration()) {
                                 return completed(ZLinkOwnerLeaseReleaseResult.STALE);
                             }
+                            if (cancellation.isCancellationRequested())
+                                return CompletableFuture.failedFuture(
+                                        new java.util.concurrent.TimeoutException(
+                                                "host shutdown deadline expired"));
                             return provider.write(
                                             new ZLinkStoreWriteRequest(
                                                     List.of(
                                                             new ZLinkStoreVersionCondition(
                                                                     key, found.value().version())),
                                                     List.of(new ZLinkStoreDelete(key))),
-                                            active())
+                                            cancellation)
                                     .thenApply(
                                             result ->
                                                     result instanceof ZLinkStoreWriteApplied

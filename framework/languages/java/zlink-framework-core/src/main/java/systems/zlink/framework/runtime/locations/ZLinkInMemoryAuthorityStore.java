@@ -98,6 +98,24 @@ final class ZLinkInMemoryAuthorityStore {
                 });
     }
 
+    CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner) {
+        return inStateLane(
+                () -> {
+                    long removed = 0;
+                    var iterator = rows.entrySet().iterator();
+                    while (iterator.hasNext()) {
+                        var row = iterator.next().getValue();
+                        if (!row.owner.equals(owner)) continue;
+                        if (row.allocation.state() == ZLinkPlacementAllocationState.ACTIVE)
+                            adjustActive(row.allocation, row.allocation.capacityBundle(), -1);
+                        else adjustPending(row.allocation, row.allocation.capacityBundle(), -1);
+                        iterator.remove();
+                        removed++;
+                    }
+                    return completed(removed);
+                });
+    }
+
     public CompletionStage<ZLinkAuthorityWriteResult> compareExchange(
             String key,
             ZLinkAuthorityExpectation expectation,

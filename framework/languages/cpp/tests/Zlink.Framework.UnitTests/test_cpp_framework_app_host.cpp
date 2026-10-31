@@ -1015,21 +1015,19 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
     auto stop_task = first_host.shutdown (1ms);
     bool teardown_waited_for_cleanup = false;
     if (bounded_cleanup_probe) {
-        // Host relocation §14: an expired deadline ends as ForceStopped/DeadlineExceeded
-        // while teardown keeps the resources that running user cleanup still uses.
+        // Host shutdown §14 observes accepted cleanup before returning ForceStopped.
         const bool entered = cleanup_started.wait_for (1s) == std::future_status::ready;
         const auto terminal = entered ? stop_task.result_for (1s) : std::nullopt;
-        const bool deadline_terminal =
-          terminal && *terminal
-          && terminal->value ()
-               == termination_result_t{termination_outcome_t::force_stopped,
-                                       termination_reason_t::deadline_exceeded};
-        teardown_waited_for_cleanup = deadline_terminal && !first_returned.load ();
-        std::cout << "cleanup_entered=" << entered << " deadline_terminal=" << deadline_terminal
-                  << " teardown_waited_for_cleanup=" << teardown_waited_for_cleanup << '\n';
+        teardown_waited_for_cleanup = entered && !terminal && !first_returned.load ();
         cleanup_release.set_value ();
     }
     auto stopped = stop_task.result ();
+    const bool expected_terminal =
+      stopped
+      && (!bounded_cleanup_probe
+          || stopped.value ()
+               == termination_result_t{termination_outcome_t::force_stopped,
+                                       termination_reason_t::deadline_exceeded});
     const bool first_cancelled = first_finished.wait_for (1s) == std::future_status::ready
                                  && first.shutting_down_count == first.expected_waiters
                                  && first.finished_count == first.expected_waiters;
@@ -1046,9 +1044,9 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
     auto first_response = first_request.get ();
     auto another_first_response = another_first_request.get ();
     auto second_response = second_request.get ();
-    return (!bounded_cleanup_probe || teardown_waited_for_cleanup) && both_entered && stopped
-           && first_cancelled && normal_waited && others_pending && completed && !duplicate
-           && outside.result () && source.task ().result () && !first_response
+    return (!bounded_cleanup_probe || teardown_waited_for_cleanup) && both_entered
+           && expected_terminal && first_cancelled && normal_waited && others_pending && completed
+           && !duplicate && outside.result () && source.task ().result () && !first_response
            && !another_first_response && first.observer_calls == 2 && first.failed_observers == 2
            && second.observer_calls == 1 && second.failed_observers == 0
            && second.finished_count == 1 && second.shutting_down_count == 0 && second_response
@@ -2546,21 +2544,19 @@ int main (int test_argc, char **test_argv)
         bounded_shutdown_thread.join ();
         return 70;
     }
-    const auto bounded_shutdown_started = std::chrono::steady_clock::now ();
     auto bounded_shutdown_task = bounded_shutdown_app.shutdown (std::chrono::milliseconds (100));
+    const bool stop_entered = blocking_service_ptr->wait_stop_entered (std::chrono::seconds (1));
+    const bool pending_until_cleanup =
+      !bounded_shutdown_task.result_for (std::chrono::milliseconds (100));
+    blocking_service_ptr->release_stop ();
     const auto &bounded_shutdown_result = bounded_shutdown_task.result ();
-    const auto bounded_shutdown_elapsed =
-      std::chrono::steady_clock::now () - bounded_shutdown_started;
+    bounded_shutdown_thread.join ();
     const bool bounded_shutdown_terminal =
-      bounded_shutdown_result
+      stop_entered && pending_until_cleanup && bounded_shutdown_result
       && bounded_shutdown_result.value ().outcome
            == zlink::framework::termination_outcome_t::force_stopped
       && bounded_shutdown_result.value ().reason
-           == zlink::framework::termination_reason_t::deadline_exceeded
-      && bounded_shutdown_elapsed < std::chrono::seconds (1)
-      && blocking_service_ptr->wait_stop_entered (std::chrono::seconds (1));
-    blocking_service_ptr->release_stop ();
-    bounded_shutdown_thread.join ();
+           == zlink::framework::termination_reason_t::deadline_exceeded;
     if (!bounded_shutdown_terminal || bounded_shutdown_exit_code != 0) {
         return 71;
     }

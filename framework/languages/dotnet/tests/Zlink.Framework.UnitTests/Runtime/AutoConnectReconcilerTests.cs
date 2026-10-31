@@ -925,7 +925,7 @@ public sealed class AutoConnectReconcilerTests
     }
 
     [Fact]
-    public async Task Shutdown_After_Drain_Owner_Cleanup_Does_Not_Require_Released_Lease()
+    public async Task Shutdown_After_Drain_Owner_Cleanup_Preserves_Publisher_Descriptor_Without_Lease()
     {
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryLocationStore(time);
@@ -961,9 +961,13 @@ public sealed class AutoConnectReconcilerTests
         );
 
         await runtime.CleanupOwnerForDrainAsync(CancellationToken.None);
+        Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
+            await store.ReadOwnerLeaseAsync(runtime.OwnerId)
+        );
         await reconciler.ShutdownAsync();
 
-        Assert.Empty((await store.ListMeshNodesAsync("play", default)).Items);
+        var remaining = Assert.Single((await store.ListMeshNodesAsync("play", default)).Items);
+        Assert.Equal(RoutingId.From("local"), remaining.Rid);
         await runtime.StopAsync();
     }
 

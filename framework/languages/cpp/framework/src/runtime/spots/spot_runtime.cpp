@@ -14012,15 +14012,16 @@ bool spot_node_runtime_t::close_all_user_spots (
       .get ();
     const auto wait_for_close = [&remaining, &cleanup_cancellation] (const task_t<bool> &closing) {
         const auto result = closing.result_for (remaining ());
-        // The existing host deadline wait also signals cleanup cancellation; no separate timer is needed.
-        if (!result)
+        // Host shutdown §14 observes accepted Close completion before local teardown.
+        if (!result) {
             cleanup_cancellation.request_stop ();
+            static_cast<void> (closing.result ());
+        }
         return result && result->value ();
     };
-    for (const auto &closing : running_closes) {
-        if (!wait_for_close (closing))
-            return false;
-    }
+    if (static_cast<std::size_t> (std::ranges::count_if (running_closes, wait_for_close))
+        != running_closes.size ())
+        return false;
     for (auto &spot_id : user_spots) {
         if (!wait_for_close (close_spot (std::move (spot_id), spot_close_reason_t::host_shutdown,
                                          closing_deadline, cleanup_cancellation.get_token ())))

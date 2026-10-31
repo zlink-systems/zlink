@@ -1401,7 +1401,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         ThrowIfStopRequestedFromOwnedWork();
         if (Services.GetService<ZLinkClientServerRuntimeService>() is { } clientServerRuntime)
             await clientServerRuntime.StopAsync().ConfigureAwait(false);
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
             ThrowIfStopRequestedFromOwnedWork();

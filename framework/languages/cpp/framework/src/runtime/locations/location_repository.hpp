@@ -568,6 +568,26 @@ class location_repository_t
           result_t<std::optional<std::vector<aggregate_participant_t>>>::success (std::nullopt));
     }
     virtual task_t<std::int64_t> remove_all_by_owner (location_owner_token_t owner) = 0;
+    virtual task_t<std::int64_t>
+    remove_all_by_owner (location_owner_token_t owner,
+                         std::chrono::steady_clock::time_point deadline)
+    {
+        if (std::chrono::steady_clock::now () >= deadline)
+            return task_t<std::int64_t> (result_t<std::int64_t>::failure (
+              framework_error_kind_t::deadline_exceeded, "owner cleanup deadline expired"));
+        return remove_all_by_owner (std::move (owner));
+    }
+    virtual task_t<owner_lease_release_result_t>
+    release_owner_lease (location_owner_token_t owner,
+                         std::chrono::steady_clock::time_point deadline)
+    {
+        if (std::chrono::steady_clock::now () >= deadline)
+            return task_t<owner_lease_release_result_t> (
+              result_t<owner_lease_release_result_t>::failure (
+                framework_error_kind_t::deadline_exceeded, "owner cleanup deadline expired"));
+        return release_owner_lease (std::move (owner));
+    }
+
     virtual task_t<std::optional<std::uint64_t>> get_mesh_node_change_stamp (std::string mesh_name)
     {
         (void) mesh_name;

@@ -5682,6 +5682,8 @@ TEST (ActorMaintenanceJoin, HostShutdownClosesOccupiedUserSpot)
     const auto before =
       repository.read_authority (fw::runtime::actor_authority_key (actor_id)).result ().value ();
     ASSERT_TRUE (std::holds_alternative<fw::authority_snapshot_t> (before));
+    const auto mesh_name = std::get<fw::authority_snapshot_t> (before).allocation.target.mesh_name;
+    ASSERT_EQ (1u, repository.list_mesh_nodes (mesh_name).result ().value ().items.size ());
     const auto stopped = host.app.shutdown (wait_budget).result ().value ();
     EXPECT_EQ (stopped.outcome, fw::termination_outcome_t::stopped);
     EXPECT_EQ (stopped.reason, fw::termination_reason_t::none);
@@ -5691,9 +5693,8 @@ TEST (ActorMaintenanceJoin, HostShutdownClosesOccupiedUserSpot)
     }
     const auto after =
       repository.read_authority (fw::runtime::actor_authority_key (actor_id)).result ().value ();
-    ASSERT_TRUE (std::holds_alternative<fw::authority_snapshot_t> (after));
-    EXPECT_EQ (std::get<fw::authority_snapshot_t> (before).store_version,
-               std::get<fw::authority_snapshot_t> (after).store_version);
+    EXPECT_TRUE (std::holds_alternative<fw::authority_missing_t> (after));
+    EXPECT_TRUE (repository.list_mesh_nodes (mesh_name).result ().value ().items.empty ());
     std::lock_guard lock (evidence.mutex);
     ASSERT_EQ (evidence.closings.size (), 1);
     EXPECT_EQ (evidence.closings.front ().first, fw::spot_close_reason_t::host_shutdown);

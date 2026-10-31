@@ -834,6 +834,14 @@ completes within a fixed time, in this order.
    `ForceStopped/DeadlineExceeded` or `ForceStopped/TeardownFailed` after bounded
    teardown.
 
+Store cleanup uses the single absolute Shutdown deadline. No new Store operation starts
+after it expires. The runtime observes cancellation or completion of in-flight Store
+operations and local resource cleanup before returning `ForceStopped` exactly once. No
+runtime callback remains after the return. There is no separate Store cleanup budget.
+Records whose deletion was not confirmed may remain and follow owner lease expiry and
+the existing conditional release rules in
+[Location runtime §11](01-location-runtime.en.md#11-cleaning-up-store-records-when-a-host-shuts-down).
+
 When a listener and transport are cleaned up, already-accepted transport callbacks and
 in-flight read/write operations are completed or cancelled first. In particular,
 TLS/WebSocket resources and a per-connection write queue aren't destroyed until

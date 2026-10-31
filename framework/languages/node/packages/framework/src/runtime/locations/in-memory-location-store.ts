@@ -1054,52 +1054,7 @@ export class ZLinkInMemoryLocationStore
     ) {
       return 0n;
     }
-    const ownerId = owner.ownerId;
-    let removed = Number(await this.authority.removeAllByOwner(owner, signal));
-    for (const [key, row] of [...this.meshNodes.rows]) {
-      if (row.ownerId !== owner.ownerId) continue;
-      this.meshNodes.rows.delete(key);
-      this.releaseEntrySpotIdentity(row);
-      this.bump(ZLinkLocationKind.Peer, row.meshName);
-      removed++;
-    }
-    removed += this.removeByOwner(
-      this.peers,
-      ownerId,
-      (row) => row.ownerId,
-      ZLinkLocationKind.Peer,
-      (row) => row.meshName
-    );
-    removed += this.removeByOwner(
-      this.spots,
-      ownerId,
-      (row) => row.ownerId,
-      ZLinkLocationKind.Spot,
-      (row) => row.meshName
-    );
-    removed += this.removeByOwner(
-      this.actors,
-      ownerId,
-      (row) => row.ownerId,
-      ZLinkLocationKind.Actor,
-      () => undefined
-    );
-    removed += this.removeByOwner(
-      this.routes,
-      ownerId,
-      (row) => row.ownerId,
-      ZLinkLocationKind.Route,
-      () => undefined
-    );
-    removed += this.removeByOwner(
-      this.clientServers,
-      ownerId,
-      (row) => row.ownerId,
-      ZLinkLocationKind.ClientServer,
-      (row) => row.channelName
-    );
-    removed += this.removeFanoutByOwner(owner);
-    return BigInt(removed);
+    return this.authority.removeAllByOwner(owner, signal);
   }
 
   private claimEntrySpotIdentity(
@@ -1247,24 +1202,6 @@ export class ZLinkInMemoryLocationStore
     return stored(owner.leaseGeneration, this.now());
   }
 
-  private removeByOwner<TRow>(
-    table: RowTable<TRow>,
-    ownerId: string,
-    ownerOf: (row: TRow) => string,
-    kind: ZLinkLocationKind,
-    meshOf: (row: TRow) => string | undefined
-  ): number {
-    let removed = 0;
-    for (const [key, row] of [...table.rows.entries()]) {
-      if (ownerOf(row) === ownerId) {
-        table.rows.delete(key);
-        this.bump(kind, meshOf(row));
-        removed++;
-      }
-    }
-    return removed;
-  }
-
   private liveOwnerLease(ownerId: string, now: Date): InMemoryOwnerLease | undefined {
     const lease = this.leases.get(ownerId);
     return lease !== undefined && lease.leaseExpiresAt.getTime() > now.getTime()
@@ -1277,16 +1214,6 @@ export class ZLinkInMemoryLocationStore
     if (meshName !== undefined) {
       this.bumpScope({ kind });
     }
-  }
-
-  private removeFanoutByOwner(owner: ZLinkLocationOwnerToken): number {
-    let removed = 0;
-    for (const [key, row] of this.fanoutPublishers.rows) {
-      if (row.ownerId !== owner.ownerId) continue;
-      this.fanoutPublishers.rows.delete(key);
-      removed++;
-    }
-    return removed;
   }
 
   private bumpScope(scope: ZLinkLocationChangeStampScope): void {

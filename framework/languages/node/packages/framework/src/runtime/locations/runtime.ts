@@ -386,7 +386,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   async cleanupOwner(signal?: AbortSignal): Promise<void> {
     const pending = this.heartbeatRenewal;
     try {
-      await withTimeout(() => pending ?? Promise.resolve(), undefined, signal);
+      await (pending ?? Promise.resolve());
     } catch (error) {
       if (!isAbortError(error)) throw error;
     } finally {
@@ -396,25 +396,14 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       return;
     }
     try {
-      const owner = this.ownerToken ??
-        this.lastOwnerToken ?? {
-          ownerId: this.ownerId,
-          leaseGeneration: 0n
-        };
-      await withTimeout(
-        async (cleanupSignal) => {
-          await this.stores.locationStore.removeAllByOwner(owner, cleanupSignal);
-          const currentLease = await this.stores.ownerLeaseStore.readOwnerLease(
-            this.ownerId,
-            cleanupSignal
-          );
-          if (currentLease.kind === 'found') {
-            await this.stores.ownerLeaseStore.releaseOwnerLease(currentLease.token, cleanupSignal);
-          }
-        },
-        undefined,
-        signal
-      );
+      const owner = this.ownerToken ?? this.lastOwnerToken;
+      signal?.throwIfAborted();
+      if (owner !== undefined) {
+        await this.stores.locationStore.removeAllByOwner(owner, signal);
+        signal?.throwIfAborted();
+        await this.stores.ownerLeaseStore.releaseOwnerLease(owner, signal);
+        signal?.throwIfAborted();
+      }
       this.ownerToken = undefined;
       this.lastOwnerToken = undefined;
       this.ownerCleanupComplete = true;
@@ -516,7 +505,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
     try {
       if (!this.started) {
-        // stop owns confirmation and release under the host shutdown signal.
+        this.lastOwnerToken = claim.token;
         return false;
       }
       this.lastOwnerToken = this.ownerToken;
