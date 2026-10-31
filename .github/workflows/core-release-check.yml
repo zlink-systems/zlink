@@ -1,0 +1,32 @@
+name: Core release check
+
+# Called by ready-for-queue.yml. A reusable workflow reports its check only when it runs,
+# so a ready-for-queue run skipped by another label event (merge-queue, queued, dequeued)
+# cannot replace an earlier result with "skipped".
+on:
+  workflow_call:
+    inputs:
+      core_version_changed:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Core release exists
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    steps:
+      - name: Core version unchanged
+        if: inputs.core_version_changed != 'true'
+        run: echo "Core version is unchanged; release check succeeds."
+
+      - uses: actions/checkout@v5
+        if: inputs.core_version_changed == 'true'
+
+      - name: Check published Core release
+        if: inputs.core_version_changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/check-core-release-exists.sh
