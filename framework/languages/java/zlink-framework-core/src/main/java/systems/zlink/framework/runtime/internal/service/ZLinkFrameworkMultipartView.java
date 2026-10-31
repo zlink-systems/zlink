@@ -43,8 +43,8 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
 
     /**
      * Outbound envelope parts: the header bytes are retained directly until the transport writes or
-     * materializes them. They may be shared with other envelopes, so they are only ever read and are
-     * exposed through read-only views. Closing the view releases {@code body}.
+     * materializes them. They may be shared with other envelopes, so they are only ever read and
+     * are exposed through read-only views. Closing the view releases {@code body}.
      */
     public static ZLinkFrameworkMultipartView encoded(byte[] header, Message body) {
         return new ZLinkFrameworkMultipartView(

@@ -464,9 +464,10 @@ public final class ZLinkChannelEnvelope {
         boolean cacheableSize = headerPart != null && length <= MAX_CACHEABLE_HEADER_BYTES;
         // Correlated request/reply headers are never cached, so their length rarely matches an
         // entry; hash only when some cached header has the same length.
-        long hash = cacheableSize && hasDecodedHeaderOfLength(length)
-                ? hashBytes(headerPart, start, limit)
-                : 0;
+        long hash =
+                cacheableSize && hasDecodedHeaderOfLength(length)
+                        ? hashBytes(headerPart, start, limit)
+                        : 0;
         if (hash != 0) {
             Header cached = findDecodedHeaderCacheEntry(headerPart, start, limit, hash);
             if (cached != null) {
