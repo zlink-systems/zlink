@@ -43,6 +43,7 @@ final class ZLinkJavaLivenessNativeContractTest {
         var armed = new AtomicBoolean();
         var clockEntered = new CompletableFuture<Void>();
         var releaseClock = new CompletableFuture<Void>();
+        var cleaned = new CompletableFuture<Void>();
         var sourceSocket = new AtomicReference<RouterSocket>();
         var sourcePump = new AtomicReference<Thread>();
         var previousHandler = new AtomicReference<Thread.UncaughtExceptionHandler>();
@@ -62,6 +63,12 @@ final class ZLinkJavaLivenessNativeContractTest {
                                 });
                         clockEntered.complete(null);
                         releaseClock.join();
+                    } else if (ZLinkStateLane.current() == null
+                            && Thread.currentThread() == sourcePump.get()) {
+                        // The receive owner has finished the cleanup turn, including
+                        // native disconnect, before reading the clock for its next turn.
+                        offset.set(0);
+                        cleaned.complete(null);
                     }
                     return System.nanoTime() + offset.get();
                 };
@@ -107,17 +114,7 @@ final class ZLinkJavaLivenessNativeContractTest {
                 awaitAdmission(
                         source, expiredRid, () -> source.connectPeer(expiredEndpoint, expiredRid));
                 awaitAdmission(expired, sourceRid, () -> {});
-                var cleaned = new CompletableFuture<Void>();
-                try (var observation =
-                        source.onPeerStateChanged(
-                                expiredRid,
-                                () -> {
-                                    if (!source.observePeerRoute(expiredRid).ready()) {
-                                        offset.set(0);
-                                        cleaned.complete(null);
-                                    }
-                                },
-                                () -> {})) {
+                try {
                     armed.set(true);
                     // Wake the existing receive owner with an ordinary record. Block its
                     // next clock read before enqueuing the public connection-close request.
