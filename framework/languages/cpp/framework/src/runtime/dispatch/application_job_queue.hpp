@@ -178,8 +178,8 @@ class application_job_queue_t
                 _phase = permit_phase_t::queued;
             }
         }
-        // An asynchronous forwarding owner carries this same admission to its
-        // first handler. Allocate its storage before transferring the permit.
+        // The handler-entry callback owns admission until entry or destruction.
+        // Allocate its storage before transferring the permit.
         std::function<void ()> defer_handler_entry ()
         {
             auto permit = std::make_shared<permit_t> ();

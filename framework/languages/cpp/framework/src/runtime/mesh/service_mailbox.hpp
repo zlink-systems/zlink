@@ -142,7 +142,7 @@ struct service_mailbox_record_t
     std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
     std::optional<service_bound_session_source_t> bound_session_source;
     std::function<void ()> before_application_handler;
-    // Before a claim, the queued original owns its admission permit inline.
+    // Publication moves admission into the owning handler-entry callback.
     std::optional<application_job_queue_t::permit_t> application_permit;
     service_mailbox_application_t application;
     messaging::envelope_header_t envelope_header{.content_type = {}};
@@ -351,8 +351,6 @@ struct service_mailbox_claim_t
     service_mailbox_domain_t domain;
     std::vector<service_mailbox_record_t *> records;
     std::vector<std::size_t> record_bytes;
-    // Stable slots owned by the same claim credit that travels to handler terminal.
-    std::vector<application_job_queue_t::permit_t> application_permits;
     std::size_t claimed_messages = 0;
     std::size_t claimed_bytes = 0;
 

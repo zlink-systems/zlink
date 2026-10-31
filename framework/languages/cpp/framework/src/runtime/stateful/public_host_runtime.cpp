@@ -8136,8 +8136,6 @@ public_host_runtime_t::dispatch_application_claim (
                 auto parts =
                   protocol::decode_application_parts (std::move (mailbox_record.parts.back ()));
                 auto before = std::move (mailbox_record.before_application_handler);
-                if (!claim->application_permits.empty () && claim->application_permits[index])
-                    before = claim->application_permits[index].defer_handler_entry ();
                 auto pending = std::make_shared<task_t<void>> (enqueue_local_multicast (
                   std::move (targets), std::move (multicast.channelName.value),
                   std::move (multicast.topic.value), std::move (parts), std::move (metadata),
@@ -8154,8 +8152,6 @@ public_host_runtime_t::dispatch_application_claim (
                 throw protocol::service_wire_error_t ("application wire requires two parts");
             if (wire.kind == protocol::command::boundSessionSend) {
                 // The outbound stream delivery is a transport handoff, not an application handler.
-                if (!claim->application_permits.empty ())
-                    claim->application_permits[index].release_without_handler ();
                 mailbox_record.before_application_handler = {};
                 (void) dispatch_bound_session_send (mailbox_record);
                 ++batch->count;

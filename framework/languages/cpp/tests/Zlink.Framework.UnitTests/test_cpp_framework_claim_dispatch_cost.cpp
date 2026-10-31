@@ -324,7 +324,45 @@ void verify_nested_batch (host::public_host_runtime_t &target)
              "nested reply original changed after outer drain returned");
 }
 
-void verify_inline_permit (bool bulk_release)
+void measure_permit_ownership_cost ()
+{
+    constexpr std::size_t count = 32;
+    const auto measure = [] (bool admitted) {
+        runtime::application_job_queue_t jobs (runtime::application_job_queue_configuration_t{
+          application_job_queue_profile_t::balanced, std::uint32_t{count}, 1, count});
+        mesh::service_mailbox_t mailbox;
+        return tests::measure_allocations ([&] {
+            for (std::size_t i = 0; i < count; ++i) {
+                mesh::service_mailbox_record_t record;
+                record.owner = owner;
+                record.domain = domain;
+                record.application.emplace ();
+                if (admitted) {
+                    record.application_permit = jobs.try_reserve_supply ();
+                    require (record.application_permit.has_value (), "cost permit unavailable");
+                    record.application_permit->mark_queued ();
+                }
+                require (mailbox.try_enqueue (std::move (record)), "cost publication failed");
+            }
+            auto claim = mailbox.try_claim_owner (domain, owner, count,
+                                                  runtime::dispatch_limits::receive_batch_bytes);
+            require (claim && claim->claimed_messages == count, "cost claim failed");
+            for (std::size_t i = 0; i < count; ++i) {
+                auto original = mailbox.take ({claim, i});
+                if (original->before_application_handler)
+                    original->before_application_handler ();
+                original->transferred ();
+            }
+        });
+    };
+    const auto baseline = measure (false);
+    const auto admitted = measure (true);
+    std::cout << "permit-ownership records=" << count << " baseline-count=" << baseline.count
+              << " admitted-count=" << admitted.count << " extra-per-record="
+              << (admitted.count - baseline.count) / static_cast<double> (count) << std::endl;
+}
+
+void verify_inline_permit (bool bulk_release, bool enter_handler = true)
 {
     runtime::application_job_queue_t jobs (runtime::application_job_queue_configuration_t{
       application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1});
@@ -343,12 +381,12 @@ void verify_inline_permit (bool bulk_release)
     auto original = mailbox.take ({claim, 0});
     require (original && original->before_application_handler,
              "claim did not bind inline permit handler entry");
-    bool delivered = false;
+    std::size_t delivered = 0;
     auto waiter = jobs.wait_for_supply (
       [&] (auto supplied) {
           require (supplied.has_value (), "inline permit did not return capacity");
           (void) mailbox.pending_messages (domain);
-          delivered = true;
+          ++delivered;
       },
       runtime::application_job_queue_t::origin_t::remote);
     require (!delivered, "inline permit returned capacity before terminal");
@@ -356,10 +394,28 @@ void verify_inline_permit (bool bulk_release)
         require (mailbox.release (*claim), "bulk terminal did not settle claim");
     else
         require (original->transferred (), "individual terminal did not settle claim");
-    require (delivered && jobs.snapshot ().permits_in_use == 0,
-             "terminal did not return inline admission outside mailbox lock");
-    original->before_application_handler ();
-    require (jobs.snapshot ().permits_in_use == 0, "late handler entry returned admission twice");
+    auto before = std::move (original->before_application_handler);
+    original->transferred = {};
+    original.reset ();
+    std::weak_ptr<mesh::service_mailbox_claim_t> lifetime = claim;
+    claim.reset ();
+    require (lifetime.expired (), "late handler fixture retained the claim");
+    std::cout << "permit-lifetime bulk=" << bulk_release << " handler=" << enter_handler
+              << " claim-destroyed=" << lifetime.expired ()
+              << " permits-before-handler=" << jobs.snapshot ().permits_in_use
+              << " returns-before-handler=" << delivered << std::endl;
+    require (delivered == 0 && jobs.snapshot ().permits_in_use == 1,
+             "claim credit settlement released admission before handler entry");
+    if (enter_handler) {
+        before ();
+        require (delivered == 1 && jobs.snapshot ().permits_in_use == 0,
+                 "late handler entry did not return admission exactly once");
+        before ();
+    }
+    before = {};
+    require (delivered == 1 && jobs.snapshot ().permits_in_use == 0,
+             "handler or no-handler terminal returned admission incorrectly");
+    std::cout << "permit-lifetime returns=" << delivered << std::endl;
 }
 
 void verify_cut_permit ()
@@ -800,15 +856,29 @@ void verify_suspended_actor (bool local)
 }
 
 } // namespace
-int main ()
+int main (int argc, char **argv)
 {
     try {
+        if (argc == 2 && std::string_view (argv[1]) == "--permit-cost-only") {
+            measure_permit_ownership_cost ();
+            return 0;
+        }
+        if (argc == 2 && std::string_view (argv[1]) == "--permit-lifetime-only") {
+            verify_inline_permit (false);
+            verify_inline_permit (true);
+            verify_inline_permit (false, false);
+            verify_inline_permit (true, false);
+            return 0;
+        }
+        measure_permit_ownership_cost ();
         auto target = make_host ();
         verify_retained_batch (*target);
         verify_original_transfer (*target);
         verify_nested_batch (*target);
         verify_inline_permit (false);
         verify_inline_permit (true);
+        verify_inline_permit (false, false);
+        verify_inline_permit (true, false);
         verify_cut_permit ();
         verify_reply_source_snapshot ();
         verify_retained_local_original ();
