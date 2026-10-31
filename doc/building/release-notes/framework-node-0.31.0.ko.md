@@ -40,6 +40,7 @@ Framework 0.31.0은 Node.js binding 1.21.0과 Core 1.21.0을 사용합니다.
 
 - 시험 코드의 private 멤버 접근을 공개 경로로 옮기는 작업을 Node·Java·.NET에서 9차까지 진행했습니다. 남은 범위는 다음 릴리스에서 이어 갑니다. 제품 동작에는 영향이 없습니다. (#2309)
 - Windows에서 mailbox signaler가 AF_UNIX datagram 실패 뒤 stream으로 전환하면 socket마다 임시 경로를 만들고 지우는 데 약 2.5ms가 듭니다. 수정은 다음 Core 릴리스에 포함됩니다. (#3053)
+- 공개 템플릿 `mmo-world-channels`에서 플레이어가 채널에 들어간 직후 첫 `ChannelView`가 오지 않아 update 시나리오가 시간 초과하는 경우가 있습니다(0.31.0에서 약 절반, 0.30.3에서는 재현되지 않음). 0.32.0에서 고칩니다. 그때까지 Node 템플릿은 0.30.3에 고정합니다. (#3344)
 
 ## 설치
 

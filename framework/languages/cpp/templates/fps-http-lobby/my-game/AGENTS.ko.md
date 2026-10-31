@@ -2,7 +2,7 @@
 
 ## 프로젝트와 개발
 
-이 C++20 FPS 템플릿의 게임 규칙을 확장합니다. HTTP Lobby, Session gateway, Match host A·B, Redis Location Store를 실행합니다. Lobby는 `POST /match` 요청을 mode별로 매칭하고 설정된 prefix와 UUID로 Room ID를 만들며, `RoomPrepared`를 받은 뒤 Room ID와 Session endpoint를 반환합니다. 게임의 첫 STREAM packet은 `JoinRoomRequest`이며 `RoomRoster`가 입장 여부를 결정합니다. 공개 Framework·connector package는 `bootstrap.cmake`의 0.30.3에 고정되어 있습니다. 실행·배포·알려진 문제는 [README](README.md)가, topology와 scenario 순서는 [zlink.structure.json](zlink.structure.json)이 소유합니다.
+이 C++20 FPS 템플릿의 게임 규칙을 확장합니다. HTTP Lobby, Session gateway, Match host A·B, Redis Location Store를 실행합니다. Lobby는 `POST /match` 요청을 mode별로 매칭하고 설정된 prefix와 UUID로 Room ID를 만들며, `RoomPrepared`를 받은 뒤 Room ID와 Session endpoint를 반환합니다. 게임의 첫 STREAM packet은 `JoinRoomRequest`이며 `RoomRoster`가 입장 여부를 결정합니다. 공개 Framework·connector package는 `bootstrap.cmake`의 0.31.0에 고정되어 있습니다. 실행·배포·알려진 문제는 [README](README.md)가, topology와 scenario 순서는 [zlink.structure.json](zlink.structure.json)이 소유합니다.
 
 Docker Compose v2와 Linux container를 준비한 뒤 프로젝트 루트에서 실행합니다.
 
@@ -48,7 +48,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 
 [ZLink 문서](https://docs.zlink.systems/), [C++ server guide](https://docs.zlink.systems/cpp/guide/server/), [API reference](https://docs.zlink.systems/cpp/reference/), [agent index](https://docs.zlink.systems/llms.txt)를 사용합니다. `bootstrap.cmake`에 고정한 package 버전과 현재 문서를 대조합니다. Entry·Spot·Actor·Session·Location·relocation은 공개 Framework API와 기본 typed serializer를 사용합니다. Private API·raw frame 해석·수동 JSON 변환·application routing 우회를 추가하지 않습니다.
 
-고정된 0.30.3 C++ public header는 문서의 typed `SessionInfoRequest` reply 예시와 맞지 않습니다. STREAM write/reply는 `zlink::message_t`를 받지만 `fx::message_t::from(T)`는 typed wrapper를 반환하고, `submit()`은 `void`입니다. Request/reply 의미를 push로 바꾸거나 serializer 우회를 넣지 말고 public 계약 차이로 기록합니다.
+고정된 0.31.0 C++ public header는 문서의 typed `SessionInfoRequest` reply 예시와 맞지 않습니다. STREAM write/reply는 `zlink::message_t`를 받지만 `fx::message_t::from(T)`는 typed wrapper를 반환하고, `submit()`은 `void`입니다. Request/reply 의미를 push로 바꾸거나 serializer 우회를 넣지 말고 public 계약 차이로 기록합니다.
 
 ## 진단과 결함
 

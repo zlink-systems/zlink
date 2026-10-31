@@ -61,7 +61,7 @@ The runner checks `zlink.structure.json`, creates its own Redis Compose project 
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.31.0 packages.
 
 ## Deployment sequence
 

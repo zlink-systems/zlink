@@ -15,7 +15,7 @@ flowchart LR
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Docker with Compose v2 (Linux containers), and PowerShell 7 or Bash. The project uses public ZLink Framework and Stream Connector 0.30.3 packages from NuGet.org. No repository checkout is needed. The transitive .NET binding is pinned to 1.20.0. Package versions are owned by `Directory.Packages.props`.
+Docker with Compose v2 (Linux containers), and PowerShell 7 or Bash. The project uses public ZLink Framework and Stream Connector 0.31.0 packages from NuGet.org. No repository checkout is needed. The transitive .NET binding is pinned to 1.21.0. Package versions are owned by `Directory.Packages.props`.
 
 ## Build
 
@@ -86,7 +86,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.31.0 packages.
 
 ## Deployment sequence
 
