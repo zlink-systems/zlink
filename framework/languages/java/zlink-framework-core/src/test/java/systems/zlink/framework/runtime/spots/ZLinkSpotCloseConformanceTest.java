@@ -37,6 +37,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome;
@@ -958,7 +959,11 @@ final class ZLinkSpotCloseConformanceTest {
 
         @Override
         public void close() {
-            Logger.getLogger("").removeHandler(this);
+            try {
+                ZLinkTelemetryTestFence.awaitIdle();
+            } finally {
+                Logger.getLogger("").removeHandler(this);
+            }
         }
     }
 
