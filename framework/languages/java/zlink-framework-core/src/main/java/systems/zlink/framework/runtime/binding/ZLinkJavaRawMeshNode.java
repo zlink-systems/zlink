@@ -4007,8 +4007,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void dispatchBoundSessionClose(ZLinkJavaRawServicePort.Inbound inbound) {
-        if (inbound.frames().size() != 1 || inbound.requestSequence() == null) return;
-        var request = statefulWire.decodeBoundSessionClose(inbound.frames().getFirst());
+        if (inbound.frames().size() != 1 || inbound.requestSequence() == null) {
+            rejectProtocolRecord(inbound, "actor");
+            return;
+        }
+        final ZLinkServiceM6BWireCodec.BoundSessionClose request;
+        try {
+            request = statefulWire.decodeBoundSessionClose(inbound.frames().getFirst());
+        } catch (IllegalArgumentException invalidHeader) {
+            rejectProtocolRecord(inbound, "actor");
+            return;
+        }
         acceptBoundSessionClose(request)
                 .whenComplete(
                         (ignored, failure) -> {
@@ -5620,13 +5629,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     }
                 }
             }
+            boolean currentSource =
+                    source.isPresent()
+                            && Long.parseUnsignedLong(source.orElseThrow().connectionId(), 16)
+                                    == inbound.routeGeneration();
+            if (header == null && currentSource) rejectProtocolRecord(inbound, "node");
             Runnable afterCommit = null;
             if (header != null) {
                 int command = header.command();
-                boolean currentSource =
-                        source.isPresent()
-                                && Long.parseUnsignedLong(source.orElseThrow().connectionId(), 16)
-                                        == inbound.routeGeneration();
                 if (!currentSource
                         && command != ServiceWireConstants.COMMAND_HELLO
                         && command != ServiceWireConstants.COMMAND_ADMIT
@@ -5699,9 +5709,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 try {
                     spotHeader = statefulWire.decodeSpotHeader(head);
                 } catch (RuntimeException invalid) {
-                    if (command == ServiceWireConstants.COMMAND_SPOT_SEND) {
-                        messageMetrics.dropped("spot", "decode_error");
-                    }
+                    rejectProtocolRecord(inbound, "spot");
                     return;
                 }
                 correlation = spotHeader.correlation();
@@ -5710,9 +5718,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 try {
                     actorHeader = statefulWire.decodeActorHeader(head);
                 } catch (RuntimeException invalid) {
-                    if (command == ServiceWireConstants.COMMAND_ACTOR_SEND) {
-                        messageMetrics.dropped("actor", "decode_error");
-                    }
+                    rejectProtocolRecord(inbound, "actor");
                     return;
                 }
                 correlation = actorHeader.correlation();
@@ -5812,7 +5818,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             int payloadOffset = (flags & ServiceWireConstants.FLAG_METADATA) == 0 ? 1 : 2;
             if (frames.size() != payloadOffset + 1
                     || (correlation != null && inbound.requestSequence() == null)) {
-                replyApplicationProtocolFailure(inbound, correlation, kind);
+                rejectProtocolRecord(inbound, channelName == null ? "node" : "channel");
                 return;
             }
             byte[] metadata = payloadOffset == 2 ? frames.get(1).clone() : new byte[0];
@@ -5822,7 +5828,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrameView(
                                 inbound.received().parts().get(payloadOffset).dataBuffer());
             } catch (RuntimeException invalid) {
-                replyApplicationProtocolFailure(inbound, correlation, kind);
+                rejectProtocolRecord(inbound, channelName == null ? "node" : "channel");
                 return;
             }
             boolean relocationControl =
@@ -5958,7 +5964,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         // Spec 04:222: claim and dispatch failures settle only their own record.
         LOGGER.log(Level.WARNING, "Service record dispatch failed", failure);
         if (kind != null && decoding && failure instanceof IllegalArgumentException) {
-            replyApplicationProtocolFailure(inbound, correlation, kind);
+            rejectProtocolRecord(
+                    inbound,
+                    kind == RecordKind.CHANNEL_SEND || kind == RecordKind.CHANNEL_REQUEST
+                            ? "channel"
+                            : "node");
         } else if (correlation != null
                 && inbound.requestSequence() != null
                 && (replied == null || replied.compareAndSet(false, true))) {
@@ -6094,21 +6104,29 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return pair;
     }
 
-    private void replyApplicationProtocolFailure(
-            ZLinkJavaRawServicePort.Inbound inbound, Long correlation, RecordKind kind) {
-        if (kind == RecordKind.NODE_SEND || kind == RecordKind.CHANNEL_SEND) {
-            messageMetrics.dropped(
-                    kind == RecordKind.NODE_SEND ? "node" : "channel", "decode_error");
-            return;
-        }
-        if (correlation == null || inbound.requestSequence() == null) {
+    private void rejectProtocolRecord(ZLinkJavaRawServicePort.Inbound inbound, String surface) {
+        LOGGER.log(
+                Level.WARNING, "ProtocolError: rejected service record from {0}", inbound.source());
+        Long correlation =
+                inbound.frames().isEmpty()
+                        ? null
+                        : ServiceWireConstants.recoverRequestCorrelation(
+                                inbound.frames().getFirst());
+        if (inbound.requestSequence() == null || correlation == null) {
+            messageMetrics.dropped(surface, "decode_error");
             return;
         }
         port.reply(
                 requireStarted(),
                 inbound.source(),
                 inbound.requestSequence(),
-                List.of(wire.encodeReplyHeader(correlation, 104, 12)));
+                List.of(
+                        wire.encodeReplyHeader(
+                                correlation,
+                                RequestResult.PROTOCOL_ERROR.value(),
+                                (int)
+                                        ServiceWireConstants
+                                                .FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR)));
     }
 
     private void dispatchRelocationControl(
@@ -6467,9 +6485,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         List<byte[]> frames = inbound.frames();
         int payloadOffset = (flags & ServiceWireConstants.FLAG_METADATA) == 0 ? 1 : 2;
         if (frames.size() != payloadOffset + 1) {
-            if (!header.request()) {
-                messageMetrics.dropped("spot", "decode_error");
-            }
+            rejectProtocolRecord(inbound, "spot");
             return false;
         }
         ZLinkServiceM6AWireCodec.ApplicationPayload payload;
@@ -6865,12 +6881,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private void dispatchUserSpotCreate(ZLinkJavaRawServicePort.Inbound inbound) {
         if (inbound.frames().size() != 1 || inbound.requestSequence() == null) {
+            rejectProtocolRecord(inbound, "spot");
             return;
         }
         ZLinkServiceM6BWireCodec.UserSpotCreate command;
         try {
             command = statefulWire.decodeUserSpotCreateHeader(inbound.frames().getFirst());
         } catch (RuntimeException invalid) {
+            rejectProtocolRecord(inbound, "spot");
             return;
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> source =
@@ -6995,12 +7013,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private void dispatchActorCreate(ZLinkJavaRawServicePort.Inbound inbound) {
         if (inbound.frames().size() != 1 || inbound.requestSequence() == null) {
+            rejectProtocolRecord(inbound, "actor");
             return;
         }
         ZLinkServiceM6BWireCodec.ActorCreate command;
         try {
             command = statefulWire.decodeActorCreateHeader(inbound.frames().getFirst());
         } catch (RuntimeException invalid) {
+            rejectProtocolRecord(inbound, "actor");
             return;
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> source =
@@ -7050,12 +7070,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private void dispatchUserSpotClose(ZLinkJavaRawServicePort.Inbound inbound) {
         if (inbound.frames().size() != 1 || inbound.requestSequence() == null) {
+            rejectProtocolRecord(inbound, "spot");
             return;
         }
         ZLinkServiceM6BWireCodec.UserSpotClose command;
         try {
             command = statefulWire.decodeUserSpotCloseHeader(inbound.frames().getFirst());
         } catch (RuntimeException invalid) {
+            rejectProtocolRecord(inbound, "spot");
             return;
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> source =
@@ -7326,17 +7348,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private void dispatchCanonicalActorJoin(ZLinkJavaRawServicePort.Inbound inbound) {
         List<byte[]> frames = inbound.frames();
         if (inbound.requestSequence() == null || frames.isEmpty()) {
+            rejectProtocolRecord(inbound, "actor");
             return;
         }
         if (frames.size() > 2) {
-            replyCanonicalActorJoinProtocolFailure(inbound, frames);
+            rejectProtocolRecord(inbound, "actor");
             return;
         }
         final ServiceWirePilotCodec.ActorJoin28 join;
         try {
             join = ServiceWirePilotCodec.decodeActorJoin28(frames);
         } catch (Exception invalidCanonical) {
-            replyCanonicalActorJoinProtocolFailure(inbound, frames);
+            rejectProtocolRecord(inbound, "actor");
             return;
         }
         RoutingId targetNode = RoutingId.from(join.targetSpot().targetNodeRid());
@@ -7418,19 +7441,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
-    private void replyCanonicalActorJoinProtocolFailure(
-            ZLinkJavaRawServicePort.Inbound inbound, List<byte[]> frames) {
-        if (inbound.requestSequence() == null
-                || frames.isEmpty()
-                || frames.getFirst().length < PREFIX_BYTES + Long.BYTES) {
-            return;
-        }
-        long correlation = ByteBuffer.wrap(frames.getFirst()).getLong(PREFIX_BYTES);
-        if (correlation != 0) {
-            replyCanonicalActorJoinFailure(inbound, correlation, 104, 16);
-        }
-    }
-
     private void replyCanonicalActorJoinFailure(
             ZLinkJavaRawServicePort.Inbound inbound,
             long correlation,
@@ -7454,9 +7464,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         List<byte[]> frames = inbound.frames();
         int payloadOffset = (flags & ServiceWireConstants.FLAG_METADATA) == 0 ? 1 : 2;
         if (frames.size() != payloadOffset + 1) {
-            if (!header.request()) {
-                messageMetrics.dropped("actor", "decode_error");
-            }
+            rejectProtocolRecord(inbound, "actor");
             return false;
         }
         ZLinkServiceM6AWireCodec.ApplicationPayload payload;
@@ -7660,12 +7668,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private void dispatchBoundSessionBind(ZLinkJavaRawServicePort.Inbound inbound) {
         if (inbound.frames().size() != 1 || inbound.requestSequence() == null) {
+            rejectProtocolRecord(inbound, "actor");
             return;
         }
         ZLinkServiceM6BWireCodec.BoundSessionBind binding;
         try {
             binding = statefulWire.decodeBoundSessionBindHeader(inbound.frames().getFirst());
         } catch (RuntimeException invalid) {
+            rejectProtocolRecord(inbound, "actor");
             return;
         }
         Optional<ZLinkServiceTopologyRegistry.Peer> source =

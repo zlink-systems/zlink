@@ -47,7 +47,8 @@ import {
   SERVICE_WIRE_MAGIC,
   SERVICE_WIRE_MAJOR,
   ServiceWireCommand,
-  ServiceWireFrameworkErrorCode
+  ServiceWireFrameworkErrorCode,
+  recoverRequestCorrelation
 } from './service-wire-constants.generated';
 import {
   decodeApplicationPayload,
@@ -1208,29 +1209,16 @@ export class RawServiceMeshRuntime {
     received: import('../backend/node/node-raw-binding-port').ZLinkRawReceivedRecord
   ): boolean {
     if (received.requestSeq === undefined || received.parts.length === 0) return false;
-    try {
-      const header = decodeHeader(received.parts[0]!);
-      const correlation =
-        header.command === M6aServiceWireCommand.nodeRequest
-          ? decodeNodeRequestHeader(received.parts[0]!)
-          : header.command === M6aServiceWireCommand.channelRequest
-            ? decodeChannelRequestHeader(received.parts[0]!).correlation
-            : undefined;
-      if (correlation === undefined) return false;
-      const reply = [
-        encodeReplyHeader(
-          correlation,
-          RequestResult.ProtocolError,
-          ServiceWireFrameworkErrorCode.requestProtocolError
-        )
-      ];
-      if (received.reply === undefined) return false;
-      received.reply(reply);
-      return true;
-    } catch (error) {
-      if (error instanceof ServiceWireProtocolError) return false;
-      throw error;
-    }
+    const correlation = recoverRequestCorrelation(received.parts[0]!);
+    if (correlation === undefined || received.reply === undefined) return false;
+    received.reply([
+      encodeReplyHeader(
+        correlation,
+        RequestResult.ProtocolError,
+        ServiceWireFrameworkErrorCode.requestProtocolError
+      )
+    ]);
+    return true;
   }
 
   private processReceived(

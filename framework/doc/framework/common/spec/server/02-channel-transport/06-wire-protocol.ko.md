@@ -153,6 +153,13 @@ Flags는 뒤에 무엇이 더 붙는지를 정한다.
 수, conditional tail 또는 trailing byte가 있으면 application dispatch 전에 protocol error로
 거부한다.
 
+수신 record를 protocol error로 거부할 때 transport가 원래 request의 reply 경로를 제공하고
+schema에 따라 command와 유효한 correlation을 확보할 수 있으면, runtime은 application
+dispatch 없이 command 20의 `ProtocolError`/`requestProtocolError` terminal을 보낸다.
+이를 확보할 수 없으면 record를 폐기하고 protocol error를 관측한다. 호출자는 reply 없이
+자신의 deadline으로 완료할 수 있다. One-way record에는 reply를 보내지 않으며, correlation
+0이나 추측한 값을 사용하지 않는다.
+
 ### Decode 검증과 크기 상한
 
 - Decoder는 allocation 전에 complete record 길이, item count, UTF-8 validity와 모든 bound를 검사한다.
