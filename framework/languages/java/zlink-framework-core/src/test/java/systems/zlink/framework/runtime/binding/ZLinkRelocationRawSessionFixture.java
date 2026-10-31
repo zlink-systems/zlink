@@ -25,7 +25,8 @@ import java.util.UUID;
 /** Real raw binding and native outbound, with the already-ready peer installed before replay. */
 public final class ZLinkRelocationRawSessionFixture implements AutoCloseable {
     private final Context context = Zlink.createContext();
-    private final ZLinkJavaRawMeshNode node = new ZLinkJavaRawMeshNode(context, "mesh");
+    private ZLinkJavaRawMeshNode node;
+    private final ZLinkJavaRawServicePort port = new ZLinkJavaRawServicePort(context);
     private final ZLinkJavaRawServicePort peerPort = new ZLinkJavaRawServicePort(context);
     private RouterSocket peer;
 
@@ -33,10 +34,7 @@ public final class ZLinkRelocationRawSessionFixture implements AutoCloseable {
         try {
             var localRid = RoutingId.from("target-node");
             var peerRid = RoutingId.from("session-owner");
-            node.setRoutingId(localRid);
-            var port = (ZLinkJavaRawServicePort) field("port");
             var router = port.openRouter(localRid);
-            set("router", router);
             String endpoint = "inproc://aggregate-replay-" + UUID.randomUUID();
             router.bind(endpoint);
             peer = peerPort.openRouter(peerRid);
@@ -49,9 +47,17 @@ public final class ZLinkRelocationRawSessionFixture implements AutoCloseable {
             }
             var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid, 17));
             topology.admit(descriptor(peerRid, 31), "ready", ServiceWireConstants.COMMAND_ADMIT);
-            set("topology", topology);
-            topology.observeChanges(node::publishPeerObservation);
-        } catch (ReflectiveOperationException | RuntimeException | Error failure) {
+            node =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "mesh",
+                            port,
+                            router,
+                            null,
+                            topology,
+                            java.util.Map.of(),
+                            Runnable::run);
+            node.setRoutingId(localRid);
+        } catch (RuntimeException | Error failure) {
             close();
             throw new AssertionError(failure);
         }
@@ -100,20 +106,9 @@ public final class ZLinkRelocationRawSessionFixture implements AutoCloseable {
     public void close() {
         if (peer != null) peer.close();
         peerPort.close();
-        node.close();
+        if (node != null) node.close();
+        port.close();
         context.close();
-    }
-
-    private Object field(String name) throws ReflectiveOperationException {
-        var field = ZLinkJavaRawMeshNode.class.getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(node);
-    }
-
-    private void set(String name, Object value) throws ReflectiveOperationException {
-        var field = ZLinkJavaRawMeshNode.class.getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(node, value);
     }
 
     private static ZLinkServiceNodeDescriptor descriptor(RoutingId rid, long generation) {
