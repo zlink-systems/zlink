@@ -114,7 +114,8 @@ try {
     const runtime::call_id_t id{0, _next_request.fetch_add (1, std::memory_order_relaxed)};
     const auto registered = _requests->register_operation (
       id, expires_at,
-      [source] (runtime::foundation::operation_terminal_t terminal, zlink::message_t) {
+      [source] (runtime::foundation::operation_terminal_t terminal,
+                ::zlink::framework::result_t<zlink::message_t>) {
           if (terminal == runtime::foundation::operation_terminal_t::cancelled) {
               source->complete (detail::result_access_t::failure<raw_request_completion_t> (
                 detail::make_cancellation_exception ("request was cancelled")));

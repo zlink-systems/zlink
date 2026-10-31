@@ -118,6 +118,11 @@ decides the kind of a failure a remote node sent. The cases this node decides it
 - `InternalFailure` for a Framework execution failure that can't be expressed by the kinds
   above.
 
+When an application callback failure is delivered to a caller in the same runtime, the
+original exception is preserved. If it is converted to a Framework exception, the original
+exception is linked as its cause, and `ErrorKind` follows this section. Restoring the original
+exception from a remote wire failure is outside this guarantee.
+
 <a id="bounded-queue-failure"></a>
 **A full Framework-owned queue is not an error.** The work waits until room appears. The only way to slow
 what is coming in is the `PAUSED` state of

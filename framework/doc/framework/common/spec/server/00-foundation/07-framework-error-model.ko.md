@@ -110,6 +110,10 @@ call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와
 - Runtime이 종료 중이면 `ShuttingDown`이다.
 - 위 종류로 표현할 수 없는 Framework 실행 실패는 `InternalFailure`다.
 
+동일 runtime의 application callback 실패를 호출자에게 전달할 때 원래 예외를 보존한다.
+Framework exception으로 변환하는 경우 원래 예외를 cause로 연결하며 `ErrorKind`는 이 절을
+따른다. 원격 wire 실패에서 원래 예외를 복원하는 동작은 이 보장의 범위에 포함하지 않는다.
+
 <a id="bounded-queue-failure"></a>
 **Framework가 소유한 줄이 가득 찼다는 것은 오류가 아니다.** 자리가 날 때까지 기다린다. 들어오는 속도를 늦추는
 수단은 [§6](../01-execution/04-application-job-queue-and-backpressure.ko.md#6-pressure-상태와-socket-제어)의

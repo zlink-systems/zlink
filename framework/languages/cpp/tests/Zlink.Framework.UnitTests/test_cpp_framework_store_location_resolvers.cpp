@@ -1686,12 +1686,17 @@ class source_cleanup_client_t final : public zlink::framework::hosted_service_t
             .timeout (std::chrono::seconds (2))
             .async ()
             .result ();
-        observed =
-          !result && result.error ()
-          && result.error ()->kind () == zlink::framework::framework_error_kind_t::internal_failure;
-        if (!observed)
-            last_error =
-              result.error () ? result.error ()->what () : "User Spot failure was not preserved";
+        try {
+            result.value ();
+            last_error = "User Spot creation unexpectedly succeeded";
+        }
+        catch (const std::runtime_error &error) {
+            observed = typeid (error) == typeid (std::runtime_error)
+                       && std::string_view (error.what ())
+                            == "intentional User Spot materialization failure";
+            if (!observed)
+                last_error = error.what ();
+        }
         _app->stop ();
         co_return;
     }

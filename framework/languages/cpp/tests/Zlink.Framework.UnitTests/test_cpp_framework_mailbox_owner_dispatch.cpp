@@ -258,7 +258,7 @@ int main ()
                 .transport ()
                 .register_local_operation_async (
                   rt::foundation::operation_registry_t::clock_t::time_point::min (),
-                  [completed] (auto outcome, zlink::message_t) {
+                  [completed] (auto outcome, zlink::framework::result_t<zlink::message_t>) {
                       assert (outcome == rt::foundation::operation_terminal_t::timed_out);
                       completed->set_value ();
                   })

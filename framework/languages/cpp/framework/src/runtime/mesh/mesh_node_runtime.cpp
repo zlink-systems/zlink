@@ -3422,6 +3422,9 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::actor_join_reply_from_completi
   const actor_ref_t &actor,
   const std::shared_ptr<mesh_node_builder_state_t> &state)
 {
+    if (record.join_completion && !*record.join_completion)
+        return detail::propagate_failure<actor_join_reply_t> (*record.join_completion,
+                                                              "Local Actor join failed");
     if (record.terminal_result != 0) {
         //  Spec 32-framework-error-model:119-136 — a Framework failure carried
         //  on the completion (prerequisite or post-accept commit failure) is
@@ -3440,7 +3443,7 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::actor_join_reply_from_completi
             + std::to_string (record.terminal_result) + ", errno "
             + std::to_string (record.failure_errno) + ")");
     }
-    const auto &joined = *record.join_completion;
+    const auto &joined = record.join_completion->value ();
     const auto reply = parts.empty () ? zlink::message_t{} : parts.front ();
     if (joined.join_result == host::join_admission_t::rejected) {
         return result_t<actor_join_reply_t>::success (actor_join_reply_t{1, actor, reply});
@@ -3812,7 +3815,8 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
             {runtime::protocol::bound_session_binding_state_t::active, binding_generation}},
           timeout,
           [completion] (runtime::foundation::operation_terminal_t terminal,
-                        zlink::message_t payload) {
+                        ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+              auto payload = std::move (completion_payload.value ());
               if (terminal != runtime::foundation::operation_terminal_t::completed) {
                   const auto kind = terminal == runtime::foundation::operation_terminal_t::timed_out
                                       ? framework_error_kind_t::deadline_exceeded
@@ -3895,7 +3899,9 @@ mesh_node_runtime_t::retire_application_actor_session (runtime::stateful::stream
         session_rid.to_bytes (),
         {runtime::protocol::bound_session_binding_state_t::tombstone, binding.binding_generation}},
       timeout,
-      [completion] (runtime::foundation::operation_terminal_t terminal, zlink::message_t payload) {
+      [completion] (runtime::foundation::operation_terminal_t terminal,
+                    ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+          auto payload = std::move (completion_payload.value ());
           if (terminal != runtime::foundation::operation_terminal_t::completed) {
               completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
                 framework_error_kind_t::unavailable,
