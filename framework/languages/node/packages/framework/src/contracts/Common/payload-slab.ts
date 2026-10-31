@@ -11,13 +11,12 @@ export function allocatePayloadBytes(length: number): Buffer {
     return Buffer.allocUnsafe(length);
   }
   if (slab === undefined || offset + length > SLAB_BYTES) {
-    // Zero filled: a returned view's backing store is reachable through `.buffer`.
-    slab = Buffer.alloc(SLAB_BYTES);
+    slab = Buffer.allocUnsafe(SLAB_BYTES);
     offset = 0;
   }
   const bytes = slab.subarray(offset, offset + length);
   offset += Math.ceil(length / ALIGNMENT) * ALIGNMENT;
-  // A retained data() view can retain its <=64 KiB slab until collection,
-  // matching the retention model of Node's Buffer pool.
+  // Views stay internal to the Framework (service frames copied by the binding);
+  // never return them to application code, whose `.buffer` would reach the slab.
   return bytes;
 }

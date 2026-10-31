@@ -66,7 +66,7 @@ test('payload allocation retains Buffer errors for invalid lengths', () => {
   assert.throws(() => allocatePayloadBytes('4'), { code: 'ERR_INVALID_ARG_TYPE' });
 });
 
-test('4 KiB typed decode owns its copy after receive storage and subsequent slab views change', () => {
+test('4 KiB typed decode returns an independent backing store, not a shared view', () => {
   startSlab();
   const receiveStorage = new Uint8Array(4098).fill(0x5a);
   const input = receiveStorage.subarray(1, 4097);
@@ -78,16 +78,11 @@ test('4 KiB typed decode owns its copy after receive storage and subsequent slab
   assert.equal(retained.constructor, Uint8Array);
   assert.equal(Buffer.isBuffer(retained), false);
   assert.equal(retained.byteLength, 4096);
-  assert.notEqual(retained.buffer, receiveStorage.buffer);
-  assert.equal(retained.buffer.byteLength, 65536);
+  assert.equal(retained.byteOffset, 0);
+  assert.equal(retained.buffer.byteLength, retained.byteLength);
   const subsequent = allocatePayloadBytes(4096);
-  assert.equal(subsequent.buffer, retained.buffer);
-  assert.ok(subsequent.byteOffset >= retained.byteOffset + retained.byteLength);
+  assert.notEqual(subsequent.buffer, retained.buffer);
   input.fill(0x11);
-  subsequent.fill(0x22);
   message.close();
   assert.ok(retained.every(value => value === 0x5a));
-  retained.fill(0x33);
-  assert.ok(input.every(value => value === 0x11));
-  assert.ok(subsequent.every(value => value === 0x22));
 });
