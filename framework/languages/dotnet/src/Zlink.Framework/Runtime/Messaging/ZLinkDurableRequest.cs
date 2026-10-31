@@ -1,6 +1,6 @@
 namespace Zlink.Framework.Runtime.Messaging;
 
-// Lifecycle callers wait for initial readiness; the binding owns the started request.
+// Logical request admission is shared by application and lifecycle requests.
 internal static class ZLinkDurableRequest
 {
     private static readonly Task CancellationOnly = new TaskCompletionSource().Task;
@@ -18,11 +18,13 @@ internal static class ZLinkDurableRequest
         CancellationToken cancellationToken,
         Func<ZLinkPeerRouteObservation> observeRoute,
         TimeProvider? timeProvider = null,
-        ZLinkRequestAdmission? requestAdmission = null,
         Task? terminal = null
     )
     {
         timeProvider ??= TimeProvider.System;
+        ConnectionAttempt? baseline = null;
+        var waiting = false;
+        string? endpoint = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -39,11 +41,47 @@ internal static class ZLinkDurableRequest
                 }
                 else if (cancellationToken.CanBeCanceled)
                     await CancellationOnly.WaitAsync(cancellationToken).ConfigureAwait(false);
-                throw Exhausted(requestAdmission?.IsAdmitted == true);
+                throw Exhausted();
             }
             var route = observeRoute();
+            var attempt = route.Attempt;
+            // Ready observations do not scan attempts. Only an already waiting
+            // request needs the retained endpoint's failure history after recovery.
+            if (waiting && route.ReadyGeneration != 0 && route.Attempts is not null)
+            {
+                attempt = null;
+                foreach (var row in route.Attempts)
+                    if (string.Equals(row.Endpoint, endpoint, StringComparison.Ordinal))
+                    {
+                        attempt = row;
+                        break;
+                    }
+            }
+            // Compare retained failure tokens before accepting a recovered route.
+            if (waiting)
+            {
+                if (baseline is { } previous)
+                {
+                    if (
+                        attempt is not { } current
+                        || current.IntentId != previous.IntentId
+                        || current.LastFailureId != previous.LastFailureId
+                    )
+                        throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
+                }
+                else if (attempt is { LastFailureId: not 0 })
+                    throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
+            }
             if (route.ReadyGeneration == 0)
             {
+                if (
+                    route.SelectedGeneration == 0
+                    && route.Attempt is { State: ConnectionAttemptState.AttemptFailed }
+                )
+                    throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
+                baseline ??= attempt;
+                endpoint ??= route.Endpoint ?? attempt?.Endpoint;
+                waiting = true;
                 try
                 {
                     var wait = route.Changed.WaitAsync(cancellationToken);
@@ -87,14 +125,10 @@ internal static class ZLinkDurableRequest
                 };
     }
 
-    private static ZLinkFrameworkException Exhausted(bool admitted) =>
+    private static ZLinkFrameworkException Exhausted() =>
         new(
-            admitted
-                ? ZLinkFrameworkErrorKind.DeadlineExceeded
-                : ZLinkFrameworkErrorKind.Unavailable,
-            admitted
-                ? "Durable request reply was not received before its deadline."
-                : "Durable request was not admitted before its deadline.",
+            ZLinkFrameworkErrorKind.DeadlineExceeded,
+            "Request deadline elapsed before binding submission.",
             ZLinkRetryAdvice.RetryAfterBackoff
         );
 }
@@ -103,5 +137,8 @@ internal static class ZLinkDurableRequest
 internal readonly record struct ZLinkPeerRouteObservation(
     ulong SelectedGeneration,
     ulong ReadyGeneration,
-    Task Changed
+    Task Changed,
+    ConnectionAttempt? Attempt = null,
+    string? Endpoint = null,
+    IReadOnlyList<ConnectionAttempt>? Attempts = null
 );
