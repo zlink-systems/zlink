@@ -600,10 +600,9 @@ void enqueue_application_route (
     mailbox_record.owner = mesh::service_mailbox_t::application_owner (owner);
     mailbox_record.domain = mesh::service_mailbox_domain_t::application;
     mailbox_record.before_application_handler = [] {};
-    mailbox_record.application =
-      std::make_shared<zlink::framework::runtime::host::local_application_dispatch_t> (
-        zlink::framework::runtime::host::local_application_dispatch_t{
-          std::move (owner), std::move (record), std::move (parts)});
+    mailbox_record.application.emplace (
+      zlink::framework::runtime::host::local_application_dispatch_t{
+        std::move (owner), std::move (record), std::move (parts)});
     assert (node->native_node ().transport ().mailbox ().try_enqueue (std::move (mailbox_record)));
 }
 

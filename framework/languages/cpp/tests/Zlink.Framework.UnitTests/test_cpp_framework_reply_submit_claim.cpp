@@ -66,9 +66,9 @@ stateful::object_ref_t create_ready (stateful::stateful_object_runtime_t &object
 
 std::pair<bool, bool>
 submit_client_server_reply_and_release_claim (client_server::raw_client_server_server_t &server,
-                                              std::shared_ptr<mesh::service_mailbox_claim_t> claim,
-                                              mesh::service_mailbox_record_t request)
+                                              std::shared_ptr<mesh::service_mailbox_claim_t> claim)
 {
+    const auto &request = *claim->records.front ();
     const auto delivered =
       server
         .reply (request, protocol::application_payload_t{"ClientServerReply", "application/json",
@@ -230,14 +230,13 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
     auto claim = server.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
                                                     mailbox_owner, 1, 1024);
     assert (claim && claim->records.size () == 1);
-    const auto request = (*claim->records.front ());
     auto retained_claim = claim;
 
     std::atomic<int> terminal_count{0};
-    auto completion = std::async (
-      std::launch::async, [&server, retained_claim, request, &terminal_count] () mutable {
-          const auto result = submit_client_server_reply_and_release_claim (
-            server, std::move (retained_claim), std::move (request));
+    auto completion =
+      std::async (std::launch::async, [&server, retained_claim, &terminal_count] () mutable {
+          const auto result =
+            submit_client_server_reply_and_release_claim (server, std::move (retained_claim));
           terminal_count.fetch_add (1, std::memory_order_relaxed);
           return result;
       });
@@ -452,7 +451,7 @@ void verify_partial_prefix_and_stale_claim (bool local)
         record.operation = std::pair<std::uint64_t, std::uint64_t>{9, value};
         record.before_application_handler = [&] { ++permits; };
         if (local) {
-            record.application = std::make_shared<runtime::host::local_application_dispatch_t> ();
+            record.application.emplace ();
             record.application->parts.push_back (zlink::message_t::from ("body"));
         } else
             record.parts.push_back (zlink::message_t::from ("body"));

@@ -3,9 +3,11 @@
 #undef NDEBUG
 #endif
 #include "runtime/dispatch/offload_executor.hpp"
+#include "allocation_counter.hpp"
 
 #include <atomic>
 #include <cassert>
+#include <cstdio>
 #include <future>
 #include <stdexcept>
 #if defined(__unix__)
@@ -15,6 +17,16 @@
 
 namespace rt = zlink::framework::runtime;
 using namespace std::chrono_literals;
+
+#ifdef ZLINK_TEST_WRAP_NOTIFY_ONE
+std::atomic_bool suppress_notify_one{false};
+extern "C" void __real__ZNSt18condition_variable10notify_oneEv (std::condition_variable *);
+extern "C" void __wrap__ZNSt18condition_variable10notify_oneEv (std::condition_variable *condition)
+{
+    if (!suppress_notify_one.load ())
+        __real__ZNSt18condition_variable10notify_oneEv (condition);
+}
+#endif
 
 namespace zlink::framework::runtime
 {
@@ -30,6 +42,7 @@ struct offload_executor_test_access_t
         std::lock_guard lock (executor._mutex);
         return executor._stopping;
     }
+    static void wake_workers (offload_executor_t &executor) { executor._ready.notify_all (); }
 };
 }
 
@@ -53,6 +66,88 @@ struct test_role_t final : rt::offload_executor_t::role_t
     std::function<bool ()> run;
     bool run_until_handoff () override { return run (); }
 };
+
+#ifdef ZLINK_TEST_WRAP_NOTIFY_ONE
+void queued_work_reserves_independent_workers (bool internal_first)
+{
+    rt::offload_executor_t executor (1, 2, 0ms);
+    await ([&] { return rt::offload_executor_test_access_t::idle (executor) == 1; });
+    std::promise<void> release, second_entered;
+    auto released = release.get_future ();
+    auto second = second_entered.get_future ();
+    auto first_work = [&] { released.wait (); };
+    auto second_work = [&] { second_entered.set_value (); };
+
+    suppress_notify_one.store (true);
+    if (internal_first) {
+        assert (executor.try_submit_internal (first_work));
+        assert (executor.try_submit (second_work));
+    } else {
+        assert (executor.try_submit (first_work));
+        assert (executor.try_submit_internal (second_work));
+    }
+    const auto workers = executor.live_worker_count ();
+    suppress_notify_one.store (false);
+    rt::offload_executor_test_access_t::wake_workers (executor);
+    const bool progressed = second.wait_for (5s) == std::future_status::ready;
+    release.set_value ();
+    executor.drain ();
+    std::fprintf (stderr, "queued work workers=%zu independent_progress=%d\n", workers, progressed);
+    assert (workers == 2 && progressed);
+}
+#endif
+
+void internal_submission_does_not_allocate_a_callable_wrapper ()
+{
+    rt::offload_executor_t executor (1);
+    std::promise<void> entered, release;
+    auto released = release.get_future ();
+    assert (executor.try_submit_internal ([&] {
+        entered.set_value ();
+        await (released);
+    }));
+    auto started = entered.get_future ();
+    await (started);
+
+    std::atomic_size_t calls{0};
+    constexpr std::size_t submissions = 32;
+    const auto wrappers = zlink::framework::tests::count_allocations (
+      [&] {
+          for (std::size_t index = 0; index != submissions; ++index)
+              assert (executor.try_submit_internal ([&calls] { ++calls; }));
+      },
+      sizeof (std::function<void ()>));
+    release.set_value ();
+    executor.drain ();
+    std::fprintf (stderr, "internal submissions=%zu callable-wrapper allocations=%zu\n",
+                  submissions, wrappers);
+    assert (calls == submissions);
+    assert (wrappers == 0);
+}
+
+void cancellable_work_preserves_stop_and_exception_isolation ()
+{
+    rt::offload_executor_t executor (1);
+    std::promise<void> entered;
+    std::atomic_bool continuation_ran{false};
+    assert (executor.try_submit_cancellable ([&] (std::stop_token token) {
+        assert (token.stop_possible ());
+        entered.set_value ();
+        await ([&] { return token.stop_requested (); });
+        throw std::runtime_error ("cancellable application failure");
+    }));
+    auto started = entered.get_future ();
+    await (started);
+    assert (executor.try_submit ({}));
+    assert (executor.try_submit_cancellable ({}));
+    assert (executor.try_submit_internal ({}));
+    assert (executor.try_submit_internal ([&] { continuation_ran.store (true); }));
+    executor.request_stop ();
+    executor.drain ();
+    assert (continuation_ran.load () && executor.drained ());
+    assert (!executor.try_submit ({}));
+    assert (!executor.try_submit_cancellable ({}));
+}
 
 void handoff_keeps_receiving_and_drains_application_before_roles ()
 {
@@ -344,6 +439,12 @@ void rotation_exception_terminates ()
 
 int main ()
 {
+#ifdef ZLINK_TEST_WRAP_NOTIFY_ONE
+    queued_work_reserves_independent_workers (true);
+    queued_work_reserves_independent_workers (false);
+#endif
+    internal_submission_does_not_allocate_a_callable_wrapper ();
+    cancellable_work_preserves_stop_and_exception_isolation ();
     application_drain_waits_for_work_capture_destruction ();
     rotation_exception_terminates ();
     handoff_keeps_receiving_and_drains_application_before_roles ();

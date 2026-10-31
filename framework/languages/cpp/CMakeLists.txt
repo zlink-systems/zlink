@@ -1213,11 +1213,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
   add_executable(test_cpp_framework_receive_role
     tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role.cpp
-    framework/src/runtime/dispatch/offload_executor.cpp)
+    framework/src/runtime/dispatch/offload_executor.cpp
+    tests/support/allocation_counter.cpp)
   target_compile_features(test_cpp_framework_receive_role PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_receive_role PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
   target_link_libraries(test_cpp_framework_receive_role PRIVATE Threads::Threads)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_definitions(test_cpp_framework_receive_role PRIVATE ZLINK_TEST_WRAP_NOTIFY_ONE)
+    target_link_options(test_cpp_framework_receive_role PRIVATE
+      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv")
+  endif()
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_receive_role
     COMMAND test_cpp_framework_receive_role
@@ -2180,6 +2187,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
     zlink_framework_cpp_add_boost_headers(test_cpp_framework_receive_handoff_turn)
     target_link_options(test_cpp_framework_receive_handoff_turn PRIVATE
+      "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t10start_roleESt10shared_ptrINS2_6role_tEE"
+      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
       "LINKER:--wrap=zlink_router_recv"
       "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t15try_assign_roleESt10shared_ptrINS2_6role_tEE")
     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL

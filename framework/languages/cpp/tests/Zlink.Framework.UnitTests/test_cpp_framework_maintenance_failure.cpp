@@ -6,6 +6,7 @@
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include <gtest/gtest.h>
+#include <future>
 #include <atomic>
 #include <cstdlib>
 #include <new>
@@ -124,7 +125,7 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
         mesh::service_mailbox_record_t original;
         original.owner = "node";
         original.domain = mesh::service_mailbox_domain_t::application;
-        original.application = std::make_shared<host::local_application_dispatch_t> ();
+        original.application.emplace ();
         original.application->owner.owner_kind = host::owner_kind_t::node;
         original.application->record.kind = host::record_kind_t::node_send;
         original.application->parts.push_back (zlink::message_t::from ("x"));
@@ -136,12 +137,26 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
     std::size_t started = 0, rejected = 0, dispatched = 0;
     injected = 0;
     // The batch's record storage is larger than its pointer/byte claim vectors.
-    fail_size = count * sizeof (mesh::service_mailbox_record_t);
-    auto pending = owner->dispatch_application_owner (
-      "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [&] { ++started; },
-      [&] { ++rejected; });
-    fail_size = 0;
-    const auto &result = pending.result ();
+    std::promise<void> begin_dispatch;
+    auto begin = begin_dispatch.get_future ().share ();
+    auto cold = std::async (std::launch::async, [&] {
+        begin.wait ();
+        fail_size = count * sizeof (mesh::service_mailbox_record_t);
+        try {
+            auto result = owner->dispatch_application_owner (
+              "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [&] { ++started; },
+              [&] { ++rejected; });
+            fail_size = 0;
+            return result;
+        }
+        catch (...) {
+            fail_size = 0;
+            throw;
+        }
+    });
+    begin_dispatch.set_value ();
+    auto pending = cold.get ();
+    const auto &result = zlink::framework::test::application_owner_result (pending);
     ASSERT_EQ (injected.load (), 1);
     ASSERT_FALSE (result);
     EXPECT_THROW (result.value (), std::bad_alloc);
@@ -153,7 +168,7 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
     auto next = owner->dispatch_application_owner (
       "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [&] { ++started; },
       [&] { ++rejected; });
-    EXPECT_TRUE (next.result ().value ());
+    EXPECT_TRUE (zlink::framework::test::application_owner_result (next).value ());
     EXPECT_EQ (dispatched, 1u);
     EXPECT_EQ (started, count + 1);
     EXPECT_EQ (rejected, count);

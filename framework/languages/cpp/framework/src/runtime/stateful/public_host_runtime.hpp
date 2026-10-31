@@ -848,7 +848,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
       bool accept_application_receive = true,
       std::function<bool ()> next_application_receive = {});
-    task_t<bool> dispatch_application_owner (
+    using application_owner_result_t = std::variant<bool, task_t<bool>>;
+    application_owner_result_t dispatch_application_owner (
       std::string owner,
       const std::function<void (
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
@@ -1289,7 +1290,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::optional<protocol::application_payload_t> application_reply;
         // Retransmissions of the running operation, with their correlations.
         // They receive the same terminal result (§7.1 operation ID).
-        std::vector<std::pair<mesh::service_mailbox_record_t, std::uint64_t>> waiting;
+        std::vector<std::pair<std::shared_ptr<const mesh::service_mailbox_record_t>, std::uint64_t>>
+          waiting;
     };
     std::map<std::string, user_spot_terminal_record_t> _user_spot_terminals;
     std::function<void ()> _maintenance_closing;

@@ -22,37 +22,30 @@ namespace zlink::framework::runtime
 {
 struct offload_executor_test_access_t
 {
-    static bool application_queued (offload_executor_t &executor)
+    static std::condition_variable *ready (offload_executor_t &executor)
     {
-        std::lock_guard lock (executor._mutex);
-        return !executor._queue.empty ();
-    }
-    static bool application_running (offload_executor_t &executor)
-    {
-        std::lock_guard lock (executor._mutex);
-        return executor._active > executor._role_active;
-    }
-    static std::size_t idle (offload_executor_t &executor)
-    {
-        std::lock_guard lock (executor._mutex);
-        return executor._idle_workers;
+        return &executor._ready;
     }
 };
 }
 namespace
 {
+std::atomic<std::condition_variable *> application_ready{nullptr};
+std::atomic_size_t worker_notifications{0};
+std::atomic_bool watch_notifications{false};
 std::mutex observation_mutex;
 std::thread::id received_on;
-bool pending_handoff = false;
-bool reject_handoff = false;
-std::promise<std::pair<std::thread::id, bool>> assigned;
 std::promise<std::thread::id> handled;
 std::atomic_bool handler_entered{false};
-std::atomic_bool handoff_observed{false};
-std::atomic_bool direct_blocked{false};
-std::atomic_size_t posted_before_handoff{0};
+std::atomic_bool handler_blocked{false};
+std::atomic_size_t role_assignments{0};
+std::atomic_size_t successful_role_assignments{0};
+constexpr std::size_t queued_records = 128;
+std::atomic_size_t received_queued{0};
+std::atomic_size_t handled_queued{0};
+std::promise<void> queue_drained;
 std::promise<void> parallel_started;
-std::shared_future<void> release_direct;
+std::shared_future<void> release_handler_turn;
 struct probe_t
 {
     std::string value;
@@ -65,12 +58,17 @@ struct handler_t
             parallel_started.set_value ();
             return;
         }
-        const bool hold = !reject_handoff && handoff_observed.load ();
-        direct_blocked = hold;
+        if (probe.value.starts_with ("queued-probe-")) {
+            const auto index = std::stoul (probe.value.substr (13));
+            assert (handled_queued.fetch_add (1) == index);
+            if (index + 1 == queued_records)
+                queue_drained.set_value ();
+            return;
+        }
+        handler_blocked = true;
         handler_entered = true;
         handled.set_value (std::this_thread::get_id ());
-        if (hold)
-            release_direct.wait ();
+        release_handler_turn.wait ();
     }
 };
 }
@@ -96,11 +94,13 @@ extern "C" zlink_recv_result_t __wrap_zlink_router_recv (void *socket,
         for (std::size_t index = 0; index < *count; ++index) {
             const auto *data = static_cast<const char *> (zlink_msg_data (&parts[index]));
             const auto bytes = zlink_msg_size (&parts[index]);
+            if (std::string_view (data, bytes).find ("queued-probe-") != std::string_view::npos)
+                ++received_queued;
             if (bytes >= sizeof (marker) - 1
                 && std::string_view (data, bytes).find (marker) != std::string_view::npos) {
                 std::lock_guard lock (observation_mutex);
                 received_on = std::this_thread::get_id ();
-                pending_handoff = true;
+                watch_notifications = true;
             }
         }
     }
@@ -118,67 +118,63 @@ wrapped_assign (rt::offload_executor_t *executor,
 extern "C" bool wrapped_assign (rt::offload_executor_t *executor,
                                 std::shared_ptr<rt::offload_executor_t::role_t> role)
 {
-    bool watched;
-    {
-        std::lock_guard lock (observation_mutex);
-        watched = pending_handoff && received_on == std::this_thread::get_id ();
-        if (watched)
-            pending_handoff = false;
-    }
-    if (watched) {
-        // Other application work may still be finishing on a worker. A posted
-        // probe owner enters its handler; unrelated work completes instead.
-        const auto deadline = std::chrono::steady_clock::now () + 5s;
-        while (!handler_entered.load ()
-               && rt::offload_executor_test_access_t::application_running (*executor)) {
-            assert (std::chrono::steady_clock::now () < deadline);
-            std::this_thread::yield ();
-        }
-    }
-    if (watched
-        && (handler_entered.load ()
-            || rt::offload_executor_test_access_t::application_queued (*executor))) {
-        ++posted_before_handoff;
-        // The original receive turn has already published this owner. Let
-        // its posted worker enter before the receive resource can continue.
-        const auto deadline = std::chrono::steady_clock::now () + 5s;
-        while (!handler_entered.load ()) {
-            assert (std::chrono::steady_clock::now () < deadline);
-            std::this_thread::yield ();
-        }
-    }
-    if (watched && !reject_handoff) {
-        const auto deadline = std::chrono::steady_clock::now () + 5s;
-        while (rt::offload_executor_test_access_t::idle (*executor) == 0) {
-            assert (std::chrono::steady_clock::now () < deadline);
-            std::this_thread::yield ();
-        }
-    }
-    const bool accepted =
-      watched && reject_handoff ? false : real_assign (executor, std::move (role));
-    if (watched) {
-        handoff_observed = true;
-        assigned.set_value ({std::this_thread::get_id (), accepted});
-    }
-    return accepted;
+    const bool watched =
+      watch_notifications.load ()
+      && rt::offload_executor_test_access_t::ready (*executor) == application_ready.load ();
+    if (watched)
+        ++role_assignments;
+    const bool assigned = real_assign (executor, std::move (role));
+    if (watched && assigned)
+        ++successful_role_assignments;
+    return assigned;
 }
+
+extern "C" bool real_start_role (
+  rt::offload_executor_t *,
+  std::shared_ptr<rt::offload_executor_t::
+                    role_t>) __asm__ ("__real__ZN5zlink9framework7runtime18offload_executor_"
+                                      "t10start_roleESt10shared_ptrINS2_6role_tEE");
+extern "C" bool wrapped_start_role (
+  rt::offload_executor_t *,
+  std::shared_ptr<rt::offload_executor_t::
+                    role_t>) __asm__ ("__wrap__ZN5zlink9framework7runtime18offload_executor_"
+                                      "t10start_roleESt10shared_ptrINS2_6role_tEE");
+extern "C" bool wrapped_start_role (rt::offload_executor_t *executor,
+                                    std::shared_ptr<rt::offload_executor_t::role_t> role)
+{
+    application_ready = rt::offload_executor_test_access_t::ready (*executor);
+    return real_start_role (executor, std::move (role));
+}
+
+extern "C" void
+real_notify (std::condition_variable *) __asm__ ("__real__ZNSt18condition_variable10notify_oneEv");
+extern "C" void wrapped_notify (std::condition_variable *) __asm__ (
+  "__wrap__ZNSt18condition_variable10notify_oneEv");
+extern "C" void wrapped_notify (std::condition_variable *ready)
+{
+    if (watch_notifications.load () && ready == application_ready.load ())
+        ++worker_notifications;
+    real_notify (ready);
+}
+
 int main ()
 {
     bool correct = true;
-    for (const bool rejected : {false, true}) {
+    {
         fw::completion_owner_t completion;
-        assigned = {};
         handled = {};
+        received_queued = 0;
+        handled_queued = 0;
+        queue_drained = {};
+        auto drained = queue_drained.get_future ();
         handler_entered = false;
-        handoff_observed = false;
-        direct_blocked = false;
-        posted_before_handoff = 0;
+        handler_blocked = false;
+        role_assignments = 0;
+        successful_role_assignments = 0;
         parallel_started = {};
         std::promise<void> release_handler;
-        release_direct = release_handler.get_future ().share ();
+        release_handler_turn = release_handler.get_future ().share ();
         auto parallel = parallel_started.get_future ();
-        reject_handoff = rejected;
-        auto assignment = assigned.get_future ();
         auto invocation = handled.get_future ();
         auto registration =
           fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("handoff-turn");
@@ -223,8 +219,10 @@ int main ()
           fw::service_lifetime_t::singleton);
         auto provider = services.build_provider ();
         provider.get_required<rt::location_runtime_t> ().start (*registration->routing_id);
-        rt::mesh_node_host_service_t service (std::make_shared<rt::runtime_failure_collector_t> (),
-                                              {registration}, serializers);
+        rt::mesh_node_host_service_t service (
+          std::make_shared<rt::runtime_failure_collector_t> (), {registration}, serializers, {}, {},
+          std::make_shared<rt::application_job_queue_t> (rt::application_job_queue_configuration_t{
+            fw::application_job_queue_profile_t::balanced, std::uint32_t{512}, 1, 512}));
         service.start (provider).result ().value ();
         const auto target = service.nodes ().front ();
         auto source_state =
@@ -252,12 +250,35 @@ int main ()
             .result ()
             .value ()
           == zlink::submit_result_t::ok);
-        assert (assignment.wait_for (5s) == std::future_status::ready);
         assert (invocation.wait_for (5s) == std::future_status::ready);
-        const auto [receiver, accepted] = assignment.get ();
+        std::thread::id receiver;
+        {
+            std::lock_guard lock (observation_mutex);
+            receiver = received_on;
+        }
         const auto handler = invocation.get ();
         const bool same = receiver == handler;
-        if (!rejected) {
+        {
+            for (std::size_t index = 0; index < queued_records; ++index) {
+                auto queued = codec.encode_envelope_parts (
+                  header, probe_t{"queued-probe-" + std::to_string (index)}, serializers);
+                assert (source
+                          .send_to_node (*registration->routing_id, queued.items (),
+                                         std::vector<std::uint8_t>{})
+                          .result ()
+                          .value ()
+                        == zlink::submit_result_t::ok);
+            }
+            const auto receive_deadline = std::chrono::steady_clock::now () + 5s;
+            while (received_queued.load () < queued_records) {
+                assert (std::chrono::steady_clock::now () < receive_deadline);
+                std::this_thread::yield ();
+            }
+            assert (handled_queued.load () == 0);
+            const auto notifications_while_busy = worker_notifications.load ();
+            std::cout << "worker_notifications_for_129_records=" << notifications_while_busy
+                      << std::endl;
+            correct = correct && notifications_while_busy == 1;
             auto completed = std::make_shared<std::promise<void>> ();
             auto terminal = completed->get_future ();
             const auto operation =
@@ -282,18 +303,20 @@ int main ()
             const bool other_owner = parallel.wait_for (5s) == std::future_status::ready;
             const bool completion_ready = terminal.wait_for (5s) == std::future_status::ready;
             release_handler.set_value ();
+            assert (drained.wait_for (5s) == std::future_status::ready);
             correct = correct && operation && parallel_send
                       && parallel_send.value () == zlink::submit_result_t::ok && other_owner
-                      && completion_ready && direct_blocked.load ();
-            std::cout << "blocked_direct=" << direct_blocked.load ()
+                      && completion_ready && handler_blocked.load ();
+            std::cout << "blocked_handler=" << handler_blocked.load ()
                       << " independent_owner=" << other_owner
                       << " independent_completion=" << completion_ready << '\n';
         }
-        std::cout << "handoff rejected=" << rejected << " accepted=" << accepted
-                  << " same_tid=" << same
-                  << " posted_before_handoff=" << posted_before_handoff.load () << '\n';
-        correct = correct && accepted == !rejected && same == !rejected
-                  && posted_before_handoff.load () == 0;
+        std::cout << "queued_records=" << handled_queued.load ()
+                  << " handler_on_receive_thread=" << same
+                  << " role_assignments=" << role_assignments.load ()
+                  << " successful_role_assignments=" << successful_role_assignments.load () << '\n';
+        correct = correct && !same && role_assignments.load () == 0
+                  && handled_queued.load () == queued_records;
         source.stop ();
         service.request_stop ();
         service.stop ();

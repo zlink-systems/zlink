@@ -783,9 +783,11 @@ void verify_bound_session_bind_does_not_replay_after_route_change ()
         return claim;
     };
     auto first = receive ();
-    (void) protocol::decode_bound_session_bind (
+    const auto bind = protocol::decode_bound_session_bind (
       protocol::message_bytes (first->records.front ()->parts.front ()));
-    const auto first_record = *first->records.front ();
+    // Bind replies select their wire terminal from the original request header.
+    auto first_record = target.mailbox ().take ({first, 0});
+    assert (first_record && !first_record->parts.empty ());
     std::size_t submissions = first->records.size ();
     assert (admitted.await_ready () && admitted.result ());
     const auto *first_admission = &admitted.result ();
@@ -805,10 +807,8 @@ void verify_bound_session_bind_does_not_replay_after_route_change ()
     assert (admitted.result () && admission_completions == 1);
     assert (&admitted.result () == first_admission && submissions == 1);
     const auto terminal = request.result ().exception ();
-    const auto bind =
-      protocol::decode_bound_session_bind (protocol::message_bytes (first_record.parts.front ()));
     (void) target.reply_bound_session_bind (
-      first_record, 0, 0,
+      *first_record, 0, 0,
       protocol::stream_bind_reply_tail_t{bind.binding.generation,
                                          bind.actor.authority_owner_generation});
     for (int turn = 0; turn < 32; ++turn) {
@@ -3613,10 +3613,12 @@ void verify_actor_join_waits_for_admit_without_replay ()
             assert (claim && claim->records.size () == 1);
             return claim;
         };
-        std::optional<mesh::service_mailbox_record_t> first;
+        std::shared_ptr<const mesh::service_mailbox_record_t> first;
+        std::vector<zlink::message_t> first_parts;
         if (handover) {
             auto claim = receive ();
-            first = (*claim->records.front ());
+            first = claim->records.front ()->reply_source ();
+            first_parts = claim->records.front ()->parts;
             assert (first->reply_token);
             assert (target.mailbox ().release (*claim));
             assert (!pending.await_ready ());
@@ -3656,7 +3658,7 @@ void verify_actor_join_waits_for_admit_without_replay ()
         assert (decoded.correlation == request.correlation);
         if (first)
             assert (zlink::framework::detail::backend::copy_binding_parts (record.parts)
-                    == zlink::framework::detail::backend::copy_binding_parts (first->parts));
+                    == zlink::framework::detail::backend::copy_binding_parts (first_parts));
         assert (!pending.await_ready ());
         assert (target.reply_actor_join (record, protocol::actor_join_result_t::accepted,
                                          protocol::actor_join_reply_spot_ref_t{"join-spot", 9}, 3,
@@ -4043,9 +4045,10 @@ void verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ()
     assert (claim && claim->records.size () == 1);
     // Reply through the raw route (so the frame reaches the pending
     // request), but stamp a correlation that does not identify it.
-    auto misrouted = (*claim->records.front ());
-    misrouted.correlation = request.correlation + 2;
-    assert (target.reply_actor_join (misrouted, protocol::actor_join_result_t::accepted,
+    auto misrouted = std::const_pointer_cast<mesh::service_mailbox_record_t> (
+      claim->records.front ()->reply_source ());
+    misrouted->correlation = request.correlation + 2;
+    assert (target.reply_actor_join (*misrouted, protocol::actor_join_result_t::accepted,
                                      protocol::actor_join_reply_spot_ref_t{"spot-4", 9}, 3, 8192));
     assert (target.mailbox ().release (*claim));
 
@@ -4514,7 +4517,7 @@ void verify_prepare_does_not_replay_on_selected_route ()
         return claim;
     };
     auto first = receive ();
-    const auto first_record = *first->records.front ();
+    const auto first_record = first->records.front ()->reply_source ();
     assert (first->records.size () == 1);
     assert (target.mailbox ().release (*first));
     assert (target.connect_peer (source.endpoint (), local));
@@ -4530,7 +4533,7 @@ void verify_prepare_does_not_replay_on_selected_route ()
     const auto &terminal = pending.result ();
     assert (terminal && !terminal.value ().ready && !terminal.value ().failed);
     (void) target.reply_relocation_failed (
-      first_record,
+      *first_record,
       protocol::relocation_failed_t{
         prepare.relocation, prepare.target_attempt_generation, prepare.coordinator, prepare.target,
         prepare.object, protocol::relocation_role_t::target,

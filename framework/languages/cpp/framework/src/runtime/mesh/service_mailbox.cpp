@@ -21,6 +21,21 @@ bool has_original (const service_mailbox_record_t &record) noexcept
 }
 } // namespace
 
+std::shared_ptr<const service_mailbox_record_t> service_mailbox_record_t::reply_source () const
+{
+    auto source = std::make_shared<service_mailbox_record_t> ();
+    source->domain = service_mailbox_domain_t::infrastructure;
+    source->source_routing_id = source_routing_id;
+    source->reply_token = reply_token;
+    source->correlation = correlation;
+    return source;
+}
+
+bool service_mailbox_settlement_t::operator() () const
+{
+    return _claim && service_mailbox_t::settle (*this);
+}
+
 void service_mailbox_t::start_source_lookup (const request_source_lookup_t &lookup) const
 {
     request_source_lookup_state_t::start_t start;
@@ -194,8 +209,22 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
     claim->_settled = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
     claim->_remaining.store (claim->claimed_messages, std::memory_order_relaxed);
     // Each slot holds its own credit; whichever take moves the original out holds it.
-    for (std::size_t index = 0; index != claim->claimed_messages; ++index)
-        claim->records[index]->transferred = service_mailbox_settlement_t (claim, index);
+    if (std::any_of (claim->records.begin (), claim->records.end (),
+                     [] (const auto *slot) { return slot->application_permit.has_value (); }))
+        claim->application_permits.resize (claim->claimed_messages);
+    for (std::size_t index = 0; index != claim->claimed_messages; ++index) {
+        auto &slot = *claim->records[index];
+        slot.transferred = service_mailbox_settlement_t (claim, index);
+        if (slot.application_permit) {
+            auto &permit = claim->application_permits[index];
+            permit = std::move (*slot.application_permit);
+            slot.application_permit.reset ();
+            // The transferred settlement keeps this slot alive through handler entry.
+            slot.before_application_handler = [permit = &permit] {
+                permit->release_for_handler_entry ();
+            };
+        }
+    }
     queue.bytes -= claim->claimed_bytes;
     queue.messages -= claim->claimed_messages;
     source.bytes -= claim->claimed_bytes;
@@ -246,9 +275,18 @@ bool service_mailbox_t::next_locked (const claim_handle_t &handle)
 
 service_mailbox_record_t service_mailbox_t::transfer_locked (service_mailbox_record_t &slot)
 {
+    if (slot.application_permit) {
+        // An unclaimed relocation cut has no claim to own its permit. Prepare all
+        // potentially throwing storage before moving the original's admission.
+        auto before = slot.application_permit->defer_handler_entry ();
+        slot.application_permit.reset ();
+        slot.before_application_handler = std::move (before);
+    }
     // Moving out leaves the slot without parts or application: the taken mark. The
     // slot's claim credit moves with the original.
-    return std::move (slot);
+    auto transferred = std::move (slot);
+    slot.application.reset ();
+    return transferred;
 }
 
 std::optional<std::vector<std::vector<service_mailbox_record_t>>>
@@ -327,12 +365,16 @@ std::size_t service_mailbox_t::retained_bytes (const service_mailbox_record_t &r
 bool service_mailbox_t::release (service_mailbox_claim_t &claim)
 {
     std::vector<service_mailbox_record_t> discarded;
+    std::vector<application_job_queue_t::permit_t> permits;
+    permits.reserve (claim.application_permits.size ());
     std::unique_lock lock (_state->mutex);
     std::size_t settled = 0;
     for (std::size_t index = 0; index < claim.claimed_messages; ++index) {
         if (!settle_once (claim, index))
             continue;
         ++settled;
+        if (!claim.application_permits.empty ())
+            permits.push_back (std::move (claim.application_permits[index]));
         auto &slot = *claim.records[index];
         if (has_original (slot))
             discarded.push_back (transfer_locked (slot));
@@ -343,6 +385,8 @@ bool service_mailbox_t::release (service_mailbox_claim_t &claim)
     if (settles_last (claim, settled))
         notify = finish_locked (*_state, claim);
     lock.unlock ();
+    // Supply delivery may reenter the mailbox, so return admission outside its lock.
+    permits.clear ();
     discarded.clear ();
     if (notify)
         notify_application_ready ();
@@ -366,6 +410,8 @@ bool service_mailbox_t::settle (const service_mailbox_settlement_t &settlement)
     auto &claim = *settlement._claim;
     if (!settle_once (claim, settlement._index))
         return false;
+    if (!claim.application_permits.empty ())
+        claim.application_permits[settlement._index].release_without_handler ();
     if (!settles_last (claim, 1))
         return true;
     const auto state = claim._mailbox.lock ();

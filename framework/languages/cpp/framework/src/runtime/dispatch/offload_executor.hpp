@@ -12,6 +12,7 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace zlink::framework::runtime
@@ -101,12 +102,14 @@ class offload_executor_t
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
     static thread_local const offload_executor_t *_current_worker_executor;
 #endif
+    using work_t = std::variant<std::function<void ()>, std::function<void (std::stop_token)>>;
     struct work_item_t
     {
-        std::function<void (std::stop_token)> work;
+        work_t work;
         std::optional<std::stop_source> cancellation;
     };
 
+    bool try_submit_application (work_t work);
     void worker_loop ();
     void complete_work_locked ();
     void start_worker_locked ();
