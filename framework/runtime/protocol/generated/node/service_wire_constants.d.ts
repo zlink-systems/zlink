@@ -110,3 +110,4 @@ export declare const ServiceWireExactTerminalByFailureCode: {
     readonly 35: 105;
 };
 export declare const isValidServiceWireTerminalFailure: (terminal: number, failureCode: number) => boolean;
+export declare function recoverRequestCorrelation(bytes: Uint8Array): bigint | undefined;
