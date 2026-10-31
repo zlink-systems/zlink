@@ -115,7 +115,8 @@ public final class BenchClient {
         }
         if ("zlink-java".equals(options.implementation)
             && "send-saturation".equals(options.scenario)) {
-            return "one Java platform submit thread; OK continues inline, "
+            return options.sendConcurrency + " Java platform send-stream threads; one shared "
+                + "socket submission gate; one completion-poller thread; OK continues inline, "
                 + "BACKPRESSURED awaits admission";
         }
         return switch (options.scenario) {
