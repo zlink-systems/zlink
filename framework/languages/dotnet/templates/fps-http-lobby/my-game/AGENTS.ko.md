@@ -2,7 +2,7 @@
 
 ## 프로젝트와 개발
 
-이 템플릿의 도메인을 확장하여 FPS 서버를 만듭니다. .NET 8 프로젝트는 HTTP Lobby, Session gateway, Match host A·B, Redis Location Store를 실행합니다. Lobby는 `/match` 요청을 모드별로 매칭하고 GUID 기반 Room ID를 발급하며 동적 Room User Spot의 명단을 준비합니다. 플레이어는 STREAM으로 Session에 연결하고 배정된 Room에 입장합니다. `Directory.Packages.props`는 공개 Framework·connector package를 0.30.3로 고정합니다. 실행·배포·알려진 문제는 [README](README.md)가, 초기 구성과 시나리오 순서는 [zlink.structure.json](zlink.structure.json)이 소유합니다.
+이 템플릿의 도메인을 확장하여 FPS 서버를 만듭니다. .NET 8 프로젝트는 HTTP Lobby, Session gateway, Match host A·B, Redis Location Store를 실행합니다. Lobby는 `/match` 요청을 모드별로 매칭하고 GUID 기반 Room ID를 발급하며 동적 Room User Spot의 명단을 준비합니다. 플레이어는 STREAM으로 Session에 연결하고 배정된 Room에 입장합니다. `Directory.Packages.props`는 공개 Framework·connector package를 0.31.0로 고정합니다. 실행·배포·알려진 문제는 [README](README.md)가, 초기 구성과 시나리오 순서는 [zlink.structure.json](zlink.structure.json)이 소유합니다.
 
 프로젝트 루트에서 Docker Compose v2와 Linux container로 실행합니다.
 

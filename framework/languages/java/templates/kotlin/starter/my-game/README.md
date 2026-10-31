@@ -12,7 +12,7 @@ flowchart LR
 
 Install Docker with Compose v2 and access to a Linux container daemon. Bash or PowerShell 7 runs the scripts. Docker builds use Eclipse Temurin JDK and JRE `25.0.2+10` and Docker CLI `28.5.1`; the image references are at the top of `Dockerfile`. Network access to Maven Central and the Redis container registry is required. Host debugging also requires JDK 25 (Gradle resolves Kotlin 2.3.21).
 
-`build.gradle.kts` pins Framework `0.30.3` and binding `1.20.0`. Gradle resolves them from Maven Central only. Do not add repository source references or a private repository.
+`build.gradle.kts` pins Framework `0.31.0` and binding `1.21.0`. Gradle resolves them from Maven Central only. Do not add repository source references or a private repository.
 
 The Gradle wrapper and both server modules are included. Copy this directory to build it independently.
 
@@ -66,7 +66,7 @@ Changes to registrations, settings, structure, and scenarios must be made togeth
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.31.0 packages.
 
 ## Deployment sequence
 

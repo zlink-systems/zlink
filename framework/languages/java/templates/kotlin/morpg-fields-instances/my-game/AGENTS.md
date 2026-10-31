@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a MORPG example in which players move across shared fields on several nodes, see each other at field borders, and enter party dungeons. It runs a Session gateway for connections, two Field hosts (`fieldA` and `fieldB`) with four fixed fields, two Instance hosts (`instanceA` and `instanceB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.30.3` (`frameworkVersion`) and the ZLink binding to `1.20.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a MORPG example in which players move across shared fields on several nodes, see each other at field borders, and enter party dungeons. It runs a Session gateway for connections, two Field hosts (`fieldA` and `fieldB`) with four fixed fields, two Instance hosts (`instanceA` and `instanceB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.31.0` (`frameworkVersion`) and the ZLink binding to `1.21.0` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -46,7 +46,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/shared/src/
 
 ### Border subscriptions
 
-`server/field/src/main/kotlin/MyGame/border/BorderRoutes.kt` registers `BorderHandler` for each adjacent Field topic with the public 0.30.3 `addSubscribe` API. New Field pairs need no additional handler class.
+`server/field/src/main/kotlin/MyGame/border/BorderRoutes.kt` registers `BorderHandler` for each adjacent Field topic with the public 0.31.0 `addSubscribe` API. New Field pairs need no additional handler class.
 
 ### Dungeons
 
@@ -173,7 +173,7 @@ The value applies to child processes started from that environment. In Bash, set
 export ZLINK_JAVA_STREAM_TRACE=1
 ```
 
-`ZLINK_JAVA_STREAM_TRACE` is a version-specific diagnostic switch in the public `0.30.3` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, keep its Docker socket control path, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+`ZLINK_JAVA_STREAM_TRACE` is a version-specific diagnostic switch in the public `0.31.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, keep its Docker socket control path, preserve cleanup failures, and avoid stopping unrelated processes or containers.
 
 ## Reporting ZLink defects
 

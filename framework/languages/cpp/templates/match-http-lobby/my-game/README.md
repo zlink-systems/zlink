@@ -16,7 +16,7 @@ flowchart LR
 
 Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for the default run.
 
-Public Framework 0.30.3 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.30.3` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
+Public Framework 0.31.0 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.31.0` GitHub Release, checks it against the SHA-256 checksum published with it and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, the Framework libraries, Boost headers and nlohmann_json, so no package manager runs. The Docker build and local mode run the same script. Follow the public package licensing requirements.
 
 ## Build
 
@@ -93,11 +93,11 @@ Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenar
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.31.0 packages.
 
 The default C++ typed serializer emits a signed 64-bit `sequence` as a JSON number, although the message model requires a decimal string ([#1694](https://github.com/zlink-systems/zlink/issues/1694)). The wire golden check passes three common samples; the five samples containing 64-bit fields remain blocked.
 
-This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.30.3 adds a typed Session reply API (#1785), and the template has not switched to it.
+This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.31.0 adds a typed Session reply API (#1785), and the template has not switched to it.
 
 ## Deployment sequence
 
@@ -117,4 +117,4 @@ Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉
 
 Run domain and wire checks separately with `./run-e2e.sh --check-domain` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`. Game boundary checks use the existing language-specific test location; the HTTP domain suite contains 19 checks.
 
-C++ 공개 0.30.3 serializer는 64-bit `sequence`를 JSON number로 출력한다. 공통 메시지 모델이 요구하는 10진 문자열과 달라 wire 표본 8개 중 5개는 #1694로 차단된다. 나머지 3개 표본은 통과한다.
+C++ 공개 0.31.0 serializer는 64-bit `sequence`를 JSON number로 출력한다. 공통 메시지 모델이 요구하는 10진 문자열과 달라 wire 표본 8개 중 5개는 #1694로 차단된다. 나머지 3개 표본은 통과한다.

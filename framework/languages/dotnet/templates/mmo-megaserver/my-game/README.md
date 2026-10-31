@@ -89,7 +89,7 @@ The runner validates `zlink.structure.json`, starts a uniquely named Redis Compo
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.31.0 packages.
 
 ## Deployment sequence
 

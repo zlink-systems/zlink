@@ -16,7 +16,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 on Windows. Gradle 9.3 is included. Dependencies come from Maven Central; Framework 0.30.3 and binding 1.20.0 are pinned in `build.gradle.kts`. No repository checkout is required.
+Docker with Compose v2, and PowerShell 7 on Windows. Gradle 9.3 is included. Dependencies come from Maven Central; Framework 0.31.0 and binding 1.21.0 are pinned in `build.gradle.kts`. No repository checkout is required.
 
 ## Build
 
@@ -61,7 +61,7 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.31.0 packages.
 
 ## Deployment sequence
 
