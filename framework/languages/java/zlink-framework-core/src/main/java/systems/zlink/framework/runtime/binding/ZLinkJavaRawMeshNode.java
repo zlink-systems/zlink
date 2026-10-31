@@ -5254,11 +5254,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void pumpTurn(RouterSocket pumpSocket) {
-        // Spec 08 §4.1 I0–I4 and §4.2: readiness blocks between receive rotations;
-        // the same receive owner needs no executor round trip for the next rotation.
-        // Permit grants share this single-thread executor with receive rotations.
-        // Yield to that grant before continuing, while keeping completion and management
-        // progress on the existing receive turns even when ordinary capacity is exhausted.
+        // Spec 08 §4.1–4.2: readiness blocks between rotations on the same receive owner.
+        // Yield to permit grants on this executor; completion and management keep progressing
+        // on receive turns even when ordinary capacity is exhausted.
         do {
             if (logicalClose.get() != null) return;
             long waitStartedAt = nanoTime.getAsLong();
@@ -5277,11 +5275,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 observeTransportState(ready);
             }
             drainPeerCloseRequests();
-            Runnable afterManagement = port.inStateLane(pumpManagement);
-            if (afterManagement != null) afterManagement.run();
             if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0
                     || pendingRawMulticast != null) {
-                drainIngressBatch(pumpSocket);
+                drainIngressBatch(pumpSocket, null);
+            } else {
+                Runnable afterManagement = port.inStateLane(pumpManagement);
+                if (afterManagement != null) afterManagement.run();
             }
         } while (pendingReceiveAcquire.get() == null);
         if (logicalClose.get() == null) {
@@ -5294,18 +5293,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     void drainIngressBatchForTest(RouterSocket pumpSocket) {
-        drainIngressBatch(pumpSocket);
-    }
-
-    private void drainIngressBatch(RouterSocket pumpSocket) {
-        if (pendingReceiveAcquire.get() != null || logicalClose.get() != null) return;
         drainIngressBatch(pumpSocket, null);
     }
 
     private void drainIngressBatch(RouterSocket pumpSocket, ZLinkApplicationJobQueue.Permit grant) {
-        // Spec 08 §4.1 I1–I3: the rotation owns its permits and records. Claim in one
-        // transport turn, then publish in receive order after leaving that turn.
-        class Rotation implements AutoCloseable, Supplier<Void> {
+        // Spec 08 §4.1–4.2: manage and claim in one turn, then run actions and dispatch outside it.
+        class Rotation implements AutoCloseable, Supplier<Runnable> {
             final long startedAt = nanoTime.getAsLong();
             final ZLinkApplicationJobQueue budgetQueue = applicationJobQueue;
             final List<ClaimedRecord> records = new ArrayList<>(MAX_INGRESS_BATCH);
@@ -5358,7 +5351,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
 
             void dispatchFanout() {
-                while (pendingRawMulticast != null && !exhausted() && acquirePermit()) {
+                while (pendingRawMulticast != null
+                        && pendingReceiveAcquire.get() == null
+                        && !exhausted()
+                        && acquirePermit()) {
                     var permit = nextPermit;
                     nextPermit = null;
                     try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
@@ -5371,30 +5367,35 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
 
             @Override
-            public Void get() {
-                while (!exhausted()
-                        && (nextPermit != null || budget > 0 || applicationJobQueue == null)) {
-                    if (nextPermit == null && budget > 0) {
-                        nextPermit = budgetQueue.takeRotationPermit();
-                        budget--;
+            public Runnable get() {
+                Runnable afterManagement = grant == null ? pumpManagement.get() : null;
+                try {
+                    while (pendingRawMulticast == null
+                            && !exhausted()
+                            && (nextPermit != null || budget > 0 || applicationJobQueue == null)) {
+                        if (nextPermit == null && budget > 0) {
+                            nextPermit = budgetQueue.takeRotationPermit();
+                            budget--;
+                        }
+                        var record = pumpClaim.get();
+                        if (record == null) break;
+                        records.add(record);
+                        permits[records.size() - 1] = nextPermit;
+                        nextPermit = null;
+                        receivedBytes =
+                                Math.addExact(
+                                        receivedBytes,
+                                        retainedBytes(record.inbound().received().parts()));
+                        count++;
+                        // Dispatch creates fanout outside the lane, before the next native record.
+                        if (record.header() != null
+                                && record.header().command()
+                                        == ServiceWireConstants.COMMAND_LOGICAL_MULTICAST) break;
                     }
-                    var record = pumpClaim.get();
-                    if (record == null) break;
-                    records.add(record);
-                    permits[records.size() - 1] = nextPermit;
-                    nextPermit = null;
-                    receivedBytes =
-                            Math.addExact(
-                                    receivedBytes,
-                                    retainedBytes(record.inbound().received().parts()));
-                    count++;
-                    // Fanout children precede the next native record. Dispatch creates the
-                    // fanout outside the lane, so multicast ends this claim section.
-                    if (record.header() != null
-                            && record.header().command()
-                                    == ServiceWireConstants.COMMAND_LOGICAL_MULTICAST) break;
+                } catch (RuntimeException failure) {
+                    LOGGER.log(Level.WARNING, "Service record claim failed", failure);
                 }
-                return null;
+                return afterManagement;
             }
 
             void dispatchClaimed() {
@@ -5439,15 +5440,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         rotationReceivePeer = null;
         try (var rotation = new Rotation()) {
             rotation.nextPermit = grant;
+            if (pendingReceiveAcquire.get() == null
+                    && logicalClose.get() == null
+                    && pendingRawMulticast == null) rotation.acquirePermit();
+            Runnable afterManagement = port.inStateLane(rotation);
+            if (afterManagement != null) afterManagement.run();
             rotation.dispatchFanout();
-            if (!rotation.exhausted() && pendingRawMulticast == null && rotation.acquirePermit()) {
-                try {
-                    port.inStateLane(rotation);
-                } catch (RuntimeException failure) {
-                    LOGGER.log(Level.WARNING, "Service record claim failed", failure);
-                }
-                rotation.dispatchClaimed();
-            }
+            rotation.dispatchClaimed();
         }
     }
 

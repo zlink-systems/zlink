@@ -710,6 +710,185 @@ final class ZLinkJavaRawMeshNodePumpTest {
     }
 
     @Test
+    void readablePumpObservesTransportChangesAndPeerCloseBeforeDispatch() throws Exception {
+        var localRid = RoutingId.from("management-order-local");
+        var peerRid = RoutingId.from("management-order-peer");
+        var closingRid = RoutingId.from("management-order-closing");
+        var descriptor = admissionDescriptor(localRid, 1);
+        try (var context = Zlink.createContext();
+                var port = new ZLinkJavaRawServicePort(context);
+                var peerPort = new ZLinkJavaRawServicePort(context);
+                var router = port.openRouter(localRid, true);
+                var peer = peerPort.openRouter(peerRid);
+                var node =
+                        new ZLinkJavaRawMeshNode(
+                                "rotation",
+                                System::currentTimeMillis,
+                                () -> 0L,
+                                Duration.ofSeconds(5),
+                                Duration.ofSeconds(15),
+                                port,
+                                Runnable::run,
+                                router,
+                                descriptor,
+                                new ZLinkServiceTopologyRegistry(descriptor, port.stateLane()),
+                                Map.of())) {
+            String endpoint = "inproc://management-order-" + UUID.randomUUID();
+            peer.bind(endpoint);
+            router.connect(endpoint);
+            awaitRoute(peerPort, peer, localRid);
+            peerPort.send(peer, localRid, List.of(new byte[] {1}))
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!port.waitForReadable(router, Duration.ofNanos(deadline - System.nanoTime())))
+                assertTrue(System.nanoTime() < deadline, "sender must be readable");
+            assertEquals(0L, node.observePeerRoute(peerRid).selectedGeneration());
+
+            String closingEndpoint = "inproc://management-order-unbound-" + UUID.randomUUID();
+            long closingIntent = node.connectPeer(closingEndpoint, closingRid);
+            assertThrows(
+                    IllegalStateException.class,
+                    () ->
+                            node.replacePeerConnection(
+                                    closingEndpoint,
+                                    closingRid,
+                                    1,
+                                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
+            assertTrue(node.isPeerConnectionClosing(closingIntent));
+
+            var endRotation = new AssertionError("readable rotation dispatched");
+            var claims = new AtomicInteger();
+            var owned = new java.util.ArrayList<Received>();
+            installClaims(
+                    node,
+                    () -> {
+                        if (claims.getAndIncrement() != 0) return null;
+                        return admissionRecord(
+                                () -> {
+                                    assertFalse(port.stateLane().isOnLane());
+                                    assertTrue(
+                                            node.observePeerRoute(peerRid).selectedGeneration()
+                                                    != 0,
+                                            "transport snapshot must precede dispatch");
+                                    assertFalse(
+                                            node.isPeerConnectionClosing(closingIntent),
+                                            "peer-close request must settle before dispatch");
+                                    assertFalse(node.hasLivePeerIntent(closingEndpoint));
+                                    throw endRotation;
+                                },
+                                owned);
+                    });
+            org.junit.jupiter.api.Assertions.assertSame(
+                    endRotation,
+                    assertThrows(AssertionError.class, () -> node.pumpTurnForTest(router)));
+            assertEquals(2, claims.get());
+            assertThrows(IllegalStateException.class, owned.getFirst()::parts);
+        }
+    }
+
+    @Test
+    void readableRotationChecksManagementAndClaimsInOneLaneTurnBeforeDispatch() throws Exception {
+        var localRid = RoutingId.from("management-turn-local");
+        var peerRid = RoutingId.from("management-turn-peer");
+        var descriptor = admissionDescriptor(localRid, 1);
+        try (var context = Zlink.createContext();
+                var port = new ZLinkJavaRawServicePort(context);
+                var peerPort = new ZLinkJavaRawServicePort(context);
+                var router = port.openRouter(localRid, true);
+                var peer = peerPort.openRouter(peerRid);
+                var worker = Executors.newVirtualThreadPerTaskExecutor()) {
+            String endpoint = "inproc://management-turn-" + UUID.randomUUID();
+            peer.bind(endpoint);
+            router.connect(endpoint);
+            awaitRoute(port, router, peerRid);
+            awaitRoute(peerPort, peer, localRid);
+            var lane = port.stateLane();
+            var managementChecks = new AtomicInteger();
+            var claims = new AtomicInteger();
+            var nextTurn = new CompletableFuture<Void>();
+            var armManagement = new java.util.concurrent.atomic.AtomicBoolean();
+            try (var node =
+                    new ZLinkJavaRawMeshNode(
+                            "rotation",
+                            System::currentTimeMillis,
+                            () -> {
+                                if (lane.isOnLane()
+                                        && armManagement.get()
+                                        && claims.get() == 0
+                                        && managementChecks.incrementAndGet() == 1) {
+                                    CompletableFuture.runAsync(
+                                                    () ->
+                                                            lane.runAsync(
+                                                                    () -> {
+                                                                        nextTurn.complete(null);
+                                                                        return null;
+                                                                    }),
+                                                    worker)
+                                            .orTimeout(5, TimeUnit.SECONDS)
+                                            .join();
+                                }
+                                return 0L;
+                            },
+                            Duration.ofSeconds(5),
+                            Duration.ofSeconds(15),
+                            port,
+                            Runnable::run,
+                            router,
+                            descriptor,
+                            new ZLinkServiceTopologyRegistry(descriptor, lane),
+                            Map.of())) {
+                node.livenessForTest().admit(peerRid, "management-turn", 0L);
+                var dispatches = new AtomicInteger();
+                var owned = new java.util.ArrayList<Received>();
+                var endRotation = new AssertionError("readable rotation dispatched");
+                installClaims(
+                        node,
+                        () -> {
+                            assertTrue(lane.isOnLane());
+                            assertEquals(1, managementChecks.get());
+                            assertFalse(
+                                    nextTurn.isDone(),
+                                    "management and claim must share one state-lane turn");
+                            if (claims.getAndIncrement() != 0) return null;
+                            return admissionRecord(
+                                    () -> {
+                                        assertFalse(lane.isOnLane());
+                                        assertTrue(
+                                                peerPort.waitForReadable(
+                                                        peer, Duration.ofSeconds(5)),
+                                                "management action must run before dispatch");
+                                        try (var probe = peerPort.receive(peer)) {
+                                            assertNotNull(probe);
+                                            assertEquals(
+                                                    ServiceWireConstants.COMMAND_LIVENESS_PROBE,
+                                                    new ZLinkServiceM6AWireCodec()
+                                                            .decodeHeader(probe.frames().getFirst())
+                                                            .command());
+                                        }
+                                        dispatches.incrementAndGet();
+                                        throw endRotation;
+                                    },
+                                    owned);
+                        });
+                peerPort.send(peer, localRid, List.of(new byte[] {1}))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+                assertTrue(port.waitForReadable(router, Duration.ofSeconds(5)));
+                armManagement.set(true);
+                org.junit.jupiter.api.Assertions.assertSame(
+                        endRotation,
+                        assertThrows(AssertionError.class, () -> node.pumpTurnForTest(router)));
+                assertEquals(1, managementChecks.get());
+                assertEquals(2, claims.get());
+                assertEquals(1, dispatches.get());
+                nextTurn.get(5, TimeUnit.SECONDS);
+                assertThrows(IllegalStateException.class, owned.getFirst()::parts);
+            }
+        }
+    }
+
+    @Test
     void oneReceiveRotationClaimsItsBudgetBeforeTheNextStateLaneTurn() throws Exception {
         try (var context = Zlink.createContext();
                 var node =
