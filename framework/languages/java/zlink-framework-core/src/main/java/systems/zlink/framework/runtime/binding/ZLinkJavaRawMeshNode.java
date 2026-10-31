@@ -5228,6 +5228,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
+    void pumpTurnForTest(RouterSocket pumpSocket) {
+        pumpTurn(pumpSocket);
+    }
+
     private void startPump() {
         RouterSocket pumpSocket = requireStarted();
         // 수신 pump는 platform thread다. 가상 thread로 두면 blocking 수신에서 지연이 쌓인다.
@@ -5412,6 +5416,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     }
                     try (scope) {
                         dispatch(record);
+                    } catch (RuntimeException failure) {
+                        LOGGER.log(Level.WARNING, "Service record settlement failed", failure);
                     } finally {
                         if (permit != null) permit.abandonReservation();
                     }
@@ -5435,7 +5441,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             rotation.nextPermit = grant;
             rotation.dispatchFanout();
             if (!rotation.exhausted() && pendingRawMulticast == null && rotation.acquirePermit()) {
-                port.inStateLane(rotation);
+                try {
+                    port.inStateLane(rotation);
+                } catch (RuntimeException failure) {
+                    LOGGER.log(Level.WARNING, "Service record claim failed", failure);
+                }
                 rotation.dispatchClaimed();
             }
         }
@@ -5632,6 +5642,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         var inbound = record.inbound();
         var source = record.source();
         boolean handedOff = false;
+        RecordKind kind = null;
+        Long correlation = null;
+        AtomicBoolean replied = null;
         try {
             var header = record.header();
             if (header == null) return;
@@ -5733,9 +5746,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 dispatchBoundSessionSend(inbound);
                 return;
             }
-            RecordKind kind;
             String channelName = null;
-            Long correlation = null;
             if (command == ServiceWireConstants.COMMAND_NODE_SEND) {
                 if (head.length != PREFIX_BYTES) {
                     messageMetrics.dropped("node", "decode_error");
@@ -5747,12 +5758,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 correlation = wire.decodeNodeRequestHeader(head);
             } else if (command == ServiceWireConstants.COMMAND_CHANNEL_SEND) {
                 kind = RecordKind.CHANNEL_SEND;
-                try {
-                    channelName = wire.decodeChannelSendHeader(head);
-                } catch (RuntimeException invalidHeader) {
-                    messageMetrics.dropped("channel", "decode_error");
-                    throw invalidHeader;
-                }
+                channelName = wire.decodeChannelSendHeader(head);
             } else if (command == ServiceWireConstants.COMMAND_CHANNEL_REQUEST) {
                 kind = RecordKind.CHANNEL_REQUEST;
                 ZLinkServiceM6AWireCodec.ChannelRequest request =
@@ -5798,10 +5804,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 contentType = applicationContentType(messages);
             } catch (RuntimeException failure) {
                 messages.close();
-                if (correlation == null) {
-                    messageMetrics.dropped(
-                            kind == RecordKind.NODE_SEND ? "node" : "channel", "decode_error");
-                }
                 throw failure;
             }
             ReceiveRecord receive =
@@ -5824,12 +5826,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             0,
                             messages.size());
             Long requestCorrelation = correlation;
-            AtomicBoolean replied = new AtomicBoolean();
+            var replyWinner = replied = new AtomicBoolean();
             Consumer<List<Message>> reply =
                     correlation == null
                             ? null
                             : replyParts -> {
-                                if (!replied.compareAndSet(false, true)) {
+                                if (!replyWinner.compareAndSet(false, true)) {
                                     ZLinkFrameworkMultipartView.closeAll(replyParts);
                                     throw new IllegalStateException(
                                             "service request already has a terminal reply");
@@ -5889,6 +5891,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 if (!scheduled) {
                     dispatch.close();
                 }
+            }
+        } catch (RuntimeException failure) {
+            // Spec 04:222: settlement belongs to this record, including a failed enqueue.
+            LOGGER.log(Level.WARNING, "Service record dispatch failed", failure);
+            if (kind != null && !handedOff && failure instanceof IllegalArgumentException) {
+                replyApplicationProtocolFailure(inbound, correlation, kind);
+            } else if (correlation != null
+                    && inbound.requestSequence() != null
+                    && (replied == null || replied.compareAndSet(false, true))) {
+                int[] terminal = ZLinkRequestFailureMapping.outgoing(failure);
+                port.reply(
+                        requireStarted(),
+                        inbound.source(),
+                        inbound.requestSequence(),
+                        List.of(wire.encodeReplyHeader(correlation, terminal[0], terminal[1])));
             }
         } finally {
             if (!handedOff) {
@@ -6022,12 +6039,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private void replyApplicationProtocolFailure(
             ZLinkJavaRawServicePort.Inbound inbound, Long correlation, RecordKind kind) {
-        if (correlation == null) {
+        if (kind == RecordKind.NODE_SEND || kind == RecordKind.CHANNEL_SEND) {
             messageMetrics.dropped(
                     kind == RecordKind.NODE_SEND ? "node" : "channel", "decode_error");
             return;
         }
-        if (inbound.requestSequence() == null) {
+        if (correlation == null || inbound.requestSequence() == null) {
             return;
         }
         port.reply(
