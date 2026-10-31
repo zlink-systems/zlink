@@ -9,8 +9,11 @@ on:
 permissions:
   contents: read
 
+# Only a ready-for-queue label or a push to a labelled PR starts the gate. Any other
+# label event (for example merge-queue added together with ready-for-queue) gets its
+# own group, so its skipped run cannot cancel the gate run in progress.
 concurrency:
-  group: ready-for-queue-${{ github.event.pull_request.number }}
+  group: ready-for-queue-${{ github.event.pull_request.number }}-${{ (github.event.action == 'labeled' && github.event.label.name != 'ready-for-queue') && github.run_id || 'gate' }}
   cancel-in-progress: true
 
 jobs:
