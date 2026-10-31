@@ -7,7 +7,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -45,8 +44,9 @@ public final class ZLinkCompletionBridge {
                 first,
                 second,
                 (firstWaiter, secondWaiter) -> {
-                    firstWaiter.toCompletableFuture().cancel(false);
-                    if (secondWaiter != null) secondWaiter.toCompletableFuture().cancel(false);
+                    cancelIfIncomplete(firstWaiter.toCompletableFuture());
+                    if (secondWaiter != null)
+                        cancelIfIncomplete(secondWaiter.toCompletableFuture());
                 });
     }
 
@@ -61,6 +61,10 @@ public final class ZLinkCompletionBridge {
                 (ignored, failure) -> {
                     if (failure instanceof CancellationException) action.accept(first, second);
                 });
+    }
+
+    private static void cancelIfIncomplete(CompletableFuture<?> waiter) {
+        if (!waiter.isDone()) waiter.cancel(false);
     }
 
     public static <T> void completeOrDiscard(
@@ -148,6 +152,7 @@ public final class ZLinkCompletionBridge {
                 Supplier<? extends T> supplier, Executor executor) {
             Objects.requireNonNull(supplier, "supplier");
             Objects.requireNonNull(executor, "executor");
+            // JDK AsyncSupply completes internally and bypasses complete().
             executor.execute(
                     () -> {
                         try {
@@ -159,23 +164,20 @@ public final class ZLinkCompletionBridge {
             return this;
         }
 
-        @Override
-        public CompletableFuture<T> orTimeout(long timeout, TimeUnit unit) {
-            return super.orTimeout(timeout, unit);
-        }
-
-        @Override
-        public CompletableFuture<T> completeOnTimeout(T value, long timeout, TimeUnit unit) {
-            return super.completeOnTimeout(value, timeout, unit);
-        }
-
         private void finish(boolean cancelWaiter, Throwable failure) {
             Object target = FORWARDER.getAndSet(this, FINISHED);
             if (target == FINISHED) return;
-            if (cancelWaiter && target instanceof CompletableFuture<?> waiter) waiter.cancel(false);
+            if (cancelWaiter && target instanceof CompletableFuture<?> waiter)
+                cancelIfIncomplete(waiter);
             BiConsumer<CompletableFuture<T>, Throwable> observer = terminalObserver;
             terminalObserver = null;
-            if (observer != null) observer.accept(this, failure);
+            if (observer != null) {
+                try {
+                    observer.accept(this, failure);
+                } catch (Throwable ignored) {
+                    // whenComplete previously captured observer failures in its dependent stage.
+                }
+            }
         }
     }
 }

@@ -47,6 +47,26 @@ class ZLinkRequestStagesTest {
     }
 
     @Test
+    void cancellationDoesNotCallCancelOnAnAlreadyCompletedWaiter() {
+        class TrackingFuture extends CompletableFuture<Void> {
+            private int cancellationCalls;
+
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) {
+                cancellationCalls++;
+                return super.cancel(mayInterruptIfRunning);
+            }
+        }
+        var caller = new CompletableFuture<Void>();
+        var waiter = new TrackingFuture();
+        waiter.complete(null);
+        ZLinkCompletionBridge.forwardCancellation(caller, waiter);
+
+        assertTrue(caller.cancel(false));
+        assertEquals(0, waiter.cancellationCalls);
+    }
+
+    @Test
     void terminalObserverDoesNotAddACompletionStageAndRunsOnceOnCancellation() {
         var observations = new AtomicInteger();
         var cancellation = new AtomicReference<Throwable>();
@@ -62,6 +82,20 @@ class ZLinkRequestStagesTest {
         assertTrue(result.cancel(false));
         assertEquals(1, observations.get());
         assertInstanceOf(CancellationException.class, cancellation.get());
+    }
+
+    @Test
+    void throwingTerminalObserverDoesNotBreakCompletionOrDependents() {
+        var result =
+                ZLinkCompletionBridge.<String>newCancellationFuture(
+                        (completed, failure) -> {
+                            throw new IllegalStateException("observer failure");
+                        });
+        var dependentCalls = new AtomicInteger();
+        result.thenRun(dependentCalls::incrementAndGet);
+
+        assertTrue(result.complete("reply"));
+        assertEquals(1, dependentCalls.get());
     }
 
     @Test
