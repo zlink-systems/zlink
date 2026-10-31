@@ -503,14 +503,12 @@ test(
     const reservation = net.createServer();
     await new Promise((resolve) => reservation.listen(0, '127.0.0.1', resolve));
     const endpoint = `tcp://127.0.0.1:${reservation.address().port}`;
-    await new Promise((resolve, reject) =>
-      reservation.close((error) => (error ? reject(error) : resolve()))
-    );
     const raw = new RawServiceMeshRuntime({
       descriptor: descriptor('native-source', 'tcp://127.0.0.1:0'),
       applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
       bindingPort: new ZLinkNodeRawBindingPort()
     });
+    // Keep the target port reserved until the source has bound its own endpoint.
     raw.start();
     let pending;
     let pumping = Promise.resolve();
@@ -525,6 +523,9 @@ test(
         );
     });
     try {
+      await new Promise((resolve, reject) =>
+        reservation.close((error) => (error ? reject(error) : resolve()))
+      );
       raw.connectPeerByRoutingId(endpoint, 'dead-owner', 'default', 7n);
       const started = performance.now();
       pending = raw.requestToNode('dead-owner', payload, 5000);
