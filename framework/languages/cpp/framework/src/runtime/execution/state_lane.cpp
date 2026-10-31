@@ -184,6 +184,12 @@ void state_lane_t::drain_loop ()
             publish_close (std::move (closed));
             return;
         }
+        if (!item.work) {
+            // Transfer this scheduled claim outside the lane scope. The caller
+            // may close and destroy the lane as soon as its turn has finished.
+            item.completion ({});
+            return;
+        }
         try {
             const current_scope_t scope (this);
             item.work ();
@@ -204,7 +210,7 @@ void state_lane_t::abandon_pending (std::exception_ptr error) noexcept
     }
     for (auto &item : abandoned) {
         try {
-            item.abandon (error);
+            item.completion (error);
         }
         catch (...) {
         }
