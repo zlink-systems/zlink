@@ -4044,6 +4044,24 @@ request_completion_failure (const result_t<host::operation_completion_t> &comple
         static_cast<std::uint32_t> (record.terminal_result),
         static_cast<std::uint32_t> (record.failure_errno), std::string (operation_name)));
 }
+
+result_t<result_t<runtime::messaging::message_parts_t>>
+decode_request_reply (const result_t<host::operation_completion_t> &result,
+                      std::string_view operation_name)
+try {
+    using reply_result_t = result_t<runtime::messaging::message_parts_t>;
+    auto failure = request_completion_failure (result, operation_name);
+    auto reply =
+      failure
+        ? detail::result_access_t::failure<runtime::messaging::message_parts_t> (
+            std::move (failure))
+        : reply_result_t::success (runtime::messaging::message_parts_t (result.value ().parts));
+    return result_t<reply_result_t>::success (std::move (reply));
+}
+catch (...) {
+    return detail::current_exception_result<result_t<runtime::messaging::message_parts_t>> ();
+}
+
 }
 
 void mesh_node_runtime_t::observe_request_failure (
@@ -4066,13 +4084,7 @@ mesh_node_runtime_t::await_request_reply (const host::pending_operation_t &opera
     auto completion = await_completion (operation);
     return detail::project_task_terminal<reply_result_t> (
       completion, [operation_name] (const result_t<host::operation_completion_t> &result) {
-          auto failure = request_completion_failure (result, operation_name);
-          auto reply = failure
-                         ? detail::result_access_t::failure<runtime::messaging::message_parts_t> (
-                             std::move (failure))
-                         : reply_result_t::success (
-                             runtime::messaging::message_parts_t (result.value ().parts));
-          return result_t<reply_result_t>::success (std::move (reply));
+          return decode_request_reply (result, operation_name);
       });
 }
 
@@ -4241,78 +4253,105 @@ node_reply_t node_submission_failure (zlink::submit_result_t submitted)
 }
 }
 
-request_task_t<node_reply_t>
-mesh_node_runtime_t::compose_node_request_reply (host::pending_operation_t operation,
-                                                 task_t<zlink::submit_result_t> submission)
+void mesh_node_runtime_t::compose_node_request_reply (host::pending_operation_t operation,
+                                                      task_t<zlink::submit_result_t> submission,
+                                                      request_receiver_t<node_reply_t> receiver)
 {
-    if (!submission.await_ready ())
-        return await_node_request_submission (std::move (operation), std::move (submission));
-    const auto submitted = submission.result ();
-    if (!submitted)
-        return request_task_t<node_reply_t> (result_t<node_reply_t>::success (
-          detail::result_access_t::failure<runtime::messaging::message_parts_t> (
-            submitted.exception ())));
-    if (submitted.value () != zlink::submit_result_t::ok)
-        return request_task_t<node_reply_t> (
-          result_t<node_reply_t>::success (node_submission_failure (submitted.value ())));
-    auto admitted = std::make_shared<task_completion_source_t<void>> ();
-    auto reply = await_request_reply (operation, "MeshNode request");
-    detail::observe_request_failure (reply, admitted);
-    admitted->complete (result_t<void>::success ());
-    return detail::request_task_access_t::from_admitted_reply (std::move (reply),
-                                                               std::move (admitted));
+    const auto *immediate = submission.await_ready () ? &submission.result () : nullptr;
+    if (immediate && (!*immediate || immediate->value () != zlink::submit_result_t::ok)) {
+        auto failure = *immediate ? node_submission_failure (immediate->value ())
+                                  : result_access_t::failure<runtime::messaging::message_parts_t> (
+                                      immediate->exception ());
+        receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
+        receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
+        return;
+    }
+    // Pending/accepted submissions retain the earlier physical-failure observation.
+    observe_request_failure (operation, receiver.admitted, "MeshNode request");
+    auto deliver = [operation = std::move (operation), receiver = std::move (receiver)] (
+                     const result_t<zlink::submit_result_t> &submitted) mutable {
+        if (!submitted) {
+            receiver.admitted->complete (result_access_t::failure<void> (submitted.exception ()));
+            receiver.complete (result_access_t::failure<node_reply_t> (submitted.exception ()));
+            return;
+        }
+        if (submitted.value () != zlink::submit_result_t::ok) {
+            auto failure = node_submission_failure (submitted.value ());
+            receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
+            receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
+            return;
+        }
+        receiver.admitted->complete (result_t<void>::success ());
+        auto completion = operation.completion->task ();
+        observe_task_terminal (
+          completion, [receiver = std::move (receiver)] (
+                        const result_t<host::operation_completion_t> &result) mutable {
+              receiver.complete (decode_request_reply (result, "MeshNode request"));
+          });
+    };
+    if (immediate)
+        deliver (*immediate);
+    else
+        // Preserve the suspended admission's existing resume/cancellation owner.
+        observe_task_completion (submission, std::move (deliver));
 }
 
-request_task_t<node_reply_t>
-mesh_node_runtime_t::await_node_request_submission (host::pending_operation_t operation,
-                                                    task_t<zlink::submit_result_t> submission)
+void mesh_node_runtime_t::request_node_reply (const zlink::routing_id_t &target,
+                                              std::vector<zlink::message_t> parts,
+                                              std::chrono::milliseconds timeout,
+                                              request_receiver_t<node_reply_t> receiver)
 {
-    auto admitted = co_await detail::request_admission_source_t{};
-    observe_request_failure (operation, admitted, "MeshNode request");
-    const auto submitted = co_await submission;
-    if (submitted != zlink::submit_result_t::ok)
-        co_return node_submission_failure (submitted);
-    co_await detail::request_admitted_t{};
-    co_return co_await await_request_reply (operation, "MeshNode request");
-}
-
-request_task_t<node_reply_t>
-mesh_node_runtime_t::request_node_reply (const zlink::routing_id_t &target,
-                                         std::vector<zlink::message_t> parts,
-                                         std::chrono::milliseconds timeout)
-try {
-    return dispatch_node_request (
+    dispatch_node_request (
       target,
-      [] (zlink::submit_result_t result) {
-          return request_task_t<node_reply_t> (
-            result_t<node_reply_t>::success (node_submission_failure (result)));
+      [&] (zlink::submit_result_t result) {
+          auto failure = node_submission_failure (result);
+          receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
+          receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
       },
       [&] {
           host::pending_operation_t operation;
           auto submission = _node->request_to_node (target, std::move (parts), operation, timeout);
-          return compose_node_request_reply (operation, std::move (submission));
+          compose_node_request_reply (std::move (operation), std::move (submission),
+                                      std::move (receiver));
       },
       [&] (auto classification) {
-          return request_unknown_node_reply (target, std::move (parts), timeout,
-                                             std::move (classification));
+          request_unknown_node_reply (target, std::move (parts), timeout,
+                                      std::move (classification), std::move (receiver));
       });
 }
-catch (...) {
-    return request_task_t<node_reply_t> (detail::current_exception_result<node_reply_t> ());
-}
 
-request_task_t<node_reply_t> mesh_node_runtime_t::request_unknown_node_reply (
+void mesh_node_runtime_t::request_unknown_node_reply (
   zlink::routing_id_t target,
   std::vector<zlink::message_t> parts,
   std::chrono::milliseconds timeout,
-  task_t<std::optional<zlink::submit_result_t>> classification)
+  task_t<std::optional<zlink::submit_result_t>> classification,
+  request_receiver_t<node_reply_t> receiver)
 {
-    if (const auto classified = co_await classification)
-        co_return node_submission_failure (*classified);
-    host::pending_operation_t operation;
-    auto submission = _node->request_to_node (target, std::move (parts), operation, timeout);
-    co_return co_await detail::request_submission (
-      compose_node_request_reply (operation, std::move (submission)));
+    observe_task_completion (
+      classification, [this, target = std::move (target), parts = std::move (parts), timeout,
+                       receiver = std::move (receiver)] (const auto &classified) mutable {
+          try {
+              if (!classified)
+                  classified.value ();
+              if (classified.value ()) {
+                  auto failure = node_submission_failure (*classified.value ());
+                  receiver.admitted->complete (
+                    result_access_t::failure<void> (failure.exception ()));
+                  receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
+                  return;
+              }
+              host::pending_operation_t operation;
+              auto submission =
+                _node->request_to_node (target, std::move (parts), operation, timeout);
+              // Retain delivery ownership if cold-path submission throws.
+              compose_node_request_reply (std::move (operation), std::move (submission), receiver);
+          }
+          catch (...) {
+              auto failure = current_exception_result<node_reply_t> ();
+              receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
+              receiver.complete (std::move (failure));
+          }
+      });
 }
 
 task_t<zlink::submit_result_t>

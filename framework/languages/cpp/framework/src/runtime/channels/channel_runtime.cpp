@@ -1646,7 +1646,7 @@ route_client_t::submit_spot_send_erased (const std::shared_ptr<detail::route_cli
     }
 }
 
-request_task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
+void route_client_t::submit_request_reply_message_erased (
   const std::shared_ptr<detail::route_client_state_t> &state_ref,
   std::string router_channel_id,
   zlink::routing_id_t target_node_rid,
@@ -1654,8 +1654,9 @@ request_task_t<zlink::message_t> route_client_t::submit_request_reply_message_er
   std::type_index request_type,
   payload_encoder_t encode_payload,
   std::chrono::milliseconds timeout,
-  std::map<std::string, std::string> metadata)
-try {
+  std::map<std::string, std::string> metadata,
+  detail::request_receiver_t<zlink::message_t> receiver)
+{
     // Retain the runtime through the physical reply conversion.
     const auto state = state_ref;
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
@@ -1664,28 +1665,27 @@ try {
                               : message_flow_log_mode_t::off);
     const auto ambient_context = detail::capture_ambient_context ();
     if (!state || !state->runtime || state->serializers == nullptr) {
-        return result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
-                                                    "route client is not configured");
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "route client is not configured");
     }
     runtime::messaging::message_parts_t parts;
     auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
     if (!transport)
-        return detail::propagate_failure<zlink::message_t> (transport,
-                                                            "node transport lookup failed");
+        detail::propagate_failure<zlink::message_t> (transport, "node transport lookup failed")
+          .value ();
     const auto route =
       std::get_if<std::shared_ptr<detail::route_channel_runtime_t>> (&transport.value ());
     const auto mesh =
       std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (&transport.value ());
     if (!route && !mesh) {
-        return result_t<zlink::message_t>::failure (framework_error_kind_t::unavailable,
-                                                    "route channel or MeshNode '"
-                                                      + router_channel_id + "' is not registered");
+        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                     "route channel or MeshNode '" + router_channel_id
+                                       + "' is not registered");
     }
-    // Move the coroutine parameter's existing target storage to a stable owner:
-    // selected transports may borrow this address until physical completion.
+    // Selected transports may borrow this stable target until physical completion.
     auto target_owner = std::make_shared<const zlink::routing_id_t> (std::move (target_node_rid));
     auto effective_timeout = timeout;
-    try {
+    {
         if (route) {
             auto &runtime = **route;
             effective_timeout = timeout > std::chrono::milliseconds::zero ()
@@ -1715,24 +1715,12 @@ try {
         parts =
           codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
-    catch (const framework_exception_t &error) {
-        return detail::result_access_t::failure<zlink::message_t> (error);
-    }
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
-        auto reply_task = [&] () -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
-            if (mesh)
-                return (*mesh)->request (*target_owner, std::move (parts), effective_timeout);
-            return (*route)->request_reply_parts (*target_owner, std::move (parts),
-                                                  effective_timeout);
-        }();
-        // The reply decodes the selected operation's terminal once (hot path E5).
-        return detail::project_request_reply<zlink::message_t> (
-          reply_task,
-          [state, transport = std::move (transport.value ()), packet_name = std::move (packet_name),
+        auto decoded = receiver.project<result_t<runtime::messaging::message_parts_t>> (
+          [state, transport = transport.value (), packet_name = std::move (packet_name),
            router_channel_id = std::move (router_channel_id),
-           target_owner = std::move (target_owner)] (
-            const result_t<result_t<runtime::messaging::message_parts_t>> &terminal)
+           target_owner] (const result_t<result_t<runtime::messaging::message_parts_t>> &terminal)
             -> result_t<zlink::message_t> {
               // Retain the selected callable and its borrowed target until terminal.
               (void) transport;
@@ -1785,17 +1773,20 @@ try {
                     framework_error_kind_t::internal_failure, error.what ());
               }
           });
+        if (mesh) {
+            (*mesh)->request (*target_owner, std::move (parts), effective_timeout,
+                              std::move (decoded));
+        } else {
+            decoded.observe (
+              (*route)->request_reply_parts (*target_owner, std::move (parts), effective_timeout));
+        }
     }
-    catch (const framework_exception_t &error) {
-        return detail::result_access_t::failure<zlink::message_t> (error);
+    catch (const framework_exception_t &) {
+        throw;
     }
     catch (const std::exception &error) {
-        return result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
-                                                    error.what ());
+        throw framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
     }
-}
-catch (...) {
-    return request_task_t<zlink::message_t> (detail::current_exception_result<zlink::message_t> ());
 }
 
 request_task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_erased (

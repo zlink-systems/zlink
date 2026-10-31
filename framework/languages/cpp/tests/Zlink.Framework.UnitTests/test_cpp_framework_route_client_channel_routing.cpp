@@ -151,12 +151,12 @@ TEST (CppFrameworkRouteClientChannelRouting, NodeOperationsRetainTransportWithou
           ++sends;
           co_return result_t<void>::success ();
       },
-      [counter = transport_copy_counter_t (copies),
-       &requests] (const zlink::routing_id_t &, message_parts_t,
-                   std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
+      [counter = transport_copy_counter_t (copies), &requests] (
+        const zlink::routing_id_t &, message_parts_t, std::chrono::milliseconds, auto receiver) {
           ++requests;
-          co_return result_t<message_parts_t>::failure (framework_error_kind_t::not_found,
-                                                        "test target is absent");
+          receiver.observe (request_task_t<result_t<message_parts_t>> (
+            result_t<result_t<message_parts_t>>::success (result_t<message_parts_t>::failure (
+              framework_error_kind_t::not_found, "test target is absent"))));
       });
     auto client = builder.route_client (serializers);
     copies = 0;
@@ -191,13 +191,15 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingNodeRequestRetainsReplacedTr
     task_completion_source_t<result_t<message_parts_t>> physical_reply;
     runtime.bind_mesh_node_transport (
       "held-mesh", {},
-      [lifetime,
-       &physical_reply] (const zlink::routing_id_t &target, message_parts_t,
-                         std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
+      [request = [lifetime, &physical_reply] (
+                   const zlink::routing_id_t &target, message_parts_t,
+                   std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
           auto reply = co_await physical_reply.task ();
           EXPECT_EQ (target.to_string (), "target");
           co_return reply;
-      });
+      }] (const zlink::routing_id_t &target, message_parts_t parts,
+          std::chrono::milliseconds timeout,
+          auto receiver) { receiver.observe (request (target, std::move (parts), timeout)); });
     lifetime.reset ();
     {
         auto client = builder.route_client (serializers);
@@ -647,9 +649,8 @@ void verify_mesh_request_admission (bool to_spot)
     };
     runtime.bind_mesh_node_transport (
       "admission-mesh", {},
-      [&] (const zlink::routing_id_t &, message_parts_t parts, std::chrono::milliseconds) {
-          return submit (std::move (parts));
-      });
+      [&] (const zlink::routing_id_t &, message_parts_t parts, std::chrono::milliseconds,
+           auto receiver) { receiver.observe (submit (std::move (parts))); });
     runtime.bind_spot_mesh_transport ("admission-mesh", {},
                                       [&] (const zlink::routing_id_t &, const std::string &spot_id,
                                            std::uint64_t generation, message_parts_t parts,
