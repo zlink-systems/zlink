@@ -19,6 +19,9 @@ const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
 const snake = (value) => value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
 const pascal = (value) => value[0].toUpperCase() + value.slice(1);
 const commands = [...schema.commands].sort((a, b) => a.id - b.id);
+const correlatedRequests = commands.filter((command) => command.name !== "reply"
+  && command.body?.[0]?.name === "correlation"
+  && command.body[0].$ref === "nonzero-u64");
 const flags = [...schema.flags].sort((a, b) => a.bit - b.bit);
 const metadataBytes = schema.bounds.find((entry) => entry.name === "metadataBytes").value;
 const numericBounds = schema.bounds.filter((entry) => Number.isSafeInteger(entry.value));
@@ -616,14 +619,69 @@ const nodeTypeScript = node.replace(
   return ServiceWireExactTerminalByFailureCode[failureCode as keyof typeof ServiceWireExactTerminalByFailureCode] === terminal;`,
 );
 
+const recoveryCommandIds = correlatedRequests.map((entry) => entry.id);
+const recoveryTs = `export function recoverRequestCorrelation(bytes: Uint8Array): bigint | undefined {
+  if (bytes.length < ${schema.protocol.headPrefixBytes + 8}
+      || bytes[0] !== ${schema.protocol.magic[0]} || bytes[1] !== ${schema.protocol.magic[1]}
+      || bytes[2] !== ${schema.protocol.wireMajor}
+      || ![${recoveryCommandIds.join(", ")}].includes(bytes[3]!)) return undefined;
+  let correlation = 0n;
+  for (let index = ${schema.protocol.headPrefixBytes}; index < ${schema.protocol.headPrefixBytes + 8}; ++index)
+    correlation = (correlation << 8n) | BigInt(bytes[index]!);
+  return correlation === 0n ? undefined : correlation;
+}
+`;
+const recoveryCpp = `inline std::optional<std::uint64_t> recover_request_correlation(std::span<const std::uint8_t> bytes) {
+    if (bytes.size() < ${schema.protocol.headPrefixBytes + 8} || bytes[0] != magic[0] || bytes[1] != magic[1] || bytes[2] != wire_major)
+        return std::nullopt;
+    switch (static_cast<command>(bytes[3])) {
+${correlatedRequests.map((entry) => `        case command::${entry.name}:`).join("\n")}
+            break;
+        default: return std::nullopt;
+    }
+    std::uint64_t correlation = 0;
+    for (std::size_t index = ${schema.protocol.headPrefixBytes}; index < ${schema.protocol.headPrefixBytes + 8}; ++index)
+        correlation = (correlation << 8) | bytes[index];
+    return correlation == 0 ? std::nullopt : std::optional<std::uint64_t>{correlation};
+}
+`;
+const recoveryDotnet = `    internal static bool TryRecoverRequestCorrelation(System.ReadOnlySpan<byte> bytes, out ulong correlation)
+    {
+        correlation = 0;
+        if (bytes.Length < ${schema.protocol.headPrefixBytes + 8} || bytes[0] != Magic0 || bytes[1] != Magic1 || bytes[2] != WireMajor)
+            return false;
+        switch ((Command)bytes[3])
+        {
+${correlatedRequests.map((entry) => `            case Command.${pascal(entry.name)}:`).join("\n")}
+                break;
+            default: return false;
+        }
+        correlation = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(${schema.protocol.headPrefixBytes}, 8));
+        return correlation != 0;
+    }
+`;
+const recoveryJava = `    public static Long recoverRequestCorrelation(byte[] bytes) {
+        if (bytes == null || bytes.length < ${schema.protocol.headPrefixBytes + 8}
+                || Byte.toUnsignedInt(bytes[0]) != MAGIC_0 || Byte.toUnsignedInt(bytes[1]) != MAGIC_1
+                || Byte.toUnsignedInt(bytes[2]) != WIRE_MAJOR) return null;
+        switch (Byte.toUnsignedInt(bytes[3])) {
+${correlatedRequests.map((entry) => `            case COMMAND_${snake(entry.name)}:`).join("\n")}
+                break;
+            default: return null;
+        }
+        long correlation = java.nio.ByteBuffer.wrap(bytes).getLong(${schema.protocol.headPrefixBytes});
+        return correlation == 0 ? null : correlation;
+    }
+`;
+
 const contents = [
-  cpp,
-  dotnet,
-  java,
-  nodeTypeScript,
-  nodeJs,
-  nodeDeclarations,
-  nodeTypeScript,
+  cpp.replace("#include <cstdint>", "#include <cstdint>\n#include <optional>\n#include <span>").replace("} // namespace zlink::framework::runtime::protocol", recoveryCpp + "} // namespace zlink::framework::runtime::protocol"),
+  dotnet.replace(/}\s*$/, recoveryDotnet + "}\n"),
+  java.replace("    private ServiceWireConstants() {}", recoveryJava + "    private ServiceWireConstants() {}"),
+  nodeTypeScript + recoveryTs,
+  nodeJs + recoveryTs.replace("export function", "function").replace("bytes: Uint8Array", "bytes").replace(": bigint | undefined", "").replaceAll("[3]!", "[3]").replaceAll("[index]!", "[index]") + "exports.recoverRequestCorrelation = recoverRequestCorrelation;\n",
+  nodeDeclarations + "export declare function recoverRequestCorrelation(bytes: Uint8Array): bigint | undefined;\n",
+  nodeTypeScript + recoveryTs,
   `${JSON.stringify(fixtures, null, 2)}\n`,
   `${JSON.stringify(replacedFixture, null, 2)}\n`,
   `${JSON.stringify(userSpotCreateFixture, null, 2)}\n`,

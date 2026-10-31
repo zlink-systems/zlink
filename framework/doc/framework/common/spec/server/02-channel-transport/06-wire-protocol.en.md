@@ -171,6 +171,14 @@ These flags can be used only on commands that the schema permits or requires.
 An undefined flag, an unexpected frame count, a conditional tail, or a
 trailing byte is rejected as a protocol error before application dispatch.
 
+When rejecting a received record as a protocol error, if the transport provides the
+original request's reply path and the command and a valid correlation can be recovered
+according to the schema, the runtime sends a command 20
+`ProtocolError`/`requestProtocolError` terminal without application dispatch. Otherwise,
+it discards the record and observes the protocol error; the caller may complete at its
+own deadline without a reply. One-way records receive no reply. A zero or guessed
+correlation is never used.
+
 ### Decode Validation and Size Limits
 
 - The decoder checks the complete record length, item count, UTF-8 validity, and every bound before allocating.

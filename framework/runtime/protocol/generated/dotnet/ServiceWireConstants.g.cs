@@ -176,4 +176,29 @@ internal static class ServiceWireConstants
                 return false;
         }
     }
+    internal static bool TryRecoverRequestCorrelation(System.ReadOnlySpan<byte> bytes, out ulong correlation)
+    {
+        correlation = 0;
+        if (bytes.Length < 13 || bytes[0] != Magic0 || bytes[1] != Magic1 || bytes[2] != WireMajor)
+            return false;
+        switch ((Command)bytes[3])
+        {
+            case Command.NodeRequest:
+            case Command.ChannelRequest:
+            case Command.SpotRequest:
+            case Command.ActorRequest:
+            case Command.ActorLookup:
+            case Command.ActorDestroy:
+            case Command.ActorJoin:
+            case Command.BoundSessionBind:
+            case Command.UserSpotCreate:
+            case Command.UserSpotClose:
+            case Command.ActorCreate:
+            case Command.BoundSessionClose:
+                break;
+            default: return false;
+        }
+        correlation = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(5, 8));
+        return correlation != 0;
+    }
 }
