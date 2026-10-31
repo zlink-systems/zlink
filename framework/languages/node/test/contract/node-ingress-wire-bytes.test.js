@@ -21,6 +21,36 @@ function messageParts(parts) {
   return parts.map(part => ({ data: () => bytes(part) }));
 }
 
+// Build the expected envelope independently of the production codec.
+function expectedApplicationFrame(packetName, contentType, payload) {
+  const text8 = value => Buffer.concat([Buffer.from([Buffer.byteLength(value)]), Buffer.from(value)]);
+  const u32 = value => { const bytes = Buffer.alloc(4); bytes.writeUInt32BE(value); return bytes; };
+  const body = Buffer.concat([text8(packetName), text8(contentType), u32(payload.length), payload]);
+  return Buffer.concat([Buffer.from([1]), u32(body.length), body]);
+}
+
+for (const size of [0, 1, 1024, 4096, 70000]) {
+  test(`application frame matches independent bytes for a ${size}-byte body`, () => {
+    const source = new Uint8Array(size + 2).fill(0xee);
+    const payload = source.subarray(1, size + 1);
+    for (let index = 0; index < payload.length; index++) payload[index] = index & 0xff;
+    const frame = wire.encodeApplicationPayload({ packetName: '가', contentType: 'c', payload });
+    const expected = expectedApplicationFrame('가', 'c', Buffer.from(payload));
+    assert.deepEqual(frame, expected);
+    const packed = Buffer.alloc(size + 8);
+    packed.writeUInt32BE(1, 0);
+    packed.writeUInt32BE(size, 4);
+    packed.set(payload, 8);
+    const multipart = wire.encodeMultipartApplicationPayload([payload], '가', 'c');
+    assert.deepEqual(multipart, expectedApplicationFrame('가', 'c', packed));
+    source.fill(0x33);
+    assert.deepEqual(frame, expected);
+    const bad = Buffer.from(expected);
+    bad[4] ^= 1;
+    assert.throws(() => assert.deepEqual(frame, bad), assert.AssertionError);
+  });
+}
+
 test('ingress wire golden: node/channel routing headers and terminal reply', () => {
   const id = 0x0102030405060708n;
   assert.equal(wire.encodeNodeSendHeader().toString('hex'), '5a4d011000');

@@ -4,7 +4,7 @@ import { inspectRuntime } from '../internal-observation';
 import { encodeActorReply } from '../actors/actor-reply';
 import { ZLinkStreamMessageKind } from '../streams/protocol';
 import {
-  decodeApplicationPayloadView,
+  decodeApplicationPayload,
   encodeMultipartApplicationPayload
 } from '../foundation/service-wire-m6a-codec';
 import {
@@ -5840,7 +5840,7 @@ function maintenanceReplyRelay(
   const direct = packet.messageFollowOrigin?.requestSource !== undefined;
   const application =
     direct && completion.result.ok
-      ? decodeApplicationPayloadView(
+      ? decodeApplicationPayload(
           encodeMultipartApplicationPayload(
             encodeActorReply(
               Buffer.from(packet.header, 'base64'),
