@@ -13,7 +13,7 @@ flowchart LR
 
 - Docker with Compose v2, and PowerShell 7 on Windows.
 - Network access to Maven Central and the Redis container registry.
-- Published ZLink Framework 0.30.3 and binding 1.20.0. Versions are owned by `build.gradle.kts`.
+- Published ZLink Framework 0.31.0 and binding 1.21.0. Versions are owned by `build.gradle.kts`.
 
 The Gradle wrapper and all server modules are included. Copy this directory to build it independently. On Windows, run the commands in PowerShell 7; launchers use the JDK selected by Gradle and enable native access.
 
@@ -69,7 +69,7 @@ Before the scenarios, the runner executes the server table's `--check-domain` mo
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.31.0 packages.
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 

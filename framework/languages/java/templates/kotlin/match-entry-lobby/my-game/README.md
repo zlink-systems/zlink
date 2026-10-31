@@ -62,7 +62,7 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.31.0 packages.
 
 ## Deployment sequence
 

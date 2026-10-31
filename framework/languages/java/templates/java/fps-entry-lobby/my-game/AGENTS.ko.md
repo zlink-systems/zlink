@@ -2,7 +2,7 @@
 
 ## 프로젝트와 명령
 
-이 Java 25 프로젝트는 Session gateway, Match host A·B, Redis Location Store로 구성됩니다. Entry Spot은 플레이어를 고정 Matchmaking User Spot으로 전달하고, 같은 mode의 플레이어는 동적 Room User Spot에 들어갑니다. 공개 Framework와 connector 버전은 `gradle/libs.versions.toml`에서 0.30.3로 고정합니다. 실행과 배포 절차는 [README](README.md), 토폴로지와 시나리오 순서는 [zlink.structure.json](zlink.structure.json)이 소유합니다.
+이 Java 25 프로젝트는 Session gateway, Match host A·B, Redis Location Store로 구성됩니다. Entry Spot은 플레이어를 고정 Matchmaking User Spot으로 전달하고, 같은 mode의 플레이어는 동적 Room User Spot에 들어갑니다. 공개 Framework와 connector 버전은 `gradle/libs.versions.toml`에서 0.31.0로 고정합니다. 실행과 배포 절차는 [README](README.md), 토폴로지와 시나리오 순서는 [zlink.structure.json](zlink.structure.json)이 소유합니다.
 
 Docker Compose v2와 Linux container를 사용하는 명령은 프로젝트 루트에서 실행합니다.
 
