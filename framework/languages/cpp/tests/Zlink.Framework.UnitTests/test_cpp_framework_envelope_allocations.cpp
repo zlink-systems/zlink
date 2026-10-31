@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/json.hpp>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 #include "allocation_counter.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
@@ -214,6 +215,39 @@ std::size_t header_container_baseline ()
     });
 }
 
+void expect_same_header (const msg::envelope_header_t &actual,
+                         const msg::envelope_header_t &expected)
+{
+    EXPECT_EQ (actual.kind, expected.kind);
+    EXPECT_EQ (actual.channel_name, expected.channel_name);
+    EXPECT_EQ (actual.message_name, expected.message_name);
+    EXPECT_EQ (actual.content_type, expected.content_type);
+    EXPECT_EQ (actual.correlation_id, expected.correlation_id);
+    EXPECT_EQ (actual.deadline, expected.deadline);
+    EXPECT_EQ (actual.topic, expected.topic);
+    EXPECT_EQ (actual.error_code, expected.error_code);
+    EXPECT_EQ (actual.error_message, expected.error_message);
+    EXPECT_EQ (actual.source, expected.source);
+    EXPECT_EQ (actual.metadata, expected.metadata);
+    EXPECT_EQ (actual.flow_id, expected.flow_id);
+    EXPECT_EQ (actual.flow_origin, expected.flow_origin);
+}
+
+std::string node_ordered_header (std::string_view wire)
+{
+    constexpr std::array<std::string_view, 14> node_field_order = {
+      "formatMarker",  "kind",     "channelName", "messageName", "contentType",
+      "correlationId", "deadline", "topic",       "errorCode",   "errorMessage",
+      "source",        "metadata", "flowId",      "flowOrigin"};
+    const auto parsed = nlohmann::json::parse (wire);
+    auto ordered = nlohmann::ordered_json::object ();
+    for (const auto field : node_field_order) {
+        const std::string name (field);
+        ordered.emplace (name, parsed.at (name));
+    }
+    return ordered.dump ();
+}
+
 TEST (EnvelopeAllocations, ReplyInitializesOnlyItsFinalFields)
 {
     msg::envelope_header_t request;
@@ -256,6 +290,110 @@ TEST (EnvelopeAllocations, DecodeDoesNotAllocateADiscardedJsonDefault)
     EXPECT_EQ (decoded->value ().channel_name, "c");
     EXPECT_EQ (decoded->value ().message_name, "m");
     EXPECT_EQ (allocations, 0u);
+}
+
+TEST (EnvelopeAllocations, CanonicalHeaderDecodeDoesNotAllocate)
+{
+    msg::envelope_codec_t codec;
+    const msg::envelope_header_t header{
+      .channel_name = "c", .message_name = "m", .content_type = "x/y"};
+    const auto wire = codec.encode_header (header);
+    auto warm = codec.decode_header (wire, false);
+    ASSERT_TRUE (warm);
+    std::optional<decltype (warm)> decoded;
+    const auto allocations =
+      count_allocations ([&] { decoded.emplace (codec.decode_header (wire, false)); });
+    ASSERT_TRUE (*decoded);
+    EXPECT_EQ (decoded->value ().channel_name, "c");
+    EXPECT_EQ (decoded->value ().message_name, "m");
+    EXPECT_EQ (decoded->value ().content_type, "x/y");
+    EXPECT_EQ (allocations, 0u);
+}
+
+TEST (EnvelopeAllocations, CanonicalHeaderDecodeMatchesFallbackForEscapesAndUnicode)
+{
+    msg::envelope_codec_t codec;
+    msg::envelope_header_t header{.kind = msg::message_kind_t::error,
+                                  .channel_name = "orders\"\\\n",
+                                  .message_name = "검색/😀",
+                                  .content_type = "application/json",
+                                  .correlation_id = "corr-17"};
+    header.deadline = "2026-10-31T00:00:00Z\t";
+    header.topic = "topic/한글";
+    header.error_code = "internal_failure";
+    header.error_message = std::string ("line\nzero\0end", 13);
+    header.source = "node-é";
+    header.metadata.emplace ("a\"key", std::string ("value\n\x01") + "한글");
+    header.metadata.emplace ("z", "tail");
+    header.flow_id = "01890a5d-ac96-774b-bcce-b302099a8057";
+    header.flow_origin = zlink::framework::flow_origin_t::inbound;
+
+    const auto wire = codec.encode_header (header).to_string ();
+    const auto canonical_message = zlink::message_t::from (wire);
+    const auto whitespace_message = zlink::message_t::from (" \n\t" + wire);
+    auto canonical = codec.decode_header (canonical_message);
+    auto whitespace_fallback = codec.decode_header (whitespace_message);
+    auto reordered_fallback =
+      codec.decode_header (zlink::message_t::from (node_ordered_header (wire)));
+    auto canonical_reply = codec.decode_header (canonical_message, false);
+    auto fallback_reply = codec.decode_header (whitespace_message, false);
+    std::optional<decltype (canonical)> canonical_measurement;
+    std::optional<decltype (canonical)> fallback_measurement;
+    const auto canonical_allocations = count_allocations (
+      [&] { canonical_measurement.emplace (codec.decode_header (canonical_message)); });
+    const auto fallback_allocations = count_allocations (
+      [&] { fallback_measurement.emplace (codec.decode_header (whitespace_message)); });
+    ASSERT_TRUE (canonical);
+    ASSERT_TRUE (whitespace_fallback);
+    ASSERT_TRUE (reordered_fallback);
+    ASSERT_TRUE (canonical_reply);
+    ASSERT_TRUE (fallback_reply);
+    ASSERT_TRUE (*canonical_measurement);
+    ASSERT_TRUE (*fallback_measurement);
+    EXPECT_LT (canonical_allocations, fallback_allocations);
+    std::printf ("Escaped canonical header decode: %zu allocations; SAX fallback: %zu.\n",
+                 canonical_allocations, fallback_allocations);
+    expect_same_header (canonical.value (), whitespace_fallback.value ());
+    expect_same_header (canonical.value (), reordered_fallback.value ());
+    expect_same_header (canonical_reply.value (), fallback_reply.value ());
+    EXPECT_FALSE (canonical_reply.value ().flow_id);
+    EXPECT_FALSE (canonical_reply.value ().flow_origin);
+}
+
+TEST (EnvelopeAllocations, MissingOptionalFieldsMatchCanonicalDefaults)
+{
+    msg::envelope_codec_t codec;
+    const msg::envelope_header_t expected{
+      .kind = msg::message_kind_t::command, .channel_name = "c", .message_name = "m"};
+    const auto canonical = codec.decode_header (codec.encode_header (expected));
+    const auto missing_optional = codec.decode_header (zlink::message_t::from (
+      R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m"})"));
+    ASSERT_TRUE (canonical);
+    ASSERT_TRUE (missing_optional);
+    expect_same_header (canonical.value (), missing_optional.value ());
+}
+
+TEST (EnvelopeAllocations, MalformedCanonicalPrefixKeepsJsonParserError)
+{
+    msg::envelope_codec_t codec;
+    const msg::envelope_header_t header{
+      .channel_name = "c", .message_name = "m", .content_type = "x/y"};
+    auto malformed = codec.encode_header (header).to_string ();
+    malformed.pop_back ();
+    std::string json_error;
+    try {
+        json_error = nlohmann::json::parse (malformed).dump ();
+    }
+    catch (const nlohmann::json::parse_error &error) {
+        json_error = error.what ();
+    }
+
+    const auto decoded = codec.decode_header (zlink::message_t::from (malformed));
+    ASSERT_FALSE (decoded);
+    ASSERT_TRUE (decoded.error ());
+    EXPECT_EQ (decoded.error_kind (), zlink::framework::framework_error_kind_t::protocol_error);
+    EXPECT_EQ (std::string (decoded.error ()->what ()),
+               std::string ("invalid ZLink envelope header: ") + json_error);
 }
 
 TEST (EnvelopeAllocations, MailboxRecordDoesNotConstructAnUnusedContentType)
