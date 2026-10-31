@@ -6,7 +6,7 @@ import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message
 import type { ZLinkMessageSerializer } from '../../contracts';
 import {
   decodeApplicationPayloadView,
-  encodeApplicationPayload
+  encodeOwnedApplicationPayload
 } from '../foundation/service-wire-m6a-codec';
 import {
   decodeFrameworkPayloadMessage,
@@ -23,7 +23,7 @@ export function encodeFrameworkCreationPayload(
 ): Buffer {
   const message = encodeFrameworkPayloadMessage(payload ?? null, registry);
   try {
-    return encodeApplicationPayload({
+    return encodeOwnedApplicationPayload({
       packetName: CREATION_PACKET_NAME,
       contentType: frameworkPayloadContentType(message),
       payload: message.data()
@@ -42,7 +42,7 @@ export function decodeFrameworkCreationPayload<T>(
     if (application.packetName !== CREATION_PACKET_NAME) {
       throw new RangeError('Creation payload has an unexpected packet name.');
     }
-    // The M6A view decoder returns a Buffer over the retained input storage.
+    // Creation frames use owned storage and stay alive through synchronous decode.
     const message = RuntimeMessage.fromOwned(application.payload as Buffer);
     try {
       return decodeFrameworkPayloadMessage<T>(
