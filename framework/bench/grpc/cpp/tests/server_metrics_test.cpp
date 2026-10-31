@@ -60,6 +60,8 @@ int main ()
     metrics.reset ();
     metrics.observe_rejected_total (12);
     require (rejected () == 1);
+    metrics.observe_rejected_total (std::nullopt);
+    require (nlohmann::json::parse (metrics.snapshot_json ()).at ("rejected").is_null ());
 
     zlink_cpp_bench::server_metrics_t unavailable (std::nullopt);
     const auto snapshot = [&] {
@@ -83,7 +85,7 @@ int main ()
                                                {"message_kind", "send"},
                                                {"reason", "backpressure"}});
     };
-    require (!read_drop ().has_value ()); // No measurement must stay unavailable, not become zero.
+    require (read_drop () == 0.0); // A successful collection with no drop series is zero.
 
     auto meter = opentelemetry::metrics::Provider::GetMeterProvider ()->GetMeter ("bench-test");
     auto dropped = meter->CreateDoubleObservableCounter ("zlink.mesh_node.messages.dropped",
@@ -95,10 +97,16 @@ int main ()
     require (read_drop () == 7.0);
     observed.value = 11.0;
     require (read_drop () == 11.0); // The manual reader keeps the SDK cumulative value.
-    require (!reader.collect_cumulative_sum ("zlink.mesh_node.messages.dropped",
-                                             {{"mesh_name", "bench"},
-                                              {"surface", "node"},
-                                              {"message_kind", "send"},
-                                              {"reason", "shutdown"}}));
+    require (
+      reader.collect_cumulative_sum ("zlink.mesh_node.messages.dropped", {{"mesh_name", "bench"},
+                                                                          {"surface", "node"},
+                                                                          {"message_kind", "send"},
+                                                                          {"reason", "shutdown"}})
+      == 0.0);
     dropped->RemoveCallback (observe_drop, &observed);
+
+    opentelemetry::metrics::Provider::SetMeterProvider (
+      opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider> (
+        new opentelemetry::metrics::NoopMeterProvider));
+    require (!read_drop ().has_value ()); // A missing global provider stays unavailable.
 }
