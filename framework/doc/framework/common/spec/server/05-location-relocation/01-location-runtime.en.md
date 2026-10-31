@@ -628,8 +628,11 @@ remain in the Store — §11 defines the descriptor lifetime.
 A node's automatic routing ID is newly generated for each host process. Therefore, a host restarted
 with the same configuration adds its own descriptor under a new routing ID, while the
 stopped host's descriptor remains and continues to point to the same endpoint. The Store
-then has two descriptors pointing to one endpoint. **This section owns only the decision
-not to target such descriptors.**
+then has two descriptors pointing to one endpoint.
+
+A descriptor with a different RID is not classified as self or as an expired host merely
+because it points to the same endpoint. Self identification uses the node RID; whether
+the publishing host is live is determined by the owner lease validation in this section.
 
 **Before targeting a descriptor read from the Store, the Framework verifies that the
 owner lease of the host that published the descriptor is live.** This rule applies to

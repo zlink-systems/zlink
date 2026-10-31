@@ -159,12 +159,9 @@ final class ZLinkAutoConnectPlanner {
     }
 
     private static boolean isSelf(Local local, ZLinkAutoConnectPeer peer) {
-        if (hasRid(local.nodeRid())
+        return hasRid(local.nodeRid())
                 && hasRid(peer.nodeRid())
-                && local.nodeRid().equals(peer.nodeRid())) {
-            return true;
-        }
-        return peer.endpoint().equals(local.endpoint());
+                && local.nodeRid().equals(peer.nodeRid());
     }
 
     private static boolean shouldDial(Local local, ZLinkAutoConnectPeer peer) {

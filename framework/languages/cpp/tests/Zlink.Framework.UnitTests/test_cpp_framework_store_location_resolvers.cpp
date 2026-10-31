@@ -44,6 +44,26 @@
 #include <thread>
 #include <vector>
 
+namespace zlink::framework::runtime
+{
+struct location_auto_connect_test_access_t
+{
+    static std::vector<std::string>
+    desired_rids (std::shared_ptr<const live_location_reader_t::mesh_sources_t> sources)
+    {
+        location_auto_connect_host_service_t::loop_t local;
+        local.mesh_name = "mesh";
+        local.local_rid = zlink::routing_id_t::from ("local");
+        local.local_endpoint = "tcp://shared:1";
+        std::vector<std::string> rids;
+        for (const auto &[key, target] :
+             location_auto_connect_host_service_t::compute_desired (local, std::move (sources)))
+            rids.push_back (target.node_rid.to_string ());
+        return rids;
+    }
+};
+}
+
 namespace
 {
 
@@ -3872,6 +3892,45 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     EXPECT_TRUE (client->last_error.empty ()) << client->last_error;
 }
 
+TEST (ZLinkFrameworkStoreLocationResolvers, SameEndpointUsesRidAndOwnerLease)
+{
+    using namespace zlink::framework;
+    using tests::owner_lease_time_store_t;
+    for (const bool live : {true, false}) {
+        for (const auto &rid : {"remote", "local"}) {
+            SCOPED_TRACE (std::string (rid) + (live ? " live" : " expired"));
+            in_memory_location_repository_t seed;
+            seed_mesh_node (seed, "owner", "mesh", rid, "tcp://shared:1");
+            auto descriptor = seed.list_mesh_nodes ("mesh", {}).result ().value ().items.front ();
+            runtime::in_memory_location_store_t inner;
+            runtime::provider_location_repository_t writer (inner);
+            const auto claim =
+              writer.claim_owner_lease ("owner", std::chrono::seconds (30)).result ().value ();
+            descriptor.lease_generation =
+              std::get<owner_lease_claimed_t> (claim).token.lease_generation;
+            ASSERT_EQ (location_write_status_t::stored,
+                       writer.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                         .result ()
+                         .value ()
+                         .status);
+            owner_lease_time_store_t observed (inner, "owner",
+                                               live
+                                                 ? owner_lease_time_store_t::lease_view_t::live
+                                                 : owner_lease_time_store_t::lease_view_t::expired);
+            runtime::provider_location_repository_t repository (observed);
+            runtime::live_location_reader_t reader (repository);
+            auto sources = reader.poll_mesh_sources ("mesh").result ().value ();
+            ASSERT_EQ (1u, sources->size ());
+            EXPECT_EQ (live, sources->front ().available ());
+            const auto desired =
+              runtime::location_auto_connect_test_access_t::desired_rids (sources);
+            EXPECT_EQ ((live && std::string (rid) != "local" ? std::vector<std::string>{"remote"}
+                                                             : std::vector<std::string>{}),
+                       desired);
+        }
+    }
+}
+
 TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostReconcilesRouteMeshConnections)
 {
     auto store = std::make_shared<in_memory_location_repository_t> ();
@@ -3968,8 +4027,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectSameEndpointReplacementPr
     std::this_thread::sleep_for (std::chrono::milliseconds (5));
     seed_mesh_node (*store, "owner-route-replacement-new", "route.replacement",
                     "route-a-replacement-new", endpoint);
-    seed_mesh_node (*store, "owner-route-replacement-self-stale", "route.replacement",
-                    "route-z-replacement-self-stale", "inproc://route-replacement-local");
+    seed_mesh_node (*store, "owner-route-replacement-same-endpoint", "route.replacement",
+                    "route-z-replacement-same-endpoint", "inproc://route-replacement-local");
 
     zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink.route_channel ("route.replacement")
@@ -4017,12 +4076,12 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectSameEndpointReplacementPr
           std::any_of (targets.begin (), targets.end (), [] (const auto &target) {
               return target.peer_rid && target.peer_rid->to_string () == "route-z-replacement-old";
           });
-        const auto has_stale_self =
+        const auto has_same_endpoint_peer =
           std::any_of (targets.begin (), targets.end (), [] (const auto &target) {
               return target.peer_rid
-                     && target.peer_rid->to_string () == "route-z-replacement-self-stale";
+                     && target.peer_rid->to_string () == "route-z-replacement-same-endpoint";
           });
-        return has_new && !has_old && !has_stale_self;
+        return has_new && !has_old && has_same_endpoint_peer && targets.size () == 2;
     });
     const auto final_targets = route.list_connection_targets ();
     std::string selected_targets;
