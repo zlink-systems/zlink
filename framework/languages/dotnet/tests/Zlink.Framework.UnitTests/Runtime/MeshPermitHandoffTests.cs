@@ -10,6 +10,7 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshPermitHandoffTests
 {
     private const nuint ReceiveSocketSlot = 1;
+    private static readonly TimeSpan CompletionBound = TimeSpan.FromSeconds(5);
 
     [Fact]
     public async Task RawIngress_StopsReceivingAtApplicationPermitCapacity()
@@ -54,6 +55,20 @@ public sealed class MeshPermitHandoffTests
 
         try
         {
+            var firstFill = FillIngressAsync();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                        firstFill.IsCompleted
+                        || (
+                            Volatile.Read(ref source.Waiting)
+                            && Volatile.Read(ref source.Continuation) is not null
+                            && Volatile.Read(ref source.Deadline) == long.MaxValue
+                        ),
+                    CompletionBound
+                )
+            );
+            Assert.False(firstFill.IsCompleted);
             for (var index = 0; index < suppliedRecords; index++)
             {
                 using var header = Message.From(
@@ -74,7 +89,7 @@ public sealed class MeshPermitHandoffTests
                 Assert.True(submission.EnsureAcceptedAsync().IsCompletedSuccessfully);
             }
 
-            await FillIngressAsync();
+            await firstFill;
             var atCapacity = queue.GetStatus();
             Assert.Equal((ulong)capacity, atCapacity.QueuedApplicationJobs);
             Assert.Equal((ulong)capacity, atCapacity.PermitsInUse);
@@ -109,6 +124,11 @@ public sealed class MeshPermitHandoffTests
             DrainAndDisposeApplicationRecords(node, capacity);
             Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
 
+            // This fixture canceled the permit waiter that would re-enable data receive.
+            source.Modify(
+                socket,
+                PollEventFlags.PollIn | PollEventFlags.PollCompletion | PollEventFlags.PollErr
+            );
             await FillIngressAsync();
             var secondWave = queue.GetStatus();
             Assert.Equal((ulong)capacity, secondWave.QueuedApplicationJobs);
@@ -126,12 +146,18 @@ public sealed class MeshPermitHandoffTests
 
         async Task FillIngressAsync()
         {
-            // A receive turn may stop at its time budget before exhausting
-            // permits. All records are already supplied; at most two such
-            // turns are needed to fill this queue, with no polling or delay.
+            // Each readable turn claims at least one supplied record, even if
+            // scheduling consumes its time budget before the first receive.
             for (var turn = 0; turn < capacity; turn++)
             {
-                await DrainAsync(node, source, CancellationToken.None);
+                Assert.True(
+                    await DrainWhenReadableAsync(
+                        node,
+                        source,
+                        CancellationToken.None,
+                        Timeout.InfiniteTimeSpan
+                    )
+                );
                 if (queue.GetStatus().PermitsInUse == capacity)
                     return;
             }
