@@ -1158,24 +1158,30 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.False(second.IsCompleted);
         var ready = expectedReady;
         using var firstReply = Message.From(
-            malformed ? new byte[] { 0xff } : ZLinkServiceWireCodec.EncodeRelocationReady(ready)
+            malformed
+                ? Enumerable.Repeat((byte)0xff, 1024).ToArray()
+                : ZLinkServiceWireCodec.EncodeRelocationReady(ready)
         );
+        using var firstPayload = firstReply.Copy();
+        Assert.Equal(2, firstPayload.RefCount);
         firstReceived.Reply().Message(firstReply).Submit();
-        var firstParts = await submissions[0].Reply.WaitAsync(TimeSpan.FromSeconds(5));
+        await submissions[0].Reply.WaitAsync(TimeSpan.FromSeconds(5));
         if (malformed)
         {
-            await PartsDisposedAsync(firstParts).WaitAsync(TimeSpan.FromSeconds(5));
+            await PayloadReleasedAsync(firstPayload).WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(second.IsCompleted);
         }
         else
             Assert.Equal(ready, await second.WaitAsync(TimeSpan.FromSeconds(5)));
         // Settle the second physical leg even when the shared READY already won.
         using var secondReply = Message.From(ZLinkServiceWireCodec.EncodeRelocationReady(ready));
+        using var secondPayload = secondReply.Copy();
+        Assert.Equal(2, secondPayload.RefCount);
         secondReceived.Reply().Message(secondReply).Submit();
-        var secondParts = await submissions[1].Reply.WaitAsync(TimeSpan.FromSeconds(5));
+        await submissions[1].Reply.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ready, await second.WaitAsync(TimeSpan.FromSeconds(5)));
-        await PartsDisposedAsync(firstParts).WaitAsync(TimeSpan.FromSeconds(5));
-        await PartsDisposedAsync(secondParts).WaitAsync(TimeSpan.FromSeconds(5));
+        await PayloadReleasedAsync(firstPayload).WaitAsync(TimeSpan.FromSeconds(5));
+        await PayloadReleasedAsync(secondPayload).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(0, fixture.Node.PendingOperationCount);
         Assert.Equal(0, fixture.Node.PendingCanonicalRelocationPrepareCount);
         Assert.Equal(2, fixture.Context.NativeRequests);
@@ -1211,7 +1217,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             await gate.Held.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var heldObserved = Stopwatch.GetTimestamp();
             var submission = Assert.Single(fixture.Context.Submissions);
-            var parts = await submission.Reply.WaitAsync(TimeSpan.FromSeconds(5));
+            await submission.Reply.WaitAsync(TimeSpan.FromSeconds(5));
             var physicalObserved = Stopwatch.GetTimestamp();
             Assert.True(submission.Reply.IsCompletedSuccessfully);
             Assert.False(caller.IsCompleted);
@@ -1220,7 +1226,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             responder.Join();
             fixture.ReceiveChunks();
             Assert.Equal(responder.Ready, await caller.WaitAsync(TimeSpan.FromSeconds(5)));
-            await PartsDisposedAsync(parts).WaitAsync(TimeSpan.FromSeconds(5));
+            await PayloadReleasedAsync(responder.ReplyPayload).WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(0, fixture.Node.PendingOperationCount);
             Assert.Equal(1, fixture.Context.NativeRequests);
             output.WriteLine(
@@ -1298,6 +1304,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         );
         internal Task Received => _received.Task;
         internal ZLinkServiceWireCodec.RelocationReadyRecord Ready { get; }
+        internal Message ReplyPayload { get; }
         internal long PrepareReceived { get; private set; }
         internal long ReadySubmitted { get; private set; }
         internal bool IsAlive => _thread.IsAlive;
@@ -1315,6 +1322,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 fixture.Prepare.Object,
                 2
             );
+            ReplyPayload = Message.From(ZLinkServiceWireCodec.EncodeRelocationReady(Ready));
             _ready = new(!withholdReady);
             // The server has no poller after construction. Join transfers it back before chunks.
             _thread = new Thread(() =>
@@ -1326,9 +1334,8 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                     PrepareReceived = Stopwatch.GetTimestamp();
                     _received.TrySetResult();
                     Assert.True(_ready.Wait(TimeSpan.FromSeconds(5)));
-                    using var reply = Message.From(
-                        ZLinkServiceWireCodec.EncodeRelocationReady(Ready)
-                    );
+                    using var reply = ReplyPayload.Copy();
+                    Assert.Equal(2, ReplyPayload.RefCount);
                     received.Reply().Message(reply).Submit();
                     ReadySubmitted = Stopwatch.GetTimestamp();
                     _completion.TrySetResult();
@@ -1369,6 +1376,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 {
                     _started.Dispose();
                     _ready.Dispose();
+                    ReplyPayload.Dispose();
                 }
             }
         }
@@ -1392,23 +1400,11 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         public void Dispose() => _return.Dispose();
     }
 
-    private static async Task PartsDisposedAsync(IReadOnlyList<Message> parts)
+    private static async Task PayloadReleasedAsync(Message retainedPayload)
     {
-        foreach (var part in parts)
-        {
-            while (true)
-            {
-                try
-                {
-                    _ = part.Size;
-                }
-                catch (ObjectDisposedException)
-                {
-                    break;
-                }
-                await Task.Yield();
-            }
-        }
+        // Inproc shares this payload. Only inspect our live copy while the receiver releases its own.
+        while (retainedPayload.RefCount != 1)
+            await Task.Yield();
     }
 
     private sealed class CanonicalPhysicalRequest : IAsyncDisposable
