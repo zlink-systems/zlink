@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/manual_deadlines.hpp"
 #include "../support/telemetry_observation.hpp"
 #include "metric_test_reader.hpp"
 
@@ -20,6 +21,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 
 #include <gtest/gtest.h>
@@ -65,6 +67,23 @@ struct public_host_runtime_test_access_t
 namespace
 {
 
+// Keep deadline callbacks on their production worker, including an already-due callback.
+std::future<bool> advance_activation_deadline (std::uint64_t deadline_unix_ms)
+{
+    namespace fw = zlink::framework;
+    auto advanced = std::make_shared<std::promise<bool>> ();
+    auto result = advanced->get_future ();
+    fw::detail::deadline_scheduler_t::instance ().schedule (
+      std::chrono::steady_clock::now (), std::make_shared<fw::detail::deadline_state_t> (),
+      [deadline_unix_ms, advanced] {
+          fw::detail::deadline_scheduler_test_access_t::advance_to (
+            fw::runtime::messaging::request_deadline_from_unix_ms (deadline_unix_ms)
+            + std::chrono::milliseconds (1));
+          advanced->set_value (true);
+      });
+    return result;
+}
+
 class reserve_loser_repository_t final
     : public zlink::framework::runtime::in_memory_location_repository_t
 {
@@ -84,7 +103,7 @@ class reserve_loser_repository_t final
         captured = zlink::framework::runtime::protocol::decode_instance_activation_recovery (
           relocations->get (observed->intent.request_content_reference).value (), false);
         if (expire_deadline) {
-            std::this_thread::sleep_until (observed->operation_deadline);
+            advance_activation_deadline (captured->activation.target.deadline_unix_ms).get ();
             throw zlink::framework::framework_exception_t (
               zlink::framework::framework_error_kind_t::deadline_exceeded,
               "Object creation deadline expired");
@@ -989,6 +1008,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     auto flows = std::make_shared<fw::test::telemetry_observations_t<fw::message_flow_event_t>> ();
     auto errors =
       std::make_shared<fw::test::telemetry_observations_t<fw::message_dispatch_error_event_t>> ();
+    constexpr auto source_budget = 80ms;
+    auto deadline_worker_release = std::make_shared<fw::task_completion_source_t<void>> ();
     auto &dispatch = options.configure_dispatch ();
     dispatch.message_flow (fw::message_flow_log_mode_t::normal);
     fw::detail::dispatch_options_access_t::set_observer_for_tests (
@@ -1036,7 +1057,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       .set_object_role (fw::object_role_t::server)
       .set_routing_id (zlink::routing_id_t::from ("activation-budget-node"))
       .listen ("tcp://127.0.0.1:0")
-      .set_default_request_timeout (80ms)
+      .set_default_request_timeout (source_budget)
       .add_instance_spot_factory<traced_instance_spot_t> (
         "traced-player",
         [&] (fw::instance_spot_context_t context) {
@@ -1050,6 +1071,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     std::thread host ([&] { exit_code = app.run (1, argv); });
     auto cleanup =
       std::unique_ptr<fw::app_t, std::function<void (fw::app_t *)>> (&app, [&] (auto *) {
+          deadline_worker_release->complete (fw::result_t<void>::success ());
           store->release.complete (fw::result_t<void>::success ());
           app.stop ();
           host.join ();
@@ -1065,7 +1087,16 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
                   .in_mesh ("activation-budget")
                   .async ();
     ASSERT_EQ (std::future_status::ready, lookup_entered.wait_for (3s));
-    std::this_thread::sleep_for (240ms);
+    auto budget_elapsed = std::make_shared<std::promise<void>> ();
+    auto elapsed = budget_elapsed->get_future ();
+    fw::detail::deadline_scheduler_t::instance ().schedule (
+      std::chrono::steady_clock::now () + source_budget + 1ms,
+      std::make_shared<fw::detail::deadline_state_t> (), [budget_elapsed, deadline_worker_release] {
+          budget_elapsed->set_value ();
+          // Hold admission expiry until the expired Store operation fixes the terminal.
+          deadline_worker_release->task ().result ().value ();
+      });
+    ASSERT_EQ (std::future_status::ready, elapsed.wait_for (1s));
     EXPECT_FALSE (send.await_ready ());
     store->release.complete (fw::result_t<void>::success ());
     // The expired activation deadline reaches the target in ZLIA; send admission succeeds.
@@ -1080,6 +1111,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
         ASSERT_TRUE (errors->changed.wait_until (lock, observation_deadline,
                                                  [&] { return !errors->events.empty (); }));
     }
+    deadline_worker_release->complete (fw::result_t<void>::success ());
     // Activation records its dropped flow before reporting this terminal error.
     fw::test::acknowledge_delivery (observation_deadline);
     const auto dropped = flows->snapshot ();
@@ -1097,7 +1129,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     EXPECT_EQ (fw::dispatch_error_action_t::drop, terminal.error_action);
     ASSERT_EQ (1u, diagnostics.size ());
     EXPECT_EQ (typeid (fw::framework_exception_t).name (), diagnostics.front ().error_type);
-    EXPECT_EQ ("Instance Spot activation deadline expired", diagnostics.front ().error_message);
+    EXPECT_EQ ("relocation Store operation deadline elapsed", diagnostics.front ().error_message);
+    EXPECT_EQ (terminal.exception, diagnostics.front ().exception);
     EXPECT_FALSE (instance);
     EXPECT_TRUE (send.result ());
     cleanup.reset ();
@@ -2939,8 +2972,7 @@ static void verify_activation_failure_terminal (bool local,
                 (void) initialization_release->task ().result ();
             }
             if (failure == activation_failure_t::deadline)
-                std::this_thread::sleep_until (std::chrono::system_clock::time_point (
-                  std::chrono::milliseconds (request.target.deadline_unix_ms)));
+                advance_activation_deadline (request.target.deadline_unix_ms).get ();
             return true;
         },
         [&] (auto, auto,
@@ -3066,6 +3098,8 @@ static void verify_activation_failure_terminal (bool local,
                     return host::public_host_runtime_test_access_t::expire_activation (
                       *target, "terminal-room");
                 });
+            else
+                expired = advance_activation_deadline (header.target.deadline_unix_ms);
             EXPECT_EQ (std::future_status::ready, terminal_ready->get_future ().wait_for (1s));
             initialization_release->complete (fw::result_t<void>::success ());
             if (hold_delivery) {
@@ -3169,12 +3203,10 @@ static void verify_activation_failure_terminal (bool local,
     ASSERT_TRUE (event.exception);
     if (local)
         EXPECT_EQ (terminal_exception, event.exception);
-    std::string terminal_error_message;
     try {
         std::rethrow_exception (event.exception);
     }
     catch (const std::exception &error) {
-        terminal_error_message = error.what ();
         if (failure == activation_failure_t::factory)
             EXPECT_STREQ ("factory terminal failure", error.what ());
         else if (failure == activation_failure_t::cancelled) {
@@ -3221,9 +3253,9 @@ static void verify_activation_failure_terminal (bool local,
     else if (failure == activation_failure_t::shutdown)
         EXPECT_EQ ("Instance Spot activation target stopped", error.error_message);
     else if (deadline_failure)
-        // Admission expiry and provider commit share the deadline. Preserve the
-        // winning terminal cause rather than requiring either path to win.
-        EXPECT_EQ (terminal_error_message, error.error_message);
+        EXPECT_EQ (expire_admission ? "Activation admission expired"
+                                    : "Instance Spot activation deadline expired",
+                   error.error_message);
     if (failure != activation_failure_t::shutdown) {
         const auto authority =
           store->read_authority (rt::spot_authority_key ("terminal-room")).result ().value ();
