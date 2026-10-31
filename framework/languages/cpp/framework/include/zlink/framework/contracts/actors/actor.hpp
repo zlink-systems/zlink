@@ -951,23 +951,18 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory (
       [factory = std::move (factory)] (actor_context_t context) -> std::shared_ptr<void> {
           auto expected = actor_context_t (context._state, context.actor_ref (),
                                            context._source_binding_generation, context._mesh_name);
-          auto created = factory->create (std::move (context), {}).result ();
+          auto created = factory->create (std::move (context), {}).result ().value ();
           if (!created) {
-              const auto *error = created.error ();
-              throw framework_exception_t (
-                created.error_kind (), error != nullptr ? error->what () : "Actor factory failed");
-          }
-          if (!created.value ()) {
               throw framework_exception_t (framework_error_kind_t::not_found,
                                            "Actor factory returned null");
           }
-          if (!created.value ()->context ().has_same_source_fence (expected)) {
+          if (!created->context ().has_same_source_fence (expected)) {
               throw framework_exception_t (
                 framework_error_kind_t::not_configured,
                 "Actor factory must return an Actor that exposes the provided Context");
           }
-          created.value ()->configure ();
-          return std::static_pointer_cast<void> (std::move (created.value ()));
+          created->configure ();
+          return std::static_pointer_cast<void> (std::move (created));
       },
       [] (void *actor, detail::actor_join_completion_outcome_t outcome,
           std::uint64_t operation_id_high, std::uint64_t operation_id_low,

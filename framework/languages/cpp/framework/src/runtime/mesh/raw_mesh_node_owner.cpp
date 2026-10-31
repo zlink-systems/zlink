@@ -231,7 +231,8 @@ request_admission_completion (foundation::operation_registry_t::callback_t callb
                               std::shared_ptr<task_completion_source_t<void>> admitted)
 {
     return [callback = std::move (callback), admitted = std::move (admitted)] (
-             foundation::operation_terminal_t terminal, zlink::message_t payload) {
+             foundation::operation_terminal_t terminal,
+             ::zlink::framework::result_t<zlink::message_t> completion_payload) {
         if (terminal != foundation::operation_terminal_t::completed) {
             if (terminal == foundation::operation_terminal_t::cancelled)
                 admitted->complete (detail::result_access_t::failure<void> (
@@ -245,7 +246,7 @@ request_admission_completion (foundation::operation_registry_t::callback_t callb
                     : detail::boundary_error_t::disconnected,
                   "request ended before admission"));
         }
-        callback (terminal, std::move (payload));
+        callback (terminal, std::move (completion_payload));
     };
 }
 
@@ -1804,7 +1805,7 @@ task_t<relocation_prepare_response_t> raw_mesh_node_owner_t::request_relocation_
           id, deadline,
           [completion] (auto terminal, auto packed) {
               completion->complete (
-                result_t<completion_t>::success ({terminal, std::move (packed)}));
+                result_t<completion_t>::success ({terminal, std::move (packed.value ())}));
           },
           target_routing_id, {}, {}, detail::current_wait_owner ()))
         co_return relocation_prepare_response_t{};
@@ -2362,7 +2363,8 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
         }
     }
     if (!port) {
-        callback (foundation::operation_terminal_t::shutdown, {});
+        callback (foundation::operation_terminal_t::shutdown,
+                  result_t<zlink::message_t>::success ({}));
         co_return true;
     }
     registered = operations->register_operation (
@@ -2430,7 +2432,9 @@ raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_clos
           return protocol::pack_infrastructure_reply (parts);
       },
       deadline,
-      [completion] (foundation::operation_terminal_t terminal, zlink::message_t packed) {
+      [completion] (foundation::operation_terminal_t terminal,
+                    ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+          auto packed = std::move (completion_payload.value ());
           try {
               protocol::reply_header_t reply{};
               if (terminal == foundation::operation_terminal_t::completed) {
@@ -2531,7 +2535,8 @@ raw_mesh_node_owner_t::request_actor_create (std::vector<std::uint8_t> target_ro
         }
     }
     if (!port) {
-        callback (foundation::operation_terminal_t::shutdown, {});
+        callback (foundation::operation_terminal_t::shutdown,
+                  result_t<zlink::message_t>::success ({}));
         co_return true;
     }
     registered = operations->register_operation (
@@ -2626,7 +2631,7 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
           id, deadline,
           [completion] (auto terminal, auto packed) {
               completion->complete (
-                result_t<completion_t>::success ({terminal, std::move (packed)}));
+                result_t<completion_t>::success ({terminal, std::move (packed.value ())}));
           },
           target_routing_id, {}, {}, detail::current_wait_owner ())) {
         outcome.failure = actor_join_wire_failure_t::unavailable;
@@ -2938,25 +2943,41 @@ bool raw_mesh_node_owner_t::reply_infrastructure (const service_mailbox_record_t
 
 bool raw_mesh_node_owner_t::reply_user_spot_create (
   const service_mailbox_record_t &request,
-  const protocol::user_spot_create_reply_t &reply,
+  result_t<protocol::user_spot_create_reply_t> outcome,
   std::optional<protocol::application_payload_t> application_reply)
 {
-    if (!request.correlation || reply.header.correlation != *request.correlation) {
+    if (!request.correlation
+        || (outcome && outcome.value ().header.correlation != *request.correlation))
         throw std::invalid_argument ("User Spot create reply correlation does not match");
-    }
-    if (reply.header.terminal_result != 0 && application_reply)
+    if (application_reply && (!outcome || outcome.value ().header.terminal_result != 0))
         throw std::invalid_argument ("failed User Spot create reply cannot carry a payload");
-    detail::backend::raw_message_t parts{protocol::encode_user_spot_create_reply (
-      reply.header.correlation, reply.header.terminal_result, reply.header.failure_code,
-      reply.result, reply.spot_id, reply.object_generation)};
-    if (application_reply) {
-        parts.push_back (protocol::encode_application_payload (*application_reply));
+    auto parts = result_t<detail::backend::raw_message_t>::success ({});
+    if (outcome) {
+        const auto &reply = outcome.value ();
+        parts.value ().push_back (protocol::encode_user_spot_create_reply (
+          reply.header.correlation, reply.header.terminal_result, reply.header.failure_code,
+          reply.result, reply.spot_id, reply.object_generation));
+        if (application_reply)
+            parts.value ().push_back (protocol::encode_application_payload (*application_reply));
+    } else {
+        parts = detail::propagate_failure<detail::backend::raw_message_t> (
+          outcome, "User Spot creation failed");
     }
     const auto local = _topology.local_descriptor ();
     if (request.source_routing_id == local.node_routing_id) {
         return _operations->complete (
           operation_id (local.lifecycle_generation, *request.correlation),
-          detail::backend::materialize_binding_part (protocol::pack_infrastructure_reply (parts)));
+          parts ? result_t<zlink::message_t>::success (detail::backend::materialize_binding_part (
+                    protocol::pack_infrastructure_reply (parts.value ())))
+                : detail::propagate_failure<zlink::message_t> (parts, "User Spot creation failed"));
+    }
+    if (!parts) {
+        const auto failure =
+          messaging::request_failure_mapper_t{}.target_failure_reply (parts.exception ());
+        parts = result_t<detail::backend::raw_message_t>::success (
+          {protocol::encode_user_spot_create_reply (
+            *request.correlation, failure->terminal_result, failure->failure_code,
+            protocol::user_spot_create_result_t::rejected, {}, 0)});
     }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -2967,7 +2988,7 @@ bool raw_mesh_node_owner_t::reply_user_spot_create (
         return false;
     return port->reply (
       detail::backend::raw_received_t{request.source_routing_id, request.reply_token, {}},
-      std::move (parts));
+      std::move (parts.value ()));
 }
 
 bool raw_mesh_node_owner_t::reply_actor_create (

@@ -168,7 +168,8 @@ int main ()
         .transport ()
         .register_local_operation_async (
           runtime::foundation::operation_registry_t::clock_t::time_point::min (),
-          [&] (runtime::foundation::operation_terminal_t result, zlink::message_t) {
+          [&] (runtime::foundation::operation_terminal_t result,
+               ::zlink::framework::result_t<zlink::message_t>) {
               assert (detail::current_completion_owner () != nullptr);
               completed.set_value (result);
           })
@@ -186,7 +187,8 @@ int main ()
               .transport ()
               .register_local_operation_async (
                 runtime::foundation::operation_registry_t::clock_t::time_point::min (),
-                [&] (runtime::foundation::operation_terminal_t result, zlink::message_t) {
+                [&] (runtime::foundation::operation_terminal_t result,
+                     ::zlink::framework::result_t<zlink::message_t>) {
                     assert (detail::current_completion_owner () != nullptr);
                     assert (result == runtime::foundation::operation_terminal_t::timed_out);
                     callback_entered.set_value ();
@@ -202,7 +204,8 @@ int main ()
               .transport ()
               .register_local_operation_async (
                 runtime::foundation::operation_registry_t::clock_t::time_point::max (),
-                [&] (runtime::foundation::operation_terminal_t result, zlink::message_t) {
+                [&] (runtime::foundation::operation_terminal_t result,
+                     ::zlink::framework::result_t<zlink::message_t>) {
                     assert (detail::current_completion_owner () != nullptr);
                     ++callbacks;
                     shutdown_terminal.set_value (result);

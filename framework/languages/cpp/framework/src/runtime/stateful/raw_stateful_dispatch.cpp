@@ -510,7 +510,9 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
 
     auto complete = [this, owner, sequence, operation = application.operation,
                      reply_route = application.reply_route_id] (
-                      foundation::operation_terminal_t terminal, zlink::message_t bytes) {
+                      foundation::operation_terminal_t terminal,
+                      ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+        auto bytes = std::move (completion_payload.value ());
         // A hop with no observed terminal retains the original delivery for
         // authority settlement. An explicit application failure is a reply.
         if (terminal != foundation::operation_terminal_t::completed && bytes.is_empty ())

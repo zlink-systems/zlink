@@ -704,7 +704,8 @@ TEST (RequestCallAllocations, HostNodeRequestAddsNoCoroutineAboveTheRawTask)
     const auto target_count = fw::tests::count_allocations ([&] { (void) target.to_bytes (); });
     const auto callback_count = fw::tests::count_allocations ([&] {
         fw::runtime::foundation::operation_registry_t::callback_t callback =
-          [host, operation] (fw::runtime::foundation::operation_terminal_t, zlink::message_t) {
+          [host, operation] (fw::runtime::foundation::operation_terminal_t,
+                             ::zlink::framework::result_t<zlink::message_t>) {
               (void) host;
               (void) operation;
           };

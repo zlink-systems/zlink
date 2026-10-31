@@ -1142,9 +1142,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                                                                          operation_deadline};
                 (void) co_await await_result (_location_store->complete_creation (
                   {reserve.key, winner->fence, object_creation_failed_t{failed_publication}}));
-                co_return result_t<actor_create_result_t>::failure (
-                  created.error_kind (),
-                  created.error () ? created.error ()->what () : "Actor factory failed");
+                co_return detail::propagate_failure<actor_create_result_t> (created,
+                                                                            "Actor factory failed");
             }
             // Initial Entry membership belongs to creation, without an Actor
             // Join completion callback (membership §2).
@@ -1223,13 +1222,8 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_local_actor_cre
         joined = result_t<zlink::framework::detail::actor_join_reply_t>::success (
           co_await std::move (joining));
     }
-    catch (const framework_exception_t &error) {
-        joined =
-          detail::result_access_t::failure<zlink::framework::detail::actor_join_reply_t> (error);
-    }
-    catch (const std::exception &error) {
-        joined = result_t<zlink::framework::detail::actor_join_reply_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ());
+    catch (...) {
+        joined = detail::current_exception_result<zlink::framework::detail::actor_join_reply_t> ();
     }
     if (!joined) {
         const auto failed_envelope =
@@ -1240,9 +1234,8 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_local_actor_cre
                                                                  operation_deadline};
         (void) co_await await_result (_location_store->complete_creation (
           {reserve_key, fence, object_creation_failed_t{failed_publication}}));
-        co_return (result_t<actor_create_result_t>::failure (
-          joined.error_kind (),
-          joined.error () ? joined.error ()->what () : "Actor creation callback failed"));
+        co_return detail::propagate_failure<actor_create_result_t> (
+          joined, "Actor creation callback failed");
     }
     const bool accepted = joined.value ().result_code == 0;
     std::optional<message_t> reply;
@@ -1269,9 +1262,8 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_local_actor_cre
     const auto completed = co_await await_result (
       _location_store->complete_creation ({reserve_key, fence, std::move (completion)}));
     if (!completed)
-        co_return (result_t<actor_create_result_t>::failure (
-          completed.error_kind (),
-          completed.error () ? completed.error ()->what () : "Actor creation completion failed"));
+        co_return detail::propagate_failure<actor_create_result_t> (
+          completed, "Actor creation completion failed");
     if (const auto *done = std::get_if<object_creation_completed_result_t> (&completed.value ())) {
         if (!done->ready || done->ready->allocation.state != placement_allocation_state_t::active)
             co_return (result_t<actor_create_result_t>::failure (
@@ -1816,44 +1808,52 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                                     .count ())};
     auto completion = std::make_shared<task_completion_source_t<spot_create_result_t>> ();
     auto output = completion->task ();
-    auto on_complete =
-      [completion, target, serializers = _serializers, store = _location_store, key,
-       fence] (foundation::operation_terminal_t terminal, protocol::user_spot_create_reply_t reply,
-               std::optional<protocol::application_payload_t> application_reply) {
-          if (terminal != foundation::operation_terminal_t::completed
-              || reply.header.terminal_result != 0) {
-              if (terminal == foundation::operation_terminal_t::completed)
-                  (void) cleanup_source_created_reservation (store, key, fence, true);
-              //  Spec 16 §9 / 26 — preserve the mapped kind and the exact
-              //  operation/wire terminal in the message instead of
-              //  collapsing every failure into one opaque string.
-              const auto mapped_kind =
-                user_spot_terminal::map_user_spot_operation_failure (terminal, reply.header, true);
-              completion->complete (result_t<spot_create_result_t>::failure (
-                mapped_kind,
-                "Remote User Spot creation failed (kind="
-                  + std::to_string (static_cast<int> (mapped_kind))
-                  + ", operationTerminal=" + std::to_string (static_cast<int> (terminal))
-                  + ", terminalResult=" + std::to_string (reply.header.terminal_result)
-                  + ", failureCode=" + std::to_string (reply.header.failure_code) + ")"));
-              return;
-          }
-          if (reply.result == protocol::user_spot_create_result_t::rejected)
-              (void) cleanup_source_created_reservation (store, key, fence, true);
-          std::optional<message_t> decoded_reply;
-          if (application_reply)
-              decoded_reply = message_t::from_raw (
-                zlink::message_t::from (application_reply->payload_bytes ()), serializers);
-          completion->complete (result_t<spot_create_result_t>::success (
-            {{spot_id_t (reply.spot_id), reply.object_generation, target.mesh_name,
-              node_rid_t::from_string (target.rid.to_string ())},
-             reply.result == protocol::user_spot_create_result_t::existing
-               ? spot_create_state_t::existing
-             : reply.result == protocol::user_spot_create_result_t::created
-               ? spot_create_state_t::created
-               : spot_create_state_t::rejected,
-             std::move (decoded_reply)}));
-      };
+    auto on_complete = [completion, target, serializers = _serializers, store = _location_store,
+                        key,
+                        fence] (foundation::operation_terminal_t terminal,
+                                result_t<protocol::user_spot_create_reply_t> outcome,
+                                std::optional<protocol::application_payload_t> application_reply) {
+        if (!outcome) {
+            (void) cleanup_source_created_reservation (store, key, fence, true);
+            completion->complete (detail::propagate_failure<spot_create_result_t> (
+              outcome, "User Spot creation failed"));
+            return;
+        }
+        const auto &reply = outcome.value ();
+        if (terminal != foundation::operation_terminal_t::completed
+            || reply.header.terminal_result != 0) {
+            if (terminal == foundation::operation_terminal_t::completed)
+                (void) cleanup_source_created_reservation (store, key, fence, true);
+            //  Spec 16 §9 / 26 — preserve the mapped kind and the exact
+            //  operation/wire terminal in the message instead of
+            //  collapsing every failure into one opaque string.
+            const auto mapped_kind =
+              user_spot_terminal::map_user_spot_operation_failure (terminal, reply.header, true);
+            completion->complete (result_t<spot_create_result_t>::failure (
+              mapped_kind, "Remote User Spot creation failed (kind="
+                             + std::to_string (static_cast<int> (mapped_kind))
+                             + ", operationTerminal=" + std::to_string (static_cast<int> (terminal))
+                             + ", terminalResult=" + std::to_string (reply.header.terminal_result)
+                             + ", failureCode=" + std::to_string (reply.header.failure_code)
+                             + ")"));
+            return;
+        }
+        if (reply.result == protocol::user_spot_create_result_t::rejected)
+            (void) cleanup_source_created_reservation (store, key, fence, true);
+        std::optional<message_t> decoded_reply;
+        if (application_reply)
+            decoded_reply = message_t::from_raw (
+              zlink::message_t::from (application_reply->payload_bytes ()), serializers);
+        completion->complete (result_t<spot_create_result_t>::success (
+          {{spot_id_t (reply.spot_id), reply.object_generation, target.mesh_name,
+            node_rid_t::from_string (target.rid.to_string ())},
+           reply.result == protocol::user_spot_create_result_t::existing
+             ? spot_create_state_t::existing
+           : reply.result == protocol::user_spot_create_result_t::created
+             ? spot_create_state_t::created
+             : spot_create_state_t::rejected,
+           std::move (decoded_reply)}));
+    };
     try {
         auto accepted = source->native_node ().create_user_spot_remote (target.rid, command,
                                                                         timeout, on_complete);

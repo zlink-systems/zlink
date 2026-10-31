@@ -854,7 +854,9 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
           target_node_rid.to_bytes (), spot_id (), target,
           _host->encode_application (parts, metadata), timeout,
           [host, operation, completion = std::move (completion), direct_completion] (
-            foundation::operation_terminal_t terminal, zlink::message_t payload) mutable {
+            foundation::operation_terminal_t terminal,
+            ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+              auto payload = std::move (completion_payload.value ());
               if (!direct_completion) {
                   host->complete_operation (operation, operation_kind_t::none, terminal,
                                             std::move (payload));
@@ -2430,7 +2432,9 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
     }
     co_return co_await _transport->request_session_relocation_seal (
       session_owner_node.to_bytes (), std::move (seal), timeout,
-      [response] (foundation::operation_terminal_t terminal, zlink::message_t payload) mutable {
+      [response] (foundation::operation_terminal_t terminal,
+                  ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+          auto payload = std::move (completion_payload.value ());
           (*response) (terminal, std::move (payload));
       });
 }
@@ -2449,7 +2453,9 @@ task_t<bool> public_host_runtime_t::activate_instance_spot_remote (
       target_node.to_bytes (), std::move (request), std::move (metadata),
       std::move (application_payload), timeout,
       [completion = std::move (completion), capture = capture_flow ()] (
-        foundation::operation_terminal_t terminal, zlink::message_t packed) mutable {
+        foundation::operation_terminal_t terminal,
+        ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+          auto packed = std::move (completion_payload.value ());
           protocol::reply_header_t reply{};
           std::optional<protocol::application_payload_t> application_reply;
           if (terminal == foundation::operation_terminal_t::completed) {
@@ -2742,7 +2748,16 @@ public_host_runtime_t::create_user_spot_remote (const zlink::routing_id_t &targe
     co_return co_await _transport->request_user_spot_create (
       target_node.to_bytes (), std::move (request), timeout,
       [completion = std::move (completion), capture = capture_flow ()] (
-        foundation::operation_terminal_t terminal, zlink::message_t packed) mutable {
+        foundation::operation_terminal_t terminal,
+        ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+          if (!completion_payload) {
+              completion (terminal,
+                          detail::propagate_failure<protocol::user_spot_create_reply_t> (
+                            completion_payload, "User Spot creation failed"),
+                          std::nullopt);
+              return;
+          }
+          auto packed = std::move (completion_payload.value ());
           protocol::user_spot_create_reply_t reply{};
           std::optional<protocol::application_payload_t> application_reply;
           if (terminal == foundation::operation_terminal_t::completed) {
@@ -2767,7 +2782,9 @@ public_host_runtime_t::create_user_spot_remote (const zlink::routing_id_t &targe
                   application_reply.reset ();
               }
           }
-          completion (terminal, std::move (reply), std::move (application_reply));
+          completion (terminal,
+                      result_t<protocol::user_spot_create_reply_t>::success (std::move (reply)),
+                      std::move (application_reply));
       });
 }
 
@@ -2814,7 +2831,9 @@ public_host_runtime_t::create_actor_remote (const zlink::routing_id_t &target_no
     co_return co_await _transport->request_actor_create (
       target_node.to_bytes (), std::move (request), timeout,
       [completion = std::move (completion), capture = capture_flow ()] (
-        foundation::operation_terminal_t terminal, zlink::message_t packed) mutable {
+        foundation::operation_terminal_t terminal,
+        ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+          auto packed = std::move (completion_payload.value ());
           protocol::actor_create_reply_t reply;
           std::optional<protocol::application_payload_t> application_reply;
           if (terminal == foundation::operation_terminal_t::completed) {
@@ -2852,8 +2871,10 @@ public_host_runtime_t::close_user_spot_remote (const zlink::routing_id_t &target
         throw std::invalid_argument ("User Spot close completion is required");
     co_return co_await _transport->request_user_spot_close (
       target_node.to_bytes (), std::move (request), deadline,
-      [completion = std::move (completion)] (foundation::operation_terminal_t terminal,
-                                             zlink::message_t packed) mutable {
+      [completion = std::move (completion)] (
+        foundation::operation_terminal_t terminal,
+        ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+          auto packed = std::move (completion_payload.value ());
           protocol::user_spot_close_reply_t reply;
           if (terminal == foundation::operation_terminal_t::completed) {
               try {
@@ -3176,8 +3197,10 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes (),
         node_generation, authority_generation, route_fence->fence.owner_lease_generation},
       encode_application (parts, metadata), timeout,
-      [host, operation] (foundation::operation_terminal_t terminal,
-                         zlink::message_t payload) mutable {
+      [host,
+       operation] (foundation::operation_terminal_t terminal,
+                   ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+          auto payload = std::move (completion_payload.value ());
           host->complete_operation (operation, operation_kind_t::none, terminal,
                                     std::move (payload));
       },
@@ -3223,13 +3246,15 @@ try {
     operation.id = next_operation ();
     const auto host = shared_from_this ();
     auto target_bytes = target.to_bytes ();
-    auto accepted =
-      _transport->request_to_node (target_bytes, encode_application (std::move (parts)), timeout,
-                                   [host, operation] (foundation::operation_terminal_t terminal,
-                                                      zlink::message_t payload) mutable {
-                                       host->complete_operation (operation, operation_kind_t::none,
-                                                                 terminal, std::move (payload));
-                                   });
+    auto accepted = _transport->request_to_node (
+      target_bytes, encode_application (std::move (parts)), timeout,
+      [host,
+       operation] (foundation::operation_terminal_t terminal,
+                   ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+          auto payload = std::move (completion_payload.value ());
+          host->complete_operation (operation, operation_kind_t::none, terminal,
+                                    std::move (payload));
+      });
     auto classify = [host, target_bytes = std::move (target_bytes)] (const result_t<bool> &result) {
         if (!result)
             return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
@@ -3285,8 +3310,10 @@ public_host_runtime_t::request_to_channel (const std::string &channel_name,
     const auto host = shared_from_this ();
     const auto accepted = co_await _transport->request_to_channel (
       channel_name, encode_application (parts), timeout,
-      [host, operation] (foundation::operation_terminal_t terminal,
-                         zlink::message_t payload) mutable {
+      [host,
+       operation] (foundation::operation_terminal_t terminal,
+                   ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+          auto payload = std::move (completion_payload.value ());
           host->complete_operation (operation, operation_kind_t::none, terminal,
                                     std::move (payload));
       });
@@ -6813,7 +6840,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                       .run ([&] {
                           const auto now = unix_milliseconds_now ();
                           std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
-                              return !entry.second.header.empty ()
+                              return (!entry.second.header
+                                      || !entry.second.header.value ().empty ())
                                      && user_spot_operation_replay_expired (
                                        entry.second.deadline_unix_ms, now,
                                        _options.user_spot_operation_replay_retention);
@@ -6828,7 +6856,16 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                             || cached->request_fingerprint != request_fingerprint)
                             throw protocol::service_wire_error_t (
                               "user spot operation identity was reused with a different request");
-                        auto reply = protocol::decode_user_spot_create_reply (cached->header);
+                        if (!cached->header) {
+                            (void) _transport->reply_user_spot_create (
+                              mailbox_record,
+                              detail::propagate_failure<protocol::user_spot_create_reply_t> (
+                                cached->header, "User Spot creation failed"),
+                              std::nullopt);
+                            continue;
+                        }
+                        auto reply =
+                          protocol::decode_user_spot_create_reply (cached->header.value ());
                         reply.header.correlation = request.correlation;
                         (void) _transport->reply_user_spot_create (mailbox_record, reply,
                                                                    cached->application_reply);
@@ -6849,7 +6886,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                            protocol::user_spot_create_result_t result, const std::string &spot,
                            std::uint64_t generation,
                            std::optional<protocol::application_payload_t> application_reply =
-                             std::nullopt) {
+                             std::nullopt,
+                           result_t<void> outcome = result_t<void>::success ()) {
                           protocol::user_spot_create_reply_t reply{
                             {request.correlation, terminal_result, failure_code},
                             result,
@@ -6858,9 +6896,12 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                           user_spot_terminal_record_t stored{
                             protocol::command::userSpotCreate, request.deadline_unix_ms,
                             request_fingerprint,
-                            protocol::encode_user_spot_create_reply (request.correlation,
-                                                                     terminal_result, failure_code,
-                                                                     result, spot, generation),
+                            outcome ? result_t<std::vector<std::uint8_t>>::success (
+                                        protocol::encode_user_spot_create_reply (
+                                          request.correlation, terminal_result, failure_code,
+                                          result, spot, generation))
+                                    : detail::propagate_failure<std::vector<std::uint8_t>> (
+                                        outcome, "User Spot creation failed"),
                             application_reply};
                           _user_spot_terminal_lane
                             .run ([&] {
@@ -6868,8 +6909,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                                                                        std::move (stored));
                             })
                             .get ();
-                          (void) _transport->reply_user_spot_create (mailbox_record, reply,
-                                                                     std::move (application_reply));
+                          (void) _transport->reply_user_spot_create (
+                            mailbox_record,
+                            outcome
+                              ? result_t<protocol::user_spot_create_reply_t>::success (reply)
+                              : detail::propagate_failure<protocol::user_spot_create_reply_t> (
+                                  outcome, "User Spot creation failed"),
+                            std::move (application_reply));
                       };
                     if (!store || !materializer) {
                         terminal (static_cast<std::uint32_t> (
@@ -6998,6 +7044,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                           materializer (exact_ref, request.stable_type, *creation_payload);
                     }
                     catch (...) {
+                        const auto failure = detail::current_exception_result<void> ();
                         (void) _objects.abort_create (local.attempt);
                         (void) store
                           ->abort (
@@ -7009,7 +7056,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                                     protocol::request_terminal_result::internalError),
                                   static_cast<std::uint32_t> (
                                     protocol::framework_error_code::spotCreateFailed),
-                                  protocol::user_spot_create_result_t::rejected, {}, 0);
+                                  protocol::user_spot_create_result_t::rejected, {}, 0,
+                                  std::nullopt, failure);
                         continue;
                     }
                     preparation_terminal.preparation =
@@ -7110,7 +7158,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                     .run ([&] {
                         const auto now = unix_milliseconds_now ();
                         std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
-                            return !entry.second.header.empty ()
+                            return (!entry.second.header || !entry.second.header.value ().empty ())
                                    && user_spot_operation_replay_expired (
                                      entry.second.deadline_unix_ms, now,
                                      _options.user_spot_operation_replay_retention);
@@ -7122,7 +7170,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                                 throw protocol::service_wire_error_t (
                                   "user spot operation identity was reused with a different "
                                   "request");
-                            if (found->second.header.empty ()) {
+                            if (found->second.header && found->second.header.value ().empty ()) {
                                 found->second.waiting.emplace_back (mailbox_record.reply_source (),
                                                                     request.correlation);
                                 return admission_t::joined;
@@ -7133,20 +7181,20 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                         if (request.deadline_unix_ms <= now)
                             return admission_t::expired;
                         _user_spot_terminals.insert_or_assign (
-                          operation_key,
-                          user_spot_terminal_record_t{protocol::command::userSpotClose,
-                                                      request.deadline_unix_ms,
-                                                      request_fingerprint,
-                                                      {},
-                                                      std::nullopt,
-                                                      {}});
+                          operation_key, user_spot_terminal_record_t{
+                                           protocol::command::userSpotClose,
+                                           request.deadline_unix_ms,
+                                           request_fingerprint,
+                                           result_t<std::vector<std::uint8_t>>::success ({}),
+                                           std::nullopt,
+                                           {}});
                         return admission_t::start;
                     })
                     .get ();
                 if (admission == admission_t::joined)
                     continue;
                 if (admission == admission_t::replay) {
-                    auto reply = protocol::decode_user_spot_close_reply (cached->header);
+                    auto reply = protocol::decode_user_spot_close_reply (cached->header.value ());
                     reply.header.correlation = request.correlation;
                     (void) _transport->reply_user_spot_close (mailbox_record, reply);
                     continue;
@@ -7167,8 +7215,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                     _user_spot_terminal_lane
                       .run ([&] {
                           auto &stored = _user_spot_terminals[operation_key];
-                          stored.header = protocol::encode_user_spot_close_reply (
-                            correlation, terminal_result, failure_code, closed);
+                          stored.header = result_t<std::vector<std::uint8_t>>::success (
+                            protocol::encode_user_spot_close_reply (correlation, terminal_result,
+                                                                    failure_code, closed));
                           waiting = std::exchange (stored.waiting, {});
                       })
                       .get ();
@@ -7197,7 +7246,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                         return;
                     }
                     const auto failure =
-                      messaging::request_failure_mapper_t{}.target_failure_reply (*result.error ());
+                      messaging::request_failure_mapper_t{}.target_failure_reply (
+                        result.exception ());
                     terminal (failure->terminal_result, failure->failure_code, false);
                 };
                 // The started operation settles its terminal record once, also
@@ -7211,9 +7261,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                     else
                         run_authority_close (begin, done, {});
                 }
-                catch (const std::exception &error) {
-                    done (result_t<bool>::failure (framework_error_kind_t::internal_failure,
-                                                   error.what ()));
+                catch (...) {
+                    done (detail::current_exception_result<bool> ());
                 }
             }
             catch (const protocol::service_wire_error_t &) {
@@ -8598,7 +8647,9 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
     const auto registered = _transport->register_prepared_local_operation (
       reservation, deadline,
       [source, result, completion = std::move (completion),
-       incomplete] (foundation::operation_terminal_t terminal, zlink::message_t payload) mutable {
+       incomplete] (foundation::operation_terminal_t terminal,
+                    ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+          auto payload = std::move (completion_payload.value ());
           std::string terminal_message;
           if (terminal == foundation::operation_terminal_t::completed && payload.size () != 0) {
               try {
@@ -8767,14 +8818,15 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
             record.operation_deadline = operation_deadline;
             record.source_node_rid = status ().routing_id ();
             record.actor_control = actor_control_t{lifecycle_kind_t::joined, actor};
-            record.reply_token.local_actor_join = [weak, operation, actor_type, membership] (
-                                                    const actor_join_operation_result_t &result,
-                                                    const std::vector<zlink::message_t> &reply) {
-                const auto host = weak.lock ();
-                return host
-                       && host->complete_local_actor_join (operation, actor_type, membership,
-                                                           result, reply);
-            };
+            record.reply_token.local_actor_join =
+              [weak, operation, actor_type,
+               membership] (const result_t<actor_join_operation_result_t> &result,
+                            const std::vector<zlink::message_t> &reply) {
+                  const auto host = weak.lock ();
+                  return host
+                         && host->complete_local_actor_join (operation, actor_type, membership,
+                                                             result, reply);
+              };
             dispatch = _local_dispatch_completion_lane.run_task (
               [&, owner = std::move (owner), record = std::move (record), waiter] () mutable {
                   admit_local_application (
@@ -8801,11 +8853,12 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
     std::rethrow_exception (failure);
 }
 
-bool public_host_runtime_t::complete_local_actor_join (pending_operation_t operation,
-                                                       std::string actor_type,
-                                                       stateful::membership_token_t membership,
-                                                       const actor_join_operation_result_t &result,
-                                                       const std::vector<zlink::message_t> &parts)
+bool public_host_runtime_t::complete_local_actor_join (
+  pending_operation_t operation,
+  std::string actor_type,
+  stateful::membership_token_t membership,
+  const result_t<actor_join_operation_result_t> &result,
+  const std::vector<zlink::message_t> &parts)
 {
     const bool completed = _transport->complete_local_operation_async (
       operation.id,
@@ -8820,11 +8873,15 @@ bool public_host_runtime_t::complete_local_actor_join (pending_operation_t opera
           completion.source_node_rid =
             zlink::routing_id_t::from (self->_options.mesh.descriptor.node_routing_id);
 
-          if (result.terminal_result != 0) {
+          if (!result) {
               (void) co_await self->_objects.abort_membership_move_async (membership);
-              completion.terminal_result = result.terminal_result;
-              completion.failure_errno = result.failure_code;
-          } else if (result.join_result == protocol::actor_join_result_t::accepted) {
+              completion.join_completion = detail::propagate_failure<actor_join_completion_t> (
+                result, "Local Actor join failed");
+          } else if (result.value ().terminal_result != 0) {
+              (void) co_await self->_objects.abort_membership_move_async (membership);
+              completion.terminal_result = result.value ().terminal_result;
+              completion.failure_errno = result.value ().failure_code;
+          } else if (result.value ().join_result == protocol::actor_join_result_t::accepted) {
               auto [error, current] =
                 co_await self->_objects.commit_membership_move_async (membership);
               if (error != stateful::stateful_error_t::none) {
@@ -8843,14 +8900,14 @@ bool public_host_runtime_t::complete_local_actor_join (pending_operation_t opera
                       if (found != self->_actors.end ())
                           found->second.second = current;
                   });
-                  completion.join_completion =
-                    actor_join_completion_t{join_admission_t::accepted, actor};
+                  completion.join_completion = result_t<actor_join_completion_t>::success (
+                    {join_admission_t::accepted, actor});
               }
           } else {
               (void) co_await self->_objects.abort_membership_move_async (membership);
-              completion.join_completion =
-                actor_join_completion_t{join_admission_t::rejected,
-                                        self->framework_actor_ref (membership.actor, actor_type)};
+              completion.join_completion = result_t<actor_join_completion_t>::success (
+                {join_admission_t::rejected,
+                 self->framework_actor_ref (membership.actor, actor_type)});
           }
 
           *operation.local_result =
@@ -9686,6 +9743,19 @@ bool actor_join_reply (const reply_token_t &token,
                        result_t<actor_join_result_t> result,
                        const std::vector<zlink::message_t> &parts)
 {
+    if (token.local_actor_join) {
+        if (!result)
+            return token.local_actor_join (
+              detail::propagate_failure<actor_join_operation_result_t> (result,
+                                                                        "Local Actor join failed"),
+              parts);
+        actor_join_operation_result_t local;
+        local.join_result = result.value () == actor_join_result_t::accepted
+                              ? protocol::actor_join_result_t::accepted
+                              : protocol::actor_join_result_t::rejected;
+        return token.local_actor_join (
+          result_t<actor_join_operation_result_t>::success (std::move (local)), parts);
+    }
     actor_join_operation_result_t completion;
     if (result) {
         completion.join_result = result.value () == actor_join_result_t::accepted
@@ -9693,14 +9763,10 @@ bool actor_join_reply (const reply_token_t &token,
                                    : protocol::actor_join_result_t::rejected;
     } else {
         const messaging::request_failure_mapper_t mapper;
-        const auto failure =
-          result.error () ? mapper.target_failure_reply (*result.error ())
-                          : mapper.target_failure_reply (framework_error_kind_t::internal_failure);
+        const auto failure = mapper.target_failure_reply (result.exception ());
         completion.terminal_result = failure->terminal_result;
         completion.failure_code = failure->failure_code;
     }
-    if (token.local_actor_join)
-        return token.local_actor_join (completion, parts);
     const auto host = token.host.lock ();
     if (!host || !token.request)
         return false;

@@ -374,8 +374,17 @@ class raw_mesh_node_owner_t
                                           foundation::operation_registry_t::callback_t callback);
     bool reply_user_spot_create (
       const service_mailbox_record_t &request,
-      const protocol::user_spot_create_reply_t &reply,
+      result_t<protocol::user_spot_create_reply_t> reply,
       std::optional<protocol::application_payload_t> application_reply = std::nullopt);
+    bool reply_user_spot_create (
+      const service_mailbox_record_t &request,
+      const protocol::user_spot_create_reply_t &reply,
+      std::optional<protocol::application_payload_t> application_reply = std::nullopt)
+    {
+        return reply_user_spot_create (
+          request, result_t<protocol::user_spot_create_reply_t>::success (reply),
+          std::move (application_reply));
+    }
     bool reply_actor_create (
       const service_mailbox_record_t &request,
       const protocol::actor_create_reply_t &reply,

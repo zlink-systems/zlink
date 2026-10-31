@@ -191,7 +191,9 @@ void verify_completion_payload_storage ()
         std::atomic_size_t delivered{0};
         assert (registry.register_operation (
           id (1), foundation::operation_registry_t::clock_t::time_point::max (),
-          [&, storage] (foundation::operation_terminal_t observed, zlink::message_t received) {
+          [&, storage] (foundation::operation_terminal_t observed,
+                        ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+              auto received = std::move (completion_payload.value ());
               assert (observed == terminal);
               assert (received.data () == storage);
               assert (received.size () == payload_size);
@@ -1030,14 +1032,18 @@ int main (int argc, char **argv)
     std::atomic_int second_terminal{0};
     assert (registry.register_operation (
       id (1), now + std::chrono::seconds (1),
-      [&] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+      [&] (foundation::operation_terminal_t terminal,
+           ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+          auto native_payload = std::move (completion_payload.value ());
           auto payload = native_payload.to_bytes ();
           assert (terminal == foundation::operation_terminal_t::completed);
           assert (payload == std::vector<std::uint8_t> ({7}));
           first_terminal.fetch_add (1, std::memory_order_release);
       }));
     assert (registry.register_operation (
-      id (2), now, [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+      id (2), now,
+      [&] (foundation::operation_terminal_t terminal,
+           ::zlink::framework::result_t<zlink::message_t>) {
           assert (terminal == foundation::operation_terminal_t::timed_out);
           second_terminal.fetch_add (1, std::memory_order_release);
       }));
@@ -1060,7 +1066,9 @@ int main (int argc, char **argv)
     std::vector<std::uint8_t> failure_payload;
     assert (failed_registry.register_operation (
       id (4), now + std::chrono::seconds (1),
-      [&] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+      [&] (foundation::operation_terminal_t terminal,
+           ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+          auto native_payload = std::move (completion_payload.value ());
           auto payload = native_payload.to_bytes ();
           assert (terminal == foundation::operation_terminal_t::transport_failed);
           failure_payload = std::move (payload);
@@ -1098,13 +1106,17 @@ int main (int argc, char **argv)
     {
         foundation::operation_registry_t scoped_registry;
         assert (scoped_registry.register_operation (
-          id (5), now, [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+          id (5), now,
+          [&] (foundation::operation_terminal_t terminal,
+               ::zlink::framework::result_t<zlink::message_t>) {
               assert (terminal == foundation::operation_terminal_t::shutdown);
               shutdown_terminals.fetch_add (1, std::memory_order_release);
               throw std::runtime_error ("consumer failure");
           }));
         assert (scoped_registry.register_operation (
-          id (6), now, [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+          id (6), now,
+          [&] (foundation::operation_terminal_t terminal,
+               ::zlink::framework::result_t<zlink::message_t>) {
               assert (terminal == foundation::operation_terminal_t::shutdown);
               shutdown_terminals.fetch_add (1, std::memory_order_release);
           }));
@@ -1116,7 +1128,8 @@ int main (int argc, char **argv)
     foundation::operation_registry_t race_registry;
     assert (race_registry.register_operation (
       foundation::call_id_t{9, 1}, now,
-      [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+      [&] (foundation::operation_terminal_t terminal,
+           ::zlink::framework::result_t<zlink::message_t>) {
           winning_terminal.store (static_cast<int> (terminal), std::memory_order_release);
           race_terminals.fetch_add (1, std::memory_order_acq_rel);
       }));
@@ -1145,7 +1158,8 @@ int main (int argc, char **argv)
     foundation::operation_registry_t cancel_close_registry;
     assert (cancel_close_registry.register_operation (
       foundation::call_id_t{9, 2}, now,
-      [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+      [&] (foundation::operation_terminal_t terminal,
+           ::zlink::framework::result_t<zlink::message_t>) {
           assert (terminal == foundation::operation_terminal_t::cancelled
                   || terminal == foundation::operation_terminal_t::shutdown);
           cancel_close_terminals.fetch_add (1, std::memory_order_acq_rel);
@@ -1170,11 +1184,13 @@ int main (int argc, char **argv)
     std::atomic_bool reentered{false};
     static thread_local bool outer_callback_active = false;
     assert (reentrant_registry.register_operation (
-      foundation::call_id_t{9, 3}, now, [&] (foundation::operation_terminal_t, zlink::message_t) {
+      foundation::call_id_t{9, 3}, now,
+      [&] (foundation::operation_terminal_t, ::zlink::framework::result_t<zlink::message_t>) {
           outer_callback_active = true;
           assert (reentrant_registry.register_operation (
             foundation::call_id_t{9, 4}, now,
-            [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+            [&] (foundation::operation_terminal_t terminal,
+                 ::zlink::framework::result_t<zlink::message_t>) {
                 assert (terminal == foundation::operation_terminal_t::cancelled);
                 assert (!outer_callback_active);
                 reentered.store (true, std::memory_order_release);
@@ -1191,7 +1207,8 @@ int main (int argc, char **argv)
     std::atomic_bool used_new_turn{false};
     assert (turn_registry.register_operation (
       foundation::call_id_t{10, 1}, now,
-      [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+      [&] (foundation::operation_terminal_t terminal,
+           ::zlink::framework::result_t<zlink::message_t>) {
           assert (terminal == foundation::operation_terminal_t::completed);
           used_new_turn.store (std::this_thread::get_id () != caller_thread,
                                std::memory_order_release);
@@ -1207,7 +1224,8 @@ int main (int argc, char **argv)
     for (std::size_t index = 1; index <= operation_count; ++index) {
         assert (dispatcher_registry.register_operation (
           foundation::call_id_t{11, index}, now,
-          [&, index] (foundation::operation_terminal_t terminal, zlink::message_t) {
+          [&, index] (foundation::operation_terminal_t terminal,
+                      ::zlink::framework::result_t<zlink::message_t>) {
               assert (terminal
                       == (index == 1 ? foundation::operation_terminal_t::completed
                                      : foundation::operation_terminal_t::shutdown));
@@ -1231,7 +1249,8 @@ int main (int argc, char **argv)
     foundation::operation_registry_t backlog_probe_registry;
     assert (backlog_probe_registry.register_operation (
       foundation::call_id_t{12, 1}, now,
-      [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+      [&] (foundation::operation_terminal_t terminal,
+           ::zlink::framework::result_t<zlink::message_t>) {
           assert (terminal == foundation::operation_terminal_t::shutdown);
           dispatched.fetch_add (1, std::memory_order_release);
       }));
@@ -1250,7 +1269,8 @@ int main (int argc, char **argv)
     for (std::size_t index = 1; index <= operation_count; ++index) {
         assert (expiry_batch_registry.register_operation (
           foundation::call_id_t{13, index}, now,
-          [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
+          [&] (foundation::operation_terminal_t terminal,
+               ::zlink::framework::result_t<zlink::message_t>) {
               assert (terminal == foundation::operation_terminal_t::timed_out);
               expired_batch_callbacks.fetch_add (1, std::memory_order_release);
           }));
