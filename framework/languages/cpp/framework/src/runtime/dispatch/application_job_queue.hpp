@@ -178,6 +178,16 @@ class application_job_queue_t
                 _phase = permit_phase_t::queued;
             }
         }
+        // The handler-entry callback owns admission until entry or destruction.
+        // Allocate its storage before transferring the permit.
+        std::function<void ()> defer_handler_entry ()
+        {
+            auto permit = std::make_shared<permit_t> ();
+            std::function<void ()> before = [permit] { permit->release_for_handler_entry (); };
+            *permit = std::move (*this);
+            return before;
+        }
+
         void release_for_handler_entry () noexcept { release (); }
         void release_without_handler () noexcept { release (); }
 

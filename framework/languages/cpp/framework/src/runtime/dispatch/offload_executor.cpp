@@ -7,6 +7,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <mutex>
 
@@ -77,11 +78,7 @@ void offload_executor_t::submit (std::function<void ()> work)
 
 bool offload_executor_t::try_submit (std::function<void ()> work)
 {
-    return try_submit_cancellable ([work = std::move (work)] (std::stop_token) mutable {
-        if (work) {
-            work ();
-        }
-    });
+    return try_submit_application (std::move (work));
 }
 
 bool offload_executor_t::try_submit_internal (std::function<void ()> work)
@@ -94,15 +91,10 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
         if (_stopping && _active == _role_active && _queue.empty ()) {
             return false;
         }
-        if (_idle_workers == 0 && _live_workers < _max_worker_count) {
+        if (_idle_workers <= _queue.size () + _roles.size () && _live_workers < _max_worker_count) {
             start_worker_locked ();
         }
-        _queue.push (work_item_t{[work = std::move (work)] (std::stop_token) mutable {
-                                     if (work) {
-                                         work ();
-                                     }
-                                 },
-                                 std::nullopt});
+        _queue.push (work_item_t{std::move (work), std::nullopt});
     }
     _ready.notify_one ();
     return true;
@@ -150,12 +142,17 @@ offload_executor_t::retained_work_t offload_executor_t::retain_internal_work () 
 
 bool offload_executor_t::try_submit_cancellable (std::function<void (std::stop_token)> work)
 {
+    return try_submit_application (std::move (work));
+}
+
+bool offload_executor_t::try_submit_application (work_t work)
+{
     {
         std::lock_guard lock (_mutex);
         if (_stopping) {
             return false;
         }
-        if (_idle_workers == 0 && _live_workers < _max_worker_count) {
+        if (_idle_workers <= _queue.size () + _roles.size () && _live_workers < _max_worker_count) {
             start_worker_locked ();
         }
         _queue.push (work_item_t{std::move (work), std::stop_source{}});
@@ -171,19 +168,6 @@ bool offload_executor_t::start_role (std::shared_ptr<role_t> role)
         if (_stopping)
             return false;
         _roles.push (std::move (role));
-    }
-    _ready.notify_one ();
-    return true;
-}
-
-bool offload_executor_t::try_assign_role (std::shared_ptr<role_t> role)
-{
-    {
-        std::lock_guard lock (_mutex);
-        if (_stopping || _idle_workers <= _roles.size ())
-            return false;
-        _roles.push (std::move (role));
-        --_role_active;
     }
     _ready.notify_one ();
     return true;
@@ -380,13 +364,24 @@ void offload_executor_t::worker_loop ()
 
         // A receive role is deliberately outside the application exception
         // boundary.
-        const bool handed_off = role && role->run_until_handoff ();
-        run_application_turn ([&] {
-            if (work.work) {
-                work.work (work.cancellation ? work.cancellation->get_token () : std::stop_token{});
-            }
-        });
-        work.work = nullptr;
+        if (role) {
+            role->run ();
+        } else {
+            run_application_turn ([&] {
+                std::visit (
+                  [&] (auto &callback) {
+                      if (callback) {
+                          if constexpr (std::is_invocable_v<decltype (callback), std::stop_token>)
+                              callback (work.cancellation ? work.cancellation->get_token ()
+                                                          : std::stop_token{});
+                          else
+                              callback ();
+                      }
+                  },
+                  work.work);
+            });
+        }
+        work.work = std::function<void ()>{};
 
         {
             std::lock_guard lock (_mutex);
@@ -397,7 +392,7 @@ void offload_executor_t::worker_loop ()
                     _active_cancellations.erase (active);
                 }
             }
-            if (role && !handed_off)
+            if (role)
                 --_role_active;
             complete_work_locked ();
         }

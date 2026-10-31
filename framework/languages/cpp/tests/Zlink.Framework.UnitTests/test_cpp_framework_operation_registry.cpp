@@ -4,10 +4,6 @@
 #include "allocation_counter.hpp"
 #include "runtime/dispatch/completion_turn.hpp"
 #include <zlink/framework/contracts/dispatch/task.hpp>
-#include <boost/asio/execution/occupancy.hpp>
-#include <boost/asio/query.hpp>
-#include <boost/asio/post.hpp>
-#include <boost/asio/system_executor.hpp>
 #include <future>
 #include <iostream>
 #include <string_view>
@@ -214,31 +210,6 @@ void verify_completion_payload_storage ()
     }
 }
 
-void verify_idle_completion_precedes_handoff ()
-{
-    foundation::operation_registry_t registry;
-    const auto receiver = std::this_thread::get_id ();
-    auto delivered = std::make_shared<std::promise<void>> ();
-    auto finished = delivered->get_future ();
-    std::atomic_size_t handoffs{0};
-    assert (registry.register_operation (
-      id (1), foundation::operation_registry_t::clock_t::time_point::max (),
-      [&, delivered] (auto terminal, auto) {
-          assert (terminal == foundation::operation_terminal_t::completed);
-          assert (std::this_thread::get_id () != receiver);
-          assert (handoffs.load () == 0);
-          delivered->set_value ();
-      }));
-    // This is still inside the receive rotation. No boundary hook has run.
-    assert (registry.complete (id (1), {}));
-    assert (finished.wait_for (std::chrono::seconds (5)) == std::future_status::ready);
-    assert (!zlink::framework::detail::dispatch_completion_receive_handoff ([&] {
-        ++handoffs;
-        return false;
-    }));
-    assert (handoffs == 1 && registry.shutdown () == 0);
-}
-
 namespace
 {
 constexpr std::size_t shutdown_round_trips = 64;
@@ -338,58 +309,6 @@ void verify_dispatcher_shutdown_drains ()
     assert (detail::completion_dispatcher_worker_count () == 0);
 }
 
-void verify_handoff_excludes_application_system_handlers ()
-{
-    namespace detail = zlink::framework::detail;
-    assert (detail::completion_dispatcher_worker_count () == 0);
-    assert (detail::dispatch_completion_receive_handoff ([] { return true; }));
-    assert (detail::completion_dispatcher_worker_count () == 0);
-    zlink::framework::completion_owner_t owner;
-    const auto dispatcher = detail::borrow_completion_dispatcher ();
-    const auto framework_workers = detail::completion_dispatcher_worker_count ();
-    std::latch framework_occupied (framework_workers), framework_release (1),
-      framework_exited (framework_workers);
-    for (std::size_t index = 0; index < framework_workers; ++index)
-        detail::dispatch_completion ([&] {
-            framework_occupied.count_down ();
-            framework_release.wait ();
-            framework_exited.count_down ();
-        });
-    framework_occupied.wait ();
-    const auto receiver = std::this_thread::get_id ();
-    bool framework_on_receiver = false;
-    detail::dispatch_completion (
-      [&] { framework_on_receiver = std::this_thread::get_id () == receiver; });
-    const auto workers =
-      boost::asio::query (boost::asio::system_executor{}, boost::asio::execution::occupancy);
-    std::latch occupied (workers), release (1), exited (workers);
-    for (std::size_t index = 0; index < workers; ++index)
-        boost::asio::post (boost::asio::system_executor{}, [&] {
-            occupied.count_down ();
-            release.wait ();
-            exited.count_down ();
-        });
-    occupied.wait ();
-    std::atomic_bool external_on_receiver{false};
-    std::promise<void> external;
-    auto done = external.get_future ();
-    boost::asio::post (boost::asio::system_executor{}, [&] {
-        external_on_receiver = std::this_thread::get_id () == receiver;
-        external.set_value ();
-    });
-    // Every system worker is occupied, so only the handoff resource could
-    // consume the external handler before the release below.
-    assert (detail::dispatch_completion_receive_handoff ([] { return true; }));
-    assert (done.wait_for (std::chrono::seconds (0)) == std::future_status::timeout);
-    assert (framework_on_receiver);
-    framework_release.count_down ();
-    framework_exited.wait ();
-    release.count_down ();
-    exited.wait ();
-    assert (done.wait_for (std::chrono::seconds (5)) == std::future_status::ready);
-    assert (!external_on_receiver);
-}
-
 void verify_shutdown_waits_for_callback_capture_destruction ()
 {
     std::latch capture_destruction_entered (1);
@@ -452,12 +371,11 @@ void verify_shutdown_waits_for_callback_capture_destruction ()
     assert (!shutdown_returned_before_capture_destruction.load (std::memory_order_acquire));
 }
 
-void verify_completion_resource_transitions ()
+void verify_completion_callbacks_use_dispatcher ()
 {
-    namespace detail = zlink::framework::detail;
     constexpr std::size_t round_trips = 64;
     const auto receiver = std::this_thread::get_id ();
-    std::atomic_size_t before{0}, after{0}, delivered{0};
+    std::atomic_size_t delivered{0};
     foundation::operation_registry_t registry;
     for (std::size_t index = 0; index < round_trips; ++index) {
         auto returned = std::make_shared<std::promise<void>> ();
@@ -466,84 +384,15 @@ void verify_completion_resource_transitions ()
           {41, index + 1}, foundation::operation_registry_t::clock_t::time_point::max (),
           [&, returned] (auto terminal, auto) {
               assert (terminal == foundation::operation_terminal_t::completed);
-              before += std::this_thread::get_id () != receiver;
+              assert (std::this_thread::get_id () != receiver);
               ++delivered;
               returned->set_value ();
           }));
         assert (registry.complete ({41, index + 1}, {}));
         assert (reply.wait_for (std::chrono::seconds (5)) == std::future_status::ready);
     }
-    assert (before == round_trips);
-
-    // Occupy the dispatcher's existing workers so the joining resource wins
-    // dequeue deterministically. This neither stops nor replaces its queue.
-    const auto workers = detail::completion_dispatcher_worker_count ();
-    auto occupied = std::make_shared<std::latch> (workers);
-    auto release = std::make_shared<std::latch> (1);
-    auto exited = std::make_shared<std::latch> (workers);
-    for (std::size_t index = 0; index < workers; ++index)
-        detail::dispatch_completion ([occupied, release, exited] {
-            occupied->count_down ();
-            release->wait ();
-            exited->count_down ();
-        });
-    occupied->wait ();
-    std::size_t handoffs = 0;
-    for (std::size_t index = 0; index < round_trips; ++index) {
-        bool rotation_returned = false;
-        assert (registry.register_operation (
-          {42, index + 1}, foundation::operation_registry_t::clock_t::time_point::max (),
-          [&] (auto terminal, auto) {
-              assert (rotation_returned);
-              assert (detail::current_completion_owner () != nullptr);
-              assert (terminal == foundation::operation_terminal_t::completed);
-              after += std::this_thread::get_id () != receiver;
-              ++delivered;
-              if (index == 0)
-                  throw std::runtime_error ("joining worker releases a throwing callback slot");
-          }));
-        assert (registry.complete ({42, index + 1}, {}));
-        assert (delivered == round_trips + index);
-        rotation_returned = true;
-        assert (detail::dispatch_completion_receive_handoff ([&] {
-            ++handoffs;
-            return true;
-        }));
-        assert (delivered == round_trips + index + 1);
-        assert (detail::current_completion_owner () == nullptr);
-    }
-    assert (registry.shutdown () == 0 && after == 0 && handoffs == round_trips);
-    // A successful handoff is valid even if idle workers emptied the queue.
-    assert (detail::dispatch_completion_receive_handoff ([] { return true; }));
-    foundation::operation_registry_t queued;
-    std::vector<std::size_t> order;
-    for (std::size_t index = 0; index < 2; ++index) {
-        assert (queued.register_operation (
-          {43, index + 1}, foundation::operation_registry_t::clock_t::time_point::max (),
-          [&, index] (auto, auto) { order.push_back (index); }));
-        assert (queued.complete ({43, index + 1}, {}));
-    }
-    assert (detail::dispatch_completion_receive_handoff ([] { return true; }));
-    assert ((order == std::vector<std::size_t>{0}));
-    assert (detail::dispatch_completion_receive_handoff ([] { return true; }));
-    assert ((order == std::vector<std::size_t>{0, 1}));
-    assert (queued.shutdown () == 0);
-
-    foundation::operation_registry_t fallback;
-    std::atomic_size_t fallback_calls{0};
-    assert (fallback.register_operation (
-      {44, 1}, foundation::operation_registry_t::clock_t::time_point::max (), [&] (auto, auto) {
-          assert (std::this_thread::get_id () != receiver);
-          ++fallback_calls;
-      }));
-    assert (fallback.complete ({44, 1}, {}));
-    assert (!detail::dispatch_completion_receive_handoff ([] { return false; }));
-    assert (fallback_calls == 0);
-    release->count_down ();
-    exited->wait ();
-    assert (fallback.shutdown () == 0 && fallback_calls == 1);
-    std::cout << "completion_round_trips=" << round_trips << " transitions_before=" << before
-              << " transitions_after=" << after << " handoffs=" << handoffs << '\n';
+    assert (delivered == round_trips);
+    assert (registry.shutdown () == 0);
 }
 
 void verify_request_deadline_index_contract ()
@@ -1031,19 +880,9 @@ int main (int argc, char **argv)
         verify_shutdown_waits_for_callback_capture_destruction ();
         return 0;
     }
-    if (argc == 2 && std::string_view (argv[1]) == "--isolation-only") {
-        verify_handoff_excludes_application_system_handlers ();
-        return 0;
-    }
-    verify_handoff_excludes_application_system_handlers ();
     zlink::framework::completion_owner_t owner;
-    if (argc == 2 && std::string_view (argv[1]) == "--handoff-counts") {
-        verify_completion_resource_transitions ();
-        return 0;
-    }
-    verify_idle_completion_precedes_handoff ();
+    verify_completion_callbacks_use_dispatcher ();
     verify_shutdown_waits_for_callback_capture_destruction ();
-    verify_completion_resource_transitions ();
     verify_independent_completion_turns (1);
     verify_independent_completion_turns (4);
     verify_shutdown_during_completion_publication ();

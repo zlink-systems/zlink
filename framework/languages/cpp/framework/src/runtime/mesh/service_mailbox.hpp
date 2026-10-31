@@ -19,6 +19,7 @@
 
 #include <zlink/Contracts/Messaging/received.hpp>
 #include "runtime/dispatch/application_record.hpp"
+#include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
 namespace zlink::framework
@@ -68,27 +69,65 @@ struct service_bound_session_source_t
 struct service_mailbox_claim_t;
 class service_mailbox_t;
 
-// Claim credit of one claimed original. The claim mints it into the slot, so only the
-// take that moves the original out holds it; a completion that lost the take holds none
-// and cannot settle.
-class service_mailbox_settlement_t
+// One local original stays inline until an authority continuation or relocation
+// cut needs a stable retained view. Promotion moves that same original once.
+class service_mailbox_application_t
 {
   public:
-    service_mailbox_settlement_t () = default;
+    service_mailbox_application_t () = default;
+    service_mailbox_application_t (service_mailbox_application_t &&) = default;
+    service_mailbox_application_t &operator= (service_mailbox_application_t &&) = default;
+    service_mailbox_application_t (const service_mailbox_application_t &) = delete;
+    service_mailbox_application_t &operator= (const service_mailbox_application_t &) = delete;
 
-    explicit operator bool () const noexcept { return static_cast<bool> (_claim); }
-    bool operator() () const;
+    explicit operator bool () const noexcept { return get () != nullptr; }
+    host::local_application_dispatch_t *operator->() noexcept { return get (); }
+    const host::local_application_dispatch_t *operator->() const noexcept { return get (); }
+    host::local_application_dispatch_t &operator* () noexcept { return *get (); }
+    const host::local_application_dispatch_t &operator* () const noexcept { return *get (); }
 
-  private:
-    friend class service_mailbox_t;
-    service_mailbox_settlement_t (std::shared_ptr<service_mailbox_claim_t> claim,
-                                  std::size_t index) noexcept :
-        _claim (std::move (claim)), _index (index)
+    template <typename... Args> host::local_application_dispatch_t &emplace (Args &&...args)
     {
+        return _original.emplace<host::local_application_dispatch_t> (std::forward<Args> (args)...);
+    }
+    void reset () noexcept { _original.emplace<std::monostate> (); }
+
+    std::shared_ptr<const host::local_application_dispatch_t> retain ()
+    {
+        if (const auto shared =
+              std::get_if<std::shared_ptr<host::local_application_dispatch_t>> (&_original))
+            return *shared;
+        // Allocation failure leaves the inline original and its callbacks untouched.
+        auto shared = std::make_shared<host::local_application_dispatch_t> ();
+        *shared = std::move (std::get<host::local_application_dispatch_t> (_original));
+        _original = shared;
+        return shared;
     }
 
-    std::shared_ptr<service_mailbox_claim_t> _claim;
-    std::size_t _index = 0;
+  private:
+    host::local_application_dispatch_t *get () noexcept
+    {
+        if (auto value = std::get_if<host::local_application_dispatch_t> (&_original))
+            return value;
+        if (auto shared =
+              std::get_if<std::shared_ptr<host::local_application_dispatch_t>> (&_original))
+            return shared->get ();
+        return nullptr;
+    }
+    const host::local_application_dispatch_t *get () const noexcept
+    {
+        if (auto value = std::get_if<host::local_application_dispatch_t> (&_original))
+            return value;
+        if (auto shared =
+              std::get_if<std::shared_ptr<host::local_application_dispatch_t>> (&_original))
+            return shared->get ();
+        return nullptr;
+    }
+
+    std::variant<std::monostate,
+                 host::local_application_dispatch_t,
+                 std::shared_ptr<host::local_application_dispatch_t>>
+      _original;
 };
 
 struct service_mailbox_record_t
@@ -103,11 +142,16 @@ struct service_mailbox_record_t
     std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
     std::optional<service_bound_session_source_t> bound_session_source;
     std::function<void ()> before_application_handler;
-    std::shared_ptr<host::local_application_dispatch_t> application;
+    // Publication moves admission into the owning handler-entry callback.
+    std::optional<application_job_queue_t::permit_t> application_permit;
+    service_mailbox_application_t application;
     messaging::envelope_header_t envelope_header{.content_type = {}};
     service_mailbox_settlement_t transferred;
     // Read once by the publication owner before the mailbox accepts the record.
     std::optional<request_source_t> source_original = std::nullopt;
+
+    // Reply callbacks retain routing metadata without copying an owned original.
+    std::shared_ptr<const service_mailbox_record_t> reply_source () const;
 };
 
 // A claimed slot: the claim and the slot's position in the claimed prefix.
@@ -230,6 +274,7 @@ class service_mailbox_t
   private:
     friend class service_mailbox_settlement_t;
     friend struct service_mailbox_claim_t;
+    friend struct host::application_claim_batch_t;
 
     enum class owner_phase_t
     {
@@ -321,11 +366,6 @@ struct service_mailbox_claim_t
     std::unique_ptr<std::atomic_bool[]> _settled;
     std::atomic_size_t _remaining{0};
 };
-
-inline bool service_mailbox_settlement_t::operator() () const
-{
-    return _claim && service_mailbox_t::settle (*this);
-}
 
 inline std::string service_mailbox_t::application_owner (const host::ready_record_t &owner)
 {

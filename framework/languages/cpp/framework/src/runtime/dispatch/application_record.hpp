@@ -7,7 +7,11 @@
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/framework/contracts/actors/actor.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <concepts>
+#include <variant>
+#include <type_traits>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -22,10 +26,38 @@ struct serial_application_record_t;
 namespace zlink::framework::runtime::mesh
 {
 struct service_mailbox_record_t;
+struct service_mailbox_claim_t;
+class service_mailbox_t;
+
+// Claim credit of one claimed original. The claim mints it into the slot, so only the
+// take that moves the original out holds it; a completion that lost the take holds none
+// and cannot settle.
+class service_mailbox_settlement_t
+{
+  public:
+    service_mailbox_settlement_t () = default;
+
+    explicit operator bool () const noexcept { return static_cast<bool> (_claim); }
+    bool operator() () const;
+
+  private:
+    friend class service_mailbox_t;
+    service_mailbox_settlement_t (std::shared_ptr<service_mailbox_claim_t> claim,
+                                  std::size_t index) noexcept :
+        _claim (std::move (claim)), _index (index)
+    {
+    }
+
+    std::shared_ptr<service_mailbox_claim_t> _claim;
+    std::size_t _index = 0;
+};
+
+
 }
 
 namespace zlink::framework::runtime::host
 {
+struct application_claim_batch_t;
 using call_id_t = runtime::call_id_t;
 
 enum class record_kind_t
@@ -125,6 +157,52 @@ struct reply_token_t
       local_actor_join;
 };
 
+// Claim callbacks carry their concrete ownership value inline. Stateful ingress
+// may supply a general callback without changing the terminal contract.
+class mailbox_callback_t
+{
+  public:
+    mailbox_callback_t () = default;
+    mailbox_callback_t (mesh::service_mailbox_settlement_t settlement) :
+        _value (std::move (settlement))
+    {
+    }
+    mailbox_callback_t (std::shared_ptr<std::atomic_bool> retained) : _value (std::move (retained))
+    {
+    }
+    template <typename Callback>
+        requires (!std::same_as<std::remove_cvref_t<Callback>, mailbox_callback_t>
+                  && std::invocable<Callback &>)
+    mailbox_callback_t (Callback callback) :
+        _value (std::in_place_type<std::function<void ()>>, std::move (callback))
+    {
+    }
+    explicit operator bool () const noexcept
+    {
+        return std::visit ([] (const auto &value) { return static_cast<bool> (value); }, _value);
+    }
+    void operator() () const
+    {
+        std::visit (
+          [] (const auto &value) {
+              if (!value)
+                  return;
+              if constexpr (std::same_as<std::decay_t<decltype (value)>,
+                                         std::shared_ptr<std::atomic_bool>>)
+                  value->store (true, std::memory_order_release);
+              else
+                  (void) value ();
+          },
+          _value);
+    }
+
+  private:
+    std::variant<std::function<void ()>,
+                 mesh::service_mailbox_settlement_t,
+                 std::shared_ptr<std::atomic_bool>>
+      _value;
+};
+
 struct receive_record_t
 {
     record_kind_t kind = record_kind_t::node_send;
@@ -155,8 +233,8 @@ struct receive_record_t
      * gate handoffs carry this exact byte charge without a second admission;
      * their terminal retains release only as a failure fallback. */
     std::size_t transferred_owner_byte_cost = 0;
-    std::function<void ()> retain_mailbox_reservation;
-    std::function<void ()> release_mailbox_reservation;
+    mailbox_callback_t retain_mailbox_reservation;
+    mailbox_callback_t release_mailbox_reservation;
     std::function<void ()> complete_stateful_dispatch;
     std::function<void ()> before_application_handler;
     std::shared_ptr<serial_application_record_t> application_record;

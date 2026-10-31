@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/dispatch/application_record.hpp"
 
 #include <atomic>
 #include <functional>
@@ -21,9 +22,10 @@ namespace zlink::framework::runtime
 class application_dispatch_terminal_owner_t final
 {
   public:
-    application_dispatch_terminal_owner_t (std::shared_ptr<detail::mesh_node_runtime_t> node = {},
-                                           std::function<void ()> complete_stateful_dispatch = {},
-                                           std::function<void ()> release_mailbox_reservation = {});
+    application_dispatch_terminal_owner_t (
+      std::shared_ptr<detail::mesh_node_runtime_t> node = {},
+      std::function<void ()> complete_stateful_dispatch = {},
+      host::mailbox_callback_t release_mailbox_reservation = {});
     ~application_dispatch_terminal_owner_t () noexcept;
     application_dispatch_terminal_owner_t (application_dispatch_terminal_owner_t &&other) noexcept;
 
@@ -33,16 +35,16 @@ class application_dispatch_terminal_owner_t final
 
     void settle () noexcept;
     void retain_physical_work (offload_executor_t::retained_work_t work) noexcept;
-    std::function<void ()> take_mailbox_reservation () noexcept;
+    host::mailbox_callback_t take_mailbox_reservation () noexcept;
 
   private:
-    static void invoke (const std::function<void ()> &callback) noexcept;
+    template <typename Callback> static void invoke (const Callback &callback) noexcept;
 
     std::atomic_bool _settled{false};
     std::shared_ptr<detail::mesh_node_runtime_t> _node;
     offload_executor_t::retained_work_t _physical_work;
     std::function<void ()> _complete_stateful_dispatch;
-    std::function<void ()> _release_mailbox_reservation;
+    host::mailbox_callback_t _release_mailbox_reservation;
 };
 
 }

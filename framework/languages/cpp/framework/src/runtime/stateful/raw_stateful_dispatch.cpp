@@ -1240,7 +1240,8 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
   const protocol::reply_relay_t &relay,
   const std::optional<protocol::application_payload_t> &reply)
 {
-    pending_delivery_t pending;
+    std::function<bool (const std::optional<protocol::application_payload_t> &)> relocated_terminal;
+    std::shared_ptr<const mesh::service_mailbox_record_t> reply_source;
     delivery_key_t pending_key{owner.kind, owner.key, sequence};
     {
         std::unique_lock lock (_mutex);
@@ -1263,19 +1264,19 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
         if (found->second.relocated_completing)
             co_return false;
         pending_key = found->first;
+        relocated_terminal = found->second.relocated_terminal;
+        reply_source = found->second.transport.reply_source ();
         found->second.relocated_completing = true;
-        pending = found->second;
     }
     bool delivered = false;
     try {
-        if (pending.relocated_terminal)
-            delivered =
-              pending.relocated_terminal (relay.terminal_result == 0 ? reply : std::nullopt);
+        if (relocated_terminal)
+            delivered = relocated_terminal (relay.terminal_result == 0 ? reply : std::nullopt);
         else if (relay.terminal_result == 0 && reply)
-            delivered = _transport->reply (pending.transport, *reply);
+            delivered = _transport->reply (*reply_source, *reply);
         else
             delivered = _transport->reply_failure (
-              pending.transport,
+              *reply_source,
               relay.terminal_result == 0
                 ? static_cast<std::uint32_t> (protocol::request_terminal_result::internalError)
                 : relay.terminal_result,

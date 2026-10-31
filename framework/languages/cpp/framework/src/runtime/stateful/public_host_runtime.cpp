@@ -7,6 +7,9 @@
 #include "runtime/diagnostics/session_binding_diagnostics.hpp"
 
 #include "runtime/stateful/public_host_runtime.hpp"
+#include <cassert>
+#include <array>
+#include <span>
 #include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include <zlink/framework/contracts/detail/handler_invocation.hpp>
@@ -650,7 +653,15 @@ struct application_claim_batch_t
         std::atomic_bool retained{false};
     };
 
-    explicit application_claim_batch_t (std::size_t size) : entries (size) {}
+    void reset (std::size_t size)
+    {
+        for (auto &entry : entries) {
+            entry.original.reset ();
+            entry.retained.store (false, std::memory_order_relaxed);
+        }
+        entries = std::span<entry_t> (storage.data (), size);
+        index = count = handed_off = 0;
+    }
 
     void take_ordinary (const std::shared_ptr<mesh::service_mailbox_claim_t> &claim,
                         bool stateful) noexcept
@@ -659,10 +670,12 @@ struct application_claim_batch_t
         if (stateful && stateful_application_owner (claim->owner))
             return;
         for (std::size_t index = 0; index < claim->claimed_messages; ++index)
-            entries[index].original.emplace (std::move (*claim->records[index]));
+            entries[index].original.emplace (
+              mesh::service_mailbox_t::transfer_locked (*claim->records[index]));
     }
 
-    std::vector<entry_t> entries;
+    std::array<entry_t, dispatch_limits::receive_batch_messages> storage;
+    std::span<entry_t> entries;
     std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     mesh::service_mailbox_t::application_dispatch_t dispatch;
     std::function<void ()> rejected;
@@ -686,12 +699,54 @@ struct application_claim_batch_t
                 ++handed_off;
             }
         }
+        // Local reply callbacks do not alias their moved application originals.
+        // Raw replies retain routing storage, after source admission is consumed.
+        for (auto &entry : entries) {
+            if (!entry.original)
+                continue;
+            if (entry.original->application)
+                entry.original.reset ();
+            else
+                entry.original->source_original.reset ();
+        }
         dispatch = {};
         rejected = {};
         claim.reset ();
         return count;
     }
 };
+
+namespace
+{
+std::shared_ptr<application_claim_batch_t> &application_claim_storage ()
+{
+    static thread_local std::shared_ptr<application_claim_batch_t> storage;
+    return storage;
+}
+
+std::shared_ptr<application_claim_batch_t> acquire_application_claim_batch (std::size_t size)
+{
+    assert (size <= dispatch_limits::receive_batch_messages);
+    auto &storage = application_claim_storage ();
+    // Aliased originals and suspended handlers keep their existing batch alive.
+    if (!storage || storage.use_count () != 1)
+        storage = std::make_shared<application_claim_batch_t> ();
+    storage->reset (size);
+    return storage;
+}
+
+void recycle_application_claim_batch (const std::shared_ptr<application_claim_batch_t> &batch)
+{
+    auto &storage = application_claim_storage ();
+    // A nested dispatch may have replaced this worker's current storage.
+    if (storage != batch)
+        return;
+    if (batch.use_count () == 2)
+        batch->reset (0);
+    else
+        storage.reset ();
+}
+} // namespace
 
 zlink::routing_id_t node_status_t::routing_id () const
 {
@@ -6638,7 +6693,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                           mailbox_record, result.reply, std::move (result.application_reply));
                     } else {
                         auto completed = std::make_shared<std::atomic_bool> (false);
-                        auto reply = [weak = weak_from_this (), mailbox_record,
+                        auto reply = [weak = weak_from_this (),
+                                      reply_source = mailbox_record.reply_source (),
                                       completed] (actor_create_operation_result_t result) mutable {
                             if (completed->exchange (true, std::memory_order_acq_rel))
                                 return;
@@ -6647,7 +6703,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                                 return;
                             try {
                                 (void) host->_transport->reply_actor_create (
-                                  mailbox_record, result.reply,
+                                  *reply_source, result.reply,
                                   std::move (result.application_reply));
                             }
                             catch (...) {
@@ -6689,7 +6745,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                         continue;
                     }
                     auto completed = std::make_shared<std::atomic_bool> (false);
-                    auto reply = [weak = weak_from_this (), mailbox_record,
+                    auto reply = [weak = weak_from_this (),
+                                  reply_source = mailbox_record.reply_source (),
                                   completed] (actor_join_operation_result_t result) mutable {
                         if (completed->exchange (true, std::memory_order_acq_rel))
                             return;
@@ -6698,7 +6755,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                             return;
                         try {
                             (void) host->_transport->reply_actor_join (
-                              mailbox_record, result.join_result, result.spot,
+                              *reply_source, result.join_result, result.spot,
                               result.membership_epoch, result.receive_chunk_limit_bytes,
                               result.terminal_result, result.failure_code,
                               std::move (result.application_reply));
@@ -6730,8 +6787,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                     auto application = protocol::decode_application_payload (
                       protocol::message_bytes (mailbox_record.parts[request.has_metadata ? 2 : 1]),
                       capture_flow ());
-                    auto reply_record =
-                      std::make_shared<const mesh::service_mailbox_record_t> (mailbox_record);
+                    auto reply_record = mailbox_record.reply_source ();
                     auto running =
                       std::make_shared<task_t<void>> (dispatch_instance_spot_activation (
                         {request, std::move (metadata), std::move (application)}, reply_record));
@@ -7067,7 +7123,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                                   "user spot operation identity was reused with a different "
                                   "request");
                             if (found->second.header.empty ()) {
-                                found->second.waiting.emplace_back (mailbox_record,
+                                found->second.waiting.emplace_back (mailbox_record.reply_source (),
                                                                     request.correlation);
                                 return admission_t::joined;
                             }
@@ -7100,11 +7156,14 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                     (void) _transport->reply_user_spot_close (mailbox_record, reply);
                     continue;
                 }
-                auto terminal = [this, transport = _transport, mailbox_record, operation_key,
+                auto terminal = [this, transport = _transport,
+                                 reply_source = mailbox_record.reply_source (), operation_key,
                                  correlation = request.correlation] (std::uint32_t terminal_result,
                                                                      std::uint32_t failure_code,
                                                                      bool closed) {
-                    std::vector<std::pair<mesh::service_mailbox_record_t, std::uint64_t>> waiting;
+                    std::vector<std::pair<std::shared_ptr<const mesh::service_mailbox_record_t>,
+                                          std::uint64_t>>
+                      waiting;
                     _user_spot_terminal_lane
                       .run ([&] {
                           auto &stored = _user_spot_terminals[operation_key];
@@ -7113,11 +7172,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                           waiting = std::exchange (stored.waiting, {});
                       })
                       .get ();
-                    waiting.emplace (waiting.begin (), mailbox_record, correlation);
+                    waiting.emplace (waiting.begin (), reply_source, correlation);
                     for (const auto &[record, record_correlation] : waiting) {
                         protocol::user_spot_close_reply_t reply{
                           {record_correlation, terminal_result, failure_code}, closed};
-                        (void) transport->reply_user_spot_close (record, reply);
+                        (void) transport->reply_user_spot_close (*record, reply);
                     }
                 };
                 if (!store) {
@@ -7304,20 +7363,18 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
             for (;;) {
                 std::optional<local_application_dispatch_t> pending;
                 bool skip = false;
-                _local_dispatch_completion_lane
-                  .run ([&] {
-                      if (_local_application_dispatches.empty ())
-                          return;
-                      if (!accept_application_receive
-                          && !_local_application_dispatches.front ()
-                                .record.before_application_handler)
-                          return;
-                      pending = std::move (_local_application_dispatches.front ());
-                      _local_application_dispatches.pop_front ();
-                      if (uses_local_operation_registry (pending->record.kind))
-                          skip = !_transport->operation_pending (pending->record.operation_id);
-                  })
-                  .get ();
+                _local_dispatch_completion_lane.run_sync ([&] {
+                    if (_local_application_dispatches.empty ())
+                        return;
+                    if (!accept_application_receive
+                        && !_local_application_dispatches.front ()
+                              .record.before_application_handler)
+                        return;
+                    pending = std::move (_local_application_dispatches.front ());
+                    _local_application_dispatches.pop_front ();
+                    if (uses_local_operation_registry (pending->record.kind))
+                        skip = !_transport->operation_pending (pending->record.operation_id);
+                });
                 if (!pending)
                     break;
                 if (skip)
@@ -7356,7 +7413,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
             auto claim = _transport->mailbox ().try_claim (
               mesh::service_mailbox_domain_t::application, 1, dispatch_limits::receive_batch_bytes,
               [&] (const auto &claimed) {
-                  batch = std::make_shared<application_claim_batch_t> (claimed->claimed_messages);
+                  batch = acquire_application_claim_batch (claimed->claimed_messages);
                   batch->take_ordinary (claimed, static_cast<bool> (_stateful_dispatch));
               });
             if (!claim)
@@ -7365,10 +7422,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
             batch->dispatch = dispatch;
             auto result = dispatch_application_claim (batch);
             std::size_t dispatched;
-            if (const auto ready = std::get_if<std::size_t> (&result))
+            if (const auto ready = std::get_if<std::size_t> (&result)) {
                 dispatched = *ready;
-            else
+                recycle_application_claim_batch (batch);
+            } else {
+                recycle_application_claim_batch (batch);
                 dispatched = co_await std::get<task_t<std::size_t>> (std::move (result));
+            }
             count += dispatched;
             application_dispatch_started = dispatched != 0;
         }
@@ -7828,12 +7888,16 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
 {
     try {
         if (!batch)
-            batch = std::make_shared<application_claim_batch_t> (claim->claimed_messages);
+            batch = acquire_application_claim_batch (claim->claimed_messages);
         batch->claim = std::move (claim);
         batch->dispatch = std::move (dispatch);
         auto result = dispatch_application_claim (batch);
-        if (const auto count = std::get_if<std::size_t> (&result))
-            return task_t<std::size_t> (result_t<std::size_t>::success (*count));
+        if (const auto count = std::get_if<std::size_t> (&result)) {
+            const auto dispatched = *count;
+            recycle_application_claim_batch (batch);
+            return task_t<std::size_t> (result_t<std::size_t>::success (dispatched));
+        }
+        recycle_application_claim_batch (batch);
         return std::get<task_t<std::size_t>> (std::move (result));
     }
     catch (...) {
@@ -7880,8 +7944,8 @@ public_host_runtime_t::dispatch_application_claim (
                             const auto &record = original.application->record;
                             if (record.application_record || !is_stateful_application (record.kind))
                                 return std::nullopt;
-                            return kept_t{
-                              kept_local_t{original.application, original.source_original}};
+                            return kept_t{kept_local_t{original.application.retain (),
+                                                       original.source_original}};
                         }
                         const auto kind =
                           record_kind (protocol::decode_header (
@@ -8033,9 +8097,8 @@ public_host_runtime_t::dispatch_application_claim (
                 continue;
             auto &mailbox_record = *entry.original;
             release_mailbox_reservation = std::exchange (mailbox_record.transferred, {});
-            const auto retain_mailbox_reservation = [batch, index] {
-                batch->entries[index].retained.store (true, std::memory_order_release);
-            };
+            const host::mailbox_callback_t retain_mailbox_reservation (
+              std::shared_ptr<std::atomic_bool> (batch, &entry.retained));
             if (mailbox_record.application) {
                 auto application = std::move (*mailbox_record.application);
                 application.record.before_application_handler =
@@ -8072,11 +8135,12 @@ public_host_runtime_t::dispatch_application_claim (
                         mailbox_record.parts[1].to_bytes ());
                 auto parts =
                   protocol::decode_application_parts (std::move (mailbox_record.parts.back ()));
+                auto before = std::move (mailbox_record.before_application_handler);
                 auto pending = std::make_shared<task_t<void>> (enqueue_local_multicast (
                   std::move (targets), std::move (multicast.channelName.value),
                   std::move (multicast.topic.value), std::move (parts), std::move (metadata),
                   zlink::routing_id_t::from (mailbox_record.source_routing_id),
-                  std::move (mailbox_record.before_application_handler)));
+                  std::move (before)));
                 detail::observe_task_completion (
                   *pending, [self = shared_from_this (), pending] (const result_t<void> &) {});
                 ++batch->count;
@@ -8262,7 +8326,8 @@ public_host_runtime_t::continue_application_claim (std::shared_ptr<application_c
     }
 }
 
-task_t<bool> public_host_runtime_t::dispatch_application_owner (
+public_host_runtime_t::application_owner_result_t
+public_host_runtime_t::dispatch_application_owner (
   std::string owner,
   std::function<void (
     const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
@@ -8275,7 +8340,7 @@ task_t<bool> public_host_runtime_t::dispatch_application_owner (
         claimed = claim->claimed_messages;
         for (std::size_t index = 0; index < claimed; ++index)
             started ();
-        batch = std::make_shared<application_claim_batch_t> (claimed);
+        batch = acquire_application_claim_batch (claimed);
         batch->claim = claim;
         batch->dispatch = std::move (dispatch);
         batch->rejected = std::move (rejected);
@@ -8288,19 +8353,23 @@ task_t<bool> public_host_runtime_t::dispatch_application_owner (
           dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
           std::ref (transfer));
         if (!claim)
-            return task_t<bool> (result_t<bool>::success (false));
+            return false;
         auto result = dispatch_application_claim (batch);
-        if (std::holds_alternative<std::size_t> (result))
-            return task_t<bool> (result_t<bool>::success (true));
+        if (std::holds_alternative<std::size_t> (result)) {
+            recycle_application_claim_batch (batch);
+            return true;
+        }
+        recycle_application_claim_batch (batch);
         return [] (task_t<std::size_t> pending) -> task_t<bool> {
             (void) co_await pending;
             co_return true;
         }(std::get<task_t<std::size_t>> (std::move (result)));
     }
     catch (...) {
-        if (batch)
+        if (batch) {
             batch->finish ();
-        else
+            recycle_application_claim_batch (batch);
+        } else
             for (std::size_t index = 0; index < claimed; ++index)
                 rejected ();
         return task_t<bool> (detail::current_exception_result<bool> ());
@@ -8822,7 +8891,7 @@ void public_host_runtime_t::publish_local_application (local_application_dispatc
       {_local_lease_observation ? _local_lease_observation () : nullptr,
        std::shared_ptr<const mesh::service_node_descriptor_t> (shared_from_this (),
                                                                &_options.mesh.descriptor)});
-    record.application = std::make_shared<local_application_dispatch_t> (std::move (dispatch));
+    record.application.emplace (std::move (dispatch));
     if (!_transport->mailbox ().try_enqueue (std::move (record)))
         throw protocol::service_wire_error_t ("local application mailbox is closed");
 }
@@ -8947,7 +9016,7 @@ task_t<void> public_host_runtime_t::ingest_cut_original (stateful::object_ref_t 
     taken.emplace (std::move (original));
     try {
         auto query = local_application_query (*taken->application);
-        std::shared_ptr<const local_application_dispatch_t> application = taken->application;
+        auto application = taken->application.retain ();
         auto source = taken->source_original;
         (void) co_await accept_local_application (std::move (*taken), std::move (query),
                                                   std::move (application), std::move (source),

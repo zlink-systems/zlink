@@ -583,7 +583,7 @@ TEST (RouteHandlerBoundary, HostedOrdinaryHandoffAllowsSameAndSubsequentClaims)
         queued.owner = mesh::service_mailbox_t::application_owner (owner);
         queued.domain = mesh::service_mailbox_domain_t::application;
         queued.before_application_handler = [&] { ++permits; };
-        queued.application = std::make_shared<host::local_application_dispatch_t> (
+        queued.application.emplace (
           host::local_application_dispatch_t{owner, record, std::move (parts)});
         return mailbox.try_enqueue (std::move (queued));
     };
@@ -804,7 +804,7 @@ TEST (RouteHandlerBoundary, HostStopWaitsForPhysicalOrdinaryHandlerTerminal)
     queued.owner = mesh::service_mailbox_t::application_owner (owner);
     queued.domain = mesh::service_mailbox_domain_t::application;
     queued.before_application_handler = [] {};
-    queued.application = std::make_shared<host::local_application_dispatch_t> (
+    queued.application.emplace (
       host::local_application_dispatch_t{owner, record, std::move (parts)});
     ASSERT_TRUE (node->native_node ().transport ().mailbox ().try_enqueue (std::move (queued)));
     ASSERT_EQ (std::future_status::ready, entered.wait_for (1s));
