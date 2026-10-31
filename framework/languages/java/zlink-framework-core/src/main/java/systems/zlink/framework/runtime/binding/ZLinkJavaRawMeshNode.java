@@ -5674,6 +5674,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             int command = header.command();
             int flags = header.flags();
             String channelName = null;
+            ZLinkServiceM6BWireCodec.SpotMessage spotHeader = null;
+            ZLinkServiceM6BWireCodec.ActorMessage actorHeader = null;
             if (command == ServiceWireConstants.COMMAND_NODE_SEND) {
                 if (head.length != PREFIX_BYTES) {
                     messageMetrics.dropped("node", "decode_error");
@@ -5692,6 +5694,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         wire.decodeChannelRequestHeader(head);
                 correlation = request.correlation();
                 channelName = request.channelName();
+            } else if (command == ServiceWireConstants.COMMAND_SPOT_SEND
+                    || command == ServiceWireConstants.COMMAND_SPOT_REQUEST) {
+                try {
+                    spotHeader = statefulWire.decodeSpotHeader(head);
+                } catch (RuntimeException invalid) {
+                    if (command == ServiceWireConstants.COMMAND_SPOT_SEND) {
+                        messageMetrics.dropped("spot", "decode_error");
+                    }
+                    return;
+                }
+                correlation = spotHeader.correlation();
+            } else if (command == ServiceWireConstants.COMMAND_ACTOR_SEND
+                    || command == ServiceWireConstants.COMMAND_ACTOR_REQUEST) {
+                try {
+                    actorHeader = statefulWire.decodeActorHeader(head);
+                } catch (RuntimeException invalid) {
+                    if (command == ServiceWireConstants.COMMAND_ACTOR_SEND) {
+                        messageMetrics.dropped("actor", "decode_error");
+                    }
+                    return;
+                }
+                correlation = actorHeader.correlation();
             }
             if (record.claimFailure() != null) throw record.claimFailure();
             if (command == ServiceWireConstants.COMMAND_HELLO
@@ -5744,9 +5768,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
             if (command == ServiceWireConstants.COMMAND_SPOT_SEND
                     || command == ServiceWireConstants.COMMAND_SPOT_REQUEST) {
-                handedOff =
-                        dispatchSpot(
-                                inbound, flags, command == ServiceWireConstants.COMMAND_SPOT_SEND);
+                handedOff = dispatchSpot(inbound, flags, spotHeader);
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_LOGICAL_MULTICAST) {
@@ -5755,9 +5777,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
             if (command == ServiceWireConstants.COMMAND_ACTOR_SEND
                     || command == ServiceWireConstants.COMMAND_ACTOR_REQUEST) {
-                handedOff =
-                        dispatchActor(
-                                inbound, flags, command == ServiceWireConstants.COMMAND_ACTOR_SEND);
+                handedOff = dispatchActor(inbound, flags, actorHeader);
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_ACTOR_JOIN) {
@@ -6441,20 +6461,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private boolean dispatchSpot(
-            ZLinkJavaRawServicePort.Inbound inbound, int flags, boolean oneWay) {
+            ZLinkJavaRawServicePort.Inbound inbound,
+            int flags,
+            ZLinkServiceM6BWireCodec.SpotMessage header) {
         List<byte[]> frames = inbound.frames();
         int payloadOffset = (flags & ServiceWireConstants.FLAG_METADATA) == 0 ? 1 : 2;
         if (frames.size() != payloadOffset + 1) {
-            if (oneWay) {
-                messageMetrics.dropped("spot", "decode_error");
-            }
-            return false;
-        }
-        ZLinkServiceM6BWireCodec.SpotMessage header;
-        try {
-            header = statefulWire.decodeSpotHeader(frames.getFirst());
-        } catch (RuntimeException invalid) {
-            if (oneWay) {
+            if (!header.request()) {
                 messageMetrics.dropped("spot", "decode_error");
             }
             return false;
@@ -7435,20 +7448,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private boolean dispatchActor(
-            ZLinkJavaRawServicePort.Inbound inbound, int flags, boolean oneWay) {
+            ZLinkJavaRawServicePort.Inbound inbound,
+            int flags,
+            ZLinkServiceM6BWireCodec.ActorMessage header) {
         List<byte[]> frames = inbound.frames();
         int payloadOffset = (flags & ServiceWireConstants.FLAG_METADATA) == 0 ? 1 : 2;
         if (frames.size() != payloadOffset + 1) {
-            if (oneWay) {
-                messageMetrics.dropped("actor", "decode_error");
-            }
-            return false;
-        }
-        ZLinkServiceM6BWireCodec.ActorMessage header;
-        try {
-            header = statefulWire.decodeActorHeader(frames.getFirst());
-        } catch (RuntimeException invalid) {
-            if (oneWay) {
+            if (!header.request()) {
                 messageMetrics.dropped("actor", "decode_error");
             }
             return false;

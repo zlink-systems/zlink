@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.ContextOptions;
@@ -39,6 +41,7 @@ import systems.zlink.contracts.sockets.XSubSocket;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
@@ -47,6 +50,7 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueu
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
@@ -382,11 +386,18 @@ final class ZLinkJavaRawMeshNodePumpTest {
         }
     }
 
-    @Test
-    void inboundClaimFailureKeepsItsClassificationAndSiblingOrder() throws Exception {
+    @ParameterizedTest
+    @ValueSource(
+            ints = {
+                ServiceWireConstants.COMMAND_NODE_REQUEST,
+                ServiceWireConstants.COMMAND_CHANNEL_REQUEST,
+                ServiceWireConstants.COMMAND_SPOT_REQUEST,
+                ServiceWireConstants.COMMAND_ACTOR_REQUEST
+            })
+    void inboundClaimFailureKeepsItsClassificationAndSiblingOrder(int command) throws Exception {
         try (var fixture = new RotationRequests()) {
             var a = fixture.request(1);
-            var b = fixture.request(2);
+            var b = fixture.request(2, command);
             var c = fixture.request(3);
             fixture.failClaimCorrelation = 2L;
             fixture.start();
@@ -907,6 +918,44 @@ final class ZLinkJavaRawMeshNodePumpTest {
         }
 
         CompletableFuture<List<byte[]>> request(long correlation) throws Exception {
+            return request(correlation, ServiceWireConstants.COMMAND_NODE_REQUEST);
+        }
+
+        CompletableFuture<List<byte[]>> request(long correlation, int command) throws Exception {
+            var stateful = new ZLinkServiceM6BWireCodec();
+            byte[] header =
+                    switch (command) {
+                        case ServiceWireConstants.COMMAND_NODE_REQUEST ->
+                                codec.encodeNodeRequestHeader(correlation, 0);
+                        case ServiceWireConstants.COMMAND_CHANNEL_REQUEST ->
+                                codec.encodeChannelRequestHeader(correlation, "rotation", 0);
+                        case ServiceWireConstants.COMMAND_SPOT_REQUEST ->
+                                stateful.encodeSpotHeader(
+                                        true,
+                                        0,
+                                        correlation,
+                                        0,
+                                        correlation,
+                                        0,
+                                        "source-spot",
+                                        new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                                                "target-spot", 1, targetRid, 1, 1, 1));
+                        case ServiceWireConstants.COMMAND_ACTOR_REQUEST ->
+                                stateful.encodeActorHeader(
+                                        true,
+                                        0,
+                                        correlation,
+                                        0,
+                                        correlation,
+                                        0,
+                                        null,
+                                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                                new ZLinkBackendActorRef(targetRid, "actor", 1),
+                                                1,
+                                                1,
+                                                1));
+                        default -> throw new IllegalArgumentException("not a request command");
+                    };
             var admitted = new CompletableFuture<Void>();
             CompletableFuture<List<byte[]>> result;
             try (var packet = Message.from("packet")) {
@@ -916,7 +965,7 @@ final class ZLinkJavaRawMeshNodePumpTest {
                                         source,
                                         targetRid,
                                         List.of(
-                                                codec.encodeNodeRequestHeader(correlation, 0),
+                                                header,
                                                 ZLinkServiceM6AWireCodec
                                                         .encodeFrameworkMultipartFrame(
                                                                 List.of(packet))),
@@ -955,11 +1004,20 @@ final class ZLinkJavaRawMeshNodePumpTest {
                             }
                         }
                         byte[] head = inbound.frames().getFirst();
-                        boolean fail =
-                                codec.decodeHeader(head).command()
-                                                == ServiceWireConstants.COMMAND_NODE_REQUEST
-                                        && codec.decodeNodeRequestHeader(head)
-                                                == failClaimCorrelation;
+                        var stateful = new ZLinkServiceM6BWireCodec();
+                        Long correlation =
+                                switch (codec.decodeHeader(head).command()) {
+                                    case ServiceWireConstants.COMMAND_NODE_REQUEST ->
+                                            codec.decodeNodeRequestHeader(head);
+                                    case ServiceWireConstants.COMMAND_CHANNEL_REQUEST ->
+                                            codec.decodeChannelRequestHeader(head).correlation();
+                                    case ServiceWireConstants.COMMAND_SPOT_REQUEST ->
+                                            stateful.decodeSpotHeader(head).correlation();
+                                    case ServiceWireConstants.COMMAND_ACTOR_REQUEST ->
+                                            stateful.decodeActorHeader(head).correlation();
+                                    default -> null;
+                                };
+                        boolean fail = correlation != null && correlation == failClaimCorrelation;
                         if (fail) {
                             failedInbound = inbound;
                             topology.admit(
