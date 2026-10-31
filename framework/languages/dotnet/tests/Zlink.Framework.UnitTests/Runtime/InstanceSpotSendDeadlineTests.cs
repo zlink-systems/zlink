@@ -457,15 +457,59 @@ public sealed partial class EntrySpotActorDispatchTests
                 ).Result
             );
             Assert.Equal(1, RecoveryColdHandler.Received.Count(value => value == message.Value));
+            var loserNode = new CapturingSpotNode();
+            loserNode.SetRoutingId(RoutingId.From("reserve-loser-node"));
+            var loserOwner = await PublishCandidateAsync(
+                store,
+                "reserve-loser-owner",
+                loserNode.RoutingId,
+                TimeSpan.FromMinutes(5)
+            );
+            var source = Assert.IsType<ZLinkServiceWireCodec.RequestSourceFence>(
+                node.ResolveRequestSourceFence(
+                    operation.SourceNodeRid,
+                    operation.SourceNodeGeneration
+                )
+            );
+            loserNode.ObserveRequestSourceFence(source);
+            Assert.Equal(
+                source,
+                await loserNode.AcceptRequestSourceAsync(
+                    operation.SourceNodeRid,
+                    operation.SourceNodeGeneration,
+                    CancellationToken.None
+                )
+            );
+            var loserTarget = new ZLinkInstanceSpotActivationTarget(
+                store,
+                repository,
+                runtime.GetSpotNodeRuntime("entry").Catalog,
+                loserNode,
+                runtime.Registration.SpotNodes["entry"],
+                () => loserOwner
+            );
+            var loserDescriptor = Assert.Single(
+                await store.ListAllMeshNodesAsync("entry", CancellationToken.None),
+                candidate => candidate.Rid == loserNode.RoutingId
+            );
             var loser = operation with
             {
+                Target = operation.Target with
+                {
+                    TargetNodeRid = loserNode.RoutingId,
+                    TargetNodeGeneration = loserDescriptor.LifecycleGeneration,
+                    DescriptorVersion = loserDescriptor.DescriptorRevision.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture
+                    ),
+                },
                 OperationId = new MeshOperationId(211, 213),
                 ReplyRouteId = 901,
             };
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                target.ActivateAsync(loser, null, payload, CancellationToken.None).AsTask()
+                loserTarget.ActivateAsync(loser, null, payload, CancellationToken.None).AsTask()
             );
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            Assert.Empty(loserNode.CreatedSpots);
             Assert.Equal(1, RecoveryColdHandler.Received.Count(value => value == message.Value));
         }
         finally

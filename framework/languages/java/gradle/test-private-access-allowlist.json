@@ -478,7 +478,6 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkInstanceSpotStaleCacheTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 공개 Spot 생성·Join·relocation·종료 흐름과 기존 backend 주입으로 activation 및 수락 경계를 준비하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "34c645ca9fd81af5a388337594e88a4af587991f92ce84db2338362bbdad730c": 1,
       "3f74b21a50c1de8d788007bf0652c54e95adbcd688c8c2f8bae26f3d6ce98078": 1
     }
   },

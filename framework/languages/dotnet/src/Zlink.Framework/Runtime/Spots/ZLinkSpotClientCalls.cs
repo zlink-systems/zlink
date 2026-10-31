@@ -306,73 +306,69 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
         var operationTimeout = _timeout ?? runtime.Registration.DefaultRequestTimeout;
         var deadline = Stopwatch.GetElapsedTime(0) + operationTimeout;
 
-        var handle = await ResolveHandleAsync(cancellationToken).ConfigureAwait(false);
-        if (handle is not null)
+        while (true)
         {
+            Remaining(deadline);
+            var handle = await ResolveHandleAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                return await RequestExistingAsync<TReply>(
-                        handle,
-                        terminator,
-                        Remaining(deadline),
+                if (handle is not null)
+                    return await RequestExistingAsync<TReply>(
+                            handle,
+                            terminator,
+                            Remaining(deadline),
+                            cancellationToken,
+                            requestAdmission: requestAdmission
+                        )
+                        .ConfigureAwait(false);
+
+                if (!_instanceIntent)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.NotFound,
+                        $"Spot '{target.SpotId}' was not found."
+                    );
+                var activationTimeout = Remaining(deadline);
+                var header = ZLinkClientCallCodec.CreateEnvelope(
+                    ZLinkMessageKind.Request,
+                    target.MeshName,
+                    ZLinkMessageNameResolver.ResolveFromMessage(request),
+                    activationTimeout
+                );
+                var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
+                    header,
+                    request,
+                    runtime.Registration.Codecs
+                );
+                var reply = await runtime
+                    .ActivateInstanceSpotAsync(
+                        target,
+                        parts,
+                        request: true,
+                        activationTimeout,
+                        ZLinkCallMetadata.Encode(_metadata),
                         cancellationToken,
                         requestAdmission: requestAdmission
                     )
                     .ConfigureAwait(false);
+                return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
+                    reply,
+                    "Instance Spot request reply is empty.",
+                    "Instance Spot request failed.",
+                    runtime.Registration.Codecs,
+                    runtime.Flow.CaptureEnabled
+                );
             }
             catch (ZLinkFrameworkException error)
                 when (_instanceIntent
                     && error.FrameworkFailureCode
-                        == (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving
+                        is (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving
+                            or (int)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+                            or (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
                 )
             {
-                // Failover policy §4.4: after Close released authority, the next
-                // Instance intent message cold-activates. SpotMoving is the
-                // owner's Ready owner-fence refusal, made before admission, and
-                // the route is already invalidated; a message the owner accepted
-                // ends with its own terminal (§7 step 3) and is never placed
-                // again. One authority read decides: Missing continues as the
-                // cold activation below; any other authority keeps the terminal.
-                if (await ResolveHandleAsync(cancellationToken).ConfigureAwait(false) is not null)
-                    throw;
+                // §9 re-resolves authority within the original logical request deadline.
             }
         }
-
-        if (!_instanceIntent)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Spot '{target.SpotId}' was not found."
-            );
-        var activationTimeout = Remaining(deadline);
-        var header = ZLinkClientCallCodec.CreateEnvelope(
-            ZLinkMessageKind.Request,
-            target.MeshName,
-            ZLinkMessageNameResolver.ResolveFromMessage(request),
-            activationTimeout
-        );
-        var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
-            header,
-            request,
-            runtime.Registration.Codecs
-        );
-        var reply = await runtime
-            .ActivateInstanceSpotAsync(
-                target,
-                parts,
-                request: true,
-                activationTimeout,
-                ZLinkCallMetadata.Encode(_metadata),
-                cancellationToken,
-                requestAdmission: requestAdmission
-            )
-            .ConfigureAwait(false);
-        return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
-            reply,
-            "Instance Spot request reply is empty.",
-            "Instance Spot request failed.",
-            runtime.Registration.Codecs,
-            runtime.Flow.CaptureEnabled
-        );
     }
 
     private async ValueTask<ZLinkResolvedSpotHandle?> ResolveHandleAsync(

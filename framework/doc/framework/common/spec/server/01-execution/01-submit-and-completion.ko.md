@@ -251,7 +251,7 @@ admission 한 곳에서 한다.
 - Binding operation을 시작한 뒤에는 application request와 lifecycle request 모두 같은 operation을 다시
   제출하지 않는다. 연결 손실, handover, 선택 route 변경과 reply 유실은 binding의 typed 결과로 끝난다.
   Relocation relay·cutover batch와 Store authority settlement는 각 transaction 계약을 따르며 request 재시작으로
-  구현하지 않는다.
+  구현하지 않는다. Instance intent request의 admission 전 stale route 거부에 따른 authority 추종은 같은 terminal entry를 유지하는 [Spot address messaging §9](../03-spot-actor/06-spot-address-messaging.ko.md#9-실패와-관측)의 절차를 따른다.
 - One-way send의 대기는 [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)이 정하며 이 규칙을 적용하지 않는다.
 
 ## 6. Logical Multicast와 Classic fanout

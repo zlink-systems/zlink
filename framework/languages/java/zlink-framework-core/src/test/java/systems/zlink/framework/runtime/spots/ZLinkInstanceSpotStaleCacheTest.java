@@ -33,8 +33,14 @@ final class ZLinkInstanceSpotStaleCacheTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     @SuppressWarnings("unchecked")
-    void refusalEvictsBeforeAuthorityReadAndPreservesReadyTerminal(boolean missing)
-            throws Exception {
+    void refusalEvictsBeforeAuthorityReadAndFollowsCurrentOwner(boolean missing) throws Exception {
+        followAuthority(missing ? "Missing" : "Ready");
+    }
+
+    @SuppressWarnings("unchecked")
+    void followAuthority(String state) throws Exception {
+        boolean missing = !state.equals("Ready");
+        boolean creating = state.equals("Creating");
         var current = new AtomicReference<ZLinkAuthorityReadResult>(snapshot("old", 2));
         var reads = new AtomicInteger();
         var invalidations = new AtomicInteger();
@@ -91,13 +97,15 @@ final class ZLinkInstanceSpotStaleCacheTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh(MESH).listen("inproc://cache-" + UUID.randomUUID()).objects().server();
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
+        try (var locationRuntime =
+                        new ZLinkLocationRuntime(
+                                ZLinkRegisteredLocationStores.fromUnified(repository),
+                                locationOptions.ownerLeaseTtl(),
+                                locationOptions.ownerLeaseRenewInterval());
+                var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
                 var payload = Message.from(new byte[] {1})) {
             var host = (ZLinkSpotRuntime) runtime.spotManager();
-            var storeField = ZLinkSpotRuntime.class.getDeclaredField("userSpotLocationStore");
-            storeField.setAccessible(true);
-            var originalStore = storeField.get(host);
-            storeField.set(host, repository);
+            host.installUserSpotOperationHandlers(repository, repository, locationRuntime, routes);
             var nodesField = ZLinkSpotRuntime.class.getDeclaredField("routeMeshNodesByName");
             nodesField.setAccessible(true);
             var nodes = (Map<String, ZLinkInternalMeshNode>) nodesField.get(host);
@@ -114,10 +122,24 @@ final class ZLinkInstanceSpotStaleCacheTest {
                                     (proxy, method, args) -> {
                                         if (method.getName().equals("requestInstanceSpot")) {
                                             int submitted = submissions.incrementAndGet();
-                                            if (submitted == (missing ? 3 : 2)) {
-                                                assertEquals(
-                                                        "InstanceRouteFence",
-                                                        args[0].getClass().getSimpleName());
+                                            if (submitted > 1
+                                                    && args[0]
+                                                            instanceof
+                                                            systems.zlink.framework.runtime.internal
+                                                                            .service
+                                                                            .ZLinkServiceM6BWireCodec
+                                                                            .InstanceRouteFence
+                                                                    fence) {
+                                                assertEquals("new", fence.ownerId());
+                                                if (!missing && submitted == 2) {
+                                                    assertSame(requestParts.get(), args[4]);
+                                                    assertTrue(
+                                                            ((Duration) args[5])
+                                                                            .compareTo(
+                                                                                    firstTimeout
+                                                                                            .get())
+                                                                    <= 0);
+                                                }
                                                 accepted.incrementAndGet();
                                                 return CompletableFuture.completedFuture(
                                                         List.<Message>of());
@@ -129,14 +151,17 @@ final class ZLinkInstanceSpotStaleCacheTest {
                                                 requestParts.set(args[4]);
                                                 firstTimeout.set((Duration) args[5]);
                                                 current.set(
-                                                        missing
-                                                                ? new ZLinkAuthorityMissing(
-                                                                        Instant.now())
-                                                                : snapshot("new", 3));
+                                                        creating
+                                                                ? snapshot("new", 3, true)
+                                                                : missing
+                                                                        ? new ZLinkAuthorityMissing(
+                                                                                Instant.now())
+                                                                        : snapshot("new", 3));
                                                 return CompletableFuture.failedFuture(terminal);
                                             }
                                             assertTrue(
-                                                    missing, "Ready must retain the first refusal");
+                                                    missing,
+                                                    "Missing or Creating delegates to the activation coordinator");
                                             assertEquals(
                                                     "InstanceColdActivation",
                                                     args[0].getClass().getSimpleName());
@@ -182,33 +207,19 @@ final class ZLinkInstanceSpotStaleCacheTest {
                                         ready,
                                         resolver,
                                         null);
-                if (missing)
-                    assertTrue(
-                            call.toCompletableFuture()
-                                    .get(WAIT.toMillis(), TimeUnit.MILLISECONDS)
-                                    .isEmpty());
-                else
-                    assertSame(
-                            terminal,
-                            assertThrows(
-                                            ExecutionException.class,
-                                            () ->
-                                                    call.toCompletableFuture()
-                                                            .get(
-                                                                    WAIT.toMillis(),
-                                                                    TimeUnit.MILLISECONDS))
-                                    .getCause());
-                assertEquals(missing ? 2 : 1, submissions.get());
-                assertEquals(missing ? 1 : 0, accepted.get());
+                assertTrue(
+                        call.toCompletableFuture()
+                                .get(WAIT.toMillis(), TimeUnit.MILLISECONDS)
+                                .isEmpty());
+                assertEquals(2, submissions.get());
+                assertEquals(1, accepted.get());
                 assertEquals(1, invalidations.get());
                 int beforeNext = reads.get();
                 var next = resolver.resolve(SPOT).toCompletableFuture().join().orElseThrow();
                 assertEquals(
-                        "new",
-                        next.ownerId(),
-                        "next independent operation must read the current owner");
+                        "new", next.ownerId(), "next independent operation uses the current owner");
                 assertEquals(3, next.spotGeneration());
-                assertEquals(beforeNext + 1, reads.get());
+                assertEquals(beforeNext + (missing ? 1 : 0), reads.get());
                 host.instanceSpotCalls()
                         .request(
                                 SPOT,
@@ -224,15 +235,14 @@ final class ZLinkInstanceSpotStaleCacheTest {
                                 null)
                         .toCompletableFuture()
                         .get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
-                assertEquals(missing ? 3 : 2, submissions.get());
-                assertEquals(missing ? 2 : 1, accepted.get());
+                assertEquals(3, submissions.get());
+                assertEquals(2, accepted.get());
                 assertEquals(
                         1,
                         invalidations.get(),
                         "successful next operation must not invalidate again");
             } finally {
                 nodesField.set(host, nodes);
-                storeField.set(host, originalStore);
             }
         } finally {
             routes.close();
@@ -240,12 +250,19 @@ final class ZLinkInstanceSpotStaleCacheTest {
     }
 
     private static ZLinkAuthoritySnapshot snapshot(String owner, long generation) {
+        return snapshot(owner, generation, false);
+    }
+
+    private static ZLinkAuthoritySnapshot snapshot(
+            String owner, long generation, boolean creating) {
         var node = RoutingId.from(owner);
         return new ZLinkAuthoritySnapshot(
                 owner,
                 new ZLinkServiceAuthorityPayloadCodec()
                         .encodeInstance(
-                                ZLinkServiceAuthorityPayloadCodec.State.READY,
+                                creating
+                                        ? ZLinkServiceAuthorityPayloadCodec.State.CREATING
+                                        : ZLinkServiceAuthorityPayloadCodec.State.READY,
                                 TYPE,
                                 SPOT,
                                 owner,
@@ -258,7 +275,9 @@ final class ZLinkInstanceSpotStaleCacheTest {
                 owner,
                 1,
                 new ZLinkPlacementAllocation(
-                        ZLinkPlacementAllocationState.ACTIVE,
+                        creating
+                                ? ZLinkPlacementAllocationState.PENDING
+                                : ZLinkPlacementAllocationState.ACTIVE,
                         ZLinkPlacementObjectKind.INSTANCE_SPOT,
                         TYPE,
                         new ZLinkMeshNodeDescriptorKey(MESH, node),

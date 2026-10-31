@@ -2,9 +2,9 @@
   "fixture": "zlink.framework.spot-close",
   "version": 1,
   "specClauses": [
-    "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계",
-    "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md#9-실패와-관측",
-    "framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-분리와-우선순위-구현"
+    "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md#7-close\uc640-generation-\uacbd\uacc4",
+    "framework/doc/framework/common/spec/server/03-spot-actor/06-spot-address-messaging.ko.md#9-\uc2e4\ud328\uc640-\uad00\uce21",
+    "framework/doc/framework/common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#7-lane-\ubd84\ub9ac\uc640-\uc6b0\uc120\uc21c\uc704-\uad6c\ud604"
   ],
   "closeSteps": [
     "closeItemStarted",
@@ -263,8 +263,7 @@
         "authority": "Ready",
         "ownerFence": "mismatch",
         "instanceIntent": [
-          false,
-          true
+          false
         ],
         "messageKind": "request"
       },
@@ -358,6 +357,74 @@
         "surface": "instance_spot",
         "reason": "stale_target"
       }
+    }
+  ],
+  "authorityFollowCases": [
+    {
+      "name": "creating-same-attempt",
+      "authority": "Creating",
+      "refusals": 1,
+      "intent": true,
+      "terminal": "reply"
+    },
+    {
+      "name": "missing-activation",
+      "authority": "Missing",
+      "refusals": 1,
+      "intent": true,
+      "terminal": "reply"
+    },
+    {
+      "name": "ready-new-owner",
+      "authority": "Ready",
+      "refusals": 1,
+      "intent": true,
+      "terminal": "reply"
+    },
+    {
+      "name": "twice-stale-ready",
+      "authority": "Ready",
+      "refusals": 2,
+      "intent": true,
+      "terminal": "reply"
+    },
+    {
+      "name": "stale-until-deadline",
+      "authority": "Ready",
+      "refusals": -1,
+      "intent": true,
+      "terminal": "DeadlineExceeded"
+    },
+    {
+      "name": "without-intent",
+      "authority": "Ready",
+      "refusals": 1,
+      "intent": false,
+      "terminal": "Unavailable"
+    },
+    {
+      "name": "node-generation-stale",
+      "authority": "Ready",
+      "refusals": 1,
+      "intent": true,
+      "failureCode": 21,
+      "terminal": "reply"
+    },
+    {
+      "name": "spot-generation-stale",
+      "authority": "Ready",
+      "refusals": 1,
+      "intent": true,
+      "failureCode": 33,
+      "terminal": "reply"
+    },
+    {
+      "name": "other-unavailable",
+      "authority": "Ready",
+      "refusals": 1,
+      "intent": true,
+      "failureCode": 18,
+      "terminal": "Unavailable"
     }
   ]
 }
