@@ -525,7 +525,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                                 .ConfigureAwait(false)
                             : null;
                     }
-                    catch (Exception error)
+                    catch (Exception error) when (!cancellationToken.IsCancellationRequested)
                     {
                         // Spec 04: authority failure belongs to this record;
                         // the rest of the claim still performs its own acceptance.
