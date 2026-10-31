@@ -579,6 +579,16 @@ test(
       connected = resolve;
     });
     const snapshots = [];
+    const pump = async (runtime, receive, route = false, connect = false) => {
+      // Retain receive readiness across the runtime's bounded batches, as the backend does.
+      for (
+        let more = await runtime.pumpBatch(receive, route, connect);
+        more;
+        more = await runtime.pumpBatch(true)
+      ) {
+        await turn();
+      }
+    };
     try {
       owner.start();
       requester.start();
@@ -605,11 +615,11 @@ test(
         return 'infrastructure';
       });
       owner.setReadableHandler((receive, route, connect) => {
-        ownerPump = ownerPump.then(() => owner.pumpBatch(ownerReleased && receive, route, connect));
+        ownerPump = ownerPump.then(() => pump(owner, ownerReleased && receive, route, connect));
         void ownerPump.catch((error) => pending?.fail(error));
       });
       requester.setReadableHandler((receive, route, connect) => {
-        requesterPump = requesterPump.then(() => requester.pumpBatch(receive, route, connect));
+        requesterPump = requesterPump.then(() => pump(requester, receive, route, connect));
         void requesterPump.catch((error) => pending?.fail(error));
       });
       requester.connectPeer(
@@ -617,7 +627,8 @@ test(
         owner.topology.localDescriptor()
       );
       // Connect registration makes POLLCONNECT ready; consume it in the existing observer.
-      await requester.pumpBatch(false, false, true);
+      requesterPump = requesterPump.then(() => pump(requester, false, false, true));
+      await requesterPump;
       pending = requester.requestToNode('healthy-owner', payload, 5000);
       const result = pending.promise;
       void result.catch(() => {});
@@ -625,7 +636,9 @@ test(
       await requesterPump;
       assert.equal(submitted, 0, 'Core readiness cannot replace service ADMIT');
       const first = snapshots[0][0];
-      assert.equal(first.state, ConnectionAttemptState.Connecting);
+      // A snapshot observes current state; Core may already have completed its handshake.
+      assert.notEqual(first.intentId, 0n);
+      assert.equal(first.endpoint, owner.topology.localDescriptor().advertisedEndpoint);
       assert.ok(
         snapshots.some((rows) => rows.some((row) => row.state === ConnectionAttemptState.Connected))
       );
@@ -635,7 +648,7 @@ test(
         assert.equal(rows[0].lastFailureId, 0n);
       }
       ownerReleased = true;
-      ownerPump = ownerPump.then(() => owner.pumpBatch(true));
+      ownerPump = ownerPump.then(() => pump(owner, true));
       await result;
       assert.equal(submitted, 1);
       assert.equal(handled, 1);
