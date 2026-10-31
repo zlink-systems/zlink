@@ -140,6 +140,33 @@ TEST (ZLinkFrameworkSharedSerialTurn, AcceptedPublicationWakesDrain)
 
 #include "runtime/spots/spot_runtime.hpp"
 
+TEST (ZLinkFrameworkSharedSerialTurn, PreparationAliasesDoNotOwnExecutorOrOperation)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    auto worker = std::make_shared<offload_executor_t> (1);
+    state_lane_t lane;
+    auto executor = std::make_shared<detail::spot_serial_executor_t> (
+      worker, lane, serial_lane_policy_t::spot_wide ());
+    auto preparation = executor->begin_preparation ();
+    auto successor = std::make_shared<detail::spot_serial_executor_t> (
+      worker, lane, serial_lane_policy_t::spot_wide (), executor->spot_queue ());
+    successor->attach_preparation (preparation);
+    executor->close ();
+    lane.run ([] {}).get ();
+    std::weak_ptr observed_executor = executor;
+    std::weak_ptr observed_successor = successor;
+    std::weak_ptr observed_preparation = preparation;
+    executor.reset ();
+    EXPECT_TRUE (observed_executor.expired ());
+    EXPECT_FALSE (observed_preparation.expired ());
+    successor.reset ();
+    EXPECT_TRUE (observed_successor.expired ());
+    EXPECT_FALSE (observed_preparation.expired ());
+    preparation.reset ();
+    EXPECT_TRUE (observed_preparation.expired ());
+}
+
 namespace
 {
 void verify_creation_shutdown (bool published, bool pending)
