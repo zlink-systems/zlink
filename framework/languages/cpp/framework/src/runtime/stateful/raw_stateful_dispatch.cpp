@@ -642,7 +642,7 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
             return _transport->mailbox ().take (*slot);
         return std::move (*owned);
     };
-    stateful_error_t validation = stateful_error_t::none;
+    auto validation = result_t<stateful_error_t>::success (stateful_error_t::none);
     protocol::frozen_application_record_t frozen;
     protocol::application_payload_t payload;
     std::size_t application_payload_bytes = 0;
@@ -655,45 +655,45 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
             std::rethrow_exception (prepared->error);
         if (!prepared->header || !_authority_resolver || prepared->source_routing_id.empty ()
             || !prepared->source_node_generation)
-            validation = stateful_error_t::invalid;
+            validation = result_t<stateful_error_t>::success (stateful_error_t::invalid);
         else {
             application_payload_bytes = prepared->body_bytes;
         }
 
-        if (validation != stateful_error_t::none)
+        if (validation.value () != stateful_error_t::none)
             throw protocol::service_wire_error_t ("invalid application wire record");
         const auto header_bytes = protocol::message_bytes (*prepared->header);
         const auto header = protocol::decode_header (header_bytes);
 
-        if (validation == stateful_error_t::none && owner.kind == object_kind_t::actor) {
+        if (validation.value () == stateful_error_t::none && owner.kind == object_kind_t::actor) {
             if (header.kind != protocol::command::actorSend
                 && header.kind != protocol::command::actorRequest) {
-                validation = stateful_error_t::invalid;
+                validation = result_t<stateful_error_t>::success (stateful_error_t::invalid);
             } else {
                 auto actor = protocol::decode_actor_message_header (header_bytes, header.kind);
                 auto [error, authority] = co_await accepted_actor_authority (
                   owner, actor, std::move (prepared->source_routing_id),
                   prepared->source_node_generation, std::move (prepared->source_original),
                   prepared->bound_session, std::move (retained));
-                validation = error;
-                if (validation == stateful_error_t::none) {
+                validation = result_t<stateful_error_t>::success (error);
+                if (validation.value () == stateful_error_t::none) {
                     application_command = header.kind;
                     actor_header = std::move (actor);
                     accepted_authority = *authority;
                 }
             }
-        } else if (validation == stateful_error_t::none) {
+        } else if (validation.value () == stateful_error_t::none) {
             if (header.kind != protocol::command::spotSend
                 && header.kind != protocol::command::spotRequest) {
-                validation = stateful_error_t::invalid;
+                validation = result_t<stateful_error_t>::success (stateful_error_t::invalid);
             } else {
                 auto spot = protocol::decode_spot_message_header (header_bytes, header.kind);
                 auto [error, authority] = co_await accepted_spot_authority (
                   owner, spot, std::move (prepared->source_routing_id),
                   prepared->source_node_generation, std::move (prepared->source_original),
                   std::move (retained));
-                validation = error;
-                if (validation == stateful_error_t::none) {
+                validation = result_t<stateful_error_t>::success (error);
+                if (validation.value () == stateful_error_t::none) {
                     application_command = header.kind;
                     spot_header = std::move (spot);
                     accepted_authority = *authority;
@@ -702,15 +702,15 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
         }
     }
     catch (const protocol::service_wire_error_t &) {
-        validation = stateful_error_t::invalid;
+        validation = result_t<stateful_error_t>::success (stateful_error_t::invalid);
     }
     catch (...) {
-        validation = stateful_error_t::conflict;
+        validation = detail::current_exception_result<stateful_error_t> ();
     }
 
     // The accepted record reads the shared body; the original is not taken for it.
     bool malformed = false;
-    if (validation == stateful_error_t::none) {
+    if (validation && validation.value () == stateful_error_t::none) {
         try {
             /* flow-correlation §4: at Off the wire flow pair is neither validated
              * nor materialized at this ingress (structural skip only). */
@@ -739,7 +739,7 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
             malformed = true;
         }
     }
-    if (validation != stateful_error_t::none || malformed) {
+    if (!validation || validation.value () != stateful_error_t::none || malformed) {
         auto taken = take_original ();
         if (!taken)
             co_return stateful_error_t::not_found;
@@ -761,33 +761,35 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
             // moving replies with the retryable relocation terminal
             // (conflict + spotMoving maps to a retryable unavailable on the
             // requester), so the session owner keeps redelivery ownership.
-            const auto unavailable =
-              validation == stateful_error_t::unavailable
-                ? messaging::request_failure_mapper_t{}.target_failure_reply (
-                    framework_error_kind_t::unavailable)
-                : std::nullopt;
+            const auto failure = !validation
+                                   ? messaging::request_failure_mapper_t{}.target_failure_reply (
+                                       validation.exception ())
+                                 : validation.value () == stateful_error_t::unavailable
+                                   ? messaging::request_failure_mapper_t{}.target_failure_reply (
+                                       framework_error_kind_t::unavailable)
+                                   : std::nullopt;
             const auto terminal_result =
-              unavailable ? unavailable->terminal_result
-              : validation == stateful_error_t::generation_stale
-                  || validation == stateful_error_t::moving
+              failure ? failure->terminal_result
+              : validation.value () == stateful_error_t::generation_stale
+                  || validation.value () == stateful_error_t::moving
                 ? static_cast<std::uint32_t> (protocol::request_terminal_result::conflict)
-              : validation == stateful_error_t::conflict
+              : validation.value () == stateful_error_t::conflict
                 ? static_cast<std::uint32_t> (protocol::request_terminal_result::rejected)
                 : static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError);
             const auto failure_code =
-              unavailable ? unavailable->failure_code
-              : validation == stateful_error_t::generation_stale
+              failure ? failure->failure_code
+              : validation.value () == stateful_error_t::generation_stale
                 ? static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale)
-              : validation == stateful_error_t::moving
+              : validation.value () == stateful_error_t::moving
                 ? static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving)
-              : validation == stateful_error_t::conflict
+              : validation.value () == stateful_error_t::conflict
                 ? static_cast<std::uint32_t> (protocol::framework_error_code::requestRejected)
                 : static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError);
             claim_guard.dismiss ();
             reply_failure_then_release_claim (*_transport, std::move (record), terminal_result,
                                               failure_code, reservation);
         }
-        co_return validation;
+        co_return validation ? validation.value () : stateful_error_t::invalid;
     }
 
     protocol::frozen_record_t accepted_frozen;
