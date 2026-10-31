@@ -38,7 +38,8 @@ void require (bool value, const char *message)
         throw std::runtime_error (message);
 }
 
-std::shared_ptr<host::public_host_runtime_t> make_host ()
+std::shared_ptr<host::public_host_runtime_t>
+make_host (std::shared_ptr<runtime::runtime_failure_collector_t> failures = {})
 {
     auto options = test::runtime_failure_options (
       mesh::raw_mesh_node_options_t{.descriptor = {"claim-cost",
@@ -48,6 +49,8 @@ std::shared_ptr<host::public_host_runtime_t> make_host ()
                                                    "tcp://127.0.0.1:0",
                                                    {},
                                                    mesh::service_node_state_t::preparing}});
+    if (failures)
+        options.runtime_failures = std::move (failures);
     auto result =
       std::make_shared<host::public_host_runtime_t> (host::host_options_t{std::move (options)});
     result->start ();
@@ -227,8 +230,11 @@ void verify_retained_batch (host::public_host_runtime_t &target)
     require (mailbox.pending_messages (domain) == 0, "next record was lost");
 }
 
-void verify_exception (host::public_host_runtime_t &target)
+void verify_exception ()
 {
+    auto failures = std::make_shared<runtime::runtime_failure_collector_t> ();
+    auto owned = make_host (failures);
+    auto &target = *owned;
     auto &mailbox = target.transport ().mailbox ();
     enqueue (mailbox);
     enqueue (mailbox);
@@ -242,19 +248,21 @@ void verify_exception (host::public_host_runtime_t &target)
               throw std::runtime_error ("handler fixture");
       },
       [&] { ++starts; }, [&] { ++rejects; });
+    require (pending.result ().value (), "record failure aborted claim continuation");
     try {
-        pending.result ().value ();
+        failures->rethrow_if_failed ();
     }
     catch (const std::runtime_error &error) {
         caught = std::string_view (error.what ()) == "handler fixture";
     }
     require (caught && mailbox.pending_messages (domain) == 0,
-             "exception did not return current and unstarted record reservations");
-    require (starts == 3 && rejects == 2 && calls == 2,
+             "exception did not return record reservations");
+    require (starts == 3 && rejects == 1 && calls == 3,
              "exception did not settle started and rejected exactly once");
     enqueue (mailbox);
     require (dispatch (target, [] (const auto &, const auto &, auto) {}),
              "exception left the owner claim active");
+    owned->close ();
 }
 
 void verify_standalone (host::public_host_runtime_t &target)
@@ -438,7 +446,7 @@ int main ()
     try {
         auto target = make_host ();
         verify_retained_batch (*target);
-        verify_exception (*target);
+        verify_exception ();
         verify_prestart_terminal (*target);
         verify_reply_alias (false);
         verify_reply_alias (true);
