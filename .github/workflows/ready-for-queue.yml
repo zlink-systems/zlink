@@ -21,15 +21,58 @@ jobs:
         (github.event.action == 'labeled' && github.event.label.name == 'ready-for-queue') ||
         (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ready-for-queue'))
       )
+    outputs:
+      cpp: ${{ steps.paths.outputs.cpp }}
+      dotnet: ${{ steps.paths.outputs.dotnet }}
+      java: ${{ steps.paths.outputs.java }}
+      node: ${{ steps.paths.outputs.node }}
     runs-on: ubuntu-24.04
     steps:
-      - run: echo "Ready-for-queue verification is enabled for this pull request."
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Select changed framework languages
+        id: paths
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          cpp=false
+          dotnet=false
+          java=false
+          node=false
+          paths_file="${RUNNER_TEMP}/ready-for-queue-paths"
+          git diff --name-only --no-renames -z "${PR_BASE_SHA}...${PR_HEAD_SHA}" > "$paths_file"
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              framework/runtime/*|framework/doc/framework/common/spec/*|framework/doc/framework/common/e2e/*|bindings/*|core/*|scripts/ci/*|.github/workflows/*|VERSION)
+                cpp=true
+                dotnet=true
+                java=true
+                node=true
+                ;;
+              framework/languages/cpp/*) cpp=true ;;
+              framework/languages/dotnet/*) dotnet=true ;;
+              framework/languages/java/*) java=true ;;
+              framework/languages/node/*) node=true ;;
+            esac
+          done < "$paths_file"
+          {
+            echo "cpp=$cpp"
+            echo "dotnet=$dotnet"
+            echo "java=$java"
+            echo "node=$node"
+          } >> "$GITHUB_OUTPUT"
+          echo "Selected languages: cpp=$cpp dotnet=$dotnet java=$java node=$node"
 
   framework-cpp:
     name: framework-cpp
     needs: gate
     uses: ./.github/workflows/framework-cpp.yml
     with:
+      skip_tests: ${{ needs.gate.outputs.cpp != 'true' }}
       queue_checks_only: true
       concurrency_key: framework-cpp
 
@@ -38,6 +81,7 @@ jobs:
     needs: gate
     uses: ./.github/workflows/framework-dotnet.yml
     with:
+      skip_tests: ${{ needs.gate.outputs.dotnet != 'true' }}
       queue_checks_only: true
       concurrency_key: framework-dotnet
 
@@ -46,6 +90,7 @@ jobs:
     needs: gate
     uses: ./.github/workflows/framework-java.yml
     with:
+      skip_tests: ${{ needs.gate.outputs.java != 'true' }}
       queue_checks_only: true
       concurrency_key: framework-java
 
@@ -54,5 +99,13 @@ jobs:
     needs: gate
     uses: ./.github/workflows/framework-node.yml
     with:
+      skip_tests: ${{ needs.gate.outputs.node != 'true' }}
       queue_checks_only: true
       concurrency_key: framework-node
+
+  framework-format:
+    name: framework-format
+    needs: gate
+    uses: ./.github/workflows/framework-format.yml
+    with:
+      concurrency_key: framework-format

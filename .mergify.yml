@@ -23,6 +23,7 @@ queue_rules:
       - check-success=framework-node / node-release-gate
       - check-success=framework-java / linux-x64 / Java 25
       - check-success=framework-cpp / Framework C++ unit and contract tests
+      - check-success=framework-format / Framework source format
     merge_conditions:
       - check-success=dotnet-release-gate
       - check-success=node-release-gate

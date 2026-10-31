@@ -48,6 +48,11 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      skip_tests:
+        description: Succeed without running tests when this language has no changed paths.
+        required: false
+        type: boolean
+        default: false
       queue_checks_only:
         description: Run the checks used to admit a pull request to the merge queue.
         required: false
@@ -83,6 +88,7 @@ concurrency:
 
 jobs:
   framework-node:
+    if: ${{ !inputs.skip_tests }}
     name: ${{ matrix.target.name }} / node${{ matrix.node-version }}
     # ZLINK_LINUX_RUNNER/ZLINK_WINDOWS_RUNNER (JSON label lists) move the x64 Linux/Windows
     # jobs to self-hosted runners; arm64 and macOS stay hosted. Queue, manual
@@ -287,6 +293,7 @@ jobs:
         run: npm run test:browser
 
   framework-node-cross-language:
+    if: ${{ !inputs.skip_tests }}
     name: cross-language smoke
     runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     timeout-minutes: 30
@@ -405,13 +412,19 @@ jobs:
         run: npm run verify:cross-language
 
   framework-node-gate:
+    if: ${{ always() && !cancelled() && (inputs.skip_tests || (needs.framework-node.result == 'success' && needs.framework-node-cross-language.result == 'success')) }}
     name: node-release-gate
-    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.skip_tests && 'ubuntu-24.04' || vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     needs:
       - framework-node
       - framework-node-cross-language
     steps:
+      - name: Confirm unchanged language
+        if: ${{ inputs.skip_tests }}
+        run: echo "No changed node paths; tests are not required."
+
       - name: Confirm matrix completed
+        if: ${{ !inputs.skip_tests }}
         run: |
           echo "Framework Node release gate passed."
           echo "ABI matrix: win-x64, linux-x64, linux-arm64, darwin-arm64 (Core ships no macOS Intel release)"

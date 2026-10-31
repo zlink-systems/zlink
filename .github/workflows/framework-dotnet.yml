@@ -46,6 +46,11 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      skip_tests:
+        description: Succeed without running tests when this language has no changed paths.
+        required: false
+        type: boolean
+        default: false
       queue_checks_only:
         description: Run the checks used to admit a pull request to the merge queue.
         required: false
@@ -85,6 +90,7 @@ concurrency:
 
 jobs:
   prepare-dotnet-binding:
+    if: ${{ !inputs.skip_tests }}
     name: prepare-dotnet-binding
     runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     outputs:
@@ -136,6 +142,7 @@ jobs:
           if-no-files-found: error
 
   framework-dotnet:
+    if: ${{ !inputs.skip_tests }}
     name: ${{ matrix.target.name }}
     # ZLINK_LINUX_RUNNER/ZLINK_WINDOWS_RUNNER (JSON label lists) move the x64 Linux/Windows
     # jobs to self-hosted runners; arm64 and macOS stay hosted. Queue, manual
@@ -275,12 +282,18 @@ jobs:
           if-no-files-found: warn
 
   framework-dotnet-gate:
+    if: ${{ always() && !cancelled() && (inputs.skip_tests || needs.framework-dotnet.result == 'success') }}
     name: dotnet-release-gate
-    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.skip_tests && 'ubuntu-24.04' || vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     needs:
       - framework-dotnet
     steps:
+      - name: Confirm unchanged language
+        if: ${{ inputs.skip_tests }}
+        run: echo "No changed dotnet paths; tests are not required."
+
       - name: Confirm matrix completed
+        if: ${{ !inputs.skip_tests }}
         run: |
           echo "Framework .NET release gate passed."
           echo "RID matrix: win-x64, linux-x64, linux-arm64, osx-arm64 (Core ships no macOS Intel release)"
