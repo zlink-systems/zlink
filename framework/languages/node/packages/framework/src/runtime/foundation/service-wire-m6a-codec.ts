@@ -1,4 +1,5 @@
 import { UINT32_MAX, UINT64_MAX } from '@zlink-systems/stream-wire';
+import { allocatePayloadBytes } from '../../contracts/Common/payload-slab';
 import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
 import {
   validateDescriptor,
@@ -185,10 +186,23 @@ export function decodeReplyHeader(frame: Uint8Array): ServiceReplyHeader {
 }
 
 export function encodeApplicationPayload(payload: ServiceApplicationPayload): Buffer {
+  return encodeApplicationPayloadWith(payload, allocatePayloadBytes);
+}
+
+/** Encodes a retained internal application frame with its own backing store. */
+export function encodeOwnedApplicationPayload(payload: ServiceApplicationPayload): Buffer {
+  return encodeApplicationPayloadWith(payload, allocateOwnedPayloadBytes);
+}
+
+function encodeApplicationPayloadWith(
+  payload: ServiceApplicationPayload,
+  allocate: (length: number) => Buffer
+): Buffer {
   const result = allocateApplicationPayload(
     payload.packetName,
     payload.contentType,
-    payload.payload.byteLength
+    payload.payload.byteLength,
+    allocate
   );
   result.set(payload.payload, result.byteLength - payload.payload.byteLength);
   return result;
@@ -205,7 +219,12 @@ export function encodeMultipartApplicationPayload(
   contentType: string
 ): Buffer {
   const multipartLength = multipartPayloadLength(parts);
-  const result = allocateApplicationPayload(packetName, contentType, multipartLength);
+  const result = allocateApplicationPayload(
+    packetName,
+    contentType,
+    multipartLength,
+    allocatePayloadBytes
+  );
   writeMultipartPayload(result, result.byteLength - multipartLength, parts);
   return result;
 }
@@ -255,7 +274,8 @@ function writeMultipartPayload(
 function allocateApplicationPayload(
   packetName: string,
   contentType: string,
-  payloadLength: number
+  payloadLength: number,
+  allocate: (length: number) => Buffer
 ): Buffer {
   const packetNameLength = canonicalServiceWireTextLength(
     packetName,
@@ -275,16 +295,18 @@ function allocateApplicationPayload(
   const prefixLength = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
   const bodyLength = frameLength - prefixLength;
   if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
-  // Both callers write every payload byte after these header fields, so the
-  // frame needs no zero fill and a small frame comes from the shared pool
-  // instead of its own backing store.
-  const result = Buffer.allocUnsafe(frameLength);
+  // Both callers write every payload byte after these header fields.
+  const result = allocate(frameLength);
   result[0] = APPLICATION_PAYLOAD_VERSION;
   result.writeUInt32BE(bodyLength, 1);
   let offset = writeText8(result, prefixLength, packetName, packetNameLength);
   offset = writeText8(result, offset, contentType, contentTypeLength);
   result.writeUInt32BE(payloadLength, offset);
   return result;
+}
+
+function allocateOwnedPayloadBytes(length: number): Buffer {
+  return Buffer.allocUnsafeSlow(length);
 }
 
 export function decodeApplicationPayload(frame: Uint8Array): ServiceApplicationPayload {

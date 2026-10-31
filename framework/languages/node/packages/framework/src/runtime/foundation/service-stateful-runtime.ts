@@ -123,12 +123,14 @@ import {
   SERVICE_WIRE_MAJOR,
   SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
 } from './service-wire-constants.generated';
+import { copyPayloadBytes } from '../../contracts/Common/payload-slab';
 import {
   ServiceWireProtocolError,
   decodeApplicationPayload,
   decodeApplicationPayloadView,
   decodeMultipartApplicationParts,
   encodeApplicationPayload,
+  encodeOwnedApplicationPayload,
   type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
 
@@ -2437,7 +2439,7 @@ export class ServiceStatefulRuntime {
           ? record.parts.length >= 2
             ? record.parts[record.parts.length - 1]
             : undefined
-          : encodeApplicationPayload(canonicalPayload);
+          : encodeOwnedApplicationPayload(canonicalPayload);
       try {
         return await this.handleIngress(
           record,
@@ -3757,7 +3759,7 @@ export class ServiceStatefulRuntime {
             }
           })
     };
-    const applicationFrame = payloadFrame ?? encodeApplicationPayload(emptyPayload());
+    const applicationFrame = payloadFrame ?? encodeOwnedApplicationPayload(emptyPayload());
     return this.enqueueLifecycleFrame(
       ingress,
       `spot:${record.target.spot.spotId}`,
@@ -4343,7 +4345,7 @@ export class ServiceStatefulRuntime {
         channelName,
         topic,
         sourceSpotId,
-        encodeApplicationPayload(payload),
+        encodeOwnedApplicationPayload(payload),
         sourceNodeRid,
         applicationJobOwner
       );
@@ -4787,6 +4789,7 @@ export class ServiceStatefulRuntime {
   private async submitOneWay(targetNodeRid: string, parts: readonly Buffer[]): Promise<number> {
     this.requireOpen();
     if (targetNodeRid === this.nodeRid) {
+      parts = copyRetainedServiceFrames(parts);
       const applicationJobOwner = await this.raw.reserveLocalIngress();
       if (captureZLinkExecutionTurn() !== undefined) {
         //  The sender is inside a Spot serial turn. Running ingress inline
@@ -4862,6 +4865,7 @@ export class ServiceStatefulRuntime {
     receiver?: import('./operation-registry').OperationObserver<unknown, unknown>
   ): void {
     if (targetNodeRid === this.nodeRid) {
+      parts = copyRetainedServiceFrames(parts);
       const deadlineUnixMs = BigInt(Date.now() + Math.max(0, timeoutMs));
       const capacityStop = new AbortController();
       void pending.promise.then(
@@ -5058,7 +5062,7 @@ export class ServiceStatefulRuntime {
         ? ingress.parts.length < 2
           ? undefined
           : ingress.parts[1]
-        : encodeApplicationPayload({
+        : encodeOwnedApplicationPayload({
             packetName: canonicalActorJoin.payload.packetName,
             contentType: canonicalActorJoin.payload.contentType,
             payload: Buffer.from(canonicalActorJoin.payload.payload)
@@ -5171,7 +5175,7 @@ export class ServiceStatefulRuntime {
       this.enqueueLifecycleFrame(
         ingress,
         `spot:${decoded.target.spot.spotId}`,
-        payloadFrame ?? encodeApplicationPayload(emptyPayload()),
+        payloadFrame ?? encodeOwnedApplicationPayload(emptyPayload()),
         {
           receiveKind: ReceiveKind.SpotControl,
           operationKind: OperationKind.ActorJoin,
@@ -6410,6 +6414,10 @@ function emptyPayload(): ServiceApplicationPayload {
     contentType: ZlinkStreamContentType.Raw,
     payload: Buffer.alloc(0)
   };
+}
+
+function copyRetainedServiceFrames(parts: readonly Buffer[]): Buffer[] {
+  return parts.map((part) => copyPayloadBytes(part));
 }
 
 /**

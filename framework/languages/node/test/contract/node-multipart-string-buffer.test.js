@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const channel = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const payloadSlab = require('../../packages/framework/dist/contracts/Common/payload-slab');
 const { frameworkPair } = require('../../perf/request-backpressure.cjs');
 
 // Observe every Framework module, so moving normalization to another helper
@@ -34,9 +35,10 @@ test('mixed multipart strings have the exact UTF-8 wire bytes without intermedia
   const bytes = parts.map(part => typeof part === 'string' ? Buffer.from(part) : part);
   const expected = wire.encodeMultipartApplicationPayload(bytes, 'packet', 'application/test');
   const count = trackStringBuffers(t);
-  const allocations = t.mock.method(Buffer, 'allocUnsafe');
+  const allocations = t.mock.method(payloadSlab, 'allocatePayloadBytes');
   const actual = wire.encodeMultipartApplicationPayload(parts, 'packet', 'application/test');
   assert.equal(allocations.mock.callCount(), 1, 'one final application frame');
+  assert.equal(allocations.mock.calls[0].arguments[0], actual.byteLength);
   assert.deepEqual(actual, expected);
   assert.equal(count.sites.length, 0, count.sites.join('\n'));
   const payload = wire.decodeApplicationPayloadView(actual).payload;
