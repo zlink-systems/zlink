@@ -2270,7 +2270,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                     "Framework executor cleanup failed",
                                                     failure);
                             });
-                    return executorClose;
+                    return CompletableFuture.anyOf(executorClose.toCompletableFuture(), forcedDrain)
+                            .thenApply(ignored -> null);
                 });
         if (backendContext != null) {
             shutdown.defer("context_close", this::closeBackendContext);
