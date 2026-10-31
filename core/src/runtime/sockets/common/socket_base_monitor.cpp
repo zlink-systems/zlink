@@ -323,7 +323,7 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
     }
 
     const auto release_monitor_owner = [&] () {
-        release_monitor_async_command_processing (true);
+        release_monitor_async_command_processing ();
     };
 
     control_runtime_t *runtime = get_ctx ()->control_runtime ();
@@ -888,6 +888,6 @@ zlink::socket_base_t::detach_monitor_socket (bool send_monitor_stopped_event_)
     }
 
     if (release_async_owner)
-        release_monitor_async_command_processing (true);
+        release_monitor_async_command_processing ();
     return monitor_socket;
 }
