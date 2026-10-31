@@ -417,6 +417,14 @@ TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWith
     namespace framework = zlink::framework;
     namespace host = framework::runtime::host;
     namespace stateful = framework::runtime::stateful;
+    auto failures = std::make_shared<framework::runtime::runtime_failure_collector_t> ();
+    const auto injected = std::make_exception_ptr (framework::framework_exception_t (
+      framework::framework_error_kind_t::unavailable, "retained owner notification failed"));
+    unsigned reported = 0;
+    failures->bind_runtime_reporter ([&] (auto error) {
+        EXPECT_EQ (error, injected);
+        ++reported;
+    });
     auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
       .mesh = {.descriptor = {.mesh_name = "retained-ingress",
                               .node_routing_id =
@@ -424,8 +432,7 @@ TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWith
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
                               .advertised_endpoint = "tcp://127.0.0.1:0"},
-               .runtime_failures =
-                 std::make_shared<framework::runtime::runtime_failure_collector_t> ()},
+               .runtime_failures = failures},
       .object_stable_types = {"player"}});
     native->configure_stateful_dispatch (
       [] (const stateful::accepted_record_authority_query_t &query)
@@ -453,8 +460,7 @@ TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWith
     native->transport ().mailbox ().bind_application_dispatch (
       {}, {}, [&] (const auto &, auto) -> framework::task_t<bool> {
           ++notifications;
-          throw framework::framework_exception_t (framework::framework_error_kind_t::unavailable,
-                                                  "retained owner notification failed");
+          std::rethrow_exception (injected);
       });
     auto claim = native->transport ().mailbox ().try_claim_owner (
       framework::runtime::mesh::service_mailbox_domain_t::application,
@@ -481,8 +487,9 @@ TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWith
       host::public_host_runtime_test_access_t::dispatch_claim (*native, std::move (claim))
         .result ();
     EXPECT_EQ (1u, notifications);
-    EXPECT_FALSE (dispatched);
-    EXPECT_THROW ((void) dispatched.value (), framework::framework_exception_t);
+    ASSERT_TRUE (dispatched);
+    EXPECT_EQ (0u, dispatched.value ());
+    EXPECT_EQ (1u, reported);
     EXPECT_EQ (1u, native->pending_operation_count ());
     native->transport ().mailbox ().bind_application_dispatch ({}, {});
     unsigned terminals = 0;

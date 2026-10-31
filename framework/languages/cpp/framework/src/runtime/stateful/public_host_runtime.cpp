@@ -8220,18 +8220,11 @@ void public_host_runtime_t::fail_application_claim (
         rejection = std::current_exception ();
     }
     if (const auto unhandled = std::get_if<std::exception_ptr> (&rejection)) {
-        if (release_mailbox_reservation)
-            release_mailbox_reservation ();
-        // Earlier credits stay with their owners; only the untaken suffix settles here.
-        for (std::size_t remaining = index; remaining < claim->claimed_messages; ++remaining) {
-            auto &original = batch->entries[remaining].original;
-            auto abandoned = original ? std::exchange (original, std::nullopt)
-                                      : _transport->mailbox ().take ({claim, remaining});
-            if (abandoned)
-                abandoned->transferred ();
-        }
-        batch->finish ();
-        std::rethrow_exception (*unhandled);
+        const auto failure =
+          messaging::request_failure_mapper_t{}.target_failure_reply (*unhandled);
+        _options.mesh.runtime_failures->report (*unhandled);
+        if (failure)
+            rejection = *failure;
     }
     if (!entry.original)
         entry.original = _transport->mailbox ().take (slot);
