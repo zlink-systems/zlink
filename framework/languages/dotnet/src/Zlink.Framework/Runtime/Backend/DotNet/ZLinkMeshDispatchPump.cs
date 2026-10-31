@@ -513,14 +513,35 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 for (var record = 0; record < receiveBatch.Count; record++)
                 {
                     var current = receiveBatch[record];
-                    var requestSource = AcceptsRequestSource(current.Kind)
-                        ? await AcceptRequestSourceAsync(
-                                current.SourceNodeRid,
-                                current.SourceBindingGeneration,
-                                cancellationToken
-                            )
-                            .ConfigureAwait(false)
-                        : null;
+                    ZLinkServiceWireCodec.RequestSourceFence? requestSource;
+                    try
+                    {
+                        requestSource = AcceptsRequestSource(current.Kind)
+                            ? await AcceptRequestSourceAsync(
+                                    current.SourceNodeRid,
+                                    current.SourceBindingGeneration,
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false)
+                            : null;
+                    }
+                    catch (Exception error) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        // Spec 04: authority failure belongs to this record;
+                        // the rest of the claim still performs its own acceptance.
+                        if (
+                            current.Kind
+                            is MeshRecordKind.SpotRequest
+                                or MeshRecordKind.ActorRequest
+                        )
+                        {
+                            var terminal = ZLinkRequestFailureMapper.TargetFailureReply(error);
+                            current.ReplyTerminal(terminal.Result, (uint)terminal.FailureCode);
+                        }
+                        receiveBatch.TakePayloadOwner(record)?.Dispose();
+                        pending.Add(Task.FromException(error));
+                        continue;
+                    }
                     DispatchRecord(
                         receiveBatch,
                         record,
