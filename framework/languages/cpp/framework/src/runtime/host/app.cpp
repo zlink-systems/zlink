@@ -2193,10 +2193,12 @@ void app_t::_apply_zlink_framework ()
                 co_await mesh->send_to_node (target, std::move (parts).take_items ()),
                 "MeshNode send");
           },
-          [mesh] (const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts,
-                  std::chrono::milliseconds timeout)
-            -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
-              return mesh->request_node_reply (target, std::move (parts).take_items (), timeout);
+          [mesh] (
+            const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts,
+            std::chrono::milliseconds timeout,
+            detail::request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver) {
+              mesh->request_node_reply (target, std::move (parts).take_items (), timeout,
+                                        std::move (receiver));
           });
         for (const auto &channel_name : mesh->channel_names ()) {
             channel_runtime.bind_mesh_channel_transport (
