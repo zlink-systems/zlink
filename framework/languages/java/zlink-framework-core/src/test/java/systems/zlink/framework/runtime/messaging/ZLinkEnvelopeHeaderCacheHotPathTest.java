@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 final class ZLinkEnvelopeHeaderCacheHotPathTest {
     private static final String FLOW_ID = "018f2f1d-5d52-7b70-8f08-13fecf6f6abc";
@@ -233,24 +234,14 @@ final class ZLinkEnvelopeHeaderCacheHotPathTest {
         }
 
         int calls = 1024;
-        long directMessageBytes =
-                PerCallAllocation.minWindow(
-                        () -> {
-                            try (Message message = Message.from(bytes)) {
-                                return message;
-                            }
-                        },
-                        calls,
-                        calls);
-        long encodedHeaderBytes =
-                PerCallAllocation.minWindow(
-                        () -> {
-                            try (Message message = ZLinkChannelEnvelope.encodeHeader(header)) {
-                                return message;
-                            }
-                        },
-                        calls,
-                        calls);
+        HeaderMessageAllocationProbe allocationProbe =
+                new HeaderMessageAllocationProbe(header, bytes);
+        allocationProbe.alternate();
+        PerCallAllocation.AllocationComparison allocationComparison =
+                PerCallAllocation.minAlternatingWindow(allocationProbe, calls, calls);
+        allocationProbe.useDirectMessage();
+        long directMessageBytes = allocationComparison.baselineBytes();
+        long encodedHeaderBytes = allocationComparison.measuredBytes();
         ByteBuffer reusable = ByteBuffer.wrap(bytes);
         long decodedHeaderBytes =
                 PerCallAllocation.minWindow(
@@ -345,6 +336,42 @@ final class ZLinkEnvelopeHeaderCacheHotPathTest {
         byte[] expected = golden.getBytes(StandardCharsets.UTF_8);
         assertArrayEquals(expected, ZLinkChannelEnvelope.encodeHeaderBytes(header));
         assertArrayEquals(expected, ZLinkChannelEnvelope.encodeHeaderBytes(header));
+    }
+
+    private static final class HeaderMessageAllocationProbe implements Supplier<Message> {
+        private final ZLinkChannelEnvelope.Header header;
+        private final byte[] bytes;
+        private boolean encodeHeader;
+        private boolean alternate;
+
+        HeaderMessageAllocationProbe(ZLinkChannelEnvelope.Header header, byte[] bytes) {
+            this.header = header;
+            this.bytes = bytes;
+        }
+
+        void alternate() {
+            alternate = true;
+            encodeHeader = false;
+        }
+
+        void useDirectMessage() {
+            alternate = false;
+            encodeHeader = false;
+        }
+
+        @Override
+        public Message get() {
+            boolean encode = encodeHeader;
+            if (alternate) encodeHeader = !encodeHeader;
+            if (encode) {
+                try (Message message = ZLinkChannelEnvelope.encodeHeader(header)) {
+                    return message;
+                }
+            }
+            try (Message message = Message.from(bytes)) {
+                return message;
+            }
+        }
     }
 
     private static ZLinkChannelEnvelope.Header simpleHeader(int kind, String channel, String name) {
