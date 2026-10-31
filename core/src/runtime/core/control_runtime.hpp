@@ -26,6 +26,9 @@ class control_runtime_t
     bool start ();
     void stop ();
 
+    // A zero interval keeps the task registered without automatic repeats;
+    // run_immediately selects one initial call, otherwise only explicit
+    // schedule_task_after calls make it runnable.
     uint64_t add_periodic_task (control_task_fn *fn_,
                                 void *arg_,
                                 uint32_t interval_ms_,
@@ -34,6 +37,11 @@ class control_runtime_t
     int schedule_task_after (uint64_t task_id_, uint32_t delay_ms_);
 
     bool is_current_thread () const;
+
+#ifdef ZLINK_BUILD_TESTS
+    bool test_task_scheduled (uint64_t task_id_);
+    bool test_task_exists (uint64_t task_id_);
+#endif
 
   private:
     struct task_entry_t

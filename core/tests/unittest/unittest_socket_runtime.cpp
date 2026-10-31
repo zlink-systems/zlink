@@ -354,18 +354,21 @@ void test_socket_monitor_runtime_pair_readiness_cleanup_is_generation_scoped ()
       old_peer, zlink::transport_lane_completion, 11, 1));
 }
 
-void test_socket_monitor_runtime_dequeues_enqueued_worker_event_nowait ()
+void test_socket_monitor_runtime_preserves_front_until_completion ()
 {
     zlink::socket_monitor_runtime_t runtime;
     zlink::socket_monitor_event_record_t record;
     record.event = 41;
     runtime.reset_worker_state (1, 1);
-    runtime.enqueue_worker_event (record);
+    runtime.enqueue_worker_event (record, NULL);
 
     zlink::socket_monitor_event_record_t dequeued;
-    TEST_ASSERT_TRUE (runtime.dequeue_worker_event_nowait (&dequeued));
+    TEST_ASSERT_TRUE (runtime.copy_worker_event (&dequeued));
+    TEST_ASSERT_EQUAL_UINT64 (41u, dequeued.event);
+    TEST_ASSERT_TRUE (runtime.copy_worker_event (&dequeued));
     TEST_ASSERT_EQUAL_UINT64 (41u, dequeued.event);
     runtime.complete_worker_event ();
+    TEST_ASSERT_FALSE (runtime.copy_worker_event (&dequeued));
 }
 
 void test_socket_monitor_runtime_hwm_drops_lossy_events ()
@@ -378,12 +381,12 @@ void test_socket_monitor_runtime_hwm_drops_lossy_events ()
     second.event = 58;
 
     runtime.reset_worker_state (1, 1);
-    runtime.enqueue_worker_event (first);
-    runtime.enqueue_worker_event (second);
-    TEST_ASSERT_TRUE (runtime.dequeue_worker_event_nowait (&dequeued));
+    runtime.enqueue_worker_event (first, NULL);
+    runtime.enqueue_worker_event (second, NULL);
+    TEST_ASSERT_TRUE (runtime.copy_worker_event (&dequeued));
     TEST_ASSERT_EQUAL_UINT64 (57u, dequeued.event);
-    TEST_ASSERT_FALSE (runtime.dequeue_worker_event_nowait (&dequeued));
     runtime.complete_worker_event ();
+    TEST_ASSERT_FALSE (runtime.copy_worker_event (&dequeued));
 }
 
 void test_socket_monitor_runtime_hwm_backpressures_reliable_events ()
@@ -396,13 +399,13 @@ void test_socket_monitor_runtime_hwm_backpressures_reliable_events ()
     first.event = 61;
     second.event = 62;
     runtime.reset_worker_state (1, 1);
-    runtime.enqueue_worker_event (first);
+    runtime.enqueue_worker_event (first, NULL);
 
     std::atomic<bool> producer_started (false);
     std::atomic<bool> producer_completed (false);
     std::thread producer ([&] {
         producer_started.store (true, std::memory_order_release);
-        runtime.enqueue_worker_event (second);
+        runtime.enqueue_worker_event (second, NULL);
         producer_completed.store (true, std::memory_order_release);
     });
     while (!producer_started.load (std::memory_order_acquire))
@@ -411,8 +414,7 @@ void test_socket_monitor_runtime_hwm_backpressures_reliable_events ()
     const bool producer_was_blocked =
       !producer_completed.load (std::memory_order_acquire);
 
-    const bool dequeued_first =
-      runtime.dequeue_worker_event_nowait (&dequeued);
+    const bool dequeued_first = runtime.copy_worker_event (&dequeued);
     const uint64_t first_event = dequeued.event;
     runtime.complete_worker_event ();
     producer.join ();
@@ -420,7 +422,7 @@ void test_socket_monitor_runtime_hwm_backpressures_reliable_events ()
     TEST_ASSERT_TRUE (dequeued_first);
     TEST_ASSERT_EQUAL_UINT64 (61u, first_event);
     TEST_ASSERT_TRUE (producer_completed.load (std::memory_order_acquire));
-    TEST_ASSERT_TRUE (runtime.dequeue_worker_event_nowait (&dequeued));
+    TEST_ASSERT_TRUE (runtime.copy_worker_event (&dequeued));
     TEST_ASSERT_EQUAL_UINT64 (62u, dequeued.event);
     runtime.complete_worker_event ();
 }
@@ -434,17 +436,16 @@ void test_socket_monitor_runtime_reset_clears_stop_state ()
 
     runtime.reset_worker_state (1, 1);
     runtime.start_task (11);
-    runtime.enqueue_worker_event (record);
+    TEST_ASSERT_EQUAL_UINT64 (11u, runtime.retire_task ());
+    runtime.enqueue_worker_event (record, NULL);
     runtime.stop_task ();
-    TEST_ASSERT_FALSE (runtime.dequeue_worker_event_nowait (&dequeued));
-    TEST_ASSERT_FALSE (runtime.task_running);
+    TEST_ASSERT_FALSE (runtime.copy_worker_event (&dequeued));
     TEST_ASSERT_EQUAL_UINT64 (0u, runtime.task_id);
 
     runtime.reset_worker_state (1, 1);
     TEST_ASSERT_FALSE (runtime.queue_stop);
-    TEST_ASSERT_FALSE (runtime.task_running);
-    runtime.enqueue_worker_event (record);
-    TEST_ASSERT_TRUE (runtime.dequeue_worker_event_nowait (&dequeued));
+    runtime.enqueue_worker_event (record, NULL);
+    TEST_ASSERT_TRUE (runtime.copy_worker_event (&dequeued));
     TEST_ASSERT_EQUAL_UINT64 (73u, dequeued.event);
     runtime.complete_worker_event ();
 }
@@ -854,7 +855,7 @@ int main (int, char **)
     RUN_TEST (test_socket_monitor_runtime_erases_transport_pair_by_endpoint_when_rid_differs);
     RUN_TEST (
       test_socket_monitor_runtime_pair_readiness_cleanup_is_generation_scoped);
-    RUN_TEST (test_socket_monitor_runtime_dequeues_enqueued_worker_event_nowait);
+    RUN_TEST (test_socket_monitor_runtime_preserves_front_until_completion);
     RUN_TEST (test_socket_monitor_runtime_hwm_drops_lossy_events);
     RUN_TEST (test_socket_monitor_runtime_hwm_backpressures_reliable_events);
     RUN_TEST (test_socket_monitor_runtime_reset_clears_stop_state);
