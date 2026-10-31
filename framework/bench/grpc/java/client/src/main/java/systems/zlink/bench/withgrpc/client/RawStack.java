@@ -89,30 +89,65 @@ public final class RawStack implements AutoCloseable {
         };
     }
 
-    public RawOperation send() {
-        return new RawOperation() {
-            @Override
-            public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
-                var operation = router.send(peer);
-                try (Message header = Message.from(RawWire.REQUEST_ENVELOPE);
-                     Message body = RawWire.encodeBenchPayloadMessage(
-                         payloadSize, runId, phase, sequence)) {
-                    var submission = operation
-                        .message(header)
-                        .message(body)
-                        .submit();
-                    var admitted = submission.result() == SubmitResult.BACKPRESSURED
-                        ? submission.admitted().toCompletableFuture()
-                        : java.util.concurrent.CompletableFuture.<Void>completedFuture(
-                            null);
-                    return new RawSubmission(submission.result(), admitted,
-                        submission.result() == SubmitResult.OK
-                            ? java.util.concurrent.CompletableFuture.completedFuture(
-                                null)
-                            : admitted);
-                }
+    public RawSendOperation send() {
+        return new RawSendOperation();
+    }
+
+    /** A send payload prepared by a logical stream before it enters the socket gate. */
+    public static final class PreparedSend implements AutoCloseable {
+        private final Message header;
+        private final Message body;
+
+        private PreparedSend(Message header, Message body) {
+            this.header = header;
+            this.body = body;
+        }
+
+        @Override
+        public void close() {
+            body.close();
+            header.close();
+        }
+    }
+
+    public final class RawSendOperation extends RawOperation {
+        public PreparedSend prepareRaw(int payloadSize, byte phase, long sequence) {
+            Message header = Message.from(RawWire.REQUEST_ENVELOPE);
+            try {
+                Message body = RawWire.encodeBenchPayloadMessage(
+                    payloadSize, runId, phase, sequence);
+                return new PreparedSend(header, body);
+            } catch (RuntimeException | Error failure) {
+                header.close();
+                throw failure;
             }
-        };
+        }
+
+        /** Submits prepared messages and closes them after the binding snapshots them. */
+        public RawSubmission submitRaw(PreparedSend prepared) {
+            try {
+                var submission = router.send(peer)
+                    .message(prepared.header)
+                    .message(prepared.body)
+                    .submit();
+                var admitted = submission.result() == SubmitResult.BACKPRESSURED
+                    ? submission.admitted().toCompletableFuture()
+                    : java.util.concurrent.CompletableFuture.<Void>completedFuture(null);
+                return new RawSubmission(
+                    submission.result(),
+                    admitted,
+                    submission.result() == SubmitResult.OK
+                        ? java.util.concurrent.CompletableFuture.completedFuture(null)
+                        : admitted);
+            } finally {
+                prepared.close();
+            }
+        }
+
+        @Override
+        public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
+            return submitRaw(prepareRaw(payloadSize, phase, sequence));
+        }
     }
 
     /** Raw operations expose admission separately from request completion. */
