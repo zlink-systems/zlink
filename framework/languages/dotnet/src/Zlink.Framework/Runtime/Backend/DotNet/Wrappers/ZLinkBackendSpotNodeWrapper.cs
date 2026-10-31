@@ -1339,7 +1339,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
-        bool durable = false,
         ZLinkRequestAdmission? requestAdmission = null
     ) =>
         _node.RequestToNodeDirectAsync(
@@ -1349,7 +1348,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             metadata,
             timeout,
             cancellationToken,
-            durable,
             requestAdmission: requestAdmission
         );
 
