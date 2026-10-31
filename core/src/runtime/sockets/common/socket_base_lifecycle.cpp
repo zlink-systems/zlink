@@ -1162,8 +1162,7 @@ int zlink::socket_base_t::acquire_monitor_async_command_processing ()
     }
 }
 
-void zlink::socket_base_t::release_monitor_async_command_processing (
-  bool wait_for_quiescence_)
+void zlink::socket_base_t::release_monitor_async_command_processing ()
 {
     {
         scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
@@ -1172,7 +1171,10 @@ void zlink::socket_base_t::release_monitor_async_command_processing (
               false, std::memory_order_acq_rel))
             return;
     }
-    request_unowned_async_command_processing_stop (wait_for_quiescence_);
+    // A session callback can need this owner on its own I/O thread. Let the
+    // existing idle turn detach atomically with lease acquisition instead of
+    // publishing quiescence that the callback would have to wait for.
+    request_unowned_async_command_processing_stop ();
 }
 
 void zlink::socket_base_t::request_unowned_async_command_processing_stop (
@@ -1314,11 +1316,16 @@ int zlink::socket_base_t::acquire_transport_pair_owner_progress_with_timeout (
         }
         bool wait_for_quiescence = false;
         {
-            socket_public_api_scope_t admission (lifecycle);
-            if (!admission.acquired ())
-                return -1;
-
+            // Session I/O callbacks acquire this lease too. They are internal
+            // command work, not concurrent public calls that can reject close.
+            // The socket turn orders the lease with close's handoff, while the
+            // session ownership or public caller keeps the socket alive.
             socket_public_api_lock_scope_t guard (lifecycle);
+            if (lifecycle.public_close_requested ()) {
+                errno = ESHUTDOWN;
+                return -1;
+            }
+
             scoped_lock_t progress_lock (
               _transport_pair_owner_progress_sync);
             // Check the retiring executor before the reference shortcut. A

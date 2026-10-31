@@ -35,6 +35,14 @@ int zlink::socket_base_t::begin_close_handoff ()
     // reject later ones before monitor cleanup, async quiescence or reap. The
     // caller holds no socket lock here, so the join cannot wait on itself.
     stop_inproc_reconnect_scheduler ();
+    {
+        // Internal command work uses the socket turn without a public
+        // admission. Join it after stopping reconnect callbacks and before
+        // teardown; later lease acquisitions observe closing in this turn.
+        socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+        socket_public_api_lock_scope_t command_owner (
+          lifecycle, !lifecycle.public_api_sync_owned_by_current_thread ());
+    }
     // A blocking complete-record submit deliberately drops its public
     // admission while parked so close remains admissible. Publish the close
     // edge to both progress-owner forms: the async owner sleeps on the
