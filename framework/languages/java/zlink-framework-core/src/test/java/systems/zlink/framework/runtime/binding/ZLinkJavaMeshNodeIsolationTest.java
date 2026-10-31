@@ -12,12 +12,14 @@ import systems.zlink.framework.channels.ZLinkRouteSendHandler;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
-import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -44,18 +46,21 @@ final class ZLinkJavaMeshNodeIsolationTest {
                 .listen(LOOPBACK + 0)
                 .setRoutingId(TARGET)
                 .addRouteRequestHandler(Echo.class, Probe.class, String.class);
-        try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions)) {
+        var targetNodes = new ConcurrentHashMap<String, ZLinkInternalMeshNode>();
+        var sourceNodes = new ConcurrentHashMap<String, ZLinkInternalMeshNode>();
+        try (var target =
+                ZLinkFrameworkRuntimeTestAccess.start(targetOptions, capturingNodes(targetNodes))) {
             var sourceOptions = new DefaultZLinkFrameworkOptions();
             for (String mesh : new String[] {MESH_A, MESH_B}) {
                 var node =
                         sourceOptions.addRouteMesh(mesh).listen(LOOPBACK + 0).setRoutingId(SOURCE);
-                node.peerConnections()
-                        .connect(
-                                TARGET, nodes(target).nodesByName().get(mesh).advertisedEndpoint());
+                node.peerConnections().connect(TARGET, targetNodes.get(mesh).advertisedEndpoint());
                 if (mesh.equals(MESH_B))
                     node.addRouteRequestHandler(Echo.class, Probe.class, String.class);
             }
-            try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions);
+            try (var source =
+                            ZLinkFrameworkRuntimeTestAccess.start(
+                                    sourceOptions, capturingNodes(sourceNodes));
                     var callers = Executors.newVirtualThreadPerTaskExecutor()) {
                 await(
                         () ->
@@ -83,7 +88,7 @@ final class ZLinkJavaMeshNodeIsolationTest {
                 var entered = new CountDownLatch(1);
                 var release = new CountDownLatch(1);
                 var held =
-                        lane(source, MESH_A)
+                        lane(sourceNodes, MESH_A)
                                 .runAsync(
                                         () -> {
                                             entered.countDown();
@@ -154,16 +159,35 @@ final class ZLinkJavaMeshNodeIsolationTest {
         }
     }
 
-    private static ZLinkStateLane lane(ZLinkFrameworkRuntime runtime, String mesh)
-            throws Exception {
-        return ((ZLinkJavaRawMeshNode) nodes(runtime).nodesByName().get(mesh))
-                .sourceTransportLane();
+    private static ZLinkStateLane lane(Map<String, ZLinkInternalMeshNode> nodes, String mesh) {
+        return ((ZLinkJavaRawMeshNode) nodes.get(mesh)).sourceTransportLane();
     }
 
-    private static ZLinkMeshNodesRuntime nodes(ZLinkFrameworkRuntime runtime) throws Exception {
-        var nodesField = ZLinkFrameworkRuntime.class.getDeclaredField("meshNodes");
-        nodesField.setAccessible(true);
-        return (ZLinkMeshNodesRuntime) nodesField.get(runtime);
+    private static ZLinkBackendAdapterProvider capturingNodes(
+            Map<String, ZLinkInternalMeshNode> nodes) {
+        var delegate = new ZLinkJavaBackendAdapterFactory();
+        return (ZLinkBackendAdapterProvider)
+                java.lang.reflect.Proxy.newProxyInstance(
+                        ZLinkBackendAdapterProvider.class.getClassLoader(),
+                        new Class<?>[] {ZLinkBackendAdapterProvider.class},
+                        (proxy, method, args) -> {
+                            if (method.getName().equals("createMeshAdapter")) {
+                                var adapter =
+                                        delegate.createMeshAdapter(
+                                                (ZLinkBackendAdapterOptions) args[0]);
+                                return (ZLinkMeshBackendAdapter)
+                                        (context, name) -> {
+                                            var node = adapter.createMeshNode(context, name);
+                                            nodes.put(name, node);
+                                            return node;
+                                        };
+                            }
+                            try {
+                                return method.invoke(delegate, args);
+                            } catch (java.lang.reflect.InvocationTargetException failure) {
+                                throw failure.getCause();
+                            }
+                        });
     }
 
     public record Probe(String value) {}

@@ -1650,11 +1650,18 @@ final class ZLinkCanonicalRelocationStateMachineTest {
 
     private static ZLinkSpotRetireControl.Target newRetireTarget(
             ZLinkSpotRetireControl.TargetEndpoint endpoint) throws Exception {
-        var constructor =
-                ZLinkSpotRetireControl.Target.class.getDeclaredConstructor(
-                        ZLinkSpotRetireControl.TargetEndpoint.class);
-        constructor.setAccessible(true);
-        return constructor.newInstance(endpoint);
+        var node =
+                (ZLinkInternalMeshNode)
+                        Proxy.newProxyInstance(
+                                ZLinkInternalMeshNode.class.getClassLoader(),
+                                new Class<?>[] {ZLinkInternalMeshNode.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("setRelocationControlHandler")) {
+                                        return null;
+                                    }
+                                    throw new UnsupportedOperationException(method.getName());
+                                });
+        return ZLinkSpotRetireControl.install(node, endpoint);
     }
 
     private static byte[] retireControlCodec(String name, Object... arguments) throws Exception {

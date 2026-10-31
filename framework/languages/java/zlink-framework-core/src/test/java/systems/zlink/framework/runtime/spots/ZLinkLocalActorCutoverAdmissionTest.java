@@ -78,7 +78,7 @@ final class ZLinkLocalActorCutoverAdmissionTest {
             try {
                 assertEquals(List.of(), retained.records(), "the single cut must start quiescent");
 
-                var node = (ZLinkInternalSpotNode) field(field(host, "spots"), "primaryNode");
+                var node = ((ZLinkSpotRuntime) host.spotManager()).primaryNode();
                 var entry = node.entrySpot();
                 var original =
                         (ZLinkInternalAsyncSpotDispatchHandler) field(entry, "dispatchHandler");
