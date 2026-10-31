@@ -284,7 +284,7 @@ jobs:
   framework-dotnet-gate:
     if: ${{ always() && !cancelled() && (inputs.skip_tests || needs.framework-dotnet.result == 'success') }}
     name: dotnet-release-gate
-    runs-on: ${{ inputs.skip_tests && 'ubuntu-24.04' || vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.skip_tests && (vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04') || vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     needs:
       - framework-dotnet
     steps:

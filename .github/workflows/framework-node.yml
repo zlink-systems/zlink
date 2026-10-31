@@ -414,7 +414,7 @@ jobs:
   framework-node-gate:
     if: ${{ always() && !cancelled() && (inputs.skip_tests || (needs.framework-node.result == 'success' && needs.framework-node-cross-language.result == 'success')) }}
     name: node-release-gate
-    runs-on: ${{ inputs.skip_tests && 'ubuntu-24.04' || vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.skip_tests && (vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04') || vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     needs:
       - framework-node
       - framework-node-cross-language

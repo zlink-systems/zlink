@@ -26,7 +26,7 @@ jobs:
       dotnet: ${{ steps.paths.outputs.dotnet }}
       java: ${{ steps.paths.outputs.java }}
       node: ${{ steps.paths.outputs.node }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v5
         with:

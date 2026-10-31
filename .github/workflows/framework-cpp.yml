@@ -91,7 +91,7 @@ jobs:
     # ["self-hosted","linux","x64"]) moves this job to a self-hosted runner;
     # without it the job stays on the GitHub-hosted image. Mergify branches,
     # manual runs and main cache warming never run untrusted fork code.
-    runs-on: ${{ inputs.skip_tests && 'ubuntu-24.04' || vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.skip_tests && (vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04') || vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Confirm unchanged language
         if: ${{ inputs.skip_tests }}

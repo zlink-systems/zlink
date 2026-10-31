@@ -75,7 +75,7 @@ jobs:
     # ZLINK_LINUX_RUNNER/ZLINK_WINDOWS_RUNNER (JSON label lists) move the x64 Linux/Windows
     # jobs to self-hosted runners; arm64 and macOS stay hosted. Queue, manual
     # and main cache runs do not execute fork PR code.
-    runs-on: ${{ inputs.skip_tests && 'ubuntu-24.04' || (matrix.target.runner == 'ubuntu-24.04' && vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER)) || (matrix.target.runner == 'windows-latest' && vars.ZLINK_WINDOWS_RUNNER && fromJSON(vars.ZLINK_WINDOWS_RUNNER)) || matrix.target.runner }}
+    runs-on: ${{ inputs.skip_tests && (vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04') || (matrix.target.runner == 'ubuntu-24.04' && vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER)) || (matrix.target.runner == 'windows-latest' && vars.ZLINK_WINDOWS_RUNNER && fromJSON(vars.ZLINK_WINDOWS_RUNNER)) || matrix.target.runner }}
     strategy:
       fail-fast: false
       matrix:
