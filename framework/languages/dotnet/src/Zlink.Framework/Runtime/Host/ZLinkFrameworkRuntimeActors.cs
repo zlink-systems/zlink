@@ -4650,6 +4650,12 @@ internal sealed partial class ZLinkFrameworkRuntime
         return found is not null;
     }
 
+    internal Task SubmitStreamReplyAsync(
+        ZLinkSessionContext context,
+        ZlinkStreamHeader header,
+        Func<ZlinkStreamHeader, Task> submit
+    ) => _actorBoundSessionCoordinator.SubmitStreamReplyAsync(context, header, submit);
+
     internal IReadOnlyCollection<IZLinkSessionActor> SnapshotSessionActors(
         ZLinkSessionContext context
     ) => _actorBoundSessionCoordinator.SnapshotSessionActors(context);

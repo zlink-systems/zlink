@@ -88,6 +88,68 @@ test('stream runtime is exported from framework root surface', () => {
   assert.equal(typeof framework.DefaultZLinkSessionContext, 'function');
 });
 
+for (const ended of [false, true]) {
+  for (const error of [false, true]) {
+    test(`terminal reply submitted after binding end=${ended} error=${error} preserves request sequence`, async () => {
+      const frames = [];
+      const runtime = new framework.ZLinkStreamBindingRuntime({
+        messageFactory: binaryMessageFactory()
+      });
+      const stream = fakeStream('late-reply', 'session');
+      stream.writeRaw = (message) => {
+        frames.push(decodeFrame(message.bytes).header);
+        return true;
+      };
+      stream.enqueueActorBound = async (slot, actorId) => {
+        frames.push({ name: '$zlink.actor.bound', actorSlot: slot });
+      };
+      stream.enqueueActorUnbound = async (slot) => {
+        frames.push({ name: '$zlink.actor.unbound', actorSlot: slot });
+      };
+      const context = runtime.createSessionContext(stream);
+      const actor = await context.actors.bind({
+        actorId: 'late-reply-actor',
+        nodeRid: 'actor-owner',
+        generation: 1n
+      });
+      context.enterDispatch({
+        ...serviceRelayDispatchHeader('LateReply'),
+        actorSlot: 1,
+        requestSeq: 17n,
+        correlationId: 'late-reply-correlation'
+      });
+      const reply = context.client.reply({ result: 'done' });
+      if (ended) await runtime.unbind(actor.actorId, context, actor.bindingToken);
+      if (error) {
+        await context.submitReply(
+          context.dispatchHeader,
+          streamProtocol.ZLinkStreamMessageKind.Error,
+          new Map(),
+          false,
+          { code: 'InvalidOperation', message: 'ended' }
+        );
+      } else {
+        await reply.submit();
+      }
+      assert.deepEqual(
+        frames.map((frame) => frame.name),
+        ended ? ['$zlink.actor.bound', '$zlink.actor.unbound', ''] : ['$zlink.actor.bound', '']
+      );
+      const terminal = frames.at(-1);
+      assert.equal(
+        terminal.kind,
+        error
+          ? streamProtocol.ZLinkStreamMessageKind.Error
+          : streamProtocol.ZLinkStreamMessageKind.Response
+      );
+      assert.equal(terminal.actorSlot, ended ? undefined : 1);
+      assert.equal(terminal.requestSeq, 17n);
+      assert.equal(terminal.correlationId, 'late-reply-correlation');
+      context.exitDispatch();
+    });
+  }
+}
+
 test('STREAM server header codec round-trips Actor slots and rejects malformed slot headers', () => {
   const encoded = streamProtocol.encodeStreamHeader({
     kind: streamProtocol.ZLinkStreamMessageKind.Send,

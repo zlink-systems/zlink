@@ -1743,9 +1743,89 @@ int binding_submission_order ()
     return published_in_order && retired_in_order && !late ? 0 : 5;
 }
 
+int reply_submission_after_unbound (bool retire = true)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    configure_stream_dispatch_executor ();
+    struct executor_guard_t
+    {
+        ~executor_guard_t () { shutdown_stream_dispatch_executor (); }
+    } executor_guard;
+    serializer_registry_t serializers;
+    auto builder = test::runtime_failure_builder ();
+    builder.stream ("reply-unbound").bind ("tcp://127.0.0.1:0");
+    bind_stream_serializers (builder, serializers);
+    auto runtime = stream_runtime_t::from (builder);
+    auto stream = runtime.open_session ("reply-unbound");
+    actor_gateway_runtime_t gateway;
+    gateway.weak_state ().lock ()->serializers = &serializers;
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream);
+    const auto actor = actor_ref_access_t::make (node_rid_t::from_string ("actor-owner"),
+                                                 "PlayerActor", "reply-unbound-actor", 1);
+    if (!manager.bind (actor).async ().result ())
+        return 1;
+    class deferred_reply_session_t final : public packet_stream_session_t
+    {
+      public:
+        explicit deferred_reply_session_t (actor_gateway_runtime_t &gateway, bool retire) :
+            gateway (gateway), retire (retire)
+        {
+        }
+        task_t<void> on_connected (stream_t &) override { co_return; }
+        task_t<void> on_disconnected (stream_t &) override { co_return; }
+        task_t<void> on_error (stream_t &, const stream_error_t &) override { co_return; }
+        task_t<void> on_packet (stream_t &stream,
+                                const session_message_context_t &,
+                                const message_t &payload) override
+        {
+            auto reply = stream.reply_packet (payload);
+            if (retire)
+                gateway.unbind_session_stream ("reply-unbound-actor");
+            co_await reply.async ();
+        }
+        actor_gateway_runtime_t &gateway;
+        bool retire;
+    } session (gateway, retire);
+    stream_header_t request (stream_message_kind_t::request, stream_codec_t::json,
+                             stream_header_flags_t::has_request_seq, 1, "request", {});
+    request.with_actor_slot (1);
+    request.with_correlation_id ("late-reply-correlation");
+    const auto dispatched =
+      runtime.dispatch_packet (session, stream, request, zlink::message_t::from ("{}"));
+    if (!dispatched) {
+        std::cerr << "dispatch failed: " << dispatched.error ()->what () << '\n';
+        return 2;
+    }
+    const auto headers = runtime.written_headers (stream);
+    bool registered = false;
+    for (const auto &header : headers) {
+        std::cout << "frame=" << header.packet_name () << " kind=" << int (header.kind ())
+                  << " slot=" << header.actor_slot ().value_or (0) << '\n';
+        if (header.packet_name () == "$zlink.actor.bound")
+            registered = true;
+        if (header.packet_name () == "$zlink.actor.unbound")
+            registered = false;
+        if (header.actor_slot () && !registered)
+            return 3;
+    }
+    const auto &terminal = headers.back ();
+    return headers.size () == (retire ? 3 : 2)
+               && terminal.kind () == stream_message_kind_t::response
+               && terminal.request_seq () == 1
+               && terminal.correlation_id () == "late-reply-correlation"
+               && terminal.actor_slot ()
+                    == (retire ? std::optional<std::uint16_t>{} : std::optional<std::uint16_t>{1})
+             ? 0
+             : 4;
+}
+
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--reply-unbound")
+        return reply_submission_after_unbound (false) ? 5 : reply_submission_after_unbound ();
     if (argc == 2 && std::string_view (argv[1]) == "--binding-submission-order")
         return binding_submission_order ();
     if (argc == 2 && std::string_view (argv[1]) == "--reader-retirement-tracked")
@@ -2252,7 +2332,7 @@ int main (int argc, char **argv)
     }
     const auto stale_error_header =
       zlink::framework::detail::stream_runtime_t::make_terminal_header (
-        stream, stream_message_kind_t::error, request_header);
+        stream_message_kind_t::error, request_header);
     if (stale_error_header.actor_slot ()) {
         return 321;
     }
@@ -2303,7 +2383,7 @@ int main (int argc, char **argv)
     }
     const auto actor_error_header =
       zlink::framework::detail::stream_runtime_t::make_terminal_header (
-        actor_stream, stream_message_kind_t::error, actor_request_header);
+        stream_message_kind_t::error, actor_request_header);
     if (actor_error_header.actor_slot () != 1) {
         return 322;
     }
