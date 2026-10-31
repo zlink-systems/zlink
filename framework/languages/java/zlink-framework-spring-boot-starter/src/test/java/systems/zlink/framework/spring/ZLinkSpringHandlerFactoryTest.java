@@ -7,18 +7,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.beans.factory.config.DependencyDescriptor;
+import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.context.ApplicationContextException;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Scope;
+import org.springframework.context.support.SimpleThreadScope;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkHandlerFilter;
@@ -97,6 +103,368 @@ final class ZLinkSpringHandlerFactoryTest {
         try (var activation = services.openActivation()) {
             var handler = (SpringCatalogHandler) plan.create(activation, type -> dependency);
             assertSame(dependency, handler.dependency);
+        }
+    }
+
+    @Test
+    void singletonFactoryMethodSharesTheActivationStrategyButCreatesAndDestroysEachHandler() {
+        LifecycleRequestHandler.reset();
+        ActivationDependency.destroyed.set(0);
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.register(SingletonLifecycleHandlerConfig.class);
+            context.refresh();
+            var springHandler = context.getBean(LifecycleRequestHandler.class);
+            var services =
+                    ZLinkHandlerActivator.services(
+                            new ZLinkSpringHandlerFactory(context.getBeanFactory()));
+            services.prepare(LifecycleRequestHandler.class);
+
+            LifecycleRequestHandler previous = null;
+            ZLinkHandlerActivator.Activation previousActivation = null;
+            for (int index = 0; index < 2; index++) {
+                var activation =
+                        ZLinkHandlerInstanceOwner.openActivation(
+                                services, LifecycleRequestHandler.class);
+                if (previousActivation != null) {
+                    assertSame(previousActivation, activation);
+                }
+                var handler =
+                        (LifecycleRequestHandler)
+                                ZLinkHandlerInstanceOwner.createSingle(
+                                        activation, LifecycleRequestHandler.class);
+                assertNotSame(springHandler, handler);
+                assertSame(springHandler.dependency, handler.dependency);
+                if (previous != null) {
+                    assertNotSame(previous, handler);
+                }
+                ZLinkHandlerInstanceOwner.closeSingle(activation, handler);
+                previous = handler;
+                previousActivation = activation;
+            }
+
+            assertEquals(3, LifecycleRequestHandler.created.get());
+            assertEquals(2, LifecycleRequestHandler.destroyed.get());
+            assertEquals(0, ActivationDependency.destroyed.get());
+        }
+        assertEquals(3, LifecycleRequestHandler.destroyed.get());
+        assertEquals(1, ActivationDependency.destroyed.get());
+    }
+
+    @Test
+    void prototypeHandlerIsCreatedAndDestroyedForEachDispatch() {
+        LifecycleRequestHandler.reset();
+        var beans = new DefaultListableBeanFactory();
+        var definition = new RootBeanDefinition(LifecycleRequestHandler.class);
+        definition.setScope(BeanDefinition.SCOPE_PROTOTYPE);
+        definition.setAutowireMode(AbstractBeanDefinition.AUTOWIRE_CONSTRUCTOR);
+        beans.registerBeanDefinition("prototypeHandler", definition);
+        try (var context = new AnnotationConfigApplicationContext(beans)) {
+            context.refresh();
+            var services =
+                    ZLinkHandlerActivator.services(
+                            new ZLinkSpringHandlerFactory(context.getBeanFactory()));
+            services.prepare(LifecycleRequestHandler.class);
+            LifecycleRequestHandler previous = null;
+
+            for (int index = 0; index < 2; index++) {
+                var activation =
+                        ZLinkHandlerInstanceOwner.openActivation(
+                                services, LifecycleRequestHandler.class);
+                var handler =
+                        (LifecycleRequestHandler)
+                                ZLinkHandlerInstanceOwner.createSingle(
+                                        activation, LifecycleRequestHandler.class);
+                if (previous != null) {
+                    assertNotSame(previous, handler);
+                }
+                ZLinkHandlerInstanceOwner.closeSingle(activation, handler);
+                previous = handler;
+            }
+
+            assertEquals(2, LifecycleRequestHandler.created.get());
+            assertEquals(2, LifecycleRequestHandler.destroyed.get());
+        }
+    }
+
+    @Test
+    void requestScopedHandlerIsCreatedAndDestroyedForEachDispatch() {
+        LifecycleRequestHandler.reset();
+        var beans = new DefaultListableBeanFactory();
+        beans.registerScope("request", new SimpleThreadScope());
+        var definition = new RootBeanDefinition(LifecycleRequestHandler.class);
+        definition.setScope("request");
+        definition.setAutowireMode(AbstractBeanDefinition.AUTOWIRE_CONSTRUCTOR);
+        beans.registerBeanDefinition("requestHandler", definition);
+        var services = ZLinkHandlerActivator.services(new ZLinkSpringHandlerFactory(beans));
+        services.prepare(LifecycleRequestHandler.class);
+        LifecycleRequestHandler previous = null;
+
+        for (int index = 0; index < 2; index++) {
+            var activation =
+                    ZLinkHandlerInstanceOwner.openActivation(
+                            services, LifecycleRequestHandler.class);
+            var handler =
+                    (LifecycleRequestHandler)
+                            ZLinkHandlerInstanceOwner.createSingle(
+                                    activation, LifecycleRequestHandler.class);
+            if (previous != null) {
+                assertNotSame(previous, handler);
+            }
+            ZLinkHandlerInstanceOwner.closeSingle(activation, handler);
+            previous = handler;
+        }
+
+        assertEquals(2, LifecycleRequestHandler.created.get());
+        assertEquals(2, LifecycleRequestHandler.destroyed.get());
+    }
+
+    @Test
+    void runtimeServiceOverrideKeepsSingletonHandlerOnTheExistingActivationPath() {
+        FieldDependency springDependency = new FieldDependency("spring");
+        var beans = new DefaultListableBeanFactory();
+        beans.registerSingleton("fieldDependency", springDependency);
+        var definition = new RootBeanDefinition(RuntimeOverrideHandler.class);
+        definition.setAutowireMode(AbstractBeanDefinition.AUTOWIRE_CONSTRUCTOR);
+        beans.registerBeanDefinition("runtimeOverrideHandler", definition);
+        try (var context = new AnnotationConfigApplicationContext(beans)) {
+            context.refresh();
+            var springHandler = context.getBean(RuntimeOverrideHandler.class);
+            var runtimeDependency = new FieldDependency("runtime");
+            var services =
+                    ZLinkHandlerActivator.services(
+                                    new ZLinkSpringHandlerFactory(context.getBeanFactory()))
+                            .add(FieldDependency.class, runtimeDependency);
+            services.prepare(RuntimeOverrideHandler.class);
+
+            var activation =
+                    ZLinkHandlerInstanceOwner.openActivation(
+                            services, RuntimeOverrideHandler.class);
+            var handler =
+                    (RuntimeOverrideHandler)
+                            ZLinkHandlerInstanceOwner.createSingle(
+                                    activation, RuntimeOverrideHandler.class);
+
+            assertNotSame(springHandler, handler);
+            assertSame(runtimeDependency, handler.dependency);
+            ZLinkHandlerInstanceOwner.closeSingle(activation, handler);
+        }
+    }
+
+    @Test
+    void nestedRuntimeServiceOverrideHasTheSamePrecedenceInTypedAndRegularActivation() {
+        var beans = new DefaultListableBeanFactory();
+        var springDependency = new FieldDependency("spring");
+        beans.registerBeanDefinition(
+                "fieldDependency",
+                new RootBeanDefinition(FieldDependency.class, () -> springDependency));
+        var definition = new RootBeanDefinition(RuntimeOverrideHandler.class);
+        definition.setAutowireMode(AbstractBeanDefinition.AUTOWIRE_CONSTRUCTOR);
+        beans.registerBeanDefinition("runtimeOverrideHandler", definition);
+        try (var context = new AnnotationConfigApplicationContext(beans)) {
+            context.refresh();
+            var factory = new ZLinkSpringHandlerFactory(context.getBeanFactory());
+            factory.prepare(RuntimeOverrideHandler.class);
+            var runtimeDependency = new FieldDependency("runtime");
+            var services =
+                    ZLinkHandlerActivator.services(ZLinkHandlerActivator.services(factory))
+                            .add(FieldDependency.class, runtimeDependency);
+            services.prepare(RuntimeOverrideHandler.class);
+
+            var regularActivation = ZLinkHandlerInstanceOwner.openActivation(services);
+            var regularHandler =
+                    (RuntimeOverrideHandler)
+                            ZLinkHandlerInstanceOwner.createSingle(
+                                    regularActivation, RuntimeOverrideHandler.class);
+            try {
+                assertSame(runtimeDependency, regularHandler.dependency);
+            } finally {
+                ZLinkHandlerInstanceOwner.closeSingle(regularActivation, regularHandler);
+            }
+
+            var typedActivation =
+                    ZLinkHandlerInstanceOwner.openActivation(
+                            services, RuntimeOverrideHandler.class);
+            var typedHandler =
+                    (RuntimeOverrideHandler)
+                            ZLinkHandlerInstanceOwner.createSingle(
+                                    typedActivation, RuntimeOverrideHandler.class);
+            try {
+                assertSame(runtimeDependency, typedHandler.dependency);
+            } finally {
+                ZLinkHandlerInstanceOwner.closeSingle(typedActivation, typedHandler);
+            }
+        }
+    }
+
+    @Test
+    void lazyConstructorDependencyRemainsLazyOnThePerDispatchActivationPath() {
+        LazyConstructorHandler.reset();
+        LazyDependency.created.set(0);
+        LazyDependency.destroyed.set(0);
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.register(LazyDependencyConfig.class);
+            context.getDefaultListableBeanFactory()
+                    .registerBeanDefinition(
+                            "lazyConstructorHandler",
+                            new RootBeanDefinition(LazyConstructorHandler.class));
+            context.refresh();
+            var services =
+                    ZLinkHandlerActivator.services(
+                            new ZLinkSpringHandlerFactory(context.getBeanFactory()));
+            services.prepare(LazyConstructorHandler.class);
+
+            Assertions.assertFalse(
+                    context.getDefaultListableBeanFactory().containsSingleton("lazyDependency"));
+            ZLinkHandlerActivator.Activation previousActivation = null;
+            for (int index = 0; index < 2; index++) {
+                var activation =
+                        ZLinkHandlerInstanceOwner.openActivation(
+                                services, LazyConstructorHandler.class);
+                if (previousActivation != null) {
+                    assertNotSame(previousActivation, activation);
+                }
+                var handler =
+                        (LazyConstructorHandler)
+                                ZLinkHandlerInstanceOwner.createSingle(
+                                        activation, LazyConstructorHandler.class);
+
+                if (index == 0) {
+                    Assertions.assertFalse(
+                            context.getDefaultListableBeanFactory()
+                                    .containsSingleton("lazyDependency"));
+                }
+                assertEquals("ready", handler.dependency.status());
+                ZLinkHandlerInstanceOwner.closeSingle(activation, handler);
+                previousActivation = activation;
+            }
+
+            assertEquals(3, LazyConstructorHandler.created.get());
+            assertEquals(1, LazyDependency.created.get());
+            assertEquals(2, LazyConstructorHandler.destroyed.get());
+        }
+        assertEquals(1, LazyDependency.destroyed.get());
+    }
+
+    @Configuration
+    static class LazyDependencyConfig {
+        @Bean
+        @Lazy
+        LazyDependency lazyDependency() {
+            return new LazyDependency();
+        }
+    }
+
+    public static final class LazyConstructorHandler
+            implements ZLinkRequestHandler<String, String>, DisposableBean {
+        static final AtomicInteger created = new AtomicInteger();
+        static final AtomicInteger destroyed = new AtomicInteger();
+
+        final LazyDependency dependency;
+
+        public LazyConstructorHandler(@Lazy LazyDependency dependency) {
+            this.dependency = dependency;
+            created.incrementAndGet();
+        }
+
+        static void reset() {
+            created.set(0);
+            destroyed.set(0);
+        }
+
+        @Override
+        public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture(request);
+        }
+
+        @Override
+        public void destroy() {
+            destroyed.incrementAndGet();
+        }
+    }
+
+    public static class LazyDependency implements DisposableBean {
+        static final AtomicInteger created = new AtomicInteger();
+        static final AtomicInteger destroyed = new AtomicInteger();
+
+        public LazyDependency() {
+            created.incrementAndGet();
+        }
+
+        public String status() {
+            return "ready";
+        }
+
+        @Override
+        public void destroy() {
+            destroyed.incrementAndGet();
+        }
+    }
+
+    public static final class LifecycleRequestHandler
+            implements ZLinkRequestHandler<String, String>, DisposableBean {
+        static final AtomicInteger created = new AtomicInteger();
+        static final AtomicInteger destroyed = new AtomicInteger();
+        final ActivationDependency dependency;
+
+        public LifecycleRequestHandler() {
+            this(null);
+        }
+
+        public LifecycleRequestHandler(ActivationDependency dependency) {
+            this.dependency = dependency;
+            created.incrementAndGet();
+        }
+
+        static void reset() {
+            created.set(0);
+            destroyed.set(0);
+        }
+
+        @Override
+        public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture(request);
+        }
+
+        @Override
+        public void destroy() {
+            destroyed.incrementAndGet();
+        }
+    }
+
+    @Configuration
+    static class SingletonLifecycleHandlerConfig {
+        @Bean
+        ActivationDependency activationDependency() {
+            return new ActivationDependency();
+        }
+
+        @Bean
+        @Lazy
+        LifecycleRequestHandler lifecycleRequestHandler(ActivationDependency dependency) {
+            return new LifecycleRequestHandler(dependency);
+        }
+    }
+
+    public static final class ActivationDependency implements DisposableBean {
+        static final AtomicInteger destroyed = new AtomicInteger();
+
+        @Override
+        public void destroy() {
+            destroyed.incrementAndGet();
+        }
+    }
+
+    public static final class RuntimeOverrideHandler
+            implements ZLinkRequestHandler<String, String> {
+        final FieldDependency dependency;
+
+        public RuntimeOverrideHandler(FieldDependency dependency) {
+            this.dependency = dependency;
+        }
+
+        @Override
+        public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture(request);
         }
     }
 
