@@ -4,6 +4,7 @@ const framework = require('../../packages/framework/dist/internal');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const { ZLinkSubmitStatus } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+const { allocatePayloadBytes } = require('../../packages/framework/dist/contracts/Common/payload-slab');
 
 for (const classification of [true, undefined]) {
   test(`node send skips peer snapshots when manual classification is ${classification}`, async () => {
@@ -88,20 +89,20 @@ test('service multipart writes borrowed slices once into the owned wire frame', 
 });
 
 // Spec 08 E1 allows the one write into the outbound frame. Every frame byte
-// is written by the encoder, so a small frame takes pooled storage: no zero
-// fill and no backing store per message. Unallocated pool bytes are dirtied
+// is written by the encoder, so small frames share a payload slab rather
+// than allocating a backing store per message. Unallocated slab bytes are dirtied
 // first, so a byte the encoder skipped would differ from the expected layout.
-test('small service frames take pooled storage and write every byte', () => {
+test('small service frames share a payload slab and write every byte', () => {
   const text8 = value => Buffer.concat([Buffer.from([Buffer.byteLength(value)]), Buffer.from(value)]);
   const u32 = value => { const bytes = Buffer.alloc(4); bytes.writeUInt32BE(value); return bytes; };
   const expected = (packetName, contentType, payload) => {
     const body = Buffer.concat([text8(packetName), text8(contentType), u32(payload.length), payload]);
     return Buffer.concat([Buffer.from([1]), u32(body.length), body]);
   };
-  // Start where the pool has room for both frames.
-  let probe = Buffer.allocUnsafe(1);
-  while (probe.buffer.byteLength - probe.byteOffset < 1024) probe = Buffer.allocUnsafe(1);
-  new Uint8Array(probe.buffer, probe.byteOffset + 1).fill(0xa5);
+  // Start a slab with room for both frames.
+  let probe;
+  do { probe = allocatePayloadBytes(16384); } while (probe.byteOffset !== 0);
+  new Uint8Array(probe.buffer, probe.byteLength).fill(0xa5);
   const single = wire.encodeApplicationPayload({
     packetName: 'Probe', contentType: 'application/json', payload: Buffer.from('{"body":1}')
   });

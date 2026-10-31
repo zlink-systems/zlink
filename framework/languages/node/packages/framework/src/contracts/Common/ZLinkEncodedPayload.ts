@@ -1,3 +1,5 @@
+import { allocatePayloadBytes } from './payload-slab';
+
 export class ZLinkEncodedPayload {
   readonly #bytes: Buffer;
 
@@ -19,9 +21,15 @@ export class ZLinkEncodedPayload {
     return new ZLinkEncodedPayload(bytes, true);
   }
 
-  /** Returns a copy of the stored bytes. */
+  /**
+   * Returns a copy of the stored bytes. The copy may be a view into a shared
+   * backing store; use its byteOffset and byteLength, not the whole `.buffer`.
+   */
   data(): Uint8Array {
-    return new Uint8Array(this.#bytes);
+    const storage = allocatePayloadBytes(this.#bytes.length);
+    const bytes = new Uint8Array(storage.buffer, storage.byteOffset, storage.byteLength);
+    bytes.set(this.#bytes);
+    return bytes;
   }
 
   /** Returns the stored bytes without copying. Do not modify this view or its backing buffer. */
