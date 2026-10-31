@@ -47,8 +47,12 @@ class bench_metric_reader_t
     std::optional<double> collect_cumulative_sum (std::string_view metric_name,
                                                   std::initializer_list<label_t> labels) const
     {
+        if (opentelemetry::metrics::Provider::GetMeterProvider ().get () != _provider.get ())
+            return std::nullopt;
+
         std::optional<double> value;
-        _reader->Collect ([&] (opentelemetry::sdk::metrics::ResourceMetrics &resource_metrics) {
+        const bool collected = _reader->Collect ([&] (opentelemetry::sdk::metrics::ResourceMetrics
+                                                        &resource_metrics) {
             for (const auto &scope_metrics : resource_metrics.scope_metric_data_) {
                 for (const auto &metric : scope_metrics.metric_data_) {
                     if (metric.instrument_descriptor.name_ != metric_name)
@@ -69,7 +73,9 @@ class bench_metric_reader_t
             }
             return true;
         });
-        return value;
+        if (!collected)
+            return std::nullopt;
+        return value.value_or (0.0);
     }
 
   private:

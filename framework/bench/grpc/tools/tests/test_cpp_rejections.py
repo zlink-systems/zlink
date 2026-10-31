@@ -84,6 +84,17 @@ class CppRejectionTest(unittest.TestCase):
         with self.assertRaisesRegex(ReportError, "target rejection count unavailable"):
             cells_from_cell_json(json.loads(self.result.read_text()), "test")
 
+    def test_unavailable_target_rejection_stays_failure_after_merge(self):
+        self.write()
+        self.target.write_text(json.dumps({"received": 8, "errors": 0, "rejected": None}))
+        result = runner_python("merge_target_stats", self.result, self.target, 20, "false")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        merged = json.loads(self.result.read_text())["cells"][0]
+        self.assertIsNone(merged["server_rejected_count"])
+        result = runner_python("verify_request_counts", self.result)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("target rejection count unavailable", result.stderr)
+
     def test_missing_rejection_count_does_not_use_implementation_name(self):
         self.write()
         self.target.write_text(json.dumps({"received": 8, "errors": 0}))
