@@ -7,6 +7,18 @@ namespace Zlink.Framework.UnitTests;
 public sealed class ReceiveBatchRearmTests
 {
     [Fact]
+    public void ReceiveBudgetAllowsTheFirstRecordAfterItsTimeBudgetExpires()
+    {
+        var startedAt =
+            System.Diagnostics.Stopwatch.GetTimestamp() - System.Diagnostics.Stopwatch.Frequency;
+
+        Assert.False(ZLinkReceiveBatchBudget.IsExhausted(0, 0, startedAt));
+        Assert.True(ZLinkReceiveBatchBudget.IsExhausted(1, 0, startedAt));
+        Assert.False(ZLinkReceiveBatchBudget.WouldExceed(0, 0, 1, startedAt));
+        Assert.True(ZLinkReceiveBatchBudget.WouldExceed(1, 0, 1, startedAt));
+    }
+
+    [Fact]
     public async Task InfiniteWaitRearmsUnreadRecordsAfterTheReceiveCountBudgetWithoutAnotherSend()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
