@@ -63,12 +63,6 @@ final class ZLinkJavaLivenessNativeContractTest {
                                 });
                         clockEntered.complete(null);
                         releaseClock.join();
-                    } else if (ZLinkStateLane.current() == null
-                            && Thread.currentThread() == sourcePump.get()) {
-                        // The receive owner has finished the cleanup turn, including
-                        // native disconnect, before reading the clock for its next turn.
-                        offset.set(0);
-                        cleaned.complete(null);
                     }
                     return System.nanoTime() + offset.get();
                 };
@@ -114,7 +108,19 @@ final class ZLinkJavaLivenessNativeContractTest {
                 awaitAdmission(
                         source, expiredRid, () -> source.connectPeer(expiredEndpoint, expiredRid));
                 awaitAdmission(expired, sourceRid, () -> {});
-                try {
+                try (var cleanupObservation =
+                        source.onPeerStateChanged(
+                                expiredRid,
+                                () -> {
+                                    // A logical admission can end before native disconnect.
+                                    // Wait for Core's selected route to disappear as well.
+                                    if (source.observePeerRoute(expiredRid).selectedGeneration()
+                                            == 0) {
+                                        offset.set(0);
+                                        cleaned.complete(null);
+                                    }
+                                },
+                                () -> {})) {
                     armed.set(true);
                     // Wake the existing receive owner with an ordinary record. Block its
                     // next clock read before enqueuing the public connection-close request.
