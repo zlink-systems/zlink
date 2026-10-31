@@ -105,7 +105,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
 
         assertEquals(List.of("dispatch", "reply"), calls);
         assertArrayEquals(original, frozen);
-        assertTrue(pending(staged).isEmpty());
+        assertTrue(staged.pendingDrainWork().isEmpty());
     }
 
     @Test
@@ -141,7 +141,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                 .join();
 
         assertEquals(1, backend.operations.stream().filter("replay:actor:spot"::equals).count());
-        assertTrue(pending(staged).isEmpty());
+        assertTrue(staged.pendingDrainWork().isEmpty());
     }
 
     @Test
@@ -158,10 +158,13 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         owner.stageRelayedRecord(staged, "room-a", false, new byte[] {2})
                 .toCompletableFuture()
                 .join();
-        assertEquals(2, pending(staged).size());
+        var pending = staged.pendingDrainWork();
+        assertEquals(2, pending.size());
+        assertThrows(UnsupportedOperationException.class, pending::clear);
 
         owner.discard(staged).toCompletableFuture().join();
-        assertTrue(pending(staged).isEmpty());
+        assertTrue(staged.pendingDrainWork().isEmpty());
+        assertEquals(2, pending.size(), "the earlier drain snapshot must remain unchanged");
     }
 
     @Test
@@ -185,7 +188,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                 List.of(
                         new AsyncDrainProbe.Pending("temporary:spot:0", "aggregate staging owner"),
                         new AsyncDrainProbe.Pending("relayed:spot:0", "aggregate staging owner")),
-                pending(staged));
+                staged.pendingDrainWork());
 
         assertSame(
                 failure,
@@ -193,17 +196,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                                 CompletionException.class,
                                 () -> owner.discard(staged).toCompletableFuture().join())
                         .getCause());
-        assertEquals(2, pending(staged).size());
-    }
-
-    private static List<AsyncDrainProbe.Pending> pending(Object owner) {
-        try {
-            var field = owner.getClass().getDeclaredField("debugProbe");
-            field.setAccessible(true);
-            return ((AsyncDrainProbe) field.get(owner)).pending();
-        } catch (ReflectiveOperationException failure) {
-            throw new AssertionError(failure);
-        }
+        assertEquals(2, staged.pendingDrainWork().size());
     }
 
     @Test

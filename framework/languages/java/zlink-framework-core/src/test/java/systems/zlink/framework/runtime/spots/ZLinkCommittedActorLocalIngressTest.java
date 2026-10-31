@@ -511,7 +511,7 @@ final class ZLinkCommittedActorLocalIngressTest {
     }
 
     private static ZLinkInternalSpotNode node(ZLinkFrameworkRuntime host) throws Exception {
-        return (ZLinkInternalSpotNode) field(field(host, "spots"), "primaryNode");
+        return ((ZLinkSpotRuntime) host.spotManager()).primaryNode();
     }
 
     private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options) {

@@ -655,16 +655,10 @@ final class ZLinkJavaSubmissionTest {
                                 java.util.Map.of(),
                                 Runnable::run)) {
             binding.result = SubmitResult.BACKPRESSURED;
-            var portField = ZLinkJavaRawMeshNode.class.getDeclaredField("port");
-            portField.setAccessible(true);
-            var meshPort = (ZLinkJavaRawServicePort) portField.get(mesh);
-            var operationsField = ZLinkJavaRawMeshNode.class.getDeclaredField("operations");
-            operationsField.setAccessible(true);
-            var registry = (ZLinkServiceOperationRegistry) operationsField.get(mesh);
+            var meshPort = binding.port;
+            var registry = mesh.operationRegistry();
             var registrations = binding.registrations;
-            var portOperations = ZLinkJavaRawServicePort.class.getDeclaredField("operations");
-            portOperations.setAccessible(true);
-            assertSame(registry, portOperations.get(meshPort));
+            assertSame(registry, meshPort.operationRegistry());
             var socket = meshPort.openRouter(RoutingId.from("mesh-source"));
             var send = meshPort.sendMessages(socket, TARGET, List.of(Message.from("pending")));
             assertEquals(1, registry.pendingCount());

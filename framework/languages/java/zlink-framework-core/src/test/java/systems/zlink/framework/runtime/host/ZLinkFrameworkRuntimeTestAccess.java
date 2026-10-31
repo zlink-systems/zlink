@@ -25,6 +25,12 @@ public final class ZLinkFrameworkRuntimeTestAccess {
         return ZLinkFrameworkRuntime.start(options, backendProvider);
     }
 
+    public static ZLinkFrameworkRuntime startHost(
+            DefaultZLinkFrameworkOptions options, ZLinkBackendAdapterProvider backendProvider) {
+        return ZLinkFrameworkRuntime.startHost(
+                options, backendProvider, ZLinkHandlerActivator.reflection(), null);
+    }
+
     public static CompletionStage<Void> startupCompletion(ZLinkFrameworkRuntime runtime) {
         return runtime.startupCompletion();
     }
