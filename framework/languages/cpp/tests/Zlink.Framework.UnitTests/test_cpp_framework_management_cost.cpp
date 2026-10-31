@@ -50,8 +50,8 @@ void verify_ready_management_cost ()
              "empty management warmup reported a deadline");
     using activity_t = std::optional<std::chrono::steady_clock::time_point>;
     std::optional<task_t<activity_t>> ready_result;
-    // The existing task API always owns a shared result, including ready values.
-    // Calibrate that required object and reject every allocation beyond it.
+    // Calibrate the ready-result representation and reject every allocation
+    // beyond that baseline.
     const auto baseline = tests::measure_allocations (
       [&] { ready_result.emplace (result_t<activity_t>::success (std::nullopt)); });
     bool within_budget = true;

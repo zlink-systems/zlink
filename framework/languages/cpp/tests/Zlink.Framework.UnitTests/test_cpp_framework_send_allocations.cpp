@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <gtest/gtest.h>
-#include "allocation_counter.hpp"
+#include "task_allocation_counter.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime_failure_fixture.hpp"
@@ -8,10 +8,49 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 
+#include <array>
+#include <condition_variable>
 #include <cstdio>
+#include <mutex>
+#if defined(__linux__) && defined(__GNUC__) && !defined(__clang__)
+#include <pthread.h>
+#endif
 #include <limits>
 #include <memory>
 #include <optional>
+
+#if defined(__linux__) && defined(__GNUC__) && !defined(__clang__)
+namespace
+{
+thread_local bool count_sync = false;
+thread_local unsigned mutex_locks = 0;
+thread_local unsigned notifications = 0;
+}
+
+extern "C" int __real_pthread_mutex_lock (pthread_mutex_t *mutex);
+extern "C" int __wrap_pthread_mutex_lock (pthread_mutex_t *mutex)
+{
+    if (count_sync)
+        ++mutex_locks;
+    return __real_pthread_mutex_lock (mutex);
+}
+
+extern "C" void __real__ZNSt18condition_variable10notify_allEv (std::condition_variable *condition);
+extern "C" void __wrap__ZNSt18condition_variable10notify_allEv (std::condition_variable *condition)
+{
+    if (count_sync)
+        ++notifications;
+    __real__ZNSt18condition_variable10notify_allEv (condition);
+}
+
+extern "C" void __real__ZNSt18condition_variable10notify_oneEv (std::condition_variable *condition);
+extern "C" void __wrap__ZNSt18condition_variable10notify_oneEv (std::condition_variable *condition)
+{
+    if (count_sync)
+        ++notifications;
+    __real__ZNSt18condition_variable10notify_oneEv (condition);
+}
+#endif
 
 namespace
 {
@@ -19,11 +58,359 @@ namespace fw = zlink::framework;
 namespace detail = fw::detail;
 namespace mesh = fw::runtime::mesh;
 
+template <typename TAction, std::size_t N>
+std::size_t measure_ready_operation (
+  const char *name,
+  const std::array<fw::tests::shared_state_allocation_site_t, N> &state_sites,
+  TAction &&action)
+{
+    std::array<fw::tests::allocation_event_t, 32> events;
+    fw::tests::allocation_event_log_t log{events.data (), events.size ()};
+    const fw::tests::allocation_event_scope_t recording (log);
+#if defined(__linux__) && defined(__GNUC__) && !defined(__clang__)
+    mutex_locks = 0;
+    notifications = 0;
+    count_sync = true;
+    struct sync_counter_scope_t
+    {
+        ~sync_counter_scope_t () { count_sync = false; }
+    } counter_scope;
+#endif
+    const auto allocations = fw::tests::count_allocations (std::forward<TAction> (action));
+#if defined(__linux__) && defined(__GNUC__) && !defined(__clang__)
+    count_sync = false;
+#endif
+    unsigned shared_results = 0;
+    for (std::size_t index = 0; index != log.count; ++index) {
+        for (const auto &site : state_sites) {
+            if (site.matches (events[index])) {
+                ++shared_results;
+                break;
+            }
+        }
+    }
+    if constexpr (fw::tests::shared_state_stack_metrics_available)
+        std::printf ("%s: shared-results=%u allocations=%zu", name, shared_results, allocations);
+    else
+        std::printf ("%s: shared-results=not-measured allocations=%zu", name, allocations);
+#if defined(__linux__) && defined(__GNUC__) && !defined(__clang__)
+    std::printf (" locks=%u notifications=%u", mutex_locks, notifications);
+#else
+    std::printf (" synchronization=not-measured");
+#endif
+    std::printf ("\n");
+    EXPECT_FALSE (log.overflow);
+    if constexpr (fw::tests::shared_state_stack_metrics_available)
+        EXPECT_EQ (shared_results, 0u);
+    return allocations;
+}
+
+TEST (SendAllocations, SynchronizationCountersObserveLocksAndBothNotifications)
+{
+#if defined(__linux__) && defined(__GNUC__) && !defined(__clang__)
+    std::mutex mutex;
+    std::condition_variable condition;
+    mutex_locks = 0;
+    notifications = 0;
+    count_sync = true;
+    mutex.lock ();
+    mutex.unlock ();
+    condition.notify_one ();
+    condition.notify_all ();
+    count_sync = false;
+    EXPECT_EQ (mutex_locks, 1u);
+    EXPECT_EQ (notifications, 2u);
+#else
+    GTEST_SKIP () << "synchronization linker wrapping requires Linux/GNU";
+#endif
+}
+
+TEST (SendAllocations, SharedStateCounterExcludesOrdinaryAllocationOfTheSameSize)
+{
+    if constexpr (!fw::tests::shared_state_stack_metrics_available)
+        GTEST_SKIP () << "shared-state stack classification requires Linux/GNU Debug";
+    const std::array sites{
+      fw::tests::shared_state_allocation_site<detail::task_shared_state_t<fw::result_t<void>>> ()};
+    const auto allocations = measure_ready_operation ("same-size ordinary allocation", sites, [&] {
+        void *memory = ::operator new (sites[0].size);
+        ::operator delete (memory);
+    });
+    EXPECT_EQ (allocations, 1u);
+}
+
 struct route_payload_t
 {
     static constexpr const char *packet_name = "p";
     int value = 7;
 };
+
+TEST (SendAllocations, SynchronousNodeSendKeepsOnlyItsEncodedPartsAllocation)
+{
+    fw::serializer_registry_t serializers;
+    std::size_t before_serializer = 0;
+    std::size_t ready_transport_allocations = 0;
+    unsigned submitted = 0;
+    serializers.add<route_payload_t> (
+      [&] (const route_payload_t &) {
+          before_serializer = fw::tests::tracked_allocation_count;
+          return fw::encoded_payload_t::from_string ("7");
+      },
+      [] (const fw::encoded_payload_t &) { return route_payload_t{}; }, "x/y");
+    auto builder = fw::test::runtime_failure_builder ();
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    runtime.bind_mesh_node_transport (
+      "m",
+      [&] (const auto &, auto) {
+          ++submitted;
+          const auto before = fw::tests::tracked_allocation_count;
+          auto ready = fw::task_t<fw::result_t<void>> (
+            fw::result_t<fw::result_t<void>>::success (fw::result_t<void>::success ()));
+          ready_transport_allocations = fw::tests::tracked_allocation_count - before;
+          return ready;
+      },
+      {});
+    auto client = builder.route_client (serializers);
+    const auto target = zlink::routing_id_t::from ("n");
+    for (unsigned warmup = 0; warmup < 4; ++warmup)
+        client.send_to_node ("m", target, route_payload_t{}).async ().result ().value ();
+    auto call = client.send_to_node ("m", target, route_payload_t{});
+    const std::array state_sites{
+      fw::tests::shared_state_allocation_site<detail::task_shared_state_t<fw::result_t<void>>> (),
+      fw::tests::shared_state_allocation_site<detail::coroutine_task_shared_state_t<void>> (),
+      fw::tests::shared_state_allocation_site<detail::application_task_shared_state_t<void>> ()};
+    const auto allocations = measure_ready_operation ("synchronous node send", state_sites,
+                                                      [&] { call.async ().result ().value (); });
+    std::printf ("synchronous node send: before-encode=%zu ready-transport=%zu\n",
+                 before_serializer, ready_transport_allocations);
+    EXPECT_EQ (submitted, 5u);
+    EXPECT_EQ (before_serializer, 0u);
+    EXPECT_EQ (ready_transport_allocations, 0u);
+    EXPECT_EQ (allocations, 1u);
+}
+
+TEST (SendAllocations, PendingNodeSendRetainsReplacedTransport)
+{
+    fw::serializer_registry_t serializers;
+    serializers.add<route_payload_t> (
+      [] (const auto &) { return fw::encoded_payload_t::from_string ("7"); },
+      [] (const auto &) { return route_payload_t{}; }, "x/y");
+    auto builder = fw::test::runtime_failure_builder ();
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    auto lifetime = std::make_shared<int> ();
+    const std::weak_ptr<int> retained = lifetime;
+    fw::task_completion_source_t<void> release;
+    runtime.bind_mesh_node_transport (
+      "m",
+      [lifetime, &release] (const auto &, auto) -> fw::task_t<fw::result_t<void>> {
+          (void) lifetime;
+          co_await release.task ();
+          co_return fw::result_t<void>::success ();
+      },
+      {});
+    lifetime.reset ();
+    auto client = builder.route_client (serializers);
+    auto pending =
+      client.send_to_node ("m", zlink::routing_id_t::from ("n"), route_payload_t{}).async ();
+    EXPECT_FALSE (pending.await_ready ());
+    runtime.bind_mesh_node_transport ("m", {}, {});
+    EXPECT_FALSE (retained.expired ());
+    ASSERT_TRUE (release.complete (fw::result_t<void>::success ()));
+    EXPECT_TRUE (pending.result ());
+}
+
+TEST (SendAllocations, NodeDirectSendPreservesTransportExceptionClassification)
+{
+    enum class completion_t
+    {
+        synchronous_throw,
+        ready_result,
+        pending_result
+    };
+    enum class exception_t
+    {
+        framework,
+        standard,
+        nonstandard
+    };
+    struct nonstandard_failure_t
+    {
+        const void *origin;
+    };
+    const int origin = 7;
+    for (const auto completion : {completion_t::synchronous_throw, completion_t::ready_result,
+                                  completion_t::pending_result}) {
+        for (const auto exception :
+             {exception_t::framework, exception_t::standard, exception_t::nonstandard}) {
+            for (const bool outer_failure : {false, true}) {
+                if (completion == completion_t::synchronous_throw && outer_failure)
+                    continue;
+                SCOPED_TRACE (static_cast<int> (completion));
+                SCOPED_TRACE (static_cast<int> (exception));
+                SCOPED_TRACE (outer_failure);
+                const auto failure = [&] {
+                    switch (exception) {
+                        case exception_t::framework:
+                            return std::make_exception_ptr (fw::framework_exception_t (
+                              fw::framework_error_kind_t::unavailable, "transport failure"));
+                        case exception_t::standard:
+                            return std::make_exception_ptr (
+                              std::runtime_error ("transport failure"));
+                        case exception_t::nonstandard:
+                            return std::make_exception_ptr (nonstandard_failure_t{&origin});
+                    }
+                    return std::exception_ptr{};
+                }();
+                auto terminal = [&] {
+                    if (outer_failure)
+                        return detail::result_access_t::failure<fw::result_t<void>> (failure);
+                    return fw::result_t<fw::result_t<void>>::success (
+                      detail::result_access_t::failure<void> (failure));
+                }();
+                fw::serializer_registry_t serializers;
+                serializers.add<route_payload_t> (
+                  [] (const auto &) { return fw::encoded_payload_t::from_string ("7"); },
+                  [] (const auto &) { return route_payload_t{}; }, "x/y");
+                auto builder = fw::test::runtime_failure_builder ();
+                auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+                runtime.bind_serializers (serializers);
+                fw::task_completion_source_t<fw::result_t<void>> release;
+                unsigned submitted = 0;
+                runtime.bind_mesh_node_transport (
+                  "m",
+                  [&] (const auto &, auto) -> fw::task_t<fw::result_t<void>> {
+                      ++submitted;
+                      if (completion == completion_t::synchronous_throw)
+                          std::rethrow_exception (failure);
+                      if (completion == completion_t::ready_result)
+                          return fw::task_t<fw::result_t<void>> (std::move (terminal));
+                      return release.task ();
+                  },
+                  {});
+                auto client = builder.route_client (serializers);
+                auto pending =
+                  client.send_to_node ("m", zlink::routing_id_t::from ("n"), route_payload_t{})
+                    .async ();
+                ASSERT_EQ (submitted, 1u);
+                EXPECT_EQ (pending.await_ready (), completion != completion_t::pending_result);
+                if (completion == completion_t::pending_result)
+                    ASSERT_TRUE (release.complete (std::move (terminal)));
+                const auto &result = pending.result ();
+                ASSERT_FALSE (result);
+                if (exception == exception_t::nonstandard) {
+                    EXPECT_EQ (result.error (), nullptr);
+                    try {
+                        result.value ();
+                        FAIL () << "nonstandard transport exception was lost";
+                    }
+                    catch (const nonstandard_failure_t &error) {
+                        EXPECT_EQ (error.origin, &origin);
+                    }
+                } else {
+                    ASSERT_NE (result.error (), nullptr);
+                    EXPECT_EQ (result.error_kind (),
+                               exception == exception_t::framework
+                                 ? fw::framework_error_kind_t::unavailable
+                                 : fw::framework_error_kind_t::internal_failure);
+                    EXPECT_STREQ (result.error ()->what (), "transport failure");
+                }
+            }
+        }
+    }
+}
+
+struct synchronous_route_handler_t
+{
+    unsigned calls = 0;
+    void handle (const route_payload_t &) { ++calls; }
+};
+
+TEST (SendAllocations, SynchronousNodeHandlerDoesNotConstructSharedTaskStates)
+{
+    fw::serializer_registry_t serializers;
+    serializers.add<route_payload_t> (
+      [] (const route_payload_t &) { return fw::encoded_payload_t::from_string ("7"); },
+      [] (const fw::encoded_payload_t &) { return route_payload_t{}; }, "x/y");
+    fw::service_collection_t services;
+    services.add_singleton<synchronous_route_handler_t> ();
+    auto provider = services.build_provider ();
+    auto builder = fw::test::runtime_failure_builder ();
+    builder.add_route_mesh ("m")
+      .add_route_send_handler<synchronous_route_handler_t, route_payload_t> ();
+    const auto state = detail::mesh_node_runtime_t::registrations (builder).front ();
+    const auto *handler =
+      state->handlers.resolve ("m", fw::runtime::messaging::message_kind_t::command, "p");
+    ASSERT_NE (handler, nullptr);
+    auto message = zlink::message_t::from ("7");
+    fw::route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
+    context.content_type = "x/y";
+    const auto adapter = [&] {
+        handler->invoker (provider, serializers, message, context, {}).result ().value ();
+    };
+    adapter ();
+    const std::array state_sites{fw::tests::shared_state_allocation_site<
+      detail::coroutine_task_shared_state_t<zlink::message_t>> ()};
+    const auto adapter_allocations =
+      measure_ready_operation ("synchronous node handler", state_sites, adapter);
+    EXPECT_EQ (adapter_allocations, 0u);
+    EXPECT_EQ (provider.get_required<synchronous_route_handler_t> ().calls, 2u);
+}
+
+struct retained_route_payload_t
+{
+    std::shared_ptr<int> value;
+};
+
+struct asynchronous_route_handler_t
+{
+    fw::task_completion_source_t<void> release;
+    int observed = 0;
+
+    fw::task_t<void> handle (const retained_route_payload_t &payload,
+                             const fw::route_message_context_t &)
+    {
+        const auto lifetime = std::weak_ptr<int> (payload.value);
+        co_await release.task ();
+        if (!lifetime.expired ())
+            observed = *payload.value;
+    }
+};
+
+TEST (SendAllocations, AsynchronousMeshHandlerRetainsItsBorrowedPayloadUntilTerminal)
+{
+    std::weak_ptr<int> lifetime;
+    fw::serializer_registry_t serializers;
+    serializers.add<retained_route_payload_t> (
+      [] (const auto &) { return fw::encoded_payload_t::from_string ("7"); },
+      [&] (const fw::encoded_payload_t &) {
+          auto value = std::make_shared<int> (7);
+          lifetime = value;
+          return retained_route_payload_t{std::move (value)};
+      },
+      "x/y");
+    fw::service_collection_t services;
+    services.add_singleton<asynchronous_route_handler_t> ();
+    auto provider = services.build_provider ();
+    auto builder = fw::test::runtime_failure_builder ();
+    builder.add_route_mesh ("m")
+      .add_route_send_handler<asynchronous_route_handler_t, retained_route_payload_t> ("owned");
+    const auto state = detail::mesh_node_runtime_t::registrations (builder).front ();
+    const auto *handler =
+      state->handlers.resolve ("m", fw::runtime::messaging::message_kind_t::command, "owned");
+    ASSERT_NE (handler, nullptr);
+    auto message = zlink::message_t::from ("7");
+    fw::route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
+    context.content_type = "x/y";
+    auto pending = handler->invoker (provider, serializers, message, context, {});
+    EXPECT_FALSE (pending.await_ready ());
+    EXPECT_FALSE (lifetime.expired ());
+    auto &owner = provider.get_required<asynchronous_route_handler_t> ();
+    ASSERT_TRUE (owner.release.complete (fw::result_t<void>::success ()));
+    pending.result ().value ();
+    EXPECT_EQ (owner.observed, 7);
+    EXPECT_TRUE (lifetime.expired ());
+}
 
 TEST (SendAllocations, TypedRouteEncoderUsesOnlyTheBorrowedFunctionContainer)
 {
@@ -47,10 +434,7 @@ TEST (SendAllocations, TypedRouteEncoderUsesOnlyTheBorrowedFunctionContainer)
     const auto target = zlink::routing_id_t::from ("n");
     const auto payload = std::make_shared<route_payload_t> ();
     const fw::dispatch_options_t dispatch;
-    fw::task_completion_source_t<void> encoded;
-    ASSERT_TRUE (encoded.complete (fw::result_t<void>::success ()));
-    // Both paths create one transport-boundary task and encode the same envelope.
-    // The baseline uses the standard allocation-free reference_wrapper target.
+    // Compare ready submission with the standard allocation-free reference_wrapper target.
     auto baseline_submit = [&] (const std::string &packet_name,
                                 const auto &metadata) -> fw::task_t<void> {
         auto encode = [payload] (fw::serializer_registry_t &registry) {
@@ -60,7 +444,7 @@ TEST (SendAllocations, TypedRouteEncoderUsesOnlyTheBorrowedFunctionContainer)
         fw::runtime::messaging::client_call_codec_t codec;
         (void) codec.encode_node_send_parts ("m", packet_name, target, metadata, dispatch,
                                              serializers, borrowed);
-        co_await encoded.task ();
+        return fw::task_t<void> (fw::result_t<void>::success ());
     };
     const std::string packet_name = "p";
     const fw::route_send_call_t::metadata_map_t metadata;
@@ -70,6 +454,7 @@ TEST (SendAllocations, TypedRouteEncoderUsesOnlyTheBorrowedFunctionContainer)
     (void) fw::tests::count_allocations (
       [&] { baseline_submit (packet_name, metadata).result ().value (); });
     const auto expected = before_serializer;
+    EXPECT_EQ (expected, 0u);
     (void) fw::tests::count_allocations ([&] { actual.async ().result ().value (); });
     EXPECT_EQ (before_serializer, expected);
     std::printf ("route encoder allocations before serializer: baseline=%zu typed=%zu\n", expected,
@@ -124,6 +509,47 @@ std::shared_ptr<detail::mesh_node_builder_state_t> mesh_state ()
     state->listen_port.reset ();
     state->routing_id = zlink::routing_id_t::from ("source");
     return state;
+}
+
+TEST (SendAllocations, LocalRoutingIdentityFollowsConfigurationAcrossTheNativeLifecycle)
+{
+    auto state = mesh_state ();
+    detail::mesh_node_runtime_t node (state);
+    const auto original = zlink::routing_id_t::from ("source");
+    const auto replacement = zlink::routing_id_t::from ("replacement");
+    const auto configure = [&] (std::optional<zlink::routing_id_t> identity) {
+        state->lane.run_sync ([&] { state->routing_id = std::move (identity); });
+    };
+    const auto expect_identity = [&] (std::optional<zlink::routing_id_t> identity) {
+        EXPECT_EQ (node.routing_id (), identity);
+        EXPECT_EQ (node.routing_id_async ().result ().value (), identity);
+    };
+    expect_identity (original);
+    configure (std::nullopt);
+    expect_identity (std::nullopt);
+    configure (original);
+    node.start ();
+    auto &topology = node.native_node ().transport ().topology ();
+    const auto descriptor = topology.local_descriptor ();
+    EXPECT_EQ (descriptor.node_routing_id, original.to_bytes ());
+    configure (replacement);
+    expect_identity (replacement);
+    EXPECT_EQ (topology.local_descriptor ().node_routing_id, original.to_bytes ());
+    configure (std::nullopt);
+    expect_identity (std::nullopt);
+    EXPECT_EQ (topology.local_descriptor ().node_routing_id, original.to_bytes ());
+    auto changed_descriptor = descriptor;
+    changed_descriptor.node_routing_id = replacement.to_bytes ();
+    ++changed_descriptor.descriptor_revision;
+    EXPECT_THROW (topology.publish_local (changed_descriptor), std::invalid_argument);
+    EXPECT_EQ (topology.local_descriptor ().node_routing_id, original.to_bytes ());
+    configure (original);
+    node.stop ();
+    expect_identity (original);
+    configure (std::nullopt);
+    expect_identity (std::nullopt);
+    configure (replacement);
+    expect_identity (replacement);
 }
 
 TEST (SendAllocations, KnownTargetForwardsTheNativeTaskWithoutAnotherResult)

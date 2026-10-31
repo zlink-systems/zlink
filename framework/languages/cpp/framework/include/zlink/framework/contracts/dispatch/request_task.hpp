@@ -132,7 +132,7 @@ template <typename TReply> class request_task_t : public task_t<TReply>
 
     request_task_t (result_t<TReply> result) :
         task_t<TReply> (result),
-        _physical_reply (this->_state),
+        _physical_reply (this->shared_state ()),
         _admitted (std::make_shared<task_completion_source_t<void>> ())
     {
         const auto failure = detail::request_failure (result);
@@ -150,8 +150,10 @@ template <typename TReply> class request_task_t : public task_t<TReply>
     {
         // Public failure may precede the physical terminal. Keep the producer's
         // task intact so internal consumers retain their coroutine parameters.
+        (void) _physical_reply.shared_state ();
         detail::observe_task_terminal (
-          _physical_reply, [reply = this->_state, admitted = _admitted] (const auto &result) {
+          _physical_reply,
+          [reply = this->shared_state (), admitted = _admitted] (const auto &result) {
               if (auto failure = detail::request_failure (result))
                   admitted->complete (detail::result_access_t::failure<void> (std::move (failure)));
               else
@@ -183,7 +185,7 @@ template <typename TReply> class request_task_t : public task_t<TReply>
                     std::shared_ptr<task_completion_source_t<void>> admitted) :
         task_t<TReply> (std::move (reply)),
         _physical_reply (detail::with_task_resume_scheduler (
-          task_t<TReply> (this->_state),
+          task_t<TReply> (this->shared_state ()),
           this->_resume_scheduler ? *this->_resume_scheduler : detail::task_scheduler_t{})),
         _admitted (std::move (admitted))
     {
@@ -193,7 +195,7 @@ template <typename TReply> class request_task_t : public task_t<TReply>
     request_task_t (detail::request_projection_t,
                     std::shared_ptr<task_completion_source_t<void>> admitted) :
         task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
-        _physical_reply (this->_state),
+        _physical_reply (this->shared_state ()),
         _admitted (std::move (admitted))
     {
     }
@@ -209,7 +211,7 @@ template <typename TReply> class request_task_t : public task_t<TReply>
 
     detail::request_receiver_t<TReply> receiver (detail::request_projection_t)
     {
-        return {_admitted, [reply = this->_state] (const result_t<TReply> &result) {
+        return {_admitted, [reply = this->shared_state ()] (const result_t<TReply> &result) {
                     reply->complete (result);
                 }};
     }
@@ -224,20 +226,21 @@ template <typename TReply> class request_task_t : public task_t<TReply>
     detail::request_receiver_t<TInput> receiver (detail::public_request_projection_t,
                                                  TProject &&project)
     {
-        return {_admitted, [reply = this->_state, physical = _physical_reply._state,
-                            project = std::forward<TProject> (project)] (
-                             const result_t<TInput> &input) mutable {
-                    auto projected = [&] () -> result_t<TReply> {
-                        try {
-                            return project (input);
-                        }
-                        catch (...) {
-                            return detail::current_exception_result<TReply> ();
-                        }
-                    }();
-                    physical->complete (projected);
-                    reply->complete (std::move (projected));
-                }};
+        return {
+          _admitted,
+          [reply = this->shared_state (), physical = _physical_reply.shared_state (),
+           project = std::forward<TProject> (project)] (const result_t<TInput> &input) mutable {
+              auto projected = [&] () -> result_t<TReply> {
+                  try {
+                      return project (input);
+                  }
+                  catch (...) {
+                      return detail::current_exception_result<TReply> ();
+                  }
+              }();
+              physical->complete (projected);
+              reply->complete (std::move (projected));
+          }};
     }
 
     /* The reply of a selected request in this reply type (hot path E4·E5:
@@ -250,12 +253,12 @@ template <typename TReply> class request_task_t : public task_t<TReply>
                     request_task_t<TInput> &selected,
                     TProject &&project) :
         task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
-        _physical_reply (this->_state),
+        _physical_reply (this->shared_state ()),
         _admitted (selected._admitted)
     {
         detail::observe_task_terminal (
           selected._physical_reply,
-          [reply = this->_state,
+          [reply = this->shared_state (),
            project = std::forward<TProject> (project)] (const auto &result) mutable {
               try {
                   reply->complete (project (result));
@@ -289,7 +292,7 @@ template <typename TReply> class request_task_t : public task_t<TReply>
     void end_at_admission_failure ()
     {
         auto stage = _admitted->task ();
-        detail::observe_task_terminal (stage, [reply = this->_state] (const auto &result) {
+        detail::observe_task_terminal (stage, [reply = this->shared_state ()] (const auto &result) {
             if (!result)
                 reply->complete (detail::result_access_t::failure<TReply> (result.exception ()));
         });
@@ -297,7 +300,7 @@ template <typename TReply> class request_task_t : public task_t<TReply>
 
     task_t<TReply> physical_reply () const
     {
-        return detail::with_task_resume_scheduler (task_t<TReply> (_physical_reply._state),
+        return detail::with_task_resume_scheduler (task_t<TReply> (_physical_reply.shared_state ()),
                                                    _physical_reply._resume_scheduler
                                                      ? *_physical_reply._resume_scheduler
                                                      : detail::task_scheduler_t{});

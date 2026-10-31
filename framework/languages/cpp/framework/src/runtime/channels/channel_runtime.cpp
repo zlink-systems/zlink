@@ -1395,42 +1395,59 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
                                     payload_encoder_t encode_payload,
                                     const route_send_call_t::metadata_map_t &metadata)
 {
-    auto submit_flow = runtime::flow_context_t::enter_current_or_create (
-      flow_origin_t::application,
-      state && state->runtime ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
-                              : message_flow_log_mode_t::off);
-    if (!state || !state->runtime || state->serializers == nullptr) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "route client is not configured");
-    }
-    const auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
-    if (std::holds_alternative<std::monostate> (transport.value ())) {
-        throw framework_exception_t (framework_error_kind_t::unavailable,
-                                     "route channel or SPOT mesh '" + router_channel_id
-                                       + "' is not registered");
-    }
-    // The transport boundary: this task is the public route send result. The encoder
-    // runs before the first suspension, so callers may pass a borrowed encoder.
     try {
-        runtime::messaging::client_call_codec_t codec;
-        auto parts = codec.encode_node_send_parts (router_channel_id, packet_name, target_node_rid,
-                                                   metadata, state->runtime->dispatch,
-                                                   *state->serializers, encode_payload);
-        if (const auto mesh =
-              std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (
-                &transport.value ())) {
-            (co_await (*mesh)->send (target_node_rid, std::move (parts))).value ();
-            co_return;
+        auto submit_flow = runtime::flow_context_t::enter_current_or_create (
+          flow_origin_t::application,
+          state && state->runtime ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
+                                  : message_flow_log_mode_t::off);
+        if (!state || !state->runtime || state->serializers == nullptr) {
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "route client is not configured");
         }
-        auto &runtime =
-          *std::get<std::shared_ptr<detail::route_channel_runtime_t>> (transport.value ());
-        runtime.submit_send_parts (target_node_rid, std::move (parts)).value ();
+        const auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
+        if (std::holds_alternative<std::monostate> (transport.value ())) {
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "route channel or SPOT mesh '" + router_channel_id
+                                           + "' is not registered");
+        }
+        const auto finish = [transport] (const result_t<result_t<void>> &result) {
+            // The selected callable remains owned through its physical terminal.
+            (void) transport;
+            try {
+                result.value ().value ();
+                return result_t<void>::success ();
+            }
+            catch (const framework_exception_t &) {
+                throw;
+            }
+            catch (const std::exception &error) {
+                throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                             error.what ());
+            }
+        };
+        // Encoding finishes before submission, so the encoder remains borrowed.
+        try {
+            runtime::messaging::client_call_codec_t codec;
+            auto parts = codec.encode_node_send_parts (
+              router_channel_id, packet_name, target_node_rid, metadata, state->runtime->dispatch,
+              *state->serializers, encode_payload);
+            if (const auto mesh =
+                  std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (
+                    &transport.value ())) {
+                auto submitted = (*mesh)->send (target_node_rid, std::move (parts));
+                return detail::project_task_terminal<void> (submitted, finish);
+            }
+            auto &runtime =
+              *std::get<std::shared_ptr<detail::route_channel_runtime_t>> (transport.value ());
+            runtime.submit_send_parts (target_node_rid, std::move (parts)).value ();
+            return task_t<void> (result_t<void>::success ());
+        }
+        catch (...) {
+            return task_t<void> (finish (detail::current_exception_result<result_t<void>> ()));
+        }
     }
-    catch (const framework_exception_t &) {
-        throw;
-    }
-    catch (const std::exception &error) {
-        throw framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
+    catch (...) {
+        return task_t<void> (detail::current_exception_result<void> ());
     }
 }
 
