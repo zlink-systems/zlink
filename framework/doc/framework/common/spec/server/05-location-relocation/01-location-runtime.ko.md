@@ -571,8 +571,11 @@ descriptor를 지울 주체가 없고 기록은 Store에 남는다 — descripto
 
 Automatic RID를 쓰는 node의 routing ID는 host process마다 새로 만든다. 그래서 같은 설정으로 다시 시작한 host는
 새 routing ID로 자신의 descriptor를 추가하며, 멈춘 host의 descriptor는 같은 endpoint를
-가리킨 채 남는다. Store에는 한 endpoint를 가리키는 descriptor가 둘이 된다. **이 절은 그런
-descriptor를 대상으로 삼지 않는 판정만 소유한다.**
+가리킨 채 남는다. Store에는 한 endpoint를 가리키는 descriptor가 둘이 된다.
+
+동일 endpoint를 가리킨다는 이유로 다른 RID의 descriptor를 self 또는 만료된 host로 판정하지
+않는다. Self 식별은 node RID를 사용하며, 게시 host의 생존 여부는 이 절의 owner lease 검증으로
+판정한다.
 
 **Framework는 Store에서 읽은 descriptor를 대상으로 삼기 전에 그 descriptor를 게시한 host의
 owner lease가 살아 있는지 확인한다.** 이 규칙은 Store descriptor로 연결 상대나 operation

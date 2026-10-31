@@ -138,7 +138,7 @@ final class ZLinkAutoConnectPlannerTest {
                                                 "route-a-local",
                                                 "inproc://other")))
                         .containsKey(targetKey(ZLinkLocationRole.ROUTER, "route-a-local")));
-        assertFalse(
+        assertTrue(
                 ZLinkAutoConnectPlanner.computeDesired(
                                 lower,
                                 List.of(
