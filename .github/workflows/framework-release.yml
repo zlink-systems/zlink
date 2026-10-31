@@ -241,7 +241,7 @@ jobs:
 
   wait-tutorial-node:
     if: needs.resolve.outputs.publish_registry == 'true' && needs.release-node.result == 'success'
-    name: Wait for the published Node framework package
+    name: Wait for the published Node and engine server packages
     runs-on: ubuntu-24.04
     needs: [resolve, release-node]
     steps:
@@ -271,6 +271,75 @@ jobs:
               sleep 30
             done
             echo "${name}@${VERSION} tarball is served"
+          done
+
+      # The engine-server smoke restores this project from the exported tree.
+      # Its direct PackageReference IDs and centrally pinned versions are the
+      # source of truth for this wait.
+      # Match wait-tutorial-dotnet's 30-minute flatcontainer propagation window.
+      - name: Wait for engine server .NET packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages="$(python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          root = Path("framework/languages/engines/Server")
+          project = ET.parse(root / "Server/EngineLobby.Server.csproj").getroot()
+          props = ET.parse(root / "Directory.Packages.props").getroot()
+          versions = {
+              item.attrib["Include"]: item.attrib["Version"]
+              for item in props.iter()
+              if item.tag.rsplit("}", 1)[-1] == "PackageVersion"
+              and "Include" in item.attrib
+              and "Version" in item.attrib
+          }
+          references = [
+              item.attrib["Include"]
+              for item in project.iter()
+              if item.tag.rsplit("}", 1)[-1] == "PackageReference"
+              and "Include" in item.attrib
+          ]
+          if not references:
+              raise SystemExit("engine server project has no PackageReference items")
+          for package in references:
+              if package not in versions:
+                  raise SystemExit(f"no central package version for {package}")
+              print(f"{package}\t{versions[package]}")
+          PY
+          )"
+          # Restore also needs the Zlink.* packages these reference (for example
+          # Zlink.HttpClient), so follow each nuspec's Zlink.* dependencies.
+          deadline=$(( $(date +%s) + 30 * 60 ))
+          declare -A seen=()
+          queue=()
+          while IFS=$'\t' read -r package version; do
+            queue+=("${package}"$'\t'"${version}")
+          done <<< "${packages}"
+          while [ "${#queue[@]}" -gt 0 ]; do
+            IFS=$'\t' read -r package version <<< "${queue[0]}"
+            queue=("${queue[@]:1}")
+            package_id="${package,,}"
+            package_version="${version,,}"
+            if [ -n "${seen[${package_id}/${package_version}]:-}" ]; then
+              continue
+            fi
+            seen[${package_id}/${package_version}]=1
+            url="https://api.nuget.org/v3-flatcontainer/${package_id}/${package_version}/${package_id}.nuspec"
+            until nuspec="$(curl -sfL "${url}")"; do
+              if [ "$(date +%s)" -ge "${deadline}" ]; then
+                echo "::error::${package} ${version} is not indexed on nuget.org after 30 minutes" >&2
+                exit 1
+              fi
+              echo "${package} ${version} is not indexed yet; waiting 30s"
+              sleep 30
+            done
+            echo "${package} ${version} is available on nuget.org"
+            while IFS=$'\t' read -r dependency range; do
+              [ -n "${dependency}" ] || continue
+              queue+=("${dependency}"$'\t'"${range}")
+            done < <(printf '%s' "${nuspec}" | python3 .github/scripts/nuspec-zlink-dependencies.py)
           done
 
   tutorial-node:
