@@ -2758,56 +2758,79 @@ final class ZLinkProviderAuthorityRepository {
                                         owner, null, removed, restartCount + 1, cancellation);
                             }
                             ZLinkStoreScanPage page = ((ZLinkStoreScanPageResult) result).value();
-                            List<ZLinkStoreCondition> conditions = new ArrayList<>();
-                            List<ZLinkStoreMutation> mutations = new ArrayList<>();
+                            CompletionStage<Long> cleanup = completed(removed);
                             for (ZLinkStoreScanItem item : page.items()) {
                                 AuthorityRecord record = decode(item.value().bytes());
-                                if (record.aggregate() == null
-                                        && record.ownerId().equals(owner.ownerId())
-                                        && record.ownerLeaseGeneration()
-                                                == owner.leaseGeneration()) {
-                                    conditions.add(
-                                            new ZLinkStoreVersionCondition(
-                                                    item.key(), item.value().version()));
-                                    mutations.add(new ZLinkStoreDelete(item.key()));
+                                if (record.aggregate() != null
+                                        || !record.ownerId().equals(owner.ownerId())
+                                        || record.ownerLeaseGeneration()
+                                                != owner.leaseGeneration()) {
+                                    continue;
+                                }
+                                String key = decodeAuthorityKey(item.key());
+                                if (record.allocation().state()
+                                        == ZLinkPlacementAllocationState.ACTIVE) {
+                                    cleanup =
+                                            cleanup.thenCompose(
+                                                    count ->
+                                                            compareExchange(
+                                                                            key,
+                                                                            new ZLinkAuthorityExpectFound(
+                                                                                    item.value()
+                                                                                            .version()
+                                                                                            .value()),
+                                                                            new ZLinkAuthorityDelete(),
+                                                                            cancellation
+                                                                                    ::isCancellationRequested)
+                                                                    .thenApply(
+                                                                            write ->
+                                                                                    write
+                                                                                                    instanceof
+                                                                                                    ZLinkAuthorityDeleted
+                                                                                            ? Math
+                                                                                                    .addExact(
+                                                                                                            count,
+                                                                                                            1L)
+                                                                                            : count));
+                                } else if (record.pendingCreation().isPresent()) {
+                                    var reservation =
+                                            new ZLinkObjectReservation(
+                                                    key,
+                                                    item.value().version().value(),
+                                                    record.objectGeneration(),
+                                                    record.authorityOwnerGeneration(),
+                                                    record.pendingCreation().get().reservationId(),
+                                                    record.allocation().descriptor(),
+                                                    record.allocation()
+                                                            .descriptorLifecycleGeneration(),
+                                                    owner);
+                                    cleanup =
+                                            cleanup.thenCompose(
+                                                    count ->
+                                                            abort(
+                                                                            reservation,
+                                                                            cancellation
+                                                                                    ::isCancellationRequested)
+                                                                    .thenApply(
+                                                                            write ->
+                                                                                    write
+                                                                                                    == ZLinkObjectAbortResult
+                                                                                                            .ABORTED
+                                                                                            ? Math
+                                                                                                    .addExact(
+                                                                                                            count,
+                                                                                                            1L)
+                                                                                            : count));
                                 }
                             }
-                            if (!mutations.isEmpty()) {
-                                if (cancellation.isCancellationRequested())
-                                    return failed(
-                                            new java.util.concurrent.TimeoutException(
-                                                    "host shutdown deadline expired"));
-                                return provider.write(
-                                                new ZLinkStoreWriteRequest(conditions, mutations),
-                                                cancellation)
-                                        .thenCompose(
-                                                write -> {
-                                                    if (write instanceof ZLinkStoreWriteApplied) {
-                                                        return continueOwnerCleanupScan(
-                                                                owner,
-                                                                page.nextCursor(),
-                                                                Math.addExact(
-                                                                        removed, mutations.size()),
-                                                                restartCount,
-                                                                cancellation);
-                                                    }
-                                                    if (restartCount >= 8) {
-                                                        return failed(
-                                                                new IllegalStateException(
-                                                                        "authority cleanup write"
-                                                                                + " repeatedly"
-                                                                                + " conflicted"));
-                                                    }
-                                                    return removeAllByOwner(
-                                                            owner,
-                                                            null,
-                                                            removed,
-                                                            restartCount + 1,
-                                                            cancellation);
-                                                });
-                            }
-                            return continueOwnerCleanupScan(
-                                    owner, page.nextCursor(), removed, restartCount, cancellation);
+                            return cleanup.thenCompose(
+                                    count ->
+                                            continueOwnerCleanupScan(
+                                                    owner,
+                                                    page.nextCursor(),
+                                                    count,
+                                                    restartCount,
+                                                    cancellation));
                         });
     }
 

@@ -2504,24 +2504,47 @@ final class ZLinkProviderAuthorityRepositoryTest {
     @Test
     void ownerCleanupContinuesAfterTheFirstProviderScanPage() {
         var store = new ZLinkInMemoryProviderLocationStore();
-        var encodedAuthority = encodedAuthorityRecord();
-        var mutations =
-                new ArrayList<systems.zlink.framework.locationprovider.ZLinkStoreMutation>();
-        for (int index = 0; index < 1_001; index++) {
-            String authorityKey = "authority\0actor\0authority-" + index;
-            mutations.add(
-                    new ZLinkStorePut(new ZLinkStoreKey(authorityKey), encodedAuthority, null));
-        }
-        store.write(new ZLinkStoreWriteRequest(List.of(), mutations), () -> false)
-                .toCompletableFuture()
-                .join();
-
-        var repository = new ZLinkProviderAuthorityRepository(store);
-        long removed =
+        var repository = new ZLinkProviderLocationRepository(store);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                repository
+                                        .claimOwnerLease("owner-a", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        var descriptor = capacityDescriptor(owner, "game", RoutingId.from("node-a"), 1_001);
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
                 repository
-                        .removeAllByOwner(new ZLinkLocationOwnerToken("owner-a", 1))
+                        .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                         .toCompletableFuture()
-                        .join();
+                        .join()
+                        .status());
+        for (int index = 0; index < 1_001; index++) {
+            var reservation =
+                    assertInstanceOf(
+                                    ZLinkObjectReserved.class,
+                                    repository
+                                            .reserve(
+                                                    capacityRequest(
+                                                            ZLinkAuthorityKeyCodec.spot(
+                                                                    "authority-" + index),
+                                                            descriptor,
+                                                            owner),
+                                                    () -> false)
+                                            .toCompletableFuture()
+                                            .join())
+                            .reservation();
+            assertEquals(
+                    ZLinkObjectCommitResult.COMMITTED,
+                    repository
+                            .commit(reservation, new byte[] {1, 2, 3}, () -> false)
+                            .toCompletableFuture()
+                            .join());
+        }
+
+        long removed = repository.removeAllByOwner(owner).toCompletableFuture().join();
 
         assertEquals(1_001L, removed);
         var remaining =
@@ -2532,6 +2555,18 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .toCompletableFuture()
                                 .join();
         assertTrue(remaining.value().items().isEmpty());
+        var capacity =
+                repository
+                        .listMeshNodes(
+                                "game",
+                                systems.zlink.framework.locations.ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .join()
+                        .items()
+                        .getFirst()
+                        .capacity();
+        assertEquals(0, capacity.spots().active());
+        assertEquals(0, capacity.spots().reserved());
     }
 
     @Test

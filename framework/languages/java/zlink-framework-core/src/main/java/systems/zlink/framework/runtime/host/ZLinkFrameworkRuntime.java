@@ -2289,7 +2289,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             shutdown.deferCloseStage(
                     "location_stop", () -> locationRuntime.stop(terminationDeadline.get()));
             if (objectDescriptors != null) {
-                shutdown.deferStage("descriptor_remove", objectDescriptors::remove);
+                shutdown.deferStage(
+                        "descriptor_remove",
+                        () -> objectDescriptors.remove(terminationDeadline.get()));
             }
         }
         if (spots != null) {

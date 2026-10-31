@@ -488,6 +488,13 @@ class location_repository_t
                                                               location_write_intent_t intent) = 0;
     virtual task_t<location_write_status_t> remove_mesh_node (mesh_node_descriptor_key_t key,
                                                               location_owner_token_t owner) = 0;
+    virtual task_t<location_write_status_t>
+    remove_mesh_node (mesh_node_descriptor_key_t key,
+                      location_owner_token_t owner,
+                      std::chrono::steady_clock::time_point deadline)
+    {
+        return remove_mesh_node (std::move (key), std::move (owner));
+    }
     virtual task_t<location_page_t<mesh_node_descriptor_t>>
     list_mesh_nodes (std::string mesh_name, location_page_request_t page = {}) = 0;
     virtual task_t<location_write_result_t>

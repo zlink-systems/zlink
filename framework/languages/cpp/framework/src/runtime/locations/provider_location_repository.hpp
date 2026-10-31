@@ -290,7 +290,16 @@ class provider_location_repository_t final : public location_repository_t
     task_t<location_write_status_t> remove_mesh_node (mesh_node_descriptor_key_t key,
                                                       location_owner_token_t owner) override
     {
-        return remove_descriptor (key_mesh (key.mesh_name, key.rid), std::move (owner));
+        return remove_mesh_node (std::move (key), std::move (owner),
+                                 std::chrono::steady_clock::time_point::max ());
+    }
+
+    task_t<location_write_status_t>
+    remove_mesh_node (mesh_node_descriptor_key_t key,
+                      location_owner_token_t owner,
+                      std::chrono::steady_clock::time_point deadline) override
+    {
+        return remove_descriptor (key_mesh (key.mesh_name, key.rid), std::move (owner), deadline);
     }
 
     task_t<location_page_t<mesh_node_descriptor_t>>
@@ -394,8 +403,20 @@ class provider_location_repository_t final : public location_repository_t
                                 authority_mutation_t mutation,
                                 std::stop_token cancellation = {}) override
     {
+        return compare_exchange_authority (std::move (key), std::move (expected_store_version),
+                                           std::move (mutation), cancellation, std::nullopt);
+    }
+
+  private:
+    task_t<authority_compare_exchange_result_t>
+    compare_exchange_authority (authority_key_t key,
+                                std::string expected_store_version,
+                                authority_mutation_t mutation,
+                                std::stop_token cancellation,
+                                std::optional<std::chrono::steady_clock::time_point> deadline)
+    {
         const auto *put = std::get_if<authority_put_t> (&mutation);
-        const auto operation_deadline = put ? put->operation_deadline : std::nullopt;
+        const auto operation_deadline = put ? put->operation_deadline : deadline;
         const auto check_deadline = [&] {
             if (operation_deadline && std::chrono::steady_clock::now () >= *operation_deadline)
                 throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
@@ -561,7 +582,9 @@ class provider_location_repository_t final : public location_repository_t
                     co_return co_await authority_conflict (std::move (current), membership_failure);
             }
             check_deadline ();
-            auto written = co_await write_async (std::move (write_request));
+            auto written = co_await write_async (
+              std::move (write_request), nullptr, {}, "compare_exchange",
+              operation_deadline.value_or (std::chrono::steady_clock::time_point::max ()));
             const auto *applied = std::get_if<store_write_applied_t> (&written);
             if (!applied) {
                 if (co_await conflict_qualification_unchanged (row_key, found->value.version,
@@ -578,6 +601,7 @@ class provider_location_repository_t final : public location_repository_t
         }
     }
 
+  public:
     task_t<authority_scan_result_t> list_authorities (std::string key_prefix,
                                                       std::optional<authority_scan_cursor_t> cursor,
                                                       std::size_t limit,
@@ -1347,7 +1371,9 @@ class provider_location_repository_t final : public location_repository_t
                                          std::stop_token cancellation,
                                          const creation_terminal_record_t *terminal,
                                          std::chrono::system_clock::time_point terminal_store_now,
-                                         std::chrono::system_clock::time_point operation_deadline)
+                                         std::chrono::system_clock::time_point operation_deadline,
+                                         std::chrono::steady_clock::time_point deadline =
+                                           std::chrono::steady_clock::time_point::max ())
     {
         for (;;) {
             if (cancellation.stop_requested ())
@@ -1386,8 +1412,8 @@ class provider_location_repository_t final : public location_repository_t
                version_condition (target->key, target->provider_version), capacity.condition},
               {store_delete_t{authority_key},
                store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}};
-            auto written =
-              co_await write_async (std::move (write_request), terminal, terminal_store_now);
+            auto written = co_await write_async (std::move (write_request), terminal,
+                                                 terminal_store_now, "compare_exchange", deadline);
             if (!std::holds_alternative<store_write_applied_t> (written)) {
                 if (co_await conflict_qualification_unchanged (
                       authority_key, stored_authority->value.version, request.fence.target.owner,
@@ -2271,12 +2297,6 @@ class provider_location_repository_t final : public location_repository_t
                 throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
                                              "owner cleanup deadline expired");
         };
-        check_deadline ();
-        const auto lease_key = key_owner (owner.owner_id);
-        auto lease = co_await _store.read (lease_key);
-        const auto *live = std::get_if<store_found_t> (&lease);
-        if (!live || owner_generation (live->value.bytes) != owner.lease_generation)
-            co_return 0;
         std::vector<store_scan_item_t> rows;
         std::optional<store_scan_cursor_t> cursor;
         do {
@@ -2300,17 +2320,23 @@ class provider_location_repository_t final : public location_repository_t
             if (!logical)
                 continue;
             check_deadline ();
-            auto aggregate = co_await _store.read (key_aggregate_lock (logical->value));
-            if (std::holds_alternative<store_found_t> (aggregate))
-                continue;
-            check_deadline ();
-            store_write_request_t request{{version_condition (lease_key, live->value.version),
-                                           version_condition (row.key, row.value.version),
-                                           missing_condition (key_aggregate_lock (logical->value))},
-                                          {store_delete_t{row.key}}};
-            auto written = co_await _store.write_as (std::move (request), "release");
-            if (std::holds_alternative<store_write_applied_t> (written))
-                ++removed;
+            if (snapshot.allocation.state == placement_allocation_state_t::active) {
+                auto result = co_await compare_exchange_authority (
+                  *logical, snapshot.store_version, authority_delete_t{}, {}, deadline);
+                if (std::holds_alternative<authority_deleted_t> (result))
+                    ++removed;
+            } else if (snapshot.pending_creation) {
+                const auto decoded =
+                  authority_key_codec_detail::decode_authority_key (logical->value).value ();
+                object_abort_request_t request{
+                  {snapshot.allocation.object_kind, decoded.object_id},
+                  {snapshot.pending_creation->reservation_id, snapshot.store_version,
+                   snapshot.object_generation, snapshot.authority_owner_generation,
+                   snapshot.allocation.target, snapshot.allocation.capacity_bundle}};
+                auto result = co_await abort (std::move (request), {}, nullptr, {}, {}, deadline);
+                if (std::holds_alternative<object_aborted_t> (result))
+                    ++removed;
+            }
         }
         co_return removed;
     }
@@ -3132,8 +3158,11 @@ class provider_location_repository_t final : public location_repository_t
         co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
     }
 
-    task_t<location_write_status_t> remove_descriptor (store_key_t row_key,
-                                                       location_owner_token_t owner)
+    task_t<location_write_status_t>
+    remove_descriptor (store_key_t row_key,
+                       location_owner_token_t owner,
+                       std::chrono::steady_clock::time_point deadline =
+                         std::chrono::steady_clock::time_point::max ())
     {
         auto current = co_await _store.read (row_key);
         const auto *found = std::get_if<store_found_t> (&current);
@@ -3146,7 +3175,8 @@ class provider_location_repository_t final : public location_repository_t
             co_return location_write_status_t::ignored_stale;
         store_write_request_t result_request{{version_condition (row_key, found->value.version)},
                                              {store_delete_t{row_key}}};
-        auto result = co_await write_async (std::move (result_request));
+        auto result = co_await write_async (std::move (result_request), nullptr, {},
+                                            "compare_exchange", deadline);
         co_return std::holds_alternative<store_write_applied_t> (result)
           ? location_write_status_t::stored
           : location_write_status_t::ignored_stale;

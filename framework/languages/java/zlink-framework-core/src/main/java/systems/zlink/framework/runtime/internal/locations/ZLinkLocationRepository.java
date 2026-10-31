@@ -16,6 +16,13 @@ public interface ZLinkLocationRepository {
     CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
             ZLinkMeshNodeDescriptorKey key, ZLinkLocationOwnerToken owner);
 
+    default CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
+            ZLinkMeshNodeDescriptorKey key,
+            ZLinkLocationOwnerToken owner,
+            ZLinkStoreCancellation cancellation) {
+        return removeMeshNode(key, owner);
+    }
+
     CompletionStage<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> listMeshNodes(
             String meshName, ZLinkPageRequest page);
 
