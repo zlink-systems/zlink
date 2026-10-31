@@ -862,11 +862,11 @@ task_t<void> stream_t::close ()
     return task_t<void> (result_t<void>::success ());
 }
 
-namespace
+namespace detail
 {
 
 std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>
-stream_submitter (std::shared_ptr<detail::stream_state_t> state)
+stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state)
 {
     return [state = std::move (state)] (const stream_header_t &submitted_header,
                                         const zlink::message_t &submitted_payload) -> task_t<void> {
@@ -883,20 +883,25 @@ stream_submitter (std::shared_ptr<detail::stream_state_t> state)
             }
             writer = state->transport_writer;
         }
-        if (writer)
-            co_return co_await writer (submitted_header, submitted_payload);
-        if (state->closed.load (std::memory_order_acquire)) {
-            throw framework_exception_t (framework_error_kind_t::unavailable,
-                                         "STREAM session is disconnected");
-        }
-        const std::lock_guard<std::mutex> lock (state->state_mutex);
-        state->written_headers.push_back (submitted_header);
-        state->written_payloads.push_back (submitted_payload);
+        const auto submit = [&] (const stream_header_t &header, const zlink::message_t &payload) {
+            if (writer)
+                return writer (header, payload);
+            if (state->closed.load (std::memory_order_acquire)) {
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "STREAM session is disconnected");
+            }
+            const std::lock_guard<std::mutex> lock (state->state_mutex);
+            state->written_headers.push_back (header);
+            state->written_payloads.push_back (payload);
+            return task_t<void> (result_t<void>::success ());
+        };
+        co_await detail::session_actor_manager_access_t::submit_terminal (
+          stream_t (state), submitted_header, submitted_payload, submit);
         co_return;
     };
 }
 
-} // namespace
+} // namespace detail
 
 stream_send_call_t stream_t::write_packet (const zlink::framework::message_t &payload)
 {
@@ -910,7 +915,8 @@ stream_send_call_t stream_t::write_packet (const zlink::framework::message_t &pa
                                 _state->application_codec.load (std::memory_order_acquire),
                                 stream_header_flags_t::none, std::nullopt, "", {});
         return stream_send_call_t (std::move (header), std::move (raw_payload),
-                                   _state->compression_codec, stream_submitter (_state));
+                                   _state->compression_codec,
+                                   detail::stream_runtime_t::stream_submitter (_state));
     }
     catch (const framework_exception_t &error) {
         return stream_send_call_t (detail::result_access_t::failure<void> (error));
@@ -922,7 +928,7 @@ stream_write_call_t stream_t::write_packet_with_header (detail::stream_header_t 
 {
     detail::stream_runtime_t::propagate_flow (header);
     return stream_write_call_t (std::move (header), std::move (payload), _state->compression_codec,
-                                stream_submitter (_state));
+                                detail::stream_runtime_t::stream_submitter (_state));
 }
 
 stream_write_call_t stream_t::reply_packet (const zlink::framework::message_t &payload)
@@ -943,7 +949,7 @@ stream_write_call_t stream_t::reply_packet (const zlink::framework::message_t &p
     try {
         auto raw_payload = detail::message_to_raw (payload, *_state->serializers);
         auto reply_header = detail::stream_runtime_t::make_terminal_header (
-          *this, stream_message_kind_t::response, *request_header);
+          stream_message_kind_t::response, *request_header);
         auto call = write_packet_with_header (std::move (reply_header), std::move (raw_payload));
         call._state->reply_submission (_reply_submission);
         return call;
@@ -1539,8 +1545,7 @@ stream_runtime_t::decode_frame (const std::vector<zlink::message_t> &parts, bool
                                bytes.begin () + 6 + header_size, bytes.end ()))};
 }
 
-stream_header_t stream_runtime_t::make_terminal_header (const stream_t &stream,
-                                                        stream_message_kind_t kind,
+stream_header_t stream_runtime_t::make_terminal_header (stream_message_kind_t kind,
                                                         const stream_header_t &request_header)
 {
     const auto codec =
@@ -1550,12 +1555,8 @@ stream_header_t stream_runtime_t::make_terminal_header (const stream_t &stream,
     if (auto correlation = request_header.correlation_id ()) {
         header.with_correlation_id (std::string (*correlation));
     }
-    if (auto actor_slot = request_header.actor_slot ()) {
-        if (auto *actors = stream._state->actors.load (std::memory_order_acquire);
-            actors && session_actor_manager_access_t::find_slot (*actors, *actor_slot)) {
-            header.with_actor_slot (*actor_slot);
-        }
-    }
+    if (auto actor_slot = request_header.actor_slot ())
+        header.with_actor_slot (*actor_slot);
     return header;
 }
 

@@ -1,6 +1,7 @@
 namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkSessionStreamTransport(
+    ZLinkSessionContext context,
     IZLinkStream stream,
     Action<ZlinkStreamHeader> traceWritten
 )
@@ -22,6 +23,39 @@ internal sealed class ZLinkSessionStreamTransport(
 
     public Task SubmitAsync(Message payload, CancellationToken cancellationToken) =>
         SubmitAsync(stream, payload, cancellationToken);
+
+    internal Task SubmitReplyAsync(
+        ZlinkStreamHeader header,
+        Message frame,
+        CancellationToken cancellationToken
+    )
+    {
+        if (header.Kind is not (ZlinkStreamMessageKind.Response or ZlinkStreamMessageKind.Error))
+            return SubmitAsync(frame, cancellationToken);
+        return context.Runtime.SubmitStreamReplyAsync(
+            context,
+            header,
+            normalized =>
+            {
+                if (ReferenceEquals(header, normalized))
+                    return SubmitAsync(frame, cancellationToken);
+                using (frame)
+                {
+                    if (!ZLinkStreamFrameCodec.TryDecode(frame.ToArray(), out _, out var payload))
+                        throw new InvalidOperationException("STREAM reply frame is invalid.");
+                    return SubmitAsync(
+                        Message.From(
+                            ZLinkStreamFrameCodec.Encode(
+                                ZLinkStreamProtocolDefaults.EncodeHeader(normalized).Span,
+                                payload
+                            )
+                        ),
+                        cancellationToken
+                    );
+                }
+            }
+        );
+    }
 
     internal static Task SubmitAsync(
         IZLinkStream stream,
@@ -54,12 +88,7 @@ internal sealed class ZLinkSessionStreamTransport(
         cancellationToken.ThrowIfCancellationRequested();
         var responseHeader = reply.CreateResponseHeader(requestHeader);
         var frame = reply.EncodeFrame(responseHeader);
-        return SendReplyAsync(
-            Message.From(frame),
-            cancellationToken,
-            "Client stream reply send failed.",
-            responseHeader
-        );
+        return SendReplyAsync(Message.From(frame), cancellationToken, responseHeader);
     }
 
     public ValueTask ReplyErrorAsync(
@@ -87,28 +116,16 @@ internal sealed class ZLinkSessionStreamTransport(
             ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
             payload
         );
-        return SendReplyAsync(
-            Message.From(frame),
-            cancellationToken,
-            "Client stream error reply send failed.",
-            header
-        );
+        return SendReplyAsync(Message.From(frame), cancellationToken, header);
     }
 
-    private ValueTask SendReplyAsync(
+    private async ValueTask SendReplyAsync(
         Message frame,
         CancellationToken cancellationToken,
-        string failureMessage,
         ZlinkStreamHeader responseHeader
     )
     {
-        using (frame)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!Write(frame))
-                throw new InvalidOperationException(failureMessage);
-        }
+        await SubmitReplyAsync(responseHeader, frame, cancellationToken).ConfigureAwait(false);
         traceWritten(responseHeader);
-        return ValueTask.CompletedTask;
     }
 }

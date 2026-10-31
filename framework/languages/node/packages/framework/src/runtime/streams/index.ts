@@ -60,6 +60,9 @@ import { ZLinkBoundSessionService, type ZLinkBoundSessionTransport } from './bou
 import { ZLinkManagedStream } from './managed-stream';
 import {
   messageToBytes,
+  decodeStreamFrame,
+  decodeStreamHeader,
+  encodeStreamFrame,
   ZLinkStreamCodec,
   ZLinkStreamMessageKind,
   type ZLinkStreamFrameHeader,
@@ -808,19 +811,42 @@ export class ZLinkStreamBindingRuntime {
     );
   }
 
-  createJsonReplyFrameMessage(
+  async submitReply(
+    context: DefaultZLinkSessionContext,
     requestHeader: ZLinkStreamFrameHeader,
     kind: ZLinkStreamReplyMessageKind,
     metadata: ReadonlyMap<string, string>,
     compressed: boolean,
     payload: unknown
-  ): Message {
-    return this.frameMessages.createJsonReplyFrameMessage(
+  ): Promise<ZLinkSubmitResult> {
+    const frame = this.frameMessages.createJsonReplyFrameMessage(
       requestHeader,
       kind,
       metadata,
       compressed,
       payload
     );
+    try {
+      return await this.routes.submitReply(context, requestHeader, async (header) => {
+        if (header === requestHeader) return await context.stream.submitRaw(frame);
+        const encoded = decodeStreamFrame(messageToBytes(frame));
+        const normalized = this.createBinaryMessage(
+          encodeStreamFrame(
+            {
+              ...decodeStreamHeader(encoded.header),
+              actorSlot: header.actorSlot
+            },
+            encoded.payload
+          )
+        );
+        try {
+          return await context.stream.submitRaw(normalized);
+        } finally {
+          normalized.close();
+        }
+      });
+    } finally {
+      frame.close();
+    }
   }
 }
