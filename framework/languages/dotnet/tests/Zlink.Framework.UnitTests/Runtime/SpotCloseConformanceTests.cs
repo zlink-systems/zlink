@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.AspNetCore;
@@ -159,7 +160,11 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
     {
         var time = new ManualTimeProvider();
         var store = new SpotCloseFaultStore(new ZLinkInMemoryProviderLocationStore(time));
-        await using var host = await SpotCloseHost.StartAsync(store, spotLimit: 1);
+        await using var host = await SpotCloseHost.StartAsync(
+            store,
+            spotLimit: 1,
+            timeProvider: time
+        );
         _ = await host
             .Manager.GetOrCreate("occupied-room", SpotCloseHost.SpotType)
             .InMesh(SpotCloseHost.MeshName)
@@ -249,6 +254,11 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
                         }
                     )
                 )
+            );
+            Assert.True(
+                await host
+                    .Runtime.Services.GetRequiredService<ZLinkOwnerLeaseTracker>()
+                    .IsOwnerTokenLiveAsync(expiredOwner)
             );
             time.Advance(TimeSpan.FromSeconds(2));
         }
@@ -2494,7 +2504,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         SpotCloseFaultStore? sharedStore = null,
         bool registerInstanceFactory = true,
         bool registerUserSpotFactory = true,
-        int spotLimit = 100
+        int spotLimit = 100,
+        TimeProvider? timeProvider = null
     )
     {
         var store =
@@ -2541,6 +2552,14 @@ internal sealed class SpotCloseHost : IAsyncDisposable
                     static factory => factory.DisableRelocation()
                 );
         });
+        services.Replace(
+            ServiceDescriptor.Singleton(provider => new ZLinkOwnerLeaseTracker(
+                provider.GetRequiredService<IZLinkLocationRepository>(),
+                provider.GetRequiredService<ZLinkLocationOptions>(),
+                timeProvider,
+                provider.GetRequiredService<ZLinkLocationStoreHealth>()
+            ))
+        );
         var provider = services.BuildServiceProvider();
         provider
             .GetRequiredService<ZLinkFrameworkRegistration>()
