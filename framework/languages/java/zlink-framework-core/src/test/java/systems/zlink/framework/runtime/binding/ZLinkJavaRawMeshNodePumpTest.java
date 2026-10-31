@@ -9,12 +9,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.Context;
+import systems.zlink.contracts.core.ContextOptions;
+import systems.zlink.contracts.core.CoreHwmBudgetSnapshot;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ConnectResult;
+import systems.zlink.contracts.errors.ZlinkConnectException;
+import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.messaging.ReplyOperation;
+import systems.zlink.contracts.messaging.ReplyToken;
+import systems.zlink.contracts.messaging.RequestOperation;
+import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.sockets.ConnectionAttempt;
+import systems.zlink.contracts.sockets.DealerSocket;
+import systems.zlink.contracts.sockets.PairSocket;
+import systems.zlink.contracts.sockets.PubSocket;
+import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.RouterRoute;
 import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.contracts.sockets.RouterSocketOptions;
+import systems.zlink.contracts.sockets.StreamSocket;
+import systems.zlink.contracts.sockets.SubSocket;
+import systems.zlink.contracts.sockets.XPubSocket;
+import systems.zlink.contracts.sockets.XSubSocket;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -23,6 +44,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
@@ -32,7 +54,6 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.AbstractExecutorService;
@@ -45,7 +66,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ZLinkJavaRawMeshNodePumpTest {
     @Test
@@ -295,6 +320,100 @@ final class ZLinkJavaRawMeshNodePumpTest {
     }
 
     @Test
+    void managementDisconnectFailureKeepsClaimedRequestsAndPumpAlive() throws Exception {
+        var failure = new ZlinkConnectException(ConnectResult.INTERNAL_ERROR, 156);
+        try (var reports = new ManagementReports();
+                var fixture = new RotationRequests(failure)) {
+            var expiredRid = RoutingId.from("rotation-expired");
+            fixture.topology.admit(
+                    admissionDescriptor(expiredRid, 1), "1", ServiceWireConstants.COMMAND_ADMIT);
+            fixture.node.livenessForTest().admit(expiredRid, "1", 0L);
+            fixture.now.set(TimeUnit.SECONDS.toNanos(16));
+            var first = fixture.request(1);
+            fixture.start();
+            fixture.reply(1);
+            fixture.assertReply(first, 1);
+            org.junit.jupiter.api.Assertions.assertSame(
+                    failure, reports.failures.poll(5, TimeUnit.SECONDS));
+            var later = fixture.request(4);
+            fixture.reply(4);
+            fixture.assertReply(later, 4);
+            fixture.assertPermitsReturned();
+        }
+    }
+
+    @Test
+    void idleManagementDisconnectFailureKeepsPumpAlive() throws Exception {
+        var failure = new ZlinkConnectException(ConnectResult.INTERNAL_ERROR, 156);
+        try (var reports = new ManagementReports();
+                var fixture = new RotationRequests(failure, false)) {
+            var expiredRid = RoutingId.from("rotation-expired");
+            fixture.topology.admit(
+                    admissionDescriptor(expiredRid, 1), "1", ServiceWireConstants.COMMAND_ADMIT);
+            fixture.node.livenessForTest().admit(expiredRid, "1", 0L);
+            fixture.now.set(TimeUnit.SECONDS.toNanos(16));
+            fixture.start();
+            org.junit.jupiter.api.Assertions.assertSame(
+                    failure, reports.failures.poll(5, TimeUnit.SECONDS));
+            assertEquals(0, fixture.claims.get(), "failure must occur on the idle management path");
+            var later = fixture.request(4);
+            fixture.reply(4);
+            fixture.assertReply(later, 4);
+            fixture.assertPermitsReturned();
+        }
+    }
+
+    @Test
+    void managementCreationFailureKeepsClaimedRequestsAndPumpAlive() throws Exception {
+        var failure = new IllegalStateException("management clock failed");
+        try (var reports = new ManagementReports();
+                var fixture = new RotationRequests()) {
+            var first = fixture.request(1);
+            fixture.managementFailure.set(failure);
+            fixture.start();
+            fixture.reply(1);
+            fixture.assertReply(first, 1);
+            org.junit.jupiter.api.Assertions.assertSame(
+                    failure, reports.failures.poll(5, TimeUnit.SECONDS));
+            var later = fixture.request(4);
+            fixture.reply(4);
+            fixture.assertReply(later, 4);
+            fixture.assertPermitsReturned();
+        }
+    }
+
+    @Test
+    void inboundClaimFailureKeepsItsClassificationAndSiblingOrder() throws Exception {
+        try (var fixture = new RotationRequests()) {
+            var a = fixture.request(1);
+            var b = fixture.request(2);
+            var c = fixture.request(3);
+            fixture.failClaimCorrelation = 2L;
+            fixture.start();
+            fixture.reply(1);
+            fixture.reply(3);
+            assertEquals(3, fixture.claims.get());
+            assertEquals(
+                    List.of(0, 0, 0),
+                    fixture.claimTurns,
+                    "A, B and C must be claimed before the next state-lane turn");
+            fixture.assertReply(a, 1);
+            fixture.assertReply(c, 3);
+            var terminal = fixture.codec.decodeReplyHeader(b.get(5, TimeUnit.SECONDS).getFirst());
+            int[] expected = ZLinkRequestFailureMapping.outgoing(new NumberFormatException());
+            assertEquals(2, terminal.correlation());
+            assertEquals(expected[0], terminal.terminalResult());
+            assertEquals(expected[1], terminal.failureCode());
+            assertNotNull(fixture.failedInbound);
+            assertThrows(IllegalStateException.class, fixture.failedInbound.received()::parts);
+            var later = fixture.request(4);
+            fixture.reply(4);
+            fixture.assertReply(later, 4);
+            fixture.assertPermitsReturned();
+        }
+    }
+
+    @Test
     void malformedChannelSendSettlesIndependentlyAndPumpContinues() throws Exception {
         var drops = new LinkedBlockingQueue<Map<String, String>>();
         try (var metrics =
@@ -443,14 +562,254 @@ final class ZLinkJavaRawMeshNodePumpTest {
         }
     }
 
+    private static final class ManagementReports implements AutoCloseable {
+        final LinkedBlockingQueue<Throwable> failures = new LinkedBlockingQueue<>();
+        final Logger logger = Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
+        final Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        if (record.getThrown() != null) failures.add(record.getThrown());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+
+        ManagementReports() {
+            logger.addHandler(handler);
+        }
+
+        @Override
+        public void close() {
+            logger.removeHandler(handler);
+        }
+    }
+
+    private static final class DisconnectFailureRouter implements RouterSocket {
+        private final RouterSocket nativeSocket;
+        private final RuntimeException failure;
+        private final AtomicInteger claims;
+        private final boolean requiresClaim;
+
+        DisconnectFailureRouter(
+                RouterSocket nativeSocket,
+                RuntimeException failure,
+                AtomicInteger claims,
+                boolean requiresClaim) {
+            this.nativeSocket = nativeSocket;
+            this.failure = failure;
+            this.claims = claims;
+            this.requiresClaim = requiresClaim;
+        }
+
+        @Override
+        public RequestOperation request(RoutingId rid) {
+            return nativeSocket.request(rid);
+        }
+
+        @Override
+        public void bind(String v) {
+            nativeSocket.bind(v);
+        }
+
+        @Override
+        public void connect(String v) {
+            nativeSocket.connect(v);
+        }
+
+        @Override
+        public List<ConnectionAttempt> connectionAttemptsSnapshot() {
+            return nativeSocket.connectionAttemptsSnapshot();
+        }
+
+        @Override
+        public void unbind(String v) {
+            nativeSocket.unbind(v);
+        }
+
+        @Override
+        public void disconnect(String v) {
+            nativeSocket.disconnect(v);
+        }
+
+        @Override
+        public void disconnectRid(RoutingId v) {
+            if (requiresClaim)
+                assertTrue(
+                        claims.get() > 0,
+                        "management failure follows a healthy claim in the same rotation");
+            throw failure;
+        }
+
+        @Override
+        public void setRoutingId(RoutingId v) {
+            nativeSocket.setRoutingId(v);
+        }
+
+        @Override
+        public RoutingId getRoutingId() {
+            return nativeSocket.getRoutingId();
+        }
+
+        @Override
+        public List<RouterRoute> routesSnapshot() {
+            return nativeSocket.routesSnapshot();
+        }
+
+        @Override
+        public SendOperation send(RoutingId v) {
+            return nativeSocket.send(v);
+        }
+
+        @Override
+        public boolean recv(Received v, RecvFlags f) {
+            return nativeSocket.recv(v, f);
+        }
+
+        @Override
+        public ReplyOperation reply(RoutingId v, ReplyToken t) {
+            return nativeSocket.reply(v, t);
+        }
+
+        @Override
+        public RouterSocketOptions options() {
+            return nativeSocket.options();
+        }
+
+        @Override
+        public SocketMonitor monitorOpen() {
+            return nativeSocket.monitorOpen();
+        }
+
+        @Override
+        public SocketMonitor monitorOpen(MonitorEventType... e) {
+            return nativeSocket.monitorOpen(e);
+        }
+
+        @Override
+        public SocketMonitor monitorOpen(long h, MonitorEventType... e) {
+            return nativeSocket.monitorOpen(h, e);
+        }
+
+        @Override
+        public void setTlsServer(String c, String k, boolean r) {
+            nativeSocket.setTlsServer(c, k, r);
+        }
+
+        @Override
+        public void setTlsClient(String c, String h, boolean t) {
+            nativeSocket.setTlsClient(c, h, t);
+        }
+
+        @Override
+        public void close() {
+            nativeSocket.close();
+        }
+    }
+
+    private static final class RouterContext implements Context {
+        private final Context nativeContext;
+        private final RuntimeException failure;
+        private final AtomicInteger claims;
+        private final boolean requiresClaim;
+
+        RouterContext(
+                Context nativeContext,
+                RuntimeException failure,
+                AtomicInteger claims,
+                boolean requiresClaim) {
+            this.nativeContext = nativeContext;
+            this.failure = failure;
+            this.claims = claims;
+            this.requiresClaim = requiresClaim;
+        }
+
+        @Override
+        public RouterSocket createRouterSocket() {
+            var router = nativeContext.createRouterSocket();
+            return failure == null
+                    ? router
+                    : new DisconnectFailureRouter(router, failure, claims, requiresClaim);
+        }
+
+        @Override
+        public ContextOptions options() {
+            return nativeContext.options();
+        }
+
+        @Override
+        public PairSocket createPairSocket() {
+            return nativeContext.createPairSocket();
+        }
+
+        @Override
+        public DealerSocket createDealerSocket() {
+            return nativeContext.createDealerSocket();
+        }
+
+        @Override
+        public PubSocket createPubSocket() {
+            return nativeContext.createPubSocket();
+        }
+
+        @Override
+        public SubSocket createSubSocket() {
+            return nativeContext.createSubSocket();
+        }
+
+        @Override
+        public XPubSocket createXPubSocket() {
+            return nativeContext.createXPubSocket();
+        }
+
+        @Override
+        public XSubSocket createXSubSocket() {
+            return nativeContext.createXSubSocket();
+        }
+
+        @Override
+        public StreamSocket createStreamSocket() {
+            return nativeContext.createStreamSocket();
+        }
+
+        @Override
+        public void shutdown() {
+            nativeContext.shutdown();
+        }
+
+        @Override
+        public void recalculateAutoHwm() {
+            nativeContext.recalculateAutoHwm();
+        }
+
+        @Override
+        public CoreHwmBudgetSnapshot coreHwmBudgetSnapshot() {
+            return nativeContext.coreHwmBudgetSnapshot();
+        }
+
+        @Override
+        public void resetCoreHwmBudgetMetrics() {
+            nativeContext.resetCoreHwmBudgetMetrics();
+        }
+
+        @Override
+        public void close() {
+            nativeContext.close();
+        }
+    }
+
     private static final class RotationRequests implements AutoCloseable {
         final Context context = Zlink.createContext();
         final ZLinkJavaRawServicePort sourcePort = new ZLinkJavaRawServicePort(context);
-        final ZLinkJavaRawServicePort targetPort = new ZLinkJavaRawServicePort(context);
+        final ZLinkJavaRawServicePort targetPort;
         final RoutingId sourceRid = RoutingId.from("rotation-source");
         final RoutingId targetRid = RoutingId.from("rotation-target");
         final RouterSocket source = sourcePort.openRouter(sourceRid);
-        final RouterSocket target = targetPort.openRouter(targetRid, true);
+        final RouterSocket target;
         final ZLinkServiceM6AWireCodec codec = new ZLinkServiceM6AWireCodec();
         final ZLinkApplicationJobQueue queue =
                 new ZLinkApplicationJobQueue(
@@ -462,22 +821,61 @@ final class ZLinkJavaRawMeshNodePumpTest {
         final LinkedBlockingQueue<ZLinkMeshDispatchRecord> accepted = new LinkedBlockingQueue<>();
         final List<ZLinkApplicationJobContext.QueuedOwnership> queued = new java.util.ArrayList<>();
         final AtomicInteger claims = new AtomicInteger();
+        final AtomicInteger completedClaimTurns = new AtomicInteger();
+        final List<Integer> claimTurns = new java.util.ArrayList<>();
         final ZLinkJavaRawMeshNode node;
+        final AtomicLong now = new AtomicLong();
+        final java.util.concurrent.atomic.AtomicReference<RuntimeException> managementFailure =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        final ZLinkServiceTopologyRegistry topology;
+        volatile long failClaimCorrelation;
+        volatile ZLinkJavaRawServicePort.Inbound failedInbound;
+        String sourceConnection;
+        final ExecutorService executor = Executors.newSingleThreadExecutor();
 
         RotationRequests() {
+            this(null);
+        }
+
+        RotationRequests(RuntimeException disconnectFailure) {
+            this(disconnectFailure, true);
+        }
+
+        RotationRequests(RuntimeException disconnectFailure, boolean requiresClaim) {
+            Context targetContext =
+                    new RouterContext(context, disconnectFailure, claims, requiresClaim);
+            targetPort =
+                    new ZLinkJavaRawServicePort(
+                            targetContext,
+                            new ZLinkStateLane(),
+                            (socket, observesRoutes) ->
+                                    new ZLinkJavaSocketReceivePoller(
+                                            socket instanceof DisconnectFailureRouter wrapped
+                                                    ? wrapped.nativeSocket
+                                                    : socket,
+                                            true,
+                                            observesRoutes));
+            target = targetPort.openRouter(targetRid, true);
             var descriptor = admissionDescriptor(targetRid, 1);
+            topology = new ZLinkServiceTopologyRegistry(descriptor, targetPort.stateLane());
             node =
                     new ZLinkJavaRawMeshNode(
                             "rotation",
                             System::currentTimeMillis,
-                            () -> 0L,
+                            () -> {
+                                if (targetPort.stateLane().isOnLane()) {
+                                    var failure = managementFailure.getAndSet(null);
+                                    if (failure != null) throw failure;
+                                }
+                                return now.get();
+                            },
                             Duration.ofSeconds(5),
                             Duration.ofSeconds(15),
                             targetPort,
                             Runnable::run,
                             target,
                             descriptor,
-                            new ZLinkServiceTopologyRegistry(descriptor, targetPort.stateLane()),
+                            topology,
                             Map.of());
             String endpoint = "inproc://rotation-requests-" + UUID.randomUUID();
             target.bind(endpoint);
@@ -486,6 +884,18 @@ final class ZLinkJavaRawMeshNodePumpTest {
             awaitRoute(targetPort, target, sourceRid);
             sourcePort.ensureReceivePollerRegistered(source);
             targetPort.ensureReceivePollerRegistered(target);
+            sourceConnection =
+                    Long.toUnsignedString(
+                            targetPort.routesSnapshot(target).stream()
+                                    .filter(route -> route.routingId().equals(sourceRid))
+                                    .findFirst()
+                                    .orElseThrow()
+                                    .routeGeneration(),
+                            16);
+            topology.admit(
+                    admissionDescriptor(sourceRid, 1),
+                    sourceConnection,
+                    ServiceWireConstants.COMMAND_ADMIT);
             node.setApplicationJobQueue(queue);
             node.setApplicationReceiver(receiver(this::enqueue));
         }
@@ -527,16 +937,52 @@ final class ZLinkJavaRawMeshNodePumpTest {
                         var inbound = targetPort.receiveNow(target);
                         if (inbound == null) return null;
                         claims.incrementAndGet();
+                        if (failClaimCorrelation != 0L) {
+                            claimTurns.add(completedClaimTurns.get());
+                            if (claims.get() == 1) {
+                                CompletableFuture.runAsync(
+                                                () ->
+                                                        targetPort
+                                                                .stateLane()
+                                                                .runAsync(
+                                                                        () -> {
+                                                                            completedClaimTurns
+                                                                                    .incrementAndGet();
+                                                                            return null;
+                                                                        }))
+                                        .orTimeout(5, TimeUnit.SECONDS)
+                                        .join();
+                            }
+                        }
                         byte[] head = inbound.frames().getFirst();
-                        return ZLinkJavaRawMeshNode.claimedRecordForTest(
-                                inbound, Optional.empty(), head, codec.decodeHeader(head), null);
+                        boolean fail =
+                                codec.decodeHeader(head).command()
+                                                == ServiceWireConstants.COMMAND_NODE_REQUEST
+                                        && codec.decodeNodeRequestHeader(head)
+                                                == failClaimCorrelation;
+                        if (fail) {
+                            failedInbound = inbound;
+                            topology.admit(
+                                    admissionDescriptor(sourceRid, 1),
+                                    "invalid-hex",
+                                    ServiceWireConstants.COMMAND_ADMIT);
+                        }
+                        try {
+                            return node.claimRecordForTest(inbound);
+                        } finally {
+                            if (fail)
+                                topology.admit(
+                                        admissionDescriptor(sourceRid, 1),
+                                        sourceConnection,
+                                        ServiceWireConstants.COMMAND_ADMIT);
+                        }
                     });
         }
 
         void start() {
             install();
-            node.pumpForTest(Executors.newSingleThreadExecutor());
-            node.pumpForTest().execute(() -> node.pumpTurnForTest(target));
+            node.pumpForTest(executor);
+            executor.execute(() -> node.pumpTurnForTest(target));
         }
 
         void reply(long correlation) throws Exception {
@@ -1029,9 +1475,8 @@ final class ZLinkJavaRawMeshNodePumpTest {
                                         null,
                                         null);
                         if (held != null) {
-                            var pending = target.pendingReceiveAcquireForTest();
                             var yielded = new CompletableFuture<Boolean>();
-                            targetPump.execute(() -> yielded.complete(pending.get() != null));
+                            targetPump.execute(() -> yielded.complete(true));
                             assertTrue(yielded.get(5, TimeUnit.SECONDS));
                             assertTrue(incoming.isEmpty());
                             assertFalse(reply.toCompletableFuture().isDone());

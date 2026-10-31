@@ -300,10 +300,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         pumpClaim = (Supplier<ClaimedRecord>) value;
     }
 
-    AtomicReference<?> pendingReceiveAcquireForTest() {
-        return pendingReceiveAcquire;
-    }
-
     // The pump executor alone reads and writes it; close reads it after the pump terminates.
     private RawMulticastFanout pendingRawMulticast;
     // Pump-confined: the source connection whose receive this rotation already recorded.
@@ -5279,8 +5275,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     || pendingRawMulticast != null) {
                 drainIngressBatch(pumpSocket, null);
             } else {
-                Runnable afterManagement = port.inStateLane(pumpManagement);
-                if (afterManagement != null) afterManagement.run();
+                runPumpManagement(port.inStateLane(() -> managePump(pumpManagement)));
             }
         } while (pendingReceiveAcquire.get() == null);
         if (logicalClose.get() == null) {
@@ -5289,6 +5284,25 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             } catch (RejectedExecutionException stopped) {
                 if (logicalClose.get() == null) throw stopped;
             }
+        }
+    }
+
+    private <T> T managePump(Supplier<T> action) {
+        try {
+            return action.get();
+        } catch (RuntimeException failure) {
+            LOGGER.log(Level.WARNING, "Service management failed", failure);
+            return null;
+        }
+    }
+
+    private void runPumpManagement(Runnable afterManagement) {
+        if (afterManagement != null) {
+            managePump(
+                    () -> {
+                        afterManagement.run();
+                        return null;
+                    });
         }
     }
 
@@ -5368,7 +5382,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
             @Override
             public Runnable get() {
-                Runnable afterManagement = grant == null ? pumpManagement.get() : null;
+                Runnable afterManagement = grant == null ? managePump(pumpManagement) : null;
                 try {
                     while (pendingRawMulticast == null
                             && !exhausted()
@@ -5444,7 +5458,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     && logicalClose.get() == null
                     && pendingRawMulticast == null) rotation.acquirePermit();
             Runnable afterManagement = port.inStateLane(rotation);
-            if (afterManagement != null) afterManagement.run();
+            runPumpManagement(afterManagement);
             rotation.dispatchFanout();
             rotation.dispatchClaimed();
         }
@@ -5562,7 +5576,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             Optional<ZLinkServiceTopologyRegistry.Peer> source,
             byte[] head,
             ZLinkServiceM6AWireCodec.Header header,
-            Runnable afterCommit) {}
+            Runnable afterCommit,
+            RuntimeException claimFailure) {}
 
     static Object claimedRecordForTest(
             ZLinkJavaRawServicePort.Inbound inbound,
@@ -5570,7 +5585,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             byte[] head,
             ZLinkServiceM6AWireCodec.Header header,
             Runnable afterCommit) {
-        return new ClaimedRecord(inbound, source, head, header, afterCommit);
+        return new ClaimedRecord(inbound, source, head, header, afterCommit, null);
     }
 
     Object claimRecordForTest(ZLinkJavaRawServicePort.Inbound inbound) {
@@ -5583,14 +5598,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private ClaimedRecord claimRecord(ZLinkJavaRawServicePort.Inbound inbound) {
+        Optional<ZLinkServiceTopologyRegistry.Peer> source = Optional.empty();
+        byte[] head = null;
+        ZLinkServiceM6AWireCodec.Header header = null;
         try {
-            var source =
+            source =
                     topology == null
                             ? Optional.<ZLinkServiceTopologyRegistry.Peer>empty()
                             : topology.peerFromOwner(inbound.source());
             List<byte[]> frames = inbound.frames();
-            byte[] head = frames.isEmpty() ? null : frames.getFirst();
-            ZLinkServiceM6AWireCodec.Header header = null;
+            head = frames.isEmpty() ? null : frames.getFirst();
             if (head != null && head.length >= PREFIX_BYTES) {
                 int infrastructureCommand = allowedInfrastructureControlCommand(head);
                 if (infrastructureCommand < 0
@@ -5626,8 +5643,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     }
                 }
             }
-            return new ClaimedRecord(inbound, source, head, header, afterCommit);
-        } catch (RuntimeException | Error failure) {
+            return new ClaimedRecord(inbound, source, head, header, afterCommit, null);
+        } catch (RuntimeException failure) {
+            return new ClaimedRecord(inbound, source, head, header, null, failure);
+        } catch (Error failure) {
             inbound.close();
             throw failure;
         }
@@ -5646,11 +5665,35 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         AtomicBoolean replied = null;
         try {
             var header = record.header();
-            if (header == null) return;
+            if (header == null) {
+                if (record.claimFailure() != null) throw record.claimFailure();
+                return;
+            }
             List<byte[]> frames = inbound.frames();
             byte[] head = record.head();
             int command = header.command();
             int flags = header.flags();
+            String channelName = null;
+            if (command == ServiceWireConstants.COMMAND_NODE_SEND) {
+                if (head.length != PREFIX_BYTES) {
+                    messageMetrics.dropped("node", "decode_error");
+                    return;
+                }
+                kind = RecordKind.NODE_SEND;
+            } else if (command == ServiceWireConstants.COMMAND_NODE_REQUEST) {
+                kind = RecordKind.NODE_REQUEST;
+                correlation = wire.decodeNodeRequestHeader(head);
+            } else if (command == ServiceWireConstants.COMMAND_CHANNEL_SEND) {
+                kind = RecordKind.CHANNEL_SEND;
+                channelName = wire.decodeChannelSendHeader(head);
+            } else if (command == ServiceWireConstants.COMMAND_CHANNEL_REQUEST) {
+                kind = RecordKind.CHANNEL_REQUEST;
+                ZLinkServiceM6AWireCodec.ChannelRequest request =
+                        wire.decodeChannelRequestHeader(head);
+                correlation = request.correlation();
+                channelName = request.channelName();
+            }
+            if (record.claimFailure() != null) throw record.claimFailure();
             if (command == ServiceWireConstants.COMMAND_HELLO
                     || command == ServiceWireConstants.COMMAND_ADMIT
                     || command == ServiceWireConstants.COMMAND_UPDATE
@@ -5745,28 +5788,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 dispatchBoundSessionSend(inbound);
                 return;
             }
-            String channelName = null;
-            if (command == ServiceWireConstants.COMMAND_NODE_SEND) {
-                if (head.length != PREFIX_BYTES) {
-                    messageMetrics.dropped("node", "decode_error");
-                    return;
-                }
-                kind = RecordKind.NODE_SEND;
-            } else if (command == ServiceWireConstants.COMMAND_NODE_REQUEST) {
-                kind = RecordKind.NODE_REQUEST;
-                correlation = wire.decodeNodeRequestHeader(head);
-            } else if (command == ServiceWireConstants.COMMAND_CHANNEL_SEND) {
-                kind = RecordKind.CHANNEL_SEND;
-                channelName = wire.decodeChannelSendHeader(head);
-            } else if (command == ServiceWireConstants.COMMAND_CHANNEL_REQUEST) {
-                kind = RecordKind.CHANNEL_REQUEST;
-                ZLinkServiceM6AWireCodec.ChannelRequest request =
-                        wire.decodeChannelRequestHeader(head);
-                correlation = request.correlation();
-                channelName = request.channelName();
-            } else {
-                return;
-            }
+            if (kind == null) return;
             int payloadOffset = (flags & ServiceWireConstants.FLAG_METADATA) == 0 ? 1 : 2;
             if (frames.size() != payloadOffset + 1
                     || (correlation != null && inbound.requestSequence() == null)) {
@@ -5892,24 +5914,40 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 }
             }
         } catch (RuntimeException failure) {
-            // Spec 04:222: settlement belongs to this record, including a failed enqueue.
-            LOGGER.log(Level.WARNING, "Service record dispatch failed", failure);
-            if (kind != null && !handedOff && failure instanceof IllegalArgumentException) {
-                replyApplicationProtocolFailure(inbound, correlation, kind);
-            } else if (correlation != null
-                    && inbound.requestSequence() != null
-                    && (replied == null || replied.compareAndSet(false, true))) {
-                int[] terminal = ZLinkRequestFailureMapping.outgoing(failure);
-                port.reply(
-                        requireStarted(),
-                        inbound.source(),
-                        inbound.requestSequence(),
-                        List.of(wire.encodeReplyHeader(correlation, terminal[0], terminal[1])));
-            }
+            settleRecordFailure(
+                    inbound,
+                    correlation,
+                    kind,
+                    replied,
+                    !handedOff && record.claimFailure() == null,
+                    record.claimFailure() == null ? failure : record.claimFailure());
         } finally {
             if (!handedOff) {
                 inbound.close();
             }
+        }
+    }
+
+    private void settleRecordFailure(
+            ZLinkJavaRawServicePort.Inbound inbound,
+            Long correlation,
+            RecordKind kind,
+            AtomicBoolean replied,
+            boolean decoding,
+            RuntimeException failure) {
+        // Spec 04:222: claim and dispatch failures settle only their own record.
+        LOGGER.log(Level.WARNING, "Service record dispatch failed", failure);
+        if (kind != null && decoding && failure instanceof IllegalArgumentException) {
+            replyApplicationProtocolFailure(inbound, correlation, kind);
+        } else if (correlation != null
+                && inbound.requestSequence() != null
+                && (replied == null || replied.compareAndSet(false, true))) {
+            int[] terminal = ZLinkRequestFailureMapping.outgoing(failure);
+            port.reply(
+                    requireStarted(),
+                    inbound.source(),
+                    inbound.requestSequence(),
+                    List.of(wire.encodeReplyHeader(correlation, terminal[0], terminal[1])));
         }
     }
 
