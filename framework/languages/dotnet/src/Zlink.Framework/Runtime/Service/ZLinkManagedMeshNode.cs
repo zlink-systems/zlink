@@ -10216,7 +10216,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         // Spec 08 §4.2: the management work of a receive rotation reads the
         // node state in one node turn — the routes that still need a Hello and
         // the liveness activity of every admitted peer.
-        var (helloRoutes, activities, nextLiveness) = AwaitStateLane(
+        var (helloRoutes, activities, nextLiveness, failure) = AwaitStateLane(
             _lane.RunAsync(
                 static state => state.Node.CollectInfrastructureUnderLock(state.Now),
                 (Node: this, Now: now)
@@ -10252,6 +10252,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     );
                 }
             }
+        if (failure is not null)
+        {
+            var reporter = _logicalMulticastDispatchErrors;
+            if (reporter is null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+            reporter.ReportRuntimeTaskException(nameof(ProcessInfrastructure), failure);
+        }
         return nextLiveness == Timeout.InfiniteTimeSpan
             ? TimeSpan.MaxValue
             : Stopwatch.GetElapsedTime(0, now) + nextLiveness;
@@ -10260,7 +10267,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private (
         List<(RoutingId Target, ulong Generation)>? HelloRoutes,
         List<(RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId)>? Activities,
-        TimeSpan NextLiveness
+        TimeSpan NextLiveness,
+        Exception? Failure
     ) CollectInfrastructureUnderLock(long now)
     {
         List<(RoutingId Target, ulong Generation)>? helloRoutes = null;
@@ -10274,6 +10282,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         List<(RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId)>? activities =
             null;
         List<Peer>? expired = null;
+        ZLinkFailureCollector? failures = null;
         var nextLiveness = Timeout.InfiniteTimeSpan;
         foreach (var peer in _peersByRid.Values)
         {
@@ -10304,10 +10313,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var closed = EndRouteAdmissionUnderLock(
                     new RouterRoute(peer.RoutingId, peer.RouteGeneration)
                 );
-                DisconnectTransport(peer, physicalRid);
+                (failures ??= new()).Capture(() => DisconnectTransport(peer, physicalRid));
                 (activities ??= []).Add((closed, default, 0, 0));
             }
-        return (helloRoutes, activities, nextLiveness);
+        return (helloRoutes, activities, nextLiveness, failures?.BuildException());
     }
 
     private bool NeedsHelloUnderLock(RoutingId target, ulong routeGeneration)
