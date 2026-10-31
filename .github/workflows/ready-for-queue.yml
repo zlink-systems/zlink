@@ -26,6 +26,7 @@ jobs:
       dotnet: ${{ steps.paths.outputs.dotnet }}
       java: ${{ steps.paths.outputs.java }}
       node: ${{ steps.paths.outputs.node }}
+      core_version_changed: ${{ steps.paths.outputs.core_version_changed }}
     runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v5
@@ -43,11 +44,19 @@ jobs:
           dotnet=false
           java=false
           node=false
+          core_version_changed=false
           paths_file="${RUNNER_TEMP}/ready-for-queue-paths"
           git diff --name-only --no-renames -z "${PR_BASE_SHA}...${PR_HEAD_SHA}" > "$paths_file"
           while IFS= read -r -d '' path; do
             case "$path" in
-              framework/runtime/*|framework/doc/framework/common/spec/*|framework/doc/framework/common/e2e/*|bindings/*|core/*|scripts/ci/*|.github/workflows/*|VERSION)
+              VERSION)
+                core_version_changed=true
+                cpp=true
+                dotnet=true
+                java=true
+                node=true
+                ;;
+              framework/runtime/*|framework/doc/framework/common/spec/*|framework/doc/framework/common/e2e/*|bindings/*|core/*|scripts/ci/*|.github/workflows/*)
                 cpp=true
                 dotnet=true
                 java=true
@@ -64,8 +73,28 @@ jobs:
             echo "dotnet=$dotnet"
             echo "java=$java"
             echo "node=$node"
+            echo "core_version_changed=$core_version_changed"
           } >> "$GITHUB_OUTPUT"
-          echo "Selected languages: cpp=$cpp dotnet=$dotnet java=$java node=$node"
+          echo "Selected languages: cpp=$cpp dotnet=$dotnet java=$java node=$node core_version_changed=$core_version_changed"
+
+  core-release-exists:
+    name: Core release exists
+    needs: gate
+    if: needs.gate.result == 'success'
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    steps:
+      - name: Core version unchanged
+        if: needs.gate.outputs.core_version_changed != 'true'
+        run: echo "Core version is unchanged; release check succeeds."
+
+      - uses: actions/checkout@v5
+        if: needs.gate.outputs.core_version_changed == 'true'
+
+      - name: Check published Core release
+        if: needs.gate.outputs.core_version_changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/check-core-release-exists.sh
 
   framework-cpp:
     name: framework-cpp
