@@ -68,10 +68,14 @@ class server_metrics_t
         ++_errors;
     }
 
-    void observe_rejected_total (long long total)
+    void observe_rejected_total (std::optional<double> total)
     {
         std::lock_guard<std::mutex> lock (_gate);
-        _rejected_total = std::max (_rejected_total.value_or (0), total);
+        if (!total) {
+            _rejected_total.reset ();
+            return;
+        }
+        _rejected_total = std::max (_rejected_total.value_or (0), static_cast<long long> (*total));
     }
 
     std::string snapshot_json ()
