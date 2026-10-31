@@ -192,6 +192,7 @@ TEST (ZLinkStateLane, UncontendedRunOnlyAllocatesItsReturnedFuture)
     int observed = 0;
     const auto submission_allocations =
       count_allocations ([&] { observed = lane.run (work).get (); });
+    RecordProperty ("submission_allocations", static_cast<int> (submission_allocations));
     EXPECT_EQ (42, observed);
     EXPECT_EQ (returned_future_allocations, submission_allocations);
 }
@@ -204,6 +205,7 @@ TEST (ZLinkStateLane, UncontendedSynchronousTurnDoesNotAllocate)
     int observed = 0;
     const auto allocations =
       count_allocations ([&] { observed = lane.run_sync ([] { return 42; }); });
+    RecordProperty ("allocations", static_cast<int> (allocations));
     EXPECT_EQ (42, observed);
     EXPECT_EQ (0u, allocations);
 }

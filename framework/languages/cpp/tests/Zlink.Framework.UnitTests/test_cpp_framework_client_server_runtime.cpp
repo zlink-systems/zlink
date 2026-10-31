@@ -1450,7 +1450,7 @@ void verify_client_server_closed_reply_finishes_without_server_lane ()
     const auto claim =
       server.mailbox ().try_claim (service_mailbox_domain_t::application, 1, 1024 * 1024);
     assert (claim && claim->records.size () == 1);
-    const auto request = (*claim->records.front ());
+    const auto &request = (*claim->records.front ());
     server.close ();
 
     const protocol::application_payload_t payload{"closed.reply", "application/json", bytes ("{}")};

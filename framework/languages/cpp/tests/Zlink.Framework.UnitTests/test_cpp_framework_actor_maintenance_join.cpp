@@ -295,9 +295,18 @@ struct public_host_runtime_test_access_t
                           attempt.terminal->complete (result_t<void>::success ());
                       if (replaced) {
                           attempt = public_host_runtime_t::relocation_target_attempt_t{};
+                          EXPECT_TRUE (pending->request.parts.empty ());
+                          EXPECT_FALSE (pending->request.application);
+                          EXPECT_FALSE (pending->request.application_permit);
+                          EXPECT_FALSE (pending->request.transferred);
                           attempt.pending =
                             std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
-                              *pending);
+                              public_host_runtime_t::pending_relocation_assembly_t{
+                                .prepare = pending->prepare,
+                                .assembly = pending->assembly,
+                                .expires_at = pending->expires_at,
+                                .ready = pending->ready,
+                                .cancellation = pending->cancellation});
                       } else
                           host._relocation_target_attempts.erase (key);
                       return cleanup;
@@ -4334,9 +4343,8 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     const auto drain = [&] {
         EXPECT_TRUE (mailbox.begin_application_drain (owner));
         const auto result =
-          host->dispatch_application_owner (
-                owner, callback, [&] { ++started; }, [&] { ++rejected; })
-            .result ();
+          zlink::framework::test::application_owner_result (host->dispatch_application_owner (
+            owner, callback, [&] { ++started; }, [&] { ++rejected; }));
         EXPECT_TRUE (result);
         if (result)
             EXPECT_TRUE (result.value ());
@@ -4347,7 +4355,7 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     mesh::service_mailbox_record_t typed;
     typed.owner = owner;
     typed.domain = mesh::service_mailbox_domain_t::application;
-    typed.application = std::make_shared<rt::host::local_application_dispatch_t> ();
+    typed.application.emplace ();
     typed.application->record.kind = rt::host::record_kind_t::spot_control;
     ASSERT_TRUE (mailbox.try_enqueue (std::move (typed)));
     drain ();
@@ -4554,10 +4562,9 @@ TEST (NativeIntake, NativeMailboxTransferKeepsActualPrivateMClaim)
         const auto drain = [&] {
             if (!mailbox.begin_application_drain (owner))
                 return false;
-            const auto result = host
-                                  ->dispatch_application_owner (
-                                    owner, dispatch, [&] { ++started; }, [&] { ++rejected; })
-                                  .result ();
+            const auto result =
+              zlink::framework::test::application_owner_result (host->dispatch_application_owner (
+                owner, dispatch, [&] { ++started; }, [&] { ++rejected; }));
             mailbox.end_application_drain (owner);
             EXPECT_TRUE (result);
             return result && result.value ();

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/stateful_object_sync.hpp"
+#include "../support/runtime_failure_fixture.hpp"
 #include "allocation_counter.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
@@ -866,7 +867,7 @@ TEST (LocalEnqueueAllocations, NativeSpotPublicationMovesCanonicalRecordStorage)
     original.source_node_generation = 1;
     original.correlation = 55;
     original.operation = std::pair<std::uint64_t, std::uint64_t>{1, 55};
-    original.application = std::move (application);
+    original.application.emplace (std::move (*application));
     ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (original)));
     copies = 0;
     std::size_t handled = 0;
@@ -1120,7 +1121,7 @@ TEST (LocalEnqueueAllocations, ReadyNativePublicationMovesFinalIdentityStorage)
         original.owner = mesh::service_mailbox_t::application_owner (application->owner);
         const auto owner = original.owner;
         original.domain = mesh::service_mailbox_domain_t::application;
-        original.application = std::move (application);
+        original.application.emplace (std::move (*application));
         EXPECT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (original)));
         std::array<tests::allocation_event_t, 256> events{};
         tests::allocation_event_log_t log{events.data (), events.size ()};
@@ -1143,8 +1144,8 @@ TEST (LocalEnqueueAllocations, ReadyNativePublicationMovesFinalIdentityStorage)
                       received.application_record->release_native_claim ();
               },
               [] {}, [] {});
-            EXPECT_TRUE (pending.await_ready ());
-            EXPECT_TRUE (pending.result ().value ());
+            EXPECT_TRUE (zlink::framework::test::application_owner_ready (pending));
+            EXPECT_TRUE (zlink::framework::test::application_owner_result (pending).value ());
         });
         tests::allocation_event_log = previous_log;
         EXPECT_FALSE (log.overflow);

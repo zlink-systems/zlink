@@ -191,7 +191,7 @@ struct mesh_node_host_service_t::actor_destroy_callback_gate_t
 application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
   std::shared_ptr<detail::mesh_node_runtime_t> node,
   std::function<void ()> complete_stateful_dispatch,
-  std::function<void ()> release_mailbox_reservation) :
+  host::mailbox_callback_t release_mailbox_reservation) :
     _node (std::move (node)),
     _complete_stateful_dispatch (std::move (complete_stateful_dispatch)),
     _release_mailbox_reservation (std::move (release_mailbox_reservation))
@@ -231,7 +231,7 @@ void application_dispatch_terminal_owner_t::settle () noexcept
     _physical_work.reset ();
 }
 
-std::function<void ()> application_dispatch_terminal_owner_t::take_mailbox_reservation () noexcept
+host::mailbox_callback_t application_dispatch_terminal_owner_t::take_mailbox_reservation () noexcept
 {
     return std::exchange (_release_mailbox_reservation, {});
 }
@@ -242,7 +242,8 @@ void application_dispatch_terminal_owner_t::retain_physical_work (
     _physical_work = std::move (work);
 }
 
-void application_dispatch_terminal_owner_t::invoke (const std::function<void ()> &callback) noexcept
+template <typename Callback>
+void application_dispatch_terminal_owner_t::invoke (const Callback &callback) noexcept
 {
     if (!callback)
         return;
@@ -264,7 +265,7 @@ std::atomic_uint64_t next_user_spot_operation{1};
 class terminal_callback_guard_t final
 {
   public:
-    explicit terminal_callback_guard_t (std::function<void ()> release) :
+    explicit terminal_callback_guard_t (host::mailbox_callback_t release) :
         _release (std::move (release))
     {
     }
@@ -286,7 +287,7 @@ class terminal_callback_guard_t final
     void dismiss () noexcept { _release = {}; }
 
   private:
-    std::function<void ()> _release;
+    host::mailbox_callback_t _release;
 };
 
 /* The reservation's immutable creation intent is an Application payload
@@ -1996,9 +1997,7 @@ auto mesh_node_host_service_t::make_application_owner_work (
     };
 }
 
-struct mesh_node_host_service_t::node_receive_role_t final
-    : offload_executor_t::role_t,
-      std::enable_shared_from_this<node_receive_role_t>
+struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t::role_t
 {
     node_receive_role_t (
       mesh_node_host_service_t &host,
@@ -2013,17 +2012,14 @@ struct mesh_node_host_service_t::node_receive_role_t final
     {
     }
 
-    bool run_until_handoff () override
+    void run () override
     {
-        while (!host._stop.load (std::memory_order_acquire)) {
-            if (rotate ())
-                return true;
-        }
+        while (!host._stop.load (std::memory_order_acquire))
+            rotate ();
         supply.close ();
-        return false;
     }
 
-    bool rotate ()
+    void rotate ()
     {
         auto &application_permit = *receive_permit;
         auto &mailbox = node->native_node ().transport ().mailbox ();
@@ -2149,9 +2145,8 @@ struct mesh_node_host_service_t::node_receive_role_t final
                       mailbox_record.owner = mesh::service_mailbox_t::application_owner (owner);
                       mailbox_record.domain = mesh::service_mailbox_domain_t::application;
                       mailbox_record.before_application_handler = record.before_application_handler;
-                      mailbox_record.application =
-                        std::make_shared<host::local_application_dispatch_t> (
-                          host::local_application_dispatch_t{owner, record, std::move (parts)});
+                      mailbox_record.application.emplace (
+                        host::local_application_dispatch_t{owner, record, std::move (parts)});
                       const auto accepted =
                         node->native_node ().transport ().mailbox ().try_enqueue (
                           std::move (mailbox_record));
@@ -2235,28 +2230,7 @@ struct mesh_node_host_service_t::node_receive_role_t final
             (void) node->native_node ().wait_for_dispatch_activity (
               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
         }
-        if (static_cast<bool> (ready)) {
-            const bool handed_off =
-              host._application_dispatch->try_assign_role (shared_from_this ());
-            if (handed_off) {
-                auto owner = std::move (ready->first.back ());
-                ready->first.pop_back ();
-                auto start =
-                  host.make_application_owner_work (node, registration, std::move (owner));
-                // Publish the other owners first so a blocked direct handler
-                // cannot delay independent owner turns.
-                mesh::service_mailbox_t::notify_application_ready (ready);
-                // Completion workers remain independent while this resource
-                // uses its new application turn instead of polling a callback.
-                offload_executor_t::run_application_turn ([&] { start (false); });
-                return true;
-            }
-            mesh::service_mailbox_t::notify_application_ready (ready);
-            return false;
-        }
-        return detail::dispatch_completion_receive_handoff (
-          [&] { return host._application_dispatch->try_assign_role (shared_from_this ()); },
-          host._completion_dispatcher);
+        mesh::service_mailbox_t::notify_application_ready (ready);
     }
 
     struct pending_management_t
@@ -3199,13 +3173,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       if (!*receive_permit)
                           throw std::logic_error (
                             "Application owner enqueue requires a receive permit");
-                      auto permit = std::make_shared<application_job_queue_t::permit_t> (
-                        std::move (**receive_permit));
+                      record.application_permit.emplace (std::move (**receive_permit));
                       receive_permit->reset ();
-                      permit->mark_queued ();
-                      record.before_application_handler = [permit] {
-                          permit->release_for_handler_entry ();
-                      };
+                      record.application_permit->mark_queued ();
                   }
                   node->application_work_enqueued ();
               },
@@ -3633,9 +3603,16 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
         while (true) {
             auto pending = owned_node->native_node ().dispatch_application_owner (
               owner, dispatch, started, rejected);
-            if (!pending.await_ready () && !physical_work && executor)
-                physical_work = executor->retain_internal_work ();
-            if (!(co_await pending))
+            bool claimed;
+            if (const auto ready = std::get_if<bool> (&pending))
+                claimed = *ready;
+            else {
+                auto &task = std::get<task_t<bool>> (pending);
+                if (!task.await_ready () && !physical_work && executor)
+                    physical_work = executor->retain_internal_work ();
+                claimed = co_await task;
+            }
+            if (!claimed)
                 break;
             if (!reject_only && std::chrono::steady_clock::now () >= deadline)
                 break;
@@ -3698,7 +3675,7 @@ mesh_node_host_service_t::submit_local_node_send (std::shared_ptr<detail::mesh_n
     mailbox_record.before_application_handler = [application_job] {
         application_job->release_for_handler_entry ();
     };
-    mailbox_record.application = std::make_shared<host::local_application_dispatch_t> (
+    mailbox_record.application.emplace (
       host::local_application_dispatch_t{std::move (owner), std::move (record), std::move (parts)});
     if (!node->native_node ().transport ().mailbox ().try_enqueue (std::move (mailbox_record)))
         co_return zlink::submit_result_t::terminated;

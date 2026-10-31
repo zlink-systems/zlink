@@ -1907,6 +1907,9 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
 
     auto gateway_state = std::make_shared<actor_gateway_state_t> ();
     actor_gateway_runtime_t gateway (gateway_state);
+    auto jobs = std::make_shared<runtime::application_job_queue_t> (
+      runtime::application_job_queue_configuration_t{application_job_queue_profile_t::balanced,
+                                                     std::uint32_t{1}, 1, 1});
     std::atomic_int deliveries{0};
     const auto previous_actor = actor_ref_access_t::make (
       node_rid_t::from_string (previous.node_id), {}, previous.key, previous.object_generation);
@@ -1939,8 +1942,9 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
                                      const stateful::stream_binding_t &) { return false; },
       .prepare_relocation_target_route = [] (const protocol::session_relocation_route_t &,
                                              std::uint64_t) { return true; },
-      .capture_send = [gateway] (const protocol::bound_session_send_t &send) mutable
+      .capture_send = [gateway, jobs] (const protocol::bound_session_send_t &send) mutable
       -> std::optional<host::bound_session_operations_t::delivery_capability_t> {
+          assert (jobs->snapshot ().permits_in_use == 0);
           const auto actor = actor_ref_access_t::make (
             node_rid_t::from_string (
               zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()),
@@ -1967,15 +1971,26 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
       std::string (protocol::framework_multipart_packet_name),
       std::string (protocol::framework_multipart_content_type),
       {0, 0, 0, 1, 0, 0, 0, 2, 0x7b, 0x7d}};
-    assert (session_owner->transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t{
-      "bound-session:" + target.key, mesh::service_mailbox_domain_t::application,
+    mesh::service_mailbox_record_t queued{
+      "bound-session:" + target.key,
+      mesh::service_mailbox_domain_t::application,
       zlink::framework::detail::backend::materialize_binding_parts (
         {protocol::encode_bound_session_send (send),
          protocol::encode_application_payload (application)}),
-      source_node.to_bytes (), std::nullopt, std::nullopt, 19}));
+      source_node.to_bytes (),
+      std::nullopt,
+      std::nullopt,
+      19};
+    auto permit = jobs->try_reserve_supply ();
+    assert (permit);
+    queued.application_permit.emplace (std::move (*permit));
+    queued.application_permit->mark_queued ();
+    assert (jobs->snapshot ().queued_application_jobs == 1);
+    assert (session_owner->transport ().mailbox ().try_enqueue (std::move (queued)));
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
                                    std::vector<zlink::message_t>) {};
     assert (session_owner->dispatch_ready (noop_dispatch).result ().value () == 1);
+    assert (jobs->snapshot ().permits_in_use == 0);
     const auto current = session_owner->sessions ().current_binding (target.key);
     const auto lagging_projection =
       gateway.bound_session_route_async (previous_actor).result ().value ();
@@ -2920,7 +2935,7 @@ void verify_actor_create_does_not_replay_after_reciprocal_handover ()
         return claim;
     };
     auto losing = receive ();
-    const auto first_record = *losing->records.front ();
+    const auto first_record = losing->records.front ()->reply_source ();
     const auto first = protocol::decode_actor_create_header (
       protocol::message_bytes (losing->records.front ()->parts.front ()));
     assert (first.operation == request.operation);
@@ -2947,11 +2962,11 @@ void verify_actor_create_does_not_replay_after_reciprocal_handover ()
     assert (ended.first == foundation::operation_terminal_t::transport_failed);
     assert (ended.second.empty ());
     assert (source.pending_operation_count () == 0);
-    (void) target.reply_actor_create (first_record, {{first.correlation, 0, 0},
-                                                     protocol::actor_create_result_t::created,
-                                                     target_descriptor.node_routing_id,
-                                                     first.actor_id,
-                                                     1});
+    (void) target.reply_actor_create (*first_record, {{first.correlation, 0, 0},
+                                                      protocol::actor_create_result_t::created,
+                                                      target_descriptor.node_routing_id,
+                                                      first.actor_id,
+                                                      1});
     for (int turn = 0; turn < 32; ++turn) {
         pump ();
         no_replay ();
@@ -4038,7 +4053,7 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
         mesh::service_mailbox_record_t record;
         record.owner = mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
         record.domain = mesh::service_mailbox_domain_t::application;
-        record.application = std::move (application);
+        record.application.emplace (std::move (*application));
         return mailbox.try_enqueue (std::move (record));
     };
     assert (enqueue ("first"));
@@ -4050,8 +4065,8 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
     std::vector<std::string> dispatched;
     std::size_t started = 0;
     std::size_t rejected = 0;
-    assert (target
-              ->dispatch_application_owner (
+    assert (zlink::framework::test::application_owner_result (
+              target->dispatch_application_owner (
                 owner,
                 [&] (const host::ready_record_t &, const host::receive_record_t &record,
                      std::vector<zlink::message_t> parts) {
@@ -4062,8 +4077,7 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
                     dispatched.push_back (parts.front ().to_string ());
                     record.release_mailbox_reservation ();
                 },
-                [&] { ++started; }, [&] { ++rejected; })
-              .result ()
+                [&] { ++started; }, [&] { ++rejected; }))
               .value ());
     mailbox.end_application_drain (owner);
 
