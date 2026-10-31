@@ -279,6 +279,11 @@ Orderly close와 transport disconnect는 15초를 기다리지 않는다. 이전
 connection에서 늦게 도착한 ACK나 frame은 새 connection의 상태를 바꾸지 못한다. Core가 반환한
 Spot·Actor·Channel message는 Framework가 generation으로 다시 판정하지 않는다.
 
+만료 peer의 물리 disconnect가 실패해도 runtime은 그 peer의 로컬 admission과 pending
+operation 정리 및 통지를 완료하고, 같은 tick의 나머지 만료 peer를 처리한다. `NOT_FOUND`는
+이미 종료된 결과로 받아들인다. 그 밖의 오류는 독립 정리가 끝난 뒤 원래 원인을 보존하여
+기존 runtime 오류 보고 경로로 전달한다.
+
 Peer 하나의 실패는 host 전체를 `Error`로 바꾸지 않는다. 다른 ready peer와, 현재 이
 host에서 Actor·Spot을 실제로 실행하며 그 application queue를 관리하는 local
 [Owner](../00-foundation/02-glossary.ko.md#owner)는 계속 처리한다. Ready peer가 없을 때 Channel 호출의 결과는

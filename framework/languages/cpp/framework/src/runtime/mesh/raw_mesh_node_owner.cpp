@@ -4362,10 +4362,11 @@ task_t<service_liveness_tick_t>
 raw_mesh_node_owner_t::tick_due_liveness (service_liveness_registry_t::clock_t::time_point now)
 {
     std::vector<std::function<void ()>> notifications;
+    std::vector<std::exception_ptr> failures;
     try {
         const auto [result, port] =
           _lane
-            .run ([this, now, &notifications] {
+            .run ([this, now, &notifications, &failures] {
                 auto tick = _liveness.tick_owned (now);
                 std::shared_ptr<detail::backend::raw_route_port_t> port;
                 {
@@ -4392,7 +4393,10 @@ raw_mesh_node_owner_t::tick_due_liveness (service_liveness_registry_t::clock_t::
                             catch (const zlink::connect_error_t &error) {
                                 // Core may already have removed the selected route.
                                 if (error.result () != zlink::connect_result_t::not_found)
-                                    throw;
+                                    failures.push_back (std::current_exception ());
+                            }
+                            catch (...) {
+                                failures.push_back (std::current_exception ());
                             }
                         }
                         end_peer_operations_if_disconnected_locked (timed_out);
@@ -4402,7 +4406,11 @@ raw_mesh_node_owner_t::tick_due_liveness (service_liveness_registry_t::clock_t::
                 return std::pair{std::move (tick), port};
             })
             .get ();
-        if (auto failure = deliver_topology_notifications (notifications))
+        auto failure = deliver_topology_notifications (
+          notifications, failures.empty () ? std::exception_ptr{} : failures.front ());
+        for (std::size_t index = 1; index < failures.size (); ++index)
+            _options.runtime_failures->report (failures[index]);
+        if (failure)
             std::rethrow_exception (failure);
         if (!port)
             co_return result;

@@ -8354,9 +8354,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     // send failure.
                 }
             }
+            List<RuntimeException> failures = new ArrayList<>();
             for (RoutingId peer : targets) {
-                ZLinkJavaSocketSupport.disconnectRidIfPresent(requireStarted(), peer);
+                try {
+                    ZLinkJavaSocketSupport.disconnectRidIfPresent(requireStarted(), peer);
+                } catch (RuntimeException failure) {
+                    failures.add(failure);
+                }
                 signalStateChanged(peer);
+            }
+            if (!failures.isEmpty()) {
+                RuntimeException primary = failures.getFirst();
+                for (int index = 1; index < failures.size(); index++) {
+                    if (failures.get(index) != primary) primary.addSuppressed(failures.get(index));
+                }
+                throw primary;
             }
         };
     }

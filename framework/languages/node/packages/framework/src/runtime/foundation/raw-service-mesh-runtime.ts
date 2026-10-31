@@ -1604,11 +1604,24 @@ export class RawServiceMeshRuntime {
         this.submitControl(probe.nodeRoutingId, parts)
       );
     }
+    const failures: unknown[] = [];
     for (const nodeRoutingId of result.timedOutNodes) {
       const peer = this.topology.peer(nodeRoutingId);
       if (peer === undefined) continue;
-      this.removePeer(peer, () => this.requireStarted().disconnectRid!(nodeRoutingId));
+      try {
+        this.removePeer(peer, () => {
+          try {
+            this.requireStarted().disconnectRid!(nodeRoutingId);
+          } catch (error) {
+            failures.push(error);
+          }
+        });
+      } catch (error) {
+        failures.push(error);
+      }
     }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, 'Liveness peer cleanup failed.');
     return result;
   }
 

@@ -1,3 +1,5 @@
+import { ConnectError, ConnectResult } from '@zlink-systems/zlink';
+import { disconnectSocketPeer } from '../../packages/framework/src/runtime/backend/node/node-socket-backend-adapter';
 import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
 import assert from 'node:assert/strict';
 import net from 'node:net';
@@ -2348,3 +2350,69 @@ test('a channel request validates NotFound wire pairs after handling local no-me
   const invalid = meshRequestFailure('game', 102, 18);
   assert.equal(invalid.kind, ZLinkFrameworkErrorKind.ProtocolError);
 });
+
+for (const { missing, notificationFails } of [
+  { missing: false, notificationFails: false },
+  { missing: true, notificationFails: false },
+  { missing: false, notificationFails: true }
+]) {
+  test(`liveness cleanup finishes every expired peer before reporting disconnect failure (${missing}, ${notificationFails})`, () => {
+    const failure = new Error('original disconnect failure');
+    const notificationFailure = new Error('notification failure');
+    const disconnected: string[] = [];
+    const notified: string[] = [];
+    const runtime = rawServiceRuntime({
+      descriptor: descriptor('local'),
+      onPeerDisconnected: (rid) => {
+        assert.equal(runtime.topology.peer(rid), undefined);
+        notified.push(rid);
+        if (notificationFails && notified.length === 1) throw notificationFailure;
+      }
+    });
+    const internal = runtime as unknown as { router: Pick<ZLinkRawRouterPort, 'disconnectRid'> };
+    internal.router = {
+      disconnectRid(rid) {
+        disconnected.push(rid);
+        disconnectSocketPeer(
+          {
+            disconnectRid() {
+              if (disconnected.length === 1)
+                throw missing ? new ConnectError(ConnectResult.NotFound) : failure;
+            }
+          },
+          rid
+        );
+      }
+    };
+    for (const rid of ['expired-a', 'expired-b', 'expired-c']) {
+      assert.equal(
+        runtime.topology.admit(
+          descriptor(rid),
+          'route:' + rid,
+          undefined,
+          () => runtime.liveness.admit(rid, 'route:' + rid, 0),
+          M6aServiceWireCommand.admit
+        ),
+        'admitted'
+      );
+    }
+    const reported: unknown[] = [];
+    try {
+      runtime.tickLiveness(15_000);
+    } catch (error) {
+      reported.push(error);
+    }
+    assert.deepEqual(disconnected.sort(), ['expired-a', 'expired-b', 'expired-c']);
+    assert.deepEqual(notified.sort(), ['expired-a', 'expired-b', 'expired-c']);
+    assert.equal(runtime.topology.peers().length, 0);
+    assert.equal(runtime.liveness.size, 0);
+    if (notificationFails) {
+      assert.equal(reported.length, 1);
+      assert.ok(reported[0] instanceof AggregateError);
+      assert.deepEqual(reported[0].errors, [failure, notificationFailure]);
+    } else assert.deepEqual(reported, missing ? [] : [failure]);
+    runtime.tickLiveness(16_000);
+    assert.equal(disconnected.length, 3);
+    assert.equal(notified.length, 3);
+  });
+}
