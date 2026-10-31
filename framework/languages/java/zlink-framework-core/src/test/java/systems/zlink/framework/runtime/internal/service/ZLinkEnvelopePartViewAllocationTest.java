@@ -205,7 +205,7 @@ public final class ZLinkEnvelopePartViewAllocationTest {
                     copyObjects);
             assertEquals(SENDS, controlArrays);
             assertEquals(SENDS, controlViews);
-            assertEquals(SENDS, arrays, "one owned header byte array is retained for each send");
+            assertEquals(0, arrays, "warm sends reuse the cached header byte array");
             assertEquals(SENDS, copies, "one payload copy into the final native frame");
             assertEquals(0, views, "retained header bytes need no temporary heap buffer");
             assertEquals(0, writerViews, "header bytes need no temporary heap buffer for encoding");
