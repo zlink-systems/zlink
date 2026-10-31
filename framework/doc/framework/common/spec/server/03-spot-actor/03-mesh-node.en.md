@@ -55,6 +55,8 @@ MeshNode descriptor is published, the following settings can't be changed.
 
 One node-configuration owner retains the configured local identity throughout the configuration lifetime, including before native startup and after native shutdown. Reading that identity does not grant admission. The existing admission owner decides admission and shutdown outcomes. Descriptor and wire identities derive from this source and are not separate authorities for deciding whether a target is local.
 
+From native startup until shutdown, locality is decided with the RID fixed when that lifecycle started. This is the same RID the transport actually uses. A configured identity change during the run does not change decisions for the current lifecycle; the new value applies from the next start.
+
 ### 3.1 Automatic RID
 
 MeshNode automatic RID issuance, format, conflict, and lifecycle rules are defined by
