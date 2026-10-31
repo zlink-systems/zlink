@@ -141,6 +141,12 @@ class raw_mesh_node_owner_t
 
     const dispatch_options_t &dispatch_options () const noexcept { return _options.dispatch; }
 
+    // Identity fields are fixed for this native lifecycle and seed its transport.
+    const service_node_descriptor_t &startup_descriptor () const noexcept
+    {
+        return _options.descriptor;
+    }
+
     raw_mesh_node_owner_t (const raw_mesh_node_owner_t &) = delete;
     raw_mesh_node_owner_t &operator= (const raw_mesh_node_owner_t &) = delete;
 
