@@ -177,7 +177,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
         }
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final RoutingId source = RoutingId.from("authority-source");
         final RoutingId target = RoutingId.from("authority-target");
         final ZLinkServiceM6AWireCodec wire = new ZLinkServiceM6AWireCodec();
@@ -287,6 +287,31 @@ final class ZLinkJavaActorAuthorityFailureTest {
 
         ZLinkJavaRawServicePort.Inbound dispatch(long correlation) throws Exception {
             return dispatch(correlation, true);
+        }
+
+        ZLinkJavaRawServicePort.Inbound dispatchSpot(long correlation) {
+            byte[] payload;
+            try (var message = Message.from("{}")) {
+                payload = ZLinkServiceM6AWireCodec.encodeFrameworkMultipartFrame(List.of(message));
+            }
+            byte[] header =
+                    actors.encodeSpotHeader(
+                            true,
+                            0,
+                            correlation,
+                            1,
+                            1,
+                            0,
+                            "source-spot",
+                            new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                                    "target-spot", 1, target, 1, 1, 1));
+            var received =
+                    systems.zlink.internal.ContractAccess.received(
+                            source, new Message[] {Message.from(header), Message.from(payload)});
+            ReceivedTesting.setRouteGeneration(received, 1);
+            var inbound = new ZLinkJavaRawServicePort.Inbound(source, token, received);
+            node.dispatch(inbound);
+            return inbound;
         }
 
         ZLinkJavaRawServicePort.Inbound dispatch(long correlation, boolean request)
