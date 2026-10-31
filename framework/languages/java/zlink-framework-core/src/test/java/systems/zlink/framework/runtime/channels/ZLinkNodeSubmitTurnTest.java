@@ -424,7 +424,7 @@ final class ZLinkNodeSubmitTurnTest {
     }
 
     @Test
-    void routeRouterKeepsPriorityAndSubmitsInTheRegistryTurn() throws Exception {
+    void routeRouterKeepsPriorityAndSubmitsSynchronously() throws Exception {
         try (Fixture f = new Fixture()) {
             NodeProbe node = new NodeProbe(f.lane);
             RouterProbe router = new RouterProbe(f.lane);
@@ -945,11 +945,12 @@ final class ZLinkNodeSubmitTurnTest {
                                             return java.lang.reflect.InvocationHandler
                                                     .invokeDefault(proxy, method, args);
                                         if (method.getName().equals("send")) {
-                                            assertSame(lane, ZLinkStateLane.current());
+                                            assertNull(ZLinkStateLane.current());
                                             sends.incrementAndGet();
                                             return CompletableFuture.completedFuture(null);
                                         }
                                         if (method.getName().equals("request")) {
+                                            // This fixture uses the registry lane as request owner.
                                             assertSame(lane, ZLinkStateLane.current());
                                             requests.incrementAndGet();
                                             timeout.set((Duration) args[2]);
