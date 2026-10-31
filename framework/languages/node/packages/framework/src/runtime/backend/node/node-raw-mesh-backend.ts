@@ -629,6 +629,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       peer.securityIdentity,
       peer.lifecycleGeneration
     );
+    this.scheduleMaintenance();
   }
 
   removePeerConnection(intentId: bigint): void {
