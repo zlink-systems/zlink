@@ -202,6 +202,13 @@ TEST (LocalEnqueueAllocations, SuccessfulLocalMessagesOnlyAllocateTheirPublished
         ASSERT_EQ (submit ().result ().value (), zlink::submit_result_t::ok);
         drain ();
         const auto caller = caller_baseline (actor, scenario, parts);
+        // Reply completion does not join the preceding deadline-index turn.
+        // Keep that warm-up work outside this caller-thread allocation sample.
+        const auto infrastructure = fw::runtime::infrastructure_executor ();
+        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+        while (!infrastructure->drained () && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        ASSERT_TRUE (infrastructure->drained ());
         std::array<fw::tests::allocation_event_t, 128> events{};
         fw::tests::allocation_event_log_t log{events.data (), events.size ()};
         const auto previous_log = fw::tests::allocation_event_log;
