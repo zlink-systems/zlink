@@ -282,64 +282,52 @@ internal sealed partial class ZLinkFrameworkRuntime
         string targetName
     )
     {
-        if (nodeRuntime.Node.RoutingId == targetNodeRid)
+        if (
+            RequireKnownRouteMeshTarget(
+                nodeRuntime,
+                routerChannelId,
+                targetNodeRid,
+                targetKind,
+                targetName
+            ) == ZLinkRouteMeshTargetClassification.RequiredNotConnected
+        )
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Route channel '{routerChannelId}' is not connected to node '{targetNodeRid}' for {targetKind} '{targetName}'.",
+                retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff
+            );
+    }
+
+    internal ZLinkRouteMeshTargetClassification RequireKnownRouteMeshTarget(
+        ZLinkSpotNodeRuntime nodeRuntime,
+        string routerChannelId,
+        RoutingId targetNodeRid,
+        string targetKind,
+        string targetName
+    )
+    {
+        var classification =
+            nodeRuntime.Node.RoutingId == targetNodeRid
+                ? nodeRuntime.Registration.ObjectRole == ZLinkMeshNodeObjectRole.Client
+                    ? ZLinkRouteMeshTargetClassification.ObjectClientTarget
+                    : ZLinkRouteMeshTargetClassification.ReadyEligible
+                : nodeRuntime.UsesManualRouterAcquisition
+                    ? nodeRuntime.ClassifyManualRouterTarget(targetNodeRid)
+                    : ClassifyAutomaticRouteMeshTarget(nodeRuntime, routerChannelId, targetNodeRid);
+        return classification switch
         {
-            if (nodeRuntime.Registration.ObjectRole == ZLinkMeshNodeObjectRole.Client)
+            ZLinkRouteMeshTargetClassification.ReadyEligible
+            or ZLinkRouteMeshTargetClassification.RequiredNotConnected => classification,
+            ZLinkRouteMeshTargetClassification.ObjectClientTarget
+            or ZLinkRouteMeshTargetClassification.Unknown =>
                 throw CreateUnknownRouteTargetException(
                     routerChannelId,
                     targetNodeRid,
                     targetKind,
                     targetName
-                );
-            return;
-        }
-
-        if (nodeRuntime.UsesManualRouterAcquisition)
-        {
-            switch (nodeRuntime.ClassifyManualRouterTarget(targetNodeRid))
-            {
-                case ZLinkRouteMeshTargetClassification.ReadyEligible:
-                    return;
-                case ZLinkRouteMeshTargetClassification.RequiredNotConnected:
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        $"Route channel '{routerChannelId}' is not connected to node '{targetNodeRid}' for {targetKind} '{targetName}'.",
-                        retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff
-                    );
-                case ZLinkRouteMeshTargetClassification.ObjectClientTarget:
-                case ZLinkRouteMeshTargetClassification.Unknown:
-                    throw CreateUnknownRouteTargetException(
-                        routerChannelId,
-                        targetNodeRid,
-                        targetKind,
-                        targetName
-                    );
-                default:
-                    throw new InvalidOperationException("Unknown RouteMesh target classification.");
-            }
-        }
-
-        switch (ClassifyAutomaticRouteMeshTarget(nodeRuntime, routerChannelId, targetNodeRid))
-        {
-            case ZLinkRouteMeshTargetClassification.ReadyEligible:
-                return;
-            case ZLinkRouteMeshTargetClassification.RequiredNotConnected:
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"Route channel '{routerChannelId}' is not connected to node '{targetNodeRid}' for {targetKind} '{targetName}'.",
-                    retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff
-                );
-            case ZLinkRouteMeshTargetClassification.ObjectClientTarget:
-            case ZLinkRouteMeshTargetClassification.Unknown:
-                throw CreateUnknownRouteTargetException(
-                    routerChannelId,
-                    targetNodeRid,
-                    targetKind,
-                    targetName
-                );
-            default:
-                throw new InvalidOperationException("Unknown RouteMesh target classification.");
-        }
+                ),
+            _ => throw new InvalidOperationException("Unknown RouteMesh target classification."),
+        };
     }
 
     internal async ValueTask<ZLinkOneWaySubmitResult> SendToSpotViaRouterChannelAsync(
@@ -453,13 +441,13 @@ internal sealed partial class ZLinkFrameworkRuntime
             var outcome = ZLinkRuntimeMetrics.RequestCompleted;
             try
             {
-                await EnsureKnownRouteMeshPeerAsync(
-                        routerChannelId,
-                        targetNodeRid,
-                        SpotRouteTarget,
-                        targetSpotId
-                    )
-                    .ConfigureAwait(false);
+                RequireKnownRouteMeshTarget(
+                    await GetMeshNodeRuntimeAsync(routerChannelId).ConfigureAwait(false),
+                    routerChannelId,
+                    targetNodeRid,
+                    SpotRouteTarget,
+                    targetSpotId
+                );
 
                 return await _spotRouteRouter
                     .RequestAsync(

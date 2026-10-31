@@ -572,7 +572,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                     async snapshot =>
                     {
                         var requestTimeout = RemainingTimeout(deadline.Monotonic);
-                        var started = System.Diagnostics.Stopwatch.GetTimestamp();
                         var admissionHeader = ZLinkClientCallCodec.CreateEnvelope(
                             ZLinkMessageKind.Request,
                             snapshot.RouterChannelId,
@@ -607,32 +606,18 @@ internal sealed class ZLinkActorRemoteJoiner(
                             ZLinkMessageParts.DisposeAll(admissionParts);
                         }
                         var requestAdmission = new ZLinkRequestAdmission();
-                        var replyParts = await ZLinkDurableRequest
-                            .RequestAsync(
-                                wire,
-                                started,
-                                requestTimeout,
-                                (frames, remaining, token) =>
-                                {
-                                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                                        $"admit_request_sent actor={actor.Context.ActorId} target_node={snapshot.NodeRid} spot={snapshot.SpotId} spot_gen={snapshot.Generation} node_gen={snapshot.NodeGeneration} authority_gen={snapshot.AuthorityOwnerGeneration} lease_gen={snapshot.OwnerLeaseGeneration}"
-                                    );
-                                    return runtime.RequestToSpotViaRouterChannelAsync(
-                                        snapshot.RouterChannelId,
-                                        snapshot.NodeRid,
-                                        snapshot.SpotId,
-                                        (ulong)snapshot.Generation,
-                                        snapshot.NodeGeneration,
-                                        snapshot.AuthorityOwnerGeneration,
-                                        snapshot.OwnerLeaseGeneration,
-                                        frames.Select(Message.From).ToArray(),
-                                        remaining,
-                                        token,
-                                        requestAdmission: requestAdmission
-                                    );
-                                },
+                        var replyParts = await runtime
+                            .RequestToSpotViaRouterChannelAsync(
+                                snapshot.RouterChannelId,
+                                snapshot.NodeRid,
+                                snapshot.SpotId,
+                                (ulong)snapshot.Generation,
+                                snapshot.NodeGeneration,
+                                snapshot.AuthorityOwnerGeneration,
+                                snapshot.OwnerLeaseGeneration,
+                                wire.Select(Message.From).ToArray(),
+                                RemainingTimeout(deadline.Monotonic),
                                 cancellationToken,
-                                () => sourceNode.Node.ObservePeerRoute(snapshot.NodeRid),
                                 requestAdmission: requestAdmission
                             )
                             .ConfigureAwait(false);
@@ -709,15 +694,17 @@ internal sealed class ZLinkActorRemoteJoiner(
             )
         );
         var sourceCancellationToken = cancellationToken;
-        return await ExecuteWithDeadlineAsync(
-                CompleteRelocationAsync,
+        var submitPrepare = await ExecuteWithDeadlineAsync(
+                PrepareRelocationAsync,
                 RemainingTimeout(deadline.Monotonic),
                 cancellationToken,
                 registration.TimeProvider
             )
             .ConfigureAwait(false);
 
-        async ValueTask<ZLinkActorJoinResult> CompleteRelocationAsync(
+        return await submitPrepare().ConfigureAwait(false);
+
+        async ValueTask<Func<ValueTask<ZLinkActorJoinResult>>> PrepareRelocationAsync(
             CancellationToken cancellationToken
         )
         {
@@ -1019,27 +1006,33 @@ internal sealed class ZLinkActorRemoteJoiner(
                 registration.ApplicationVersion,
                 deadline.Utc
             );
-            _ = await canonical
-                .PrepareCanonicalRelocationAsync(
-                    targetNodeRid,
-                    prepare,
-                    transferPayload,
-                    RemainingTimeout(deadline.Monotonic),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            // Membership §4: relay-ready transfers public completion to the target.
-            // The returned continuation owns source settlement and cleanup only.
-            return new ZLinkActorJoinResult.Relayed(() =>
+            // The sender operation owns PREPARE's deadline. The preflight timer
+            // ends before starting it; settlement retains its transaction deadline.
+            return async () =>
             {
-                var remaining = deadline.Monotonic - registration.TimeProvider.GetElapsedTime(0);
-                return ExecuteWithDeadlineAsync(
-                    SettleSourceCleanupAsync,
-                    remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero,
-                    sourceCancellationToken,
-                    registration.TimeProvider
-                );
-            });
+                _ = await canonical
+                    .PrepareCanonicalRelocationAsync(
+                        targetNodeRid,
+                        prepare,
+                        transferPayload,
+                        RemainingTimeout(deadline.Monotonic),
+                        sourceCancellationToken
+                    )
+                    .ConfigureAwait(false);
+                // Membership §4: relay-ready transfers public completion to the target.
+                // The returned continuation owns source settlement and cleanup only.
+                return new ZLinkActorJoinResult.Relayed(() =>
+                {
+                    var remaining =
+                        deadline.Monotonic - registration.TimeProvider.GetElapsedTime(0);
+                    return ExecuteWithDeadlineAsync(
+                        SettleSourceCleanupAsync,
+                        remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero,
+                        sourceCancellationToken,
+                        registration.TimeProvider
+                    );
+                });
+            };
 
             async ValueTask<ZLinkSourceSettlementResult> SettleSourceCleanupAsync(
                 CancellationToken cancellationToken
