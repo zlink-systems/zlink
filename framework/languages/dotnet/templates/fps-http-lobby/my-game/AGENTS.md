@@ -2,7 +2,7 @@
 
 ## Project and development
 
-Extend this template's domain to build an FPS server. This .NET 8 project runs an HTTP Lobby, a Session gateway, Match hosts A and B, and a Redis Location Store. The Lobby pairs `POST /match` requests by mode, assigns a GUID Room ID and prepares the member list of a dynamic Room User Spot. Players connect to Session over STREAM and join the assigned Room. Public Framework and connector packages are pinned to 0.30.3 in `Directory.Packages.props`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
+Extend this template's domain to build an FPS server. This .NET 8 project runs an HTTP Lobby, a Session gateway, Match hosts A and B, and a Redis Location Store. The Lobby pairs `POST /match` requests by mode, assigns a GUID Room ID and prepares the member list of a dynamic Room User Spot. Players connect to Session over STREAM and join the assigned Room. Public Framework and connector packages are pinned to 0.31.0 in `Directory.Packages.props`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
 

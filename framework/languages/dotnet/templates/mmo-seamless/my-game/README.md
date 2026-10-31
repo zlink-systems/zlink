@@ -21,7 +21,7 @@ The initial `zlink.structure.json` uses the landing page's `mmo-seamless` compos
 - Bash for Linux, WSL, or macOS; PowerShell 7 for Windows.
 - Linux native assets supported by the published `Zlink` package. Local process debugging additionally requires the .NET 8 SDK and ASP.NET Core 8 runtime.
 
-Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.30.3`. This project has no dependency on a ZLink source checkout or local package feed.
+Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.31.0`. This project has no dependency on a ZLink source checkout or local package feed.
 
 ## Build
 
@@ -108,7 +108,7 @@ Every e2e run validates the composition before starting nodes. `--check-structur
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.31.0 packages.
 
 ## Deployment sequence
 
@@ -138,4 +138,4 @@ Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity befo
 
 Docker와 Compose v2를 설치한 뒤 Bash에서 `./run-e2e.sh`, PowerShell 7에서 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 빌드부터 domain 검사, node와 e2e client 실행까지 컨테이너에서 처리하므로 호스트 .NET SDK가 필요 없다. `./run-e2e.sh --check-domain` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`은 node를 시작하지 않고 도메인 경계 검사를 실행한다. 로그는 `.logs/`에 남으며 자신이 만든 컨테이너·network·이미지 태그를 자동으로 제거한다.
 
-로컬 디버깅은 .NET 8 SDK를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 공개 Framework 0.30.3 패키지로 검증했다. 게임 확장 위치와 공개 API 규칙은 `AGENTS.md`를 따른다.
+로컬 디버깅은 .NET 8 SDK를 설치한 뒤 `--local` 또는 `-Local`로 실행한다. 공개 Framework 0.31.0 패키지로 검증했다. 게임 확장 위치와 공개 API 규칙은 `AGENTS.md`를 따른다.

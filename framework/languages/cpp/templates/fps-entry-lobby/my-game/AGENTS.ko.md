@@ -2,7 +2,7 @@
 
 ## 프로젝트와 개발
 
-이 템플릿의 도메인을 확장하여 FPS 서버를 만듭니다. C++20 프로젝트는 Session gateway, Match host A·B, Redis Location Store를 실행합니다. Entry Spot은 플레이어를 고정 Matchmaking User Spot으로 보내고, 같은 mode를 요청한 플레이어는 동적 Room User Spot에 들어갑니다. 공개 Framework와 connector package는 `bootstrap.cmake`의 0.30.3에 고정되어 있습니다. 실행·배포·알려진 문제는 [README](README.md)가 소유하고, [zlink.structure.json](zlink.structure.json)은 초기 topology와 시나리오 순서를 설명합니다.
+이 템플릿의 도메인을 확장하여 FPS 서버를 만듭니다. C++20 프로젝트는 Session gateway, Match host A·B, Redis Location Store를 실행합니다. Entry Spot은 플레이어를 고정 Matchmaking User Spot으로 보내고, 같은 mode를 요청한 플레이어는 동적 Room User Spot에 들어갑니다. 공개 Framework와 connector package는 `bootstrap.cmake`의 0.31.0에 고정되어 있습니다. 실행·배포·알려진 문제는 [README](README.md)가 소유하고, [zlink.structure.json](zlink.structure.json)은 초기 topology와 시나리오 순서를 설명합니다.
 
 Docker Compose v2와 Linux container를 준비한 뒤 프로젝트 루트에서 실행합니다.
 
@@ -45,7 +45,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 
 [ZLink 문서](https://docs.zlink.systems/), [C++ server guide](https://docs.zlink.systems/cpp/guide/server/), [API reference](https://docs.zlink.systems/cpp/reference/)와 [agent index](https://docs.zlink.systems/llms.txt)를 사용합니다. 현재 문서의 API를 쓰기 전에 고정 package 버전과 대조합니다. Entry·Spot·Actor·Session·Location·relocation은 공개 Framework API와 기본 typed serializer를 사용합니다. private API·raw frame·application routing 우회는 쓰지 않습니다.
 
-고정된 0.30.3 header는 문서의 typed `SessionInfoRequest` reply 예시와 맞지 않습니다. STREAM write/reply는 `zlink::message_t`를 받지만 `fx::message_t::from(T)`는 typed wrapper를 반환하고 `submit()`은 `void`입니다. Reply를 push로 바꾸거나 수동 encoding을 넣지 말고 public 계약 불일치로 기록합니다.
+고정된 0.31.0 header는 문서의 typed `SessionInfoRequest` reply 예시와 맞지 않습니다. STREAM write/reply는 `zlink::message_t`를 받지만 `fx::message_t::from(T)`는 typed wrapper를 반환하고 `submit()`은 `void`입니다. Reply를 push로 바꾸거나 수동 encoding을 넣지 말고 public 계약 불일치로 기록합니다.
 
 ## 진단과 결함
 

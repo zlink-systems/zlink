@@ -1,6 +1,6 @@
 # my-game
 
-A Kotlin seamless MMORPG template using public ZLink Framework 0.30.3 packages. Session processes bind players to Actors; Zone processes host a six-zone world; Instance processes create Dungeon User Spots on demand. Each Zone's `ZonePositionDomain` owns authoritative movement and visibility state, including the remaining movement budget captured for relocation.
+A Kotlin seamless MMORPG template using public ZLink Framework 0.31.0 packages. Session processes bind players to Actors; Zone processes host a six-zone world; Instance processes create Dungeon User Spots on demand. Each Zone's `ZonePositionDomain` owns authoritative movement and visibility state, including the remaining movement budget captured for relocation.
 
 ```mermaid
 flowchart LR

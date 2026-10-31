@@ -18,7 +18,7 @@ flowchart LR
 
 Docker Compose v2 and a running Linux-container daemon are required for the default run. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for Docker execution.
 
-Public Framework 0.30.3 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.30.3` GitHub Release, checks its published SHA-256 checksum and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, Framework libraries, Boost headers and nlohmann_json, so no package manager runs. Docker and local builds use this script. Follow the public package licensing requirements.
+Public Framework 0.31.0 is pinned in `bootstrap.cmake`, the only file that names the version. `cmake -P bootstrap.cmake` downloads this platform's prebuilt from the `framework-cpp/v0.31.0` GitHub Release, checks its published SHA-256 checksum and extracts it into `.zlink/install`. The prebuilt carries Core, the C++ binding, Framework libraries, Boost headers and nlohmann_json, so no package manager runs. Docker and local builds use this script. Follow the public package licensing requirements.
 
 ## Build and run
 
@@ -89,10 +89,10 @@ Start Redis, Match A, Match B, Session, then the Lobby. Each role has its own ex
 
 ## 한국어 실행 안내
 
-기본 실행에는 Docker Compose v2와 Linux 컨테이너 데몬이 필요하다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. `--build-only`는 이미지 빌드만 하고, 기본 실행은 structure 검사·Redis·node·runner를 실행한 뒤 자신이 만든 리소스를 정리한다. Framework 0.30.3는 `bootstrap.cmake` 한 곳에서 고정하며 공개 prebuilt의 SHA-256 체크섬을 확인한다.
+기본 실행에는 Docker Compose v2와 Linux 컨테이너 데몬이 필요하다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. `--build-only`는 이미지 빌드만 하고, 기본 실행은 structure 검사·Redis·node·runner를 실행한 뒤 자신이 만든 리소스를 정리한다. Framework 0.31.0는 `bootstrap.cmake` 한 곳에서 고정하며 공개 prebuilt의 SHA-256 체크섬을 확인한다.
 
 시나리오는 lobby, hit, wall, input, reconnect, update 순서다. Lobby 검사는 기본 duel, mode 분리, 같은 Room·Session endpoint, 빈 방 outsider 거부, client `PrepareRoom`의 입장 전·대전 중 거부, Lobby 재시작 뒤 기존 경기 유지와 새 Room ID 발급을 확인한다. 게임 도메인 46개와 HTTP lobby 도메인 19개 검사는 시나리오 전에 실행한다. 로컬 빌드 후에는 `ctest --test-dir build --output-on-failure`로 두 domain target을 실행한다.
 
 `Matchmaker`가 mode별 매칭과 `RoomPrefix + UUID` Room ID 발급을 소유한다. Room 준비를 확인한 뒤에만 HTTP 응답을 반환한다. `RoomRoster`는 준비된 명단과 admission을 소유하고 `{Game, Roster}` snapshot으로 relocation된다. `RoomState`는 이동 예산·발사 간격·명중 판정·HP·공유 순번·승자와 남은 시간 기반 snapshot을 소유한다. 발은 Y=0이며 수직 이동은 `vertical-move`로 거부한다. RetryAfterMs는 서버가 보낸 시간만 기다린다.
 
-로컬 디버깅은 C++20 compiler, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 PowerShell의 `-Local`로 실행한다. node 설정과 로그는 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. Session typed reply 경계의 0.30.3 public API 불일치는 Known issues에 기록했다.
+로컬 디버깅은 C++20 compiler, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 PowerShell의 `-Local`로 실행한다. node 설정과 로그는 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. Session typed reply 경계의 0.31.0 public API 불일치는 Known issues에 기록했다.

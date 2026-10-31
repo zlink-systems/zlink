@@ -1,0 +1,62 @@
+name: Cancel closed Mergify merge-queue runs
+
+# Framework workflow concurrency groups only supersede runs from the same workflow/ref.
+# Closing this PR or deleting the queue branch starts this separate workflow, so it
+# explicitly cancels the old branch runs.
+on:
+  pull_request:
+    types:
+      - closed
+  delete:
+
+permissions:
+  actions: write
+
+jobs:
+  cancel-queue-runs:
+    name: Cancel obsolete queue branch runs
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       startsWith(github.event.pull_request.head.ref, 'mergify/merge-queue/')) ||
+      (github.event_name == 'delete' &&
+       github.event.ref_type == 'branch' &&
+       startsWith(github.event.ref, 'mergify/merge-queue/'))
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    steps:
+      - name: Cancel queued and running workflow runs for the branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          DELETED_REF: ${{ github.event.ref }}
+          DELETED_REF_TYPE: ${{ github.event.ref_type }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "delete" ]]; then
+            [[ "$DELETED_REF_TYPE" == "branch" ]] || exit 0
+            branch="$DELETED_REF"
+          else
+            branch="$PR_HEAD_REF"
+          fi
+
+          case "$branch" in
+            mergify/merge-queue/*) ;;
+            *) echo "Ignoring non-queue branch: $branch"; exit 0 ;;
+          esac
+
+          run_ids=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch "$branch" \
+            --limit 1000 \
+            --json databaseId,status \
+            --jq '.[] | select(.status == "queued" or .status == "in_progress") | .databaseId')
+          if [[ -z "$run_ids" ]]; then
+            echo "No queued or in-progress workflow runs for $branch."
+            exit 0
+          fi
+
+          while IFS= read -r run_id; do
+            [[ -n "$run_id" ]] || continue
+            echo "Canceling workflow run $run_id for $branch."
+            gh run cancel "$run_id" --repo "$GITHUB_REPOSITORY"
+          done <<< "$run_ids"

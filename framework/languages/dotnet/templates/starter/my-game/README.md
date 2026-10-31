@@ -12,7 +12,7 @@ flowchart LR
 
 Install Docker with Compose v2 and access to a Linux container daemon. Bash or PowerShell 7 runs the scripts. Docker builds use .NET SDK `8.0.415`, ASP.NET runtime `8.0.21`, and Docker CLI `28.5.1`; the image references are at the top of `Dockerfile`. Host debugging also requires the .NET 8 SDK.
 
-`Directory.Packages.props` pins Framework and the STREAM connector to `0.30.3`. NuGet restores from nuget.org only. Do not add repository source references or a private feed.
+`Directory.Packages.props` pins Framework and the STREAM connector to `0.31.0`. NuGet restores from nuget.org only. Do not add repository source references or a private feed.
 
 ## Build
 
