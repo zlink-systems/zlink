@@ -225,6 +225,90 @@ final class ZLinkChannelHandlerFilterContractTest {
     }
 
     @Test
+    void routeSendPreservesImmediateSuccess() {
+        Probe probe = new Probe();
+        probe.routeSendStage = CompletableFuture.completedFuture(null);
+        Message payload = text("route-send");
+
+        try {
+            CompletionStage<Void> completion =
+                    invoker(probe, null, List.of())
+                            .invokeRouteSendHandler(
+                                    null,
+                                    new ChannelRouteSendHandlerRegistration(
+                                            RouteSendHandler.class,
+                                            String.class,
+                                            "node-send",
+                                            List.of()),
+                                    RoutingId.from("source"),
+                                    payload.dataBuffer());
+
+            Assertions.assertTrue(completion.toCompletableFuture().isDone());
+            Assertions.assertNull(completion.toCompletableFuture().join());
+        } finally {
+            payload.close();
+        }
+    }
+
+    @Test
+    void routeSendWaitsForTheHandlerCompletion() {
+        Probe probe = new Probe();
+        CompletableFuture<Void> handlerCompletion = new CompletableFuture<>();
+        probe.routeSendStage = handlerCompletion;
+        Message payload = text("route-send");
+
+        try {
+            CompletionStage<Void> completion =
+                    invoker(probe, null, List.of())
+                            .invokeRouteSendHandler(
+                                    null,
+                                    new ChannelRouteSendHandlerRegistration(
+                                            RouteSendHandler.class,
+                                            String.class,
+                                            "node-send",
+                                            List.of()),
+                                    RoutingId.from("source"),
+                                    payload.dataBuffer());
+
+            Assertions.assertFalse(completion.toCompletableFuture().isDone());
+            handlerCompletion.complete(null);
+            Assertions.assertNull(completion.toCompletableFuture().join());
+        } finally {
+            payload.close();
+        }
+    }
+
+    @Test
+    void routeSendPropagatesTheHandlerException() {
+        Probe probe = new Probe();
+        RuntimeException expected = new IllegalStateException("route send failed");
+        probe.routeSendStage = CompletableFuture.failedFuture(expected);
+        Message payload = text("route-send");
+
+        try {
+            CompletionStage<Void> completion =
+                    invoker(probe, null, List.of())
+                            .invokeRouteSendHandler(
+                                    null,
+                                    new ChannelRouteSendHandlerRegistration(
+                                            RouteSendHandler.class,
+                                            String.class,
+                                            "node-send",
+                                            List.of()),
+                                    RoutingId.from("source"),
+                                    payload.dataBuffer());
+            CompletionException failure =
+                    Assertions.assertThrows(
+                            CompletionException.class,
+                            () -> completion.toCompletableFuture().join());
+
+            Assertions.assertSame(expected, failure.getCause());
+        } finally {
+            payload.close();
+        }
+    }
+
+    @Test
     void legacyRouteDispatcherUsesRouteNameAsMeshName() {
         Probe probe = new Probe();
         Message payload = text("request");
@@ -271,6 +355,11 @@ final class ZLinkChannelHandlerFilterContractTest {
     }
 
     private static ZLinkChannelHandlerInvoker invoker(Probe probe, String meshName) {
+        return invoker(probe, meshName, List.of(CapturingFilter.class));
+    }
+
+    private static ZLinkChannelHandlerInvoker invoker(
+            Probe probe, String meshName, List<Class<? extends ZLinkHandlerFilter>> filterTypes) {
         ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
         ZLinkStringMessageSerializer serializer = new ZLinkStringMessageSerializer();
         codecs.addSerializer("text/plain", serializer);
@@ -292,12 +381,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                     }
                 };
         return new ZLinkChannelHandlerInvoker(
-                serializer,
-                codecs,
-                activator,
-                Runnable::run,
-                List.of(CapturingFilter.class),
-                meshName);
+                serializer, codecs, activator, Runnable::run, filterTypes, meshName);
     }
 
     private static Message text(String value) {
@@ -311,6 +395,7 @@ final class ZLinkChannelHandlerFilterContractTest {
         private int filterCloses;
         private int handlerCalls;
         private boolean stopRequests;
+        private CompletionStage<Void> routeSendStage;
     }
 
     private static final class CapturingFilter implements ZLinkHandlerFilter, AutoCloseable {
@@ -362,7 +447,9 @@ final class ZLinkChannelHandlerFilterContractTest {
         @Override
         public CompletionStage<Void> handle(String message, ZLinkRouteMessageContext context) {
             probe.handlerCalls++;
-            return CompletableFuture.completedFuture(null);
+            return probe.routeSendStage == null
+                    ? CompletableFuture.completedFuture(null)
+                    : probe.routeSendStage;
         }
     }
 

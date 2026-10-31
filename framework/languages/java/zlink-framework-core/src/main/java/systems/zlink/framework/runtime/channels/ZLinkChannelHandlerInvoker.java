@@ -277,6 +277,7 @@ final class ZLinkChannelHandlerInvoker {
                 null);
     }
 
+    @SuppressWarnings("unchecked")
     CompletionStage<Void> invokeRouteSendHandler(
             String channelName,
             ChannelRouteSendHandlerRegistration registration,
@@ -308,7 +309,7 @@ final class ZLinkChannelHandlerInvoker {
                     registration.invocation(),
                     message,
                     beforeHandler,
-                    stage -> stage.thenApply(ignored -> null));
+                    stage -> (CompletionStage<Void>) (CompletionStage<?>) stage);
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
