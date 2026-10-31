@@ -97,18 +97,15 @@ final class ZLinkInstanceSpotStaleCacheTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh(MESH).listen("inproc://cache-" + UUID.randomUUID()).objects().server();
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
+        try (var locationRuntime =
+                        new ZLinkLocationRuntime(
+                                ZLinkRegisteredLocationStores.fromUnified(repository),
+                                locationOptions.ownerLeaseTtl(),
+                                locationOptions.ownerLeaseRenewInterval());
+                var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
                 var payload = Message.from(new byte[] {1})) {
             var host = (ZLinkSpotRuntime) runtime.spotManager();
-            var storeField = ZLinkSpotRuntime.class.getDeclaredField("userSpotLocationStore");
-            storeField.setAccessible(true);
-            var originalStore = storeField.get(host);
-            storeField.set(host, repository);
-            var resolversField =
-                    ZLinkSpotRuntime.class.getDeclaredField("userSpotLocationResolvers");
-            resolversField.setAccessible(true);
-            var originalResolvers = resolversField.get(host);
-            resolversField.set(host, routes);
+            host.installUserSpotOperationHandlers(repository, repository, locationRuntime, routes);
             var nodesField = ZLinkSpotRuntime.class.getDeclaredField("routeMeshNodesByName");
             nodesField.setAccessible(true);
             var nodes = (Map<String, ZLinkInternalMeshNode>) nodesField.get(host);
@@ -246,8 +243,6 @@ final class ZLinkInstanceSpotStaleCacheTest {
                         "successful next operation must not invalidate again");
             } finally {
                 nodesField.set(host, nodes);
-                storeField.set(host, originalStore);
-                resolversField.set(host, originalResolvers);
             }
         } finally {
             routes.close();
