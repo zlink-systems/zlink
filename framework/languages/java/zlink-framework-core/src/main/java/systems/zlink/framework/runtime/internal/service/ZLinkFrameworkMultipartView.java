@@ -42,8 +42,9 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
     }
 
     /**
-     * Outbound envelope parts: the owned header bytes are retained directly until the transport
-     * writes or materializes them. Closing the view releases {@code body}.
+     * Outbound envelope parts: the header bytes are retained directly until the transport writes or
+     * materializes them. They may be shared with other envelopes, so they are only ever read and
+     * are exposed through read-only views. Closing the view releases {@code body}.
      */
     public static ZLinkFrameworkMultipartView encoded(byte[] header, Message body) {
         return new ZLinkFrameworkMultipartView(
@@ -60,7 +61,7 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
     public static ByteBuffer buffer(List<Message> parts, int index) {
         Object value = partValue(parts, index);
         if (value instanceof ByteBuffer bytes) return bytes.duplicate();
-        if (value instanceof byte[] bytes) return ByteBuffer.wrap(bytes);
+        if (value instanceof byte[] bytes) return ByteBuffer.wrap(bytes).asReadOnlyBuffer();
         return ((Message) value).dataBuffer();
     }
 
