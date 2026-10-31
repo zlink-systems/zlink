@@ -41,6 +41,100 @@ final class ZLinkChannelEnvelopeGoldenTest {
     private static final String FLOW_ID = "018f2f1d-5d52-7b70-8f08-13fecf6f6abc";
 
     @Test
+    void envelopeDuplicatesRejectKnownFieldsAndMetadata() {
+        String[][] cases = {
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"formatMarker\":242}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"kind\":3}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"channelName\":\"c\"}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"messageName\":\"m\"}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"contentType\":null,\"contentType\":null}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"correlationId\":null,\"correlationId\":null}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"deadline\":null,\"deadline\":null}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"topic\":null,\"topic\":null}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"errorCode\":null,\"errorCode\":null}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"errorMessage\":null,\"errorMessage\":null}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"source\":null,\"source\":null}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"flowId\":null,\"flowId\":null}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"flowOrigin\":null,\"flowOrigin\":null}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"metadata\":{},\"metadata\":{}}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"k\\u0069nd\":3}",
+                "duplicate envelope header field"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"metadata\":{\"a\":\"first\",\"\\u0061\":\"last\"}}",
+                "duplicate envelope metadata key"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"metadata\":{\"a\":null,\"\\u0061\":\"last\"}}",
+                "duplicate envelope metadata key"
+            },
+            {
+                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"metadata\":{\"a\":{},\"\\u0061\":\"last\"}}",
+                "duplicate envelope metadata key"
+            }
+        };
+        for (String[] scenario : cases) {
+            ZLinkFrameworkException error =
+                    assertThrows(ZLinkFrameworkException.class, () -> decode(scenario[0], false));
+            assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, error.kind());
+            org.junit.jupiter.api.Assertions.assertTrue(error.getMessage().contains(scenario[1]));
+        }
+    }
+
+    @Test
+    void envelopeDuplicatesIgnoreUnknownFields() {
+        assertEquals(
+                "c",
+                decode(
+                                "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"Kind\":false,\"Kind\":[],\"unknown\":{\"a\":1,\"a\":2},\"unknown\":[{\"kind\":1,\"kind\":2}],\"kind\\u0000\":1,\"kind\\u0000\":2}",
+                                false)
+                        .channelName());
+    }
+
+    @Test
     void encodesCanonicalHeaderFieldNamesAndValues() throws Exception {
         ZLinkChannelEnvelope.Header header =
                 new ZLinkChannelEnvelope.Header(
@@ -461,19 +555,14 @@ final class ZLinkChannelEnvelopeGoldenTest {
     }
 
     @Test
-    void decodeUsesTheLastDuplicateTopLevelValue() {
+    void decodeRejectsDuplicateTopLevelValues() {
         String header =
                 "{\"formatMarker\":0,\"formatMarker\":242,"
                         + "\"kind\":\"not-an-int\",\"kind\":1,"
                         + "\"channelName\":\"orders\",\"messageName\":\"Request\","
                         + "\"contentType\":7,\"contentType\":\"application/json\"}";
 
-        ZLinkChannelEnvelope.Header decoded = decode(header, false);
-
-        assertEquals(ZLinkChannelEnvelope.KIND_REQUEST, decoded.kind());
-        assertEquals("orders", decoded.channelName());
-        assertEquals("Request", decoded.messageName());
-        assertEquals("application/json", decoded.contentType());
+        assertProtocolError(header, false);
     }
 
     @Test
@@ -576,7 +665,7 @@ final class ZLinkChannelEnvelopeGoldenTest {
     }
 
     @Test
-    void decodeRequiresMetadataObjectAndKeepsLastDuplicateValue() {
+    void decodeRequiresMetadataObjectAndUniqueKeys() {
         for (String metadata : List.of("null", "7", "[]", "\"text\"")) {
             assertProtocolError(
                     "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
@@ -585,14 +674,11 @@ final class ZLinkChannelEnvelopeGoldenTest {
                             + "}",
                     false);
         }
-        assertEquals(
-                Map.of("tenant", "new"),
-                decode(
-                                "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-                                        + "\"messageName\":\"m\",\"metadata\":{\"tenant\":\"old\","
-                                        + "\"tenant\":\"new\"}}",
-                                false)
-                        .metadata());
+        assertProtocolError(
+                "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                        + "\"messageName\":\"m\",\"metadata\":{\"tenant\":\"old\","
+                        + "\"tenant\":\"new\"}}",
+                false);
         assertProtocolError(
                 "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
                         + "\"messageName\":\"m\",\"metadata\":{\"tenant\":7}}",

@@ -129,13 +129,12 @@ public sealed class ChannelEnvelopeHandoffTests
         dealer.Connect(endpoint);
         var flowId = invalidFlow ? "invalid-flow" : "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
         var metadata = malformed ? "{\"\":\"invalid\"}" : "{}";
-        // Mixed-case field names exercise the codec's existing ordinal ignore-case contract.
         var json =
-            "{\"FORMATMARKER\":242,\"KiNd\":1,\"CHANNELNAME\":\"work\","
-            + "\"MESSAGENAME\":\"missing-handler\",\"CONTENTTYPE\":\"application/json\","
-            + "\"CORRELATIONID\":\"handoff-request\",\"FLOWID\":\""
+            "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"work\","
+            + "\"messageName\":\"missing-handler\",\"contentType\":\"application/json\","
+            + "\"correlationId\":\"handoff-request\",\"flowId\":\""
             + flowId
-            + "\",\"FLOWORIGIN\":1,\"METADATA\":"
+            + "\",\"flowOrigin\":1,\"metadata\":"
             + metadata
             + "}";
         using var headerFrame = Message.From(Encoding.UTF8.GetBytes(json));

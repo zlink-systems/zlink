@@ -902,6 +902,23 @@ function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
   return parseFrameworkJsonV1(payload, CHANNEL_JSON_PARSE_OPTIONS, schema);
 }
 
+const CHANNEL_HEADER_FIELDS = new Set([
+  'formatMarker',
+  'kind',
+  'channelName',
+  'messageName',
+  'contentType',
+  'correlationId',
+  'deadline',
+  'topic',
+  'errorCode',
+  'errorMessage',
+  'source',
+  'flowId',
+  'flowOrigin',
+  'metadata'
+]);
+
 function parseChannelHeaderBytes(payload: Buffer): unknown {
   const reader = new CanonicalChannelHeaderReader(payload);
   const canonical = tryParseCanonicalChannelHeader(reader);
@@ -914,7 +931,22 @@ function parseChannelHeaderBytes(payload: Buffer): unknown {
       'Channel envelope header must contain valid UTF-8.'
     );
   }
-  return canonical ?? parseFrameworkJsonV1(payload.toString());
+  return (
+    canonical ??
+    parseFrameworkJsonV1(payload.toString(), {
+      onDuplicateProperty(name, path) {
+        const reason =
+          path.length === 0 && CHANNEL_HEADER_FIELDS.has(name)
+            ? 'duplicate envelope header field'
+            : path.length === 1 && path[0] === 'metadata'
+              ? 'duplicate envelope metadata key'
+              : undefined;
+        if (reason !== undefined) {
+          throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ProtocolError, reason);
+        }
+      }
+    })
+  );
 }
 
 /**

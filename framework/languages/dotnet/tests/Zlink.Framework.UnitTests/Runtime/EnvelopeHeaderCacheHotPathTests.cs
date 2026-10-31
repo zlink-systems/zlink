@@ -306,14 +306,23 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
 
     [Theory]
     [InlineData(
-        """{"source":"first","unknown":{"nested":[true,null,12]},"KINd":3,"f\u006FrmatMarker":"242","CHANNELNAME":"cache","messageName":"flexible","contentType":"application/json","correlationId":"flexible-1","SoUrCe":"last"}"""
+        """{"source":"first","unknown":{"nested":[true,null,12]},"kind":3,"f\u006FrmatMarker":"242","channelName":"cache","messageName":"flexible","contentType":"application/json","correlationId":"flexible-1","source":"last"}"""
     )]
     [InlineData(
         """{"formatMarker":242,"kind":3,"correlationId":"flexible-2","metadata":{"same":"first","same":"last"}}"""
     )]
     [InlineData(
-        """{"formatMarker":"24\u0032","kind":3,"correlationId":"flexible-3","deadline":"2026-09-10T12:34:56Z","metadata":{"first":"discarded"},"METADATA":{}}"""
+        """{"formatMarker":"24\u0032","kind":3,"correlationId":"flexible-3","deadline":"2026-09-10T12:34:56Z","metadata":{"first":"discarded"},"metadata":{}}"""
     )]
+    public void StreamingHeaderDecodeRejectsDuplicateWebJsonFields(string wire)
+    {
+        using var encoded = Message.From(wire);
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(encoded)
+        );
+    }
+
+    [Theory]
     [InlineData(
         """{"formatMarker":242,"kind":3,"correlationId":"flexible-4","channelName":null,"messageName":null,"contentType":null}"""
     )]
