@@ -35,6 +35,18 @@
 #include <utility>
 #include <vector>
 
+namespace zlink::framework::runtime
+{
+struct state_lane_test_access_t
+{
+    static std::size_t pending_work (state_lane_t &lane)
+    {
+        const std::lock_guard lock (lane._mailbox_mutex);
+        return lane._mailbox.size ();
+    }
+};
+} // namespace zlink::framework::runtime
+
 namespace
 {
 
@@ -273,49 +285,144 @@ TEST (ZLinkStateLane, SynchronousTurnNeedsNoAllocationAndSurvivesAllocationFailu
 
 TEST (ZLinkStateLane, SynchronousTurnQueuesAfterAcceptedPredecessors)
 {
-    offload_executor_t executor (2);
+    using namespace zlink::framework;
+    test::manual_internal_scheduler_t executor;
     state_lane_t lane (executor);
-    std::promise<void> entered;
-    std::promise<void> release;
-    auto released = release.get_future ();
     std::vector<int> order;
-    std::thread owner ([&] {
-        lane.run_sync ([&] {
-            entered.set_value ();
-            released.wait ();
-            order.push_back (0);
-        });
-    });
-    entered.get_future ().wait ();
+    order.reserve (4);
+    ASSERT_TRUE (lane.try_post ([&] { order.push_back (0); }));
     auto predecessor = lane.run ([&] { order.push_back (1); });
-    std::promise<void> queued;
-    struct queued_work_t
+    std::thread::id caller_id;
+    std::thread::id work_id;
+    std::atomic_bool called{false};
+    std::size_t allocations = 0;
+    struct work_t
     {
+        std::array<int, 128> values{};
         std::vector<int> &order;
-        std::promise<void> *queued;
-        queued_work_t (std::vector<int> &order_, std::promise<void> *queued_) :
-            order (order_), queued (queued_)
+        std::thread::id &work_id;
+        std::atomic_bool &called;
+        int operator() ()
         {
+            work_id = std::this_thread::get_id ();
+            called.store (true);
+            order.push_back (2);
+            return std::accumulate (values.begin (), values.end (), 0);
         }
-        queued_work_t (const queued_work_t &) = default;
-        queued_work_t (queued_work_t &&other) : order (other.order), queued (nullptr)
-        {
-            // Moving the work occurs only after inline admission has failed.
-            if (other.queued)
-                std::exchange (other.queued, nullptr)->set_value ();
-        }
-        void operator() () { order.push_back (2); }
-    };
+    } work{{42}, order, work_id, called};
+    int result = 0;
     std::thread caller ([&] {
-        lane.run_sync (queued_work_t{order, &queued});
+        caller_id = std::this_thread::get_id ();
+        allocations = tests::count_allocations ([&] { result = lane.run_sync (work); });
         EXPECT_EQ (nullptr, state_lane_t::current ());
     });
-    queued.get_future ().wait ();
-    release.set_value ();
-    predecessor.get ();
-    owner.join ();
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (runtime::state_lane_test_access_t::pending_work (lane) < 3
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    EXPECT_EQ (3u, runtime::state_lane_test_access_t::pending_work (lane));
+    EXPECT_FALSE (called.load ());
+    EXPECT_TRUE (lane.try_post ([&] {
+        EXPECT_TRUE (lane.is_on_lane ());
+        order.push_back (3);
+    }));
+    executor.run_all ();
     caller.join ();
-    EXPECT_EQ ((std::vector<int>{0, 1, 2}), order);
+    predecessor.get ();
+    EXPECT_EQ (42, result);
+    EXPECT_EQ (caller_id, work_id);
+    EXPECT_EQ ((std::vector<int>{0, 1, 2, 3}), order);
+    RecordProperty ("contended_sync_allocations", static_cast<int> (allocations));
+    EXPECT_LE (allocations, 4u);
+}
+
+TEST (ZLinkStateLane, WaitingSynchronousCallerDrainsAcceptedWorkDuringClose)
+{
+    using namespace zlink::framework;
+    test::manual_internal_scheduler_t executor;
+    state_lane_t lane (executor);
+    ASSERT_TRUE (lane.try_post ([] {}));
+    std::thread::id caller_id;
+    std::thread::id work_id;
+    struct original_error_t
+    {
+        int value;
+    };
+    int observed = 0;
+    std::thread caller ([&] {
+        caller_id = std::this_thread::get_id ();
+        try {
+            lane.run_sync ([&] {
+                work_id = std::this_thread::get_id ();
+                EXPECT_TRUE (lane.is_on_lane ());
+                EXPECT_THROW (lane.run_sync ([] {}), std::logic_error);
+                throw original_error_t{42};
+            });
+            ADD_FAILURE () << "the original exception must reach the caller";
+        }
+        catch (const original_error_t &error) {
+            observed = error.value;
+            EXPECT_EQ (nullptr, state_lane_t::current ());
+        }
+    });
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (runtime::state_lane_test_access_t::pending_work (lane) < 2
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    EXPECT_EQ (2u, runtime::state_lane_test_access_t::pending_work (lane));
+    auto closed = lane.close_async ();
+    EXPECT_THROW (lane.run_sync ([] {}), std::runtime_error);
+    executor.run_all ();
+    caller.join ();
+    closed.result ().value ();
+    EXPECT_EQ (42, observed);
+    EXPECT_EQ (caller_id, work_id);
+    EXPECT_TRUE (lane.closed ());
+    EXPECT_EQ (0u, runtime::state_lane_test_access_t::pending_work (lane));
+}
+
+TEST (ZLinkStateLane, WaitingSynchronousCallerReceivesExecutorShutdown)
+{
+    class rejecting_executor_t final : public offload_executor_t
+    {
+      public:
+        rejecting_executor_t () : offload_executor_t (1) {}
+        bool try_submit_internal (std::function<void ()>) override
+        {
+            entered.set_value ();
+            released.wait ();
+            return false;
+        }
+        std::promise<void> entered;
+        std::promise<void> release;
+        std::future<void> released = release.get_future ();
+    } executor;
+    state_lane_t lane (executor);
+    std::thread poster ([&] { EXPECT_TRUE (lane.try_post ([] {})); });
+    executor.entered.get_future ().wait ();
+    bool called = false;
+    std::string error_message;
+    std::thread caller ([&] {
+        try {
+            lane.run_sync ([&] { called = true; });
+            ADD_FAILURE () << "an abandoned turn must report executor shutdown";
+        }
+        catch (const std::runtime_error &error) {
+            error_message = error.what ();
+        }
+    });
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (zlink::framework::runtime::state_lane_test_access_t::pending_work (lane) < 2
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    EXPECT_EQ (2u, zlink::framework::runtime::state_lane_test_access_t::pending_work (lane));
+    executor.release.set_value ();
+    poster.join ();
+    caller.join ();
+    EXPECT_FALSE (called);
+    EXPECT_EQ ("state lane executor is stopping", error_message);
+    EXPECT_TRUE (lane.closed ());
+    EXPECT_THROW (lane.run_sync ([] {}), std::runtime_error);
 }
 
 TEST (ZLinkStateLane, SynchronousQueuedAllocationFailureLeavesTheLaneUsable)
