@@ -138,5 +138,28 @@ public final class ServiceWireConstants {
                 return false;
         }
     }
+    public static Long recoverRequestCorrelation(byte[] bytes) {
+        if (bytes == null || bytes.length < 13
+                || Byte.toUnsignedInt(bytes[0]) != MAGIC_0 || Byte.toUnsignedInt(bytes[1]) != MAGIC_1
+                || Byte.toUnsignedInt(bytes[2]) != WIRE_MAJOR) return null;
+        switch (Byte.toUnsignedInt(bytes[3])) {
+            case COMMAND_NODE_REQUEST:
+            case COMMAND_CHANNEL_REQUEST:
+            case COMMAND_SPOT_REQUEST:
+            case COMMAND_ACTOR_REQUEST:
+            case COMMAND_ACTOR_LOOKUP:
+            case COMMAND_ACTOR_DESTROY:
+            case COMMAND_ACTOR_JOIN:
+            case COMMAND_BOUND_SESSION_BIND:
+            case COMMAND_USER_SPOT_CREATE:
+            case COMMAND_USER_SPOT_CLOSE:
+            case COMMAND_ACTOR_CREATE:
+            case COMMAND_BOUND_SESSION_CLOSE:
+                break;
+            default: return null;
+        }
+        long correlation = java.nio.ByteBuffer.wrap(bytes).getLong(5);
+        return correlation == 0 ? null : correlation;
+    }
     private ServiceWireConstants() {}
 }

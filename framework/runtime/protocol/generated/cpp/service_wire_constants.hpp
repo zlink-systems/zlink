@@ -3,6 +3,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <span>
 
 namespace zlink::framework::runtime::protocol {
 inline constexpr std::uint8_t magic[] = {90, 77};
@@ -191,4 +193,28 @@ inline constexpr std::uint64_t routingIdCollisionAttempts = 8ULL;
 inline constexpr std::uint64_t nodeActiveCapacityDefault = 10000ULL;
 inline constexpr std::uint64_t nodePendingCapacityDefault = 128ULL;
 inline constexpr std::uint64_t objectTypeCapacityMaximum = 2147483647ULL;
+inline std::optional<std::uint64_t> recover_request_correlation(std::span<const std::uint8_t> bytes) {
+    if (bytes.size() < 13 || bytes[0] != magic[0] || bytes[1] != magic[1] || bytes[2] != wire_major)
+        return std::nullopt;
+    switch (static_cast<command>(bytes[3])) {
+        case command::nodeRequest:
+        case command::channelRequest:
+        case command::spotRequest:
+        case command::actorRequest:
+        case command::actorLookup:
+        case command::actorDestroy:
+        case command::actorJoin:
+        case command::boundSessionBind:
+        case command::userSpotCreate:
+        case command::userSpotClose:
+        case command::actorCreate:
+        case command::boundSessionClose:
+            break;
+        default: return std::nullopt;
+    }
+    std::uint64_t correlation = 0;
+    for (std::size_t index = 5; index < 13; ++index)
+        correlation = (correlation << 8) | bytes[index];
+    return correlation == 0 ? std::nullopt : std::optional<std::uint64_t>{correlation};
+}
 } // namespace zlink::framework::runtime::protocol
