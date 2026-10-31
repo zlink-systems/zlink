@@ -73,6 +73,11 @@ public final class ZLinkStoreLocationResolvers
         if (cached != null) {
             return CompletableFuture.completedFuture(cached);
         }
+        return readActor(actorId);
+    }
+
+    /** Reads current authority directly; a failed read preserves the positive route cache. */
+    public CompletionStage<ActorRoute> readActor(String actorId) {
         return observeAuthorityRead(
                         stores.unifiedStore()
                                 .read(ZLinkAuthorityKeyCodec.actor(actorId), () -> false))

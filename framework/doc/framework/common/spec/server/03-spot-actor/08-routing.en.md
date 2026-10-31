@@ -144,6 +144,12 @@ Redis) on every call; this cache reduces that cost.
 | Relay notification | [Message Follow](../00-foundation/02-glossary.en.md#message-follow) forwards a message that still arrives at the previous owner after an Actor or Spot has moved to a different MeshNode to the new owner, then notifies the original sending runtime. The notified runtime removes that entry and re-queries the owner on the next call. |
 | Runtime setting change | The `RouteCacheMaxAge` runtime-change rule is defined by [Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner). |
 
+The lifetime and invalidation of a positive Actor route cache entry are limited
+to the conditions in the table above. Operations that must verify authority read
+the Location Store directly without first removing the cache entry to force a
+lookup. Join or relocation completion alone does not remove an entry. When a new
+Store result or route result is confirmed, the conditions in the table apply.
+
 A relay notification is a framework-owned infrastructure record and doesn't
 call an application handler. Losing the notification doesn't change
 correctness — the same result is reached once the cache lifetime ends. The
