@@ -20,12 +20,100 @@ const {
 const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
-const { Message } = require('@zlink-systems/zlink');
+const { Message, RequestResult } = require('@zlink-systems/zlink');
 const { DefaultZLinkSpotManager } = require('../../packages/framework/dist/runtime/spots');
 
-for (const departed of [false, true]) {
-  test(`relocation membership shares target admission visibility (departed=${departed})`, async () => {
+for (const [changedVersion, departed] of [
+  [false, false],
+  [false, true],
+  [true, false],
+  [true, true]
+]) {
+  test(`relocation membership shares target admission visibility (departed=${departed}, changedVersion=${changedVersion})`, async () => {
     const actorId = 'hidden-player';
+    let authorityReads = 0;
+    let cachedVersion = changedVersion ? 'v11' : 'v12';
+    const routeSnapshot = () => ({
+      kind: 'snapshot',
+      storeVersion: { value: cachedVersion },
+      payload: new Uint8Array(),
+      objectGeneration: 7n,
+      authorityOwnerGeneration: cachedVersion === 'v11' ? 11n : 12n,
+      ownerId: 'owner',
+      ownerLeaseGeneration: 1n,
+      allocation: {
+        state: 'active',
+        objectKind: 'actor',
+        stableType: 'player',
+        descriptor: { meshName: 'play', rid: cachedVersion === 'v11' ? 'source' : 'target' },
+        descriptorLifecycleGeneration: 1n
+      }
+    });
+    const resolver = new framework.ZLinkStoreLocationResolvers({
+      stores: {
+        authorityStore: {
+          async readAuthority() {
+            authorityReads++;
+            return routeSnapshot();
+          }
+        }
+      },
+      leaseTracker: {
+        async remainingOwnerTokenLeaseMs() {
+          return 60_000;
+        }
+      }
+    });
+    const retained = await resolver.resolveDirectActorRoute(actorId);
+    cachedVersion = 'v12';
+
+    class JoinedRequest {}
+    let requests = 0;
+    const operationId = { high: 1n, low: 1n };
+    const client = new framework.DefaultZLinkActorClient({
+      locationResolver: () => resolver,
+      nodeProvider: () => ({
+        requestToActor(actor, _parts, options) {
+          assert.equal(String(actor.nodeRid), 'target');
+          assert.equal(options.routeFence.authorityOwnerGeneration, 12n);
+          requests++;
+          return operationId;
+        }
+      }),
+      completionTableProvider: () => ({
+        submit(submit, _signal, operation, receiver) {
+          const work = Promise.resolve().then(() => {
+            assert.deepEqual(submit(), operationId);
+            return {
+              terminalResult: RequestResult.Ok,
+              failureErrno: 0,
+              operationKind: 0,
+              kindData: null,
+              parts: [
+                Message.from(
+                  Buffer.from(
+                    framework.encodeStreamFrame(
+                      {
+                        kind: framework.ZLinkStreamMessageKind.Response,
+                        codec: framework.ZLinkStreamCodec.Json,
+                        flags: framework.ZLinkStreamHeaderFlags.None,
+                        name: '',
+                        metadata: new Map()
+                      },
+                      Buffer.from('"joined"')
+                    )
+                  )
+                )
+              ]
+            };
+          });
+          void work.then(
+            (value) => receiver.operationCompleted(operation.id, value, undefined),
+            (error) => receiver.operationFailed(operation.id, error, undefined)
+          );
+        }
+      })
+    });
     const actorKey = encodeAuthorityKey('actor', actorId).value;
     const spotId = 'room';
     const spotKey = encodeAuthorityKey('user_spot', spotId).value;
@@ -81,6 +169,21 @@ for (const departed of [false, true]) {
       spot: {
         context: { meshName: 'play' },
         async onJoinedActor() {
+          assert.equal(
+            await client.requestToActor(actorId, new JoinedRequest()).submit(),
+            'joined'
+          );
+          assert.equal(requests, 1);
+          const result = await resolver.resolveDirectActorRoute(actorId);
+          assert.equal(result.kind, 'ready');
+          assert.equal(String(result.route.actorRef.nodeRid), 'target');
+          assert.equal(result.route.authorityOwnerGeneration, 12n);
+          assert.equal(
+            authorityReads,
+            changedVersion ? 2 : 1,
+            'OnJoinedActor request resolves a new version and retains an unchanged route'
+          );
+          if (!changedVersion) assert.strictEqual(result.route, retained.route);
           assert.equal(await manager.findActor(actorId), undefined);
           assert.equal(handlers, 0);
         }
@@ -140,12 +243,7 @@ for (const departed of [false, true]) {
       Message.from(Buffer.from('{}'))
     ];
     const probe = async () => {
-      await spotManager.dispatchRoutedActorPacket(
-        'remote',
-        spotId,
-        actorId,
-        parts
-      );
+      await spotManager.dispatchRoutedActorPacket('remote', spotId, actorId, parts);
       assert.equal(handlers, 0, 'ordinary handler must wait for target openAdmission');
     };
     const park = async () => {
@@ -168,11 +266,15 @@ for (const departed of [false, true]) {
       assert.equal(handlers, 0);
     };
     const committed = {
+      storeVersion: { value: 'v12' },
       objectGeneration: 7n,
       authorityOwnerGeneration: 12n,
       ownerLeaseGeneration: 1n
     };
     const runtime = new ZLinkHostServiceRelocationRuntime({
+      invalidateActorRoute: (id) => resolver.invalidateActorRoute(id),
+      observeActorAuthorityVersion: (id, version) =>
+        resolver.observeActorAuthorityVersion(id, version),
       meshNode: () => node,
       actorManager: () => manager,
       spotManager: () => spotManager,
@@ -236,18 +338,18 @@ for (const departed of [false, true]) {
       };
       await park();
       assert.equal(admission.get('move').parked.length, 1);
-      await runtime.finalizeTargetStage('play', 'move', stage);
+      await runtime.finalizeTargetStage('play', 'move', stage).catch((error) => {
+        throw error.cause ?? error;
+      });
       assert.equal(await manager.findActor(actorId), manager.getState(actorId).actor);
       assert.equal(activation.resolveJoinedActor(actorId), manager.getState(actorId).actor);
       assert.equal(admission.get('move').parked.length, 0);
       assert.equal(admission.get('move').migrated, true);
       const payload = Message.from(Buffer.from('{"order":3}'));
-      const ordinary = spotManager.dispatchRoutedActorPacket(
-        'local',
-        spotId,
-        actorId,
-        [parts[0], payload]
-      );
+      const ordinary = spotManager.dispatchRoutedActorPacket('local', spotId, actorId, [
+        parts[0],
+        payload
+      ]);
       releaseFirst();
       await ordinary;
       payload.close();

@@ -276,7 +276,7 @@ interface ZLinkHostRelocationOptions {
     clear?(): void | Promise<void>;
   };
   readonly trackInstanceSpot?: (input: ZLinkTrackedInstanceAuthority) => void;
-  readonly invalidateActorRoute?: (actorId: string) => void;
+  readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void;
   readonly reconcileStatefulAuthorityRoutes?: (signal?: AbortSignal) => Promise<void>;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
   readonly metrics?: ZLinkRuntimeMetrics;
@@ -3122,6 +3122,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       if (result.kind !== 'stored') {
         throw new Error(`Participant '${participant.key}' recovery pointer release failed.`);
       }
+      if (participant.objectKind === 'actor') {
+        this.options.observeActorAuthorityVersion?.(
+          decodeAuthorityKey(key).globalId,
+          result.storeVersion.value
+        );
+      }
     }
   }
 
@@ -3484,15 +3490,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           );
       }
       await stage.owner.normalize(stage.staging, authority, signal);
-      // The target may have visited this Actor before and still retain that
-      // tenure in its private Actor-client resolver. The target-only CAS is
-      // now authoritative, so expire the old projection before OnJoinedActor
-      // can issue an Actor request and deadlock behind source leave.
-      for (const hidden of stage.staging.hidden.values()) {
-        if (hidden.actor !== undefined) {
-          this.options.invalidateActorRoute?.(hidden.actor.context.actorId);
-        }
-      }
       await this.finalizeActorJoinProfiles(meshName, stage, signal);
       await this.publishSessionRoutes(stage.staging);
       stage.phase = 'open';
@@ -3713,6 +3710,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
     if (result.kind !== 'stored') {
       throw new Error('Relocation target authority normalization CAS failed.');
+    }
+    if (primary.allocation.objectKind === 'actor') {
+      this.options.observeActorAuthorityVersion?.(
+        decodeAuthorityKey(stage.staging.primaryAuthorityKey).globalId,
+        result.storeVersion.value
+      );
     }
     return { ...result, kind: 'snapshot' };
   }
@@ -5129,6 +5132,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         value: hidden.authorityKey
       } as ZLinkAuthorityKey);
       const actorId = hidden.actor.context.actorId;
+      this.options.observeActorAuthorityVersion?.(actorId, current.storeVersion.value);
       const node = this.options.meshNode(this.meshName);
       const restore = node?.restoreActorAuthority;
       if (node === undefined || restore === undefined) {

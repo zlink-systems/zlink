@@ -740,6 +740,71 @@ public sealed class LocationResolverTests
         Assert.Equal("play", handle.Snapshot.RouterChannelId);
     }
 
+    [Theory]
+    [InlineData((int)ZLinkLocationChangeType.Removed)]
+    [InlineData((int)ZLinkLocationChangeType.Expired)]
+    public async Task Actor_Watch_Notification_Alone_Preserves_The_Positive_Route(int changeType)
+    {
+        var fixture = await FixtureAsync();
+        await AuthorityLocationTestFixture.PublishActorAsync(
+            fixture.Store,
+            InMemoryLocationStoreTests.Actor(OwnerA)
+        );
+        var cached = await fixture.Resolvers.ResolveActorRowAsync(ActorKey);
+        await using var host = new ZLinkSpotHandleWatchHost(
+            null,
+            fixture.Resolvers,
+            null,
+            new ZLinkLocationOptions(),
+            new ZLinkRuntimeErrorSink()
+        );
+        await host.ApplyAsync(
+            new ZLinkLocationChanged(
+                ZLinkLocationKind.Actor,
+                new ZLinkLocationKey.Actor(ActorKey),
+                (ZLinkLocationChangeType)changeType,
+                1,
+                DateTimeOffset.UtcNow
+            ),
+            CancellationToken.None
+        );
+        Assert.Same(cached, await fixture.Resolvers.ResolveActorRowAsync(ActorKey));
+    }
+
+    [Fact]
+    public async Task Actor_Watch_Upsert_Reads_Current_Authority_Without_Using_The_Cache()
+    {
+        var fixture = await FixtureAsync();
+        await AuthorityLocationTestFixture.PublishActorAsync(
+            fixture.Store,
+            InMemoryLocationStoreTests.Actor(OwnerA)
+        );
+        Assert.Equal(OwnerA, (await fixture.Resolvers.ResolveActorRowAsync(ActorKey))!.OwnerId);
+        await AuthorityLocationTestFixture.PublishActorAsync(
+            fixture.Store,
+            InMemoryLocationStoreTests.Actor(OwnerB),
+            replace: true
+        );
+        await using var host = new ZLinkSpotHandleWatchHost(
+            null,
+            fixture.Resolvers,
+            null,
+            new ZLinkLocationOptions(),
+            new ZLinkRuntimeErrorSink()
+        );
+        await host.ApplyAsync(
+            new ZLinkLocationChanged(
+                ZLinkLocationKind.Actor,
+                new ZLinkLocationKey.Actor(ActorKey),
+                ZLinkLocationChangeType.Upserted,
+                2,
+                DateTimeOffset.UtcNow
+            ),
+            CancellationToken.None
+        );
+        Assert.Equal(OwnerB, (await fixture.Resolvers.ResolveActorRowAsync(ActorKey))!.OwnerId);
+    }
+
     [Fact]
     public async Task Watch_Remove_Invalidates_The_Handle_Until_A_Newer_Row_Appears()
     {
