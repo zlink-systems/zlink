@@ -1078,7 +1078,10 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
         Console.WriteLine(
             $"hwm_requests=1000 timers_before={timers} timers_after={Timer.ActiveCount}"
         );
-        Assert.Equal(timers, Timer.ActiveCount);
+        // Timer.ActiveCount is process-wide: the test host and concurrent tests start and stop
+        // their own timers, so the count moves by a few either way. A timer per request (or per
+        // small group of requests) would add hundreds; any growth of 8 or more fails.
+        Assert.InRange(Timer.ActiveCount - timers, int.MinValue, 7);
         Assert.Equal(1000, Deadlines.PendingCount);
         await Deadlines.DisposeAsync();
         foreach (var request in requests)
