@@ -10,7 +10,6 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.messaging.Message;
 
-import java.lang.reflect.Field;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -32,7 +31,12 @@ final class ZLinkStreamActorRegistryTest {
                             server.options(ZLinkStreamDispatchMode.MANUAL));
             ConnectorTestAwait.await(connector.connect());
             ConnectorTestAwait.await(connector.dispatch());
-            registry(connector).bound(boundControl(7, "player-a"));
+            server.sendAsync(
+                            controlHeader(ZLinkStreamActorRegistry.BOUND),
+                            boundControl(7, "player-a"))
+                    .join();
+            TcpStreamConnectorTestServer.awaitCondition(
+                    () -> connector.actor("player-a").isPresent());
 
             List<String> order = new ArrayList<>();
             connector.onActorUnbound(
@@ -62,41 +66,63 @@ final class ZLinkStreamActorRegistryTest {
 
     @Test
     void boundAndUnboundOwnTheSnapshotCallbacksAndClosedHandleValidation() throws Exception {
-        ZLinkStreamConnector connector = connector();
-        ZLinkStreamActorRegistry registry = registry(connector);
-        CompletableFuture<ZLinkStreamActor> bound = new CompletableFuture<>();
-        CompletableFuture<ZLinkStreamActor> unbound = new CompletableFuture<>();
-        connector.onActorBound(
-                actor -> {
-                    bound.complete(actor);
-                    return CompletableFuture.completedFuture(null);
-                });
-        connector.onActorUnbound(
-                actor -> {
-                    unbound.complete(actor);
-                    return CompletableFuture.completedFuture(null);
-                });
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    ZLinkStreamConnectorFactory.create(
+                            server.options(ZLinkStreamDispatchMode.MANUAL));
+            ConnectorTestAwait.await(connector.connect());
+            ConnectorTestAwait.await(connector.dispatch());
+            CompletableFuture<ZLinkStreamActor> bound = new CompletableFuture<>();
+            CompletableFuture<ZLinkStreamActor> unbound = new CompletableFuture<>();
+            connector.onActorBound(
+                    actor -> {
+                        bound.complete(actor);
+                        return CompletableFuture.completedFuture(null);
+                    });
+            connector.onActorUnbound(
+                    actor -> {
+                        unbound.complete(actor);
+                        return CompletableFuture.completedFuture(null);
+                    });
 
-        registry.bound(boundControl(7, "player-a"));
-        ZLinkStreamActor actor = connector.actor("player-a").orElseThrow();
+            server.sendAsync(
+                            controlHeader(ZLinkStreamActorRegistry.BOUND),
+                            boundControl(7, "player-a"))
+                    .join();
+            TcpStreamConnectorTestServer.awaitCondition(
+                    () -> connector.actor("player-a").isPresent());
+            ZLinkStreamActor actor = connector.actor("player-a").orElseThrow();
 
-        assertEquals(1, connector.actors().size());
-        assertSame(actor, connector.actors().getFirst());
-        connector.dispatch().submit().toCompletableFuture().join();
-        assertSame(actor, bound.join());
+            assertEquals(1, connector.actors().size());
+            assertSame(actor, connector.actors().getFirst());
+            TcpStreamConnectorTestServer.awaitCondition(
+                    () -> connector.pendingDispatchCount() == 1);
+            connector.dispatch().submit().toCompletableFuture().join();
+            assertSame(actor, bound.join());
 
-        registry.unbound(unboundControl(7));
-        assertTrue(connector.actors().isEmpty());
-        assertFalse(actor.isBound());
-        assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, sendFailure(actor));
-        connector.dispatch().submit().toCompletableFuture().join();
-        assertSame(actor, unbound.join());
-        registry.bound(boundControl(7, "player-b"));
-        assertTrue(connector.actor("player-b").orElseThrow().isBound());
-        assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, sendFailure(actor));
-        ZLinkStreamException rawTypedFailure =
-                assertThrows(ZLinkStreamException.class, () -> actor.send((Object) payload()));
-        assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, rawTypedFailure.errorCode());
+            server.sendAsync(controlHeader(ZLinkStreamActorRegistry.UNBOUND), unboundControl(7))
+                    .join();
+            TcpStreamConnectorTestServer.awaitCondition(() -> connector.actors().isEmpty());
+            assertTrue(connector.actors().isEmpty());
+            assertFalse(actor.isBound());
+            assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, sendFailure(actor));
+            TcpStreamConnectorTestServer.awaitCondition(
+                    () -> connector.pendingDispatchCount() == 1);
+            connector.dispatch().submit().toCompletableFuture().join();
+            assertSame(actor, unbound.join());
+            server.sendAsync(
+                            controlHeader(ZLinkStreamActorRegistry.BOUND),
+                            boundControl(7, "player-b"))
+                    .join();
+            TcpStreamConnectorTestServer.awaitCondition(
+                    () -> connector.actor("player-b").isPresent());
+            assertTrue(connector.actor("player-b").orElseThrow().isBound());
+            assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, sendFailure(actor));
+            ZLinkStreamException rawTypedFailure =
+                    assertThrows(ZLinkStreamException.class, () -> actor.send((Object) payload()));
+            assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, rawTypedFailure.errorCode());
+            ConnectorTestAwait.await(connector.close());
+        }
     }
 
     @Test
@@ -148,7 +174,19 @@ final class ZLinkStreamActorRegistryTest {
 
     @Test
     void duplicateAndUnknownActorControlsAreRejectedByTheRegistry() throws Exception {
-        ZLinkStreamActorRegistry registry = registry(connector());
+        var options = ZLinkStreamConnectorOptions.createDefault(URI.create("tcp://127.0.0.1:1"));
+        var connector = new DefaultZLinkStreamConnector(options);
+        var registry =
+                new ZLinkStreamActorRegistry(
+                        connector,
+                        ZLinkStreamConnectorConfiguration.from(options),
+                        new ZLinkStreamDispatchQueue(
+                                error -> {
+                                    throw new AssertionError(error);
+                                }),
+                        error -> {
+                            throw new AssertionError(error);
+                        });
         registry.bound(boundControl(7, "player-a"));
 
         assertThrows(
@@ -156,6 +194,7 @@ final class ZLinkStreamActorRegistryTest {
         assertThrows(
                 IllegalArgumentException.class, () -> registry.bound(boundControl(8, "player-a")));
         assertThrows(IllegalArgumentException.class, () -> registry.unbound(unboundControl(9)));
+        ConnectorTestAwait.await(connector.close());
     }
 
     @Test
@@ -242,18 +281,6 @@ final class ZLinkStreamActorRegistryTest {
             assertEquals(0, calls.get());
             ConnectorTestAwait.await(connector.close());
         }
-    }
-
-    private static ZLinkStreamConnector connector() {
-        return ZLinkStreamConnectorFactory.create(
-                ZLinkStreamConnectorOptions.createDefault(URI.create("tcp://127.0.0.1:1")));
-    }
-
-    private static ZLinkStreamActorRegistry registry(ZLinkStreamConnector connector)
-            throws Exception {
-        Field field = DefaultZLinkStreamConnector.class.getDeclaredField("actorRegistry");
-        field.setAccessible(true);
-        return (ZLinkStreamActorRegistry) field.get(connector);
     }
 
     /**

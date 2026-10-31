@@ -221,10 +221,13 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                         null,
                         ignored -> {}));
         owner.stageRelayedRecord(staged, new byte[] {2}).toCompletableFuture().join();
-        assertEquals(2, pending(staged).size());
+        var pending = staged.pendingDrainWork();
+        assertEquals(2, pending.size());
+        assertThrows(UnsupportedOperationException.class, pending::clear);
 
         owner.discard(staged).toCompletableFuture().join();
-        assertTrue(pending(staged).isEmpty());
+        assertTrue(staged.pendingDrainWork().isEmpty());
+        assertEquals(2, pending.size(), "the earlier drain snapshot must remain unchanged");
     }
 
     @Test
@@ -252,7 +255,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                                 "temporary:actor:actor-a:0", "standalone Actor staging owner"),
                         new AsyncDrainProbe.Pending(
                                 "relayed:actor:actor-a:0", "standalone Actor staging owner")),
-                pending(staged));
+                staged.pendingDrainWork());
 
         assertSame(
                 failure,
@@ -260,7 +263,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                                 java.util.concurrent.CompletionException.class,
                                 () -> owner.discard(staged).toCompletableFuture().join())
                         .getCause());
-        assertEquals(2, pending(staged).size());
+        assertEquals(2, staged.pendingDrainWork().size());
     }
 
     @ParameterizedTest
@@ -378,17 +381,7 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         owner.openAdmission(staged);
         terminal.toCompletableFuture().join();
         assertEquals(List.of(1, 2, 3, 4, 5), executed);
-        assertTrue(pending(staged).isEmpty());
-    }
-
-    private static List<AsyncDrainProbe.Pending> pending(Object owner) {
-        try {
-            var field = owner.getClass().getDeclaredField("debugProbe");
-            field.setAccessible(true);
-            return ((AsyncDrainProbe) field.get(owner)).pending();
-        } catch (ReflectiveOperationException failure) {
-            throw new AssertionError(failure);
-        }
+        assertTrue(staged.pendingDrainWork().isEmpty());
     }
 
     @Test

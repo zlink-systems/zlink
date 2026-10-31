@@ -1399,9 +1399,7 @@ final class ZLinkActorDispatchSerialsTest {
 
     private static CompletionStage<?> closeSpotExecutorAsync(ZLinkSpotSerialExecutor executor)
             throws Exception {
-        var close = ZLinkSpotSerialExecutor.class.getDeclaredMethod("closeAsync");
-        close.setAccessible(true);
-        return (CompletionStage<?>) close.invoke(executor);
+        return ZLinkSpotSerialExecutorTesting.closeAsync(executor);
     }
 
     private static void relocateAndRetire(
