@@ -463,13 +463,14 @@ void expect_successful_channel_request (mesh::raw_mesh_node_owner_t &source,
     auto completion = promise.get_future ();
     const protocol::application_payload_t request{"WeightRequest", "application/json",
                                                   bytes ("request")};
-    ASSERT_TRUE (await_task (
-      source.request_to_channel ("X", request, 2s,
-                                 [&promise] (foundation::operation_terminal_t terminal,
-                                             zlink::message_t native_payload) mutable {
-                                     auto payload = native_payload.to_bytes ();
-                                     promise.set_value ({terminal, std::move (payload)});
-                                 })));
+    ASSERT_TRUE (await_task (source.request_to_channel (
+      "X", request, 2s,
+      [&promise] (foundation::operation_terminal_t terminal,
+                  ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+          auto native_payload = std::move (completion_payload.value ());
+          auto payload = native_payload.to_bytes ();
+          promise.set_value ({terminal, std::move (payload)});
+      })));
 
     std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     const auto request_deadline = std::chrono::steady_clock::now () + 2s;

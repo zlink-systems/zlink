@@ -3927,25 +3927,27 @@ TEST (NativeIntake, RawAuthorityFailurePreservesTerminalKind)
         const wire::actor_route_fence_t fence{
           actor_id, 1, pair.target_wire.node_routing_id, pair.target_wire.lifecycle_generation,
           1,        1};
-        using reply_t = std::pair<rt::foundation::operation_terminal_t, std::vector<std::uint8_t>>;
+        using reply_t =
+          std::pair<rt::foundation::operation_terminal_t, fw::result_t<zlink::message_t>>;
         std::promise<reply_t> completion;
         auto reply = completion.get_future ();
-        ASSERT_TRUE (pair.source->transport ()
-                       .request_to_actor (pair.target_wire.node_routing_id, std::nullopt, fence,
-                                          {"Probe", "application/json", {'{', '}'}}, wait_budget,
-                                          [&] (auto terminal, zlink::message_t payload) {
-                                              completion.set_value (
-                                                {terminal, payload.to_bytes ()});
-                                          })
-                       .result ()
-                       .value ());
+        ASSERT_TRUE (
+          pair.source->transport ()
+            .request_to_actor (pair.target_wire.node_routing_id, std::nullopt, fence,
+                               {"Probe", "application/json", {'{', '}'}}, wait_budget,
+                               [&] (auto terminal, fw::result_t<zlink::message_t> payload) {
+                                   completion.set_value ({terminal, std::move (payload)});
+                               })
+            .result ()
+            .value ());
         while (reply.wait_for (0ms) != std::future_status::ready
                && std::chrono::steady_clock::now () < deadline)
             pair.pump ();
         ASSERT_EQ (reply.wait_for (0ms), std::future_status::ready);
         const auto [terminal, payload] = reply.get ();
         EXPECT_EQ (terminal, rt::foundation::operation_terminal_t::transport_failed);
-        const auto header = wire::decode_reply_header (payload);
+        ASSERT_TRUE (payload);
+        const auto header = wire::decode_reply_header (payload.value ().to_bytes ());
         EXPECT_EQ (
           rt::messaging::request_failure_mapper_t{}
             .reply_header_exception (header.terminal_result, header.failure_code, "authority")
@@ -6176,9 +6178,8 @@ TEST (ActorMaintenanceJoin, AsyncReplyRetainsOneTerminalWhilePreparationIsPendin
     auto terminal = completed.get_future ();
     ASSERT_TRUE (operations.register_operation (
       operation, foundation::operation_registry_t::clock_t::now () + wait_budget,
-      [&] (foundation::operation_terminal_t result, zlink::message_t) {
-          completed.set_value (result);
-      }));
+      [&] (foundation::operation_terminal_t result,
+           ::zlink::framework::result_t<zlink::message_t>) { completed.set_value (result); }));
     fw::task_completion_source_t<void> preparation;
     auto prepare = [&] () -> fw::task_t<void> { co_await preparation.task (); };
     ASSERT_TRUE (operations.complete_async (operation, prepare));

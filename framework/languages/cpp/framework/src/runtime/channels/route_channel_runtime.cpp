@@ -614,7 +614,7 @@ task_t<void> route_channel_runtime_t::await_readiness (
         const bool registered = state->readiness_operations->register_operation (
           registration.id, *deadline,
           [weak = std::weak_ptr (observer)] (runtime::foundation::operation_terminal_t terminal,
-                                             zlink::message_t) {
+                                             ::zlink::framework::result_t<zlink::message_t>) {
               if (auto current = weak.lock ()) {
                   if (terminal == runtime::foundation::operation_terminal_t::cancelled) {
                       current->completion.complete (detail::result_access_t::failure<void> (

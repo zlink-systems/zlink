@@ -428,12 +428,15 @@ void complete_remote_request (mesh::raw_mesh_node_owner_t &source,
 {
     std::promise<request_result_t> promise;
     auto completion = promise.get_future ();
-    require (await_task (submit ([&promise] (foundation::operation_terminal_t terminal,
-                                             zlink::message_t native_payload) mutable {
-                 auto payload = native_payload.to_bytes ();
-                 promise.set_value ({terminal, std::move (payload)});
-             })),
-             surface + " request was not submitted");
+    require (
+      await_task (submit (
+        [&promise] (foundation::operation_terminal_t terminal,
+                    ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+            auto native_payload = std::move (completion_payload.value ());
+            auto payload = native_payload.to_bytes ();
+            promise.set_value ({terminal, std::move (payload)});
+        })),
+      surface + " request was not submitted");
     auto claim = claim_request (target, domain);
     require (claim && claim->records.size () == 1, surface + " request was not delivered");
 
@@ -571,8 +574,10 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     require (
       await_task (source.request_instance_spot_activation (
         remote.node_routing_id, std::move (failed_activation), std::nullopt, request_payload, 2s,
-        [&activation_failure_promise] (foundation::operation_terminal_t terminal,
-                                       zlink::message_t native_payload) mutable {
+        [&activation_failure_promise] (
+          foundation::operation_terminal_t terminal,
+          ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+            auto native_payload = std::move (completion_payload.value ());
             auto payload = native_payload.to_bytes ();
             activation_failure_promise.set_value ({terminal, std::move (payload)});
         })),
@@ -629,8 +634,10 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     auto failed = failed_promise.get_future ();
     require (await_task (source.request_to_node (
                remote.node_routing_id, request_payload, 2s,
-               [&failed_promise] (foundation::operation_terminal_t terminal,
-                                  zlink::message_t native_payload) mutable {
+               [&failed_promise] (
+                 foundation::operation_terminal_t terminal,
+                 ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+                   auto native_payload = std::move (completion_payload.value ());
                    auto payload = native_payload.to_bytes ();
                    failed_promise.set_value ({terminal, std::move (payload)});
                })),
@@ -672,8 +679,10 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     auto timeout = timeout_promise.get_future ();
     require (await_task (source.request_to_node (
                remote.node_routing_id, request_payload, 2s,
-               [&timeout_promise] (foundation::operation_terminal_t terminal,
-                                   zlink::message_t native_payload) mutable {
+               [&timeout_promise] (
+                 foundation::operation_terminal_t terminal,
+                 ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+                   auto native_payload = std::move (completion_payload.value ());
                    auto payload = native_payload.to_bytes ();
                    timeout_promise.set_value ({terminal, std::move (payload)});
                })),
@@ -712,8 +721,10 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
     auto wire_timeout = wire_timeout_promise.get_future ();
     require (await_task (source.request_to_node (
                remote.node_routing_id, request_payload, 2s,
-               [&wire_timeout_promise] (foundation::operation_terminal_t terminal,
-                                        zlink::message_t native_payload) mutable {
+               [&wire_timeout_promise] (
+                 foundation::operation_terminal_t terminal,
+                 ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
+                   auto native_payload = std::move (completion_payload.value ());
                    auto payload = native_payload.to_bytes ();
                    wire_timeout_promise.set_value ({terminal, std::move (payload)});
                })),

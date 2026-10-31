@@ -377,7 +377,7 @@ struct bound_session_operations_t
 
 using user_spot_create_completion_t =
   std::function<void (foundation::operation_terminal_t,
-                      protocol::user_spot_create_reply_t,
+                      result_t<protocol::user_spot_create_reply_t>,
                       std::optional<protocol::application_payload_t>)>;
 
 struct actor_create_operation_result_t
@@ -965,7 +965,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool complete_local_actor_join (pending_operation_t operation,
                                     std::string actor_type,
                                     stateful::membership_token_t membership,
-                                    const actor_join_operation_result_t &result,
+                                    const result_t<actor_join_operation_result_t> &result,
                                     const std::vector<zlink::message_t> &parts);
     task_t<zlink::submit_result_t> enqueue_local_actor_message (
       const actor_ref_t &target,
@@ -1286,7 +1286,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::uint64_t deadline_unix_ms = 0;
         std::vector<std::uint8_t> request_fingerprint;
         // Empty while the operation runs; its one terminal result afterwards.
-        std::vector<std::uint8_t> header;
+        result_t<std::vector<std::uint8_t>> header =
+          result_t<std::vector<std::uint8_t>>::success ({});
         std::optional<protocol::application_payload_t> application_reply;
         // Retransmissions of the running operation, with their correlations.
         // They receive the same terminal result (§7.1 operation ID).

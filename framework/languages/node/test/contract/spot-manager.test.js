@@ -1868,6 +1868,30 @@ test('ZLinkSpotManager scopes identical Spot RIDs and Core Spot creation by Mesh
   assert.equal(await closeUserSpot(manager, 'mesh.b', 'shared-room'), true);
 });
 
+test('local User Spot onCreate preserves an empty application exception', async () => {
+  class CallbackFailure extends Error {}
+  const original = new CallbackFailure();
+  class FailingSpot {
+    async onCreate() {
+      throw original;
+    }
+  }
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner,
+    spotFactories: [FailingSpot],
+    createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId)
+  });
+  await assert.rejects(
+    () => manager.getOrCreate('test.mesh', FailingSpot, 'callback-cause'),
+    (error) => {
+      assert.equal(error, original);
+      assert.equal(error.constructor, CallbackFailure);
+      assert.equal(error.message, '');
+      return true;
+    }
+  );
+});
+
 test('ZLinkSpotManager rolls location claim back when activation fails or rejects', async () => {
   const store = new framework.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const node = await locationLifecycleNode(store, 'owner-a', 'node-a');
