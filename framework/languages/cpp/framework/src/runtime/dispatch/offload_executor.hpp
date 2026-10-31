@@ -25,9 +25,8 @@ class offload_executor_t
     {
       public:
         virtual ~role_t () = default;
-        // Returns true after transferring the receive role.
         // Exceptions preserve the dedicated receive thread's terminate policy.
-        virtual bool run_until_handoff () = 0;
+        virtual void run () = 0;
     };
 
     template <typename Work> static void run_application_turn (Work &&work) noexcept
@@ -78,8 +77,6 @@ class offload_executor_t
     retained_work_t retain_internal_work () noexcept;
     // Initial placement uses the workers already created by the constructor.
     bool start_role (std::shared_ptr<role_t> role);
-    // Only the current holder calls this, at a receive rotation boundary.
-    bool try_assign_role (std::shared_ptr<role_t> role);
     // Seals submission and drains application work while receive roles keep
     // progressing.
     void drain_application ();

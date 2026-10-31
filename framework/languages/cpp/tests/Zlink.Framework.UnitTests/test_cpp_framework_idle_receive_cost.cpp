@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/framework.hpp>
 #include "runtime/mesh/mesh_node_runtime.hpp"
-#include "runtime/dispatch/completion_turn.hpp"
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
@@ -16,11 +15,10 @@ namespace
 {
 std::mutex mutex;
 std::condition_variable changed;
-std::size_t empty_receives = 0, empty_handoffs = 0, empty_waits = 0;
+std::size_t empty_receives = 0, empty_waits = 0;
 enum class boundary_t
 {
     none,
-    handoff,
     wait
 };
 boundary_t first_boundary = boundary_t::none;
@@ -52,18 +50,6 @@ wrap_dispatch (fw::detail::mesh_node_runtime_t *self,
                  next) __asm__ ("__wrap__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
                                 "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
                                 "16receive_record_tESt6vectorINS_9message_tESaISD_EEEEbS3_IFbvEE");
-extern "C" bool real_handoff (
-  const std::function<bool ()> &handoff,
-  const fw::detail::completion_dispatcher_borrow_t
-    &dispatcher) __asm__ ("__real__ZN5zlink9framework6detail35dispatch_completion_receive_"
-                          "handoffERKSt8functionIFbvEERKSt10shared_ptrINS1_23completion_dispatcher_"
-                          "tEE");
-extern "C" bool wrap_handoff (
-  const std::function<bool ()> &handoff,
-  const fw::detail::completion_dispatcher_borrow_t
-    &dispatcher) __asm__ ("__wrap__ZN5zlink9framework6detail35dispatch_completion_receive_"
-                          "handoffERKSt8functionIFbvEERKSt10shared_ptrINS1_23completion_dispatcher_"
-                          "tEE");
 extern "C" bool real_wait (
   fw::runtime::host::public_host_runtime_t *self,
   std::chrono::milliseconds timeout,
@@ -92,13 +78,6 @@ extern "C" fw::task_t<std::size_t> wrap_dispatch (fw::detail::mesh_node_runtime_
         observed (empty_receives);
     return result;
 }
-extern "C" bool wrap_handoff (const std::function<bool ()> &handoff,
-                              const fw::detail::completion_dispatcher_borrow_t &dispatcher)
-{
-    if (last_empty)
-        observed (empty_handoffs, boundary_t::handoff);
-    return real_handoff (handoff, dispatcher);
-}
 extern "C" bool wrap_wait (fw::runtime::host::public_host_runtime_t *self,
                            std::chrono::milliseconds timeout,
                            bool accept,
@@ -121,15 +100,13 @@ int main ()
     bool valid = false;
     {
         std::unique_lock lock (mutex);
-        changed.wait (lock, [] { return empty_handoffs != 0 || empty_waits != 0; });
+        changed.wait (lock, [] { return empty_waits != 0; });
         valid = empty_receives != 0 && empty_waits != 0 && first_boundary == boundary_t::wait;
         std::cout << "first_boundary=" << static_cast<unsigned> (first_boundary)
-                  << " empty_receives=" << empty_receives << " empty_handoffs=" << empty_handoffs
-                  << " empty_waits=" << empty_waits << '\n';
+                  << " empty_receives=" << empty_receives << " empty_waits=" << empty_waits << '\n';
     }
     app.request_stop ();
     host.join ();
-    std::cout << "empty_receives=" << empty_receives << " empty_handoffs=" << empty_handoffs
-              << " empty_waits=" << empty_waits << '\n';
+    std::cout << "empty_receives=" << empty_receives << " empty_waits=" << empty_waits << '\n';
     return valid ? 0 : 1;
 }

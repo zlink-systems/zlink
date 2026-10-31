@@ -173,19 +173,6 @@ bool offload_executor_t::start_role (std::shared_ptr<role_t> role)
     return true;
 }
 
-bool offload_executor_t::try_assign_role (std::shared_ptr<role_t> role)
-{
-    {
-        std::lock_guard lock (_mutex);
-        if (_stopping || _idle_workers <= _roles.size ())
-            return false;
-        _roles.push (std::move (role));
-        --_role_active;
-    }
-    _ready.notify_one ();
-    return true;
-}
-
 void offload_executor_t::drain_application ()
 {
     {
@@ -377,20 +364,23 @@ void offload_executor_t::worker_loop ()
 
         // A receive role is deliberately outside the application exception
         // boundary.
-        const bool handed_off = role && role->run_until_handoff ();
-        run_application_turn ([&] {
-            std::visit (
-              [&] (auto &callback) {
-                  if (callback) {
-                      if constexpr (std::is_invocable_v<decltype (callback), std::stop_token>)
-                          callback (work.cancellation ? work.cancellation->get_token ()
-                                                      : std::stop_token{});
-                      else
-                          callback ();
-                  }
-              },
-              work.work);
-        });
+        if (role) {
+            role->run ();
+        } else {
+            run_application_turn ([&] {
+                std::visit (
+                  [&] (auto &callback) {
+                      if (callback) {
+                          if constexpr (std::is_invocable_v<decltype (callback), std::stop_token>)
+                              callback (work.cancellation ? work.cancellation->get_token ()
+                                                          : std::stop_token{});
+                          else
+                              callback ();
+                      }
+                  },
+                  work.work);
+            });
+        }
         work.work = std::function<void ()>{};
 
         {
@@ -402,7 +392,7 @@ void offload_executor_t::worker_loop ()
                     _active_cancellations.erase (active);
                 }
             }
-            if (role && !handed_off)
+            if (role)
                 --_role_active;
             complete_work_locked ();
         }

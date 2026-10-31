@@ -10,7 +10,6 @@
 #include "../support/runtime_failure_fixture.hpp"
 #include <zlink.h>
 #include <cassert>
-#include <cstring>
 #include <future>
 #include <iostream>
 #include <mutex>
@@ -36,10 +35,7 @@ std::atomic_bool watch_notifications{false};
 std::mutex observation_mutex;
 std::thread::id received_on;
 std::promise<std::thread::id> handled;
-std::atomic_bool handler_entered{false};
 std::atomic_bool handler_blocked{false};
-std::atomic_size_t role_assignments{0};
-std::atomic_size_t successful_role_assignments{0};
 constexpr std::size_t queued_records = 128;
 std::atomic_size_t received_queued{0};
 std::atomic_size_t handled_queued{0};
@@ -66,7 +62,6 @@ struct handler_t
             return;
         }
         handler_blocked = true;
-        handler_entered = true;
         handled.set_value (std::this_thread::get_id ());
         release_handler_turn.wait ();
     }
@@ -90,7 +85,7 @@ extern "C" zlink_recv_result_t __wrap_zlink_router_recv (void *socket,
     const auto result =
       __real_zlink_router_recv (socket, rid, reply, parts, capacity, count, flags);
     if (result == ZLINK_RECV_OK) {
-        constexpr char marker[] = "handoff-probe";
+        constexpr char marker[] = "owner-dispatch-probe";
         for (std::size_t index = 0; index < *count; ++index) {
             const auto *data = static_cast<const char *> (zlink_msg_data (&parts[index]));
             const auto bytes = zlink_msg_size (&parts[index]);
@@ -106,29 +101,6 @@ extern "C" zlink_recv_result_t __wrap_zlink_router_recv (void *socket,
     }
     return result;
 }
-extern "C" bool
-real_assign (rt::offload_executor_t *, std::shared_ptr<rt::offload_executor_t::role_t>) __asm__ (
-  "__real__ZN5zlink9framework7runtime18offload_executor_t15try_assign_roleESt10shared_ptrINS2_"
-  "6role_tEE");
-extern "C" bool
-wrapped_assign (rt::offload_executor_t *executor,
-                std::shared_ptr<rt::offload_executor_t::role_t>
-                  role) __asm__ ("__wrap__ZN5zlink9framework7runtime18offload_executor_t15try_"
-                                 "assign_roleESt10shared_ptrINS2_6role_tEE");
-extern "C" bool wrapped_assign (rt::offload_executor_t *executor,
-                                std::shared_ptr<rt::offload_executor_t::role_t> role)
-{
-    const bool watched =
-      watch_notifications.load ()
-      && rt::offload_executor_test_access_t::ready (*executor) == application_ready.load ();
-    if (watched)
-        ++role_assignments;
-    const bool assigned = real_assign (executor, std::move (role));
-    if (watched && assigned)
-        ++successful_role_assignments;
-    return assigned;
-}
-
 extern "C" bool real_start_role (
   rt::offload_executor_t *,
   std::shared_ptr<rt::offload_executor_t::
@@ -167,23 +139,21 @@ int main ()
         handled_queued = 0;
         queue_drained = {};
         auto drained = queue_drained.get_future ();
-        handler_entered = false;
         handler_blocked = false;
-        role_assignments = 0;
-        successful_role_assignments = 0;
         parallel_started = {};
         std::promise<void> release_handler;
         release_handler_turn = release_handler.get_future ().share ();
         auto parallel = parallel_started.get_future ();
         auto invocation = handled.get_future ();
         auto registration =
-          fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("handoff-turn");
+          fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> (
+            "mailbox-owner-dispatch");
         registration->core_context = std::make_shared<zlink::context_t> ();
         registration->listen_endpoint = "tcp://127.0.0.1:0";
         registration->listen_port.reset ();
         registration->routing_id = zlink::routing_id_t::from ("target");
-        registration->handlers.on_send<handler_t, probe_t> ("handoff-turn", "HandoffProbe",
-                                                            &handler_t::handle);
+        registration->handlers.on_send<handler_t, probe_t> ("mailbox-owner-dispatch",
+                                                            "HandoffProbe", &handler_t::handle);
         registration->handlers.on_send<handler_t, probe_t> ("parallel", "HandoffProbe",
                                                             &handler_t::handle);
         registration->channels.emplace (
@@ -226,7 +196,8 @@ int main ()
         service.start (provider).result ().value ();
         const auto target = service.nodes ().front ();
         auto source_state =
-          fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("handoff-turn");
+          fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> (
+            "mailbox-owner-dispatch");
         source_state->core_context = std::make_shared<zlink::context_t> ();
         source_state->listen_endpoint = "tcp://127.0.0.1:0";
         source_state->listen_port.reset ();
@@ -241,9 +212,10 @@ int main ()
             std::this_thread::yield ();
         }
         rt::messaging::client_call_codec_t codec;
-        auto header = codec.create_envelope (rt::messaging::message_kind_t::command, "handoff-turn",
-                                             "HandoffProbe");
-        auto parts = codec.encode_envelope_parts (header, probe_t{"handoff-probe"}, serializers);
+        auto header = codec.create_envelope (rt::messaging::message_kind_t::command,
+                                             "mailbox-owner-dispatch", "HandoffProbe");
+        auto parts =
+          codec.encode_envelope_parts (header, probe_t{"owner-dispatch-probe"}, serializers);
         assert (
           source
             .send_to_node (*registration->routing_id, parts.items (), std::vector<std::uint8_t>{})
@@ -312,11 +284,8 @@ int main ()
                       << " independent_completion=" << completion_ready << '\n';
         }
         std::cout << "queued_records=" << handled_queued.load ()
-                  << " handler_on_receive_thread=" << same
-                  << " role_assignments=" << role_assignments.load ()
-                  << " successful_role_assignments=" << successful_role_assignments.load () << '\n';
-        correct = correct && !same && role_assignments.load () == 0
-                  && handled_queued.load () == queued_records;
+                  << " handler_on_receive_thread=" << same << '\n';
+        correct = correct && !same && handled_queued.load () == queued_records;
         source.stop ();
         service.request_stop ();
         service.stop ();

@@ -2012,17 +2012,14 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
     {
     }
 
-    bool run_until_handoff () override
+    void run () override
     {
-        while (!host._stop.load (std::memory_order_acquire)) {
-            if (rotate ())
-                return true;
-        }
+        while (!host._stop.load (std::memory_order_acquire))
+            rotate ();
         supply.close ();
-        return false;
     }
 
-    bool rotate ()
+    void rotate ()
     {
         auto &application_permit = *receive_permit;
         auto &mailbox = node->native_node ().transport ().mailbox ();
@@ -2234,7 +2231,6 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
         }
         mesh::service_mailbox_t::notify_application_ready (ready);
-        return false;
     }
 
     struct pending_management_t
