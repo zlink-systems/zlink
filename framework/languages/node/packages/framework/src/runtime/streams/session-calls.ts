@@ -39,13 +39,13 @@ export interface ZLinkSessionCallContext {
     payload: unknown,
     correlationId?: string
   ): Message;
-  createJsonReplyFrameMessage(
+  submitReply(
     requestHeader: ZLinkStreamFrameHeader,
     kind: ZLinkStreamReplyMessageKind,
     metadata: ReadonlyMap<string, string>,
     compressed: boolean,
     payload: unknown
-  ): Message;
+  ): Promise<ZLinkSubmitResult>;
   claimReply(requestHeader: ZLinkStreamFrameHeader): void;
   /**
    * Spec 26 §2.2: the STREAM surface records session-connected sends and the
@@ -168,23 +168,18 @@ export class DefaultZLinkSessionReplyCall implements ZLinkSessionReplyCall {
       throw new Error('Reply is only available while handling a request packet.');
     }
     this.context.claimReply(requestHeader);
-    const message = this.context.createJsonReplyFrameMessage(
+    const result = await this.context.submitReply(
       requestHeader,
       ZLinkStreamMessageKind.Response,
       new Map<string, string>(),
       this.compressionEnabled,
       this.message
     );
-    try {
-      const result = await this.context.stream.submitRaw(message);
-      requireOneWayCompletion(result, 'STREAM session reply');
-      this.context.traceFrameWritten?.(
-        ZLinkStreamMessageKind.Response,
-        requestHeader.name,
-        requestHeader.correlationId
-      );
-    } finally {
-      message.close();
-    }
+    requireOneWayCompletion(result, 'STREAM session reply');
+    this.context.traceFrameWritten?.(
+      ZLinkStreamMessageKind.Response,
+      requestHeader.name,
+      requestHeader.correlationId
+    );
   }
 }

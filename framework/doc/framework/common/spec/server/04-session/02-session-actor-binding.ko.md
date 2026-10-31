@@ -249,7 +249,10 @@ current 판정에 그 선형화점 밖의 사본을 사용하지 않는다.**
    파생 상태(projection·route 사본)를 같은 선형화점에서 함께 공개해**, commit이 관찰 가능해진
    뒤 도착한 record가 아직 갱신되지 않은 파생 상태와 대조되는 창을 만들지 않는다. Binding이
    끝날 때는 역순이다 — 새 slotted 제출을 먼저 막고, 이미 수락한 frame을 제출한 뒤
-   `$zlink.actor.unbound`를 같은 queue에 넣는다.
+   `$zlink.actor.unbound`를 같은 queue에 넣는다. Terminal reply의 Actor slot은 Session owner의
+   단일 ordered 제출 경로가 제출 turn에서 한 번 정한다. 해당 binding이 이미 끝났으면
+   `actor_slot`을 제거하고 같은 request sequence의 session reply로 제출한다. Reply 생성
+   시점의 binding 상태는 이 판정에 사용하지 않는다.
 3. **판정 권위는 하나다.** push의 current 판정은 [§8.1](#81-seal-held-message와-route-전환)이
    열거한 Session owner 검증 항목만 사용한다. 파생 사본의
    미갱신·불일치를 binding이 stale하다는 근거로 사용하지 않는다. Source 측도 전송 조건으로
@@ -869,6 +872,8 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
 - Local bind와 다른 MeshNode의 bind 모두에서 `$zlink.actor.bound`가 그 slot을 싣는 첫 STREAM
   packet보다 먼저 도착하고, `$zlink.actor.unbound`가 마지막 slotted packet 뒤에 도착한다.
 - Push와 Actor로 relay한 request의 reply가 binding의 Actor slot을 싣는다.
+- Reply 생성 뒤 binding이 끝나고 terminal reply를 제출하면 `bound → unbound → Response/Error`
+  순서로 관찰되며 terminal reply에는 slot이 없고 client의 같은 sequence 요청이 완료된다.
 - `actor_slot`이 있는 packet의 dispatch context가 그 binding의 Actor를 가리킨다.
 - 현재 binding이 아닌 slot으로 도착한 packet은 session handler에 도달하지 않는다. `Request`는
   같은 sequence의 `Error`(`InvalidOperation`)로 끝나 `zlink.dispatch_error`(`outcome=failed`, `reason=stale_target`, `action=reply_error`)로 기록되고, `Send`는

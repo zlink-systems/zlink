@@ -14,6 +14,75 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class SessionActorCoordinatorTests
 {
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    [InlineData(false, 2)]
+    [InlineData(true, 2)]
+    [InlineData(false, 3)]
+    [InlineData(true, 3)]
+    public async Task Terminal_reply_after_binding_end_preserves_sequence(bool ended, int mode)
+    {
+        var runtime = CreateRuntime();
+        var stream = new TestStream(RoutingId.From("late-reply"));
+        var context = CreateSessionContext(runtime, stream);
+        var actor = new ActorRef("late-reply-actor", 1, "actors", RoutingId.From("actor-node"));
+        var bound = Assert.IsType<ZLinkSessionActor>(
+            await BindWithDescriptorFixtureAsync(context, actor, CancellationToken.None)
+        );
+        var request = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Request,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.HasRequestSeq,
+            new ZlinkStreamRequestSeq(17),
+            "LateReply",
+            ZlinkStreamMetadata.Empty,
+            CorrelationId: "late-reply-correlation",
+            ActorSlot: bound.Slot
+        );
+        Assert.NotNull(context.EnterDispatch(request));
+        var reply = context.Client.Reply(new SessionPush("done"));
+        var actorReply =
+            mode == 2
+                ? ZLinkActorReply.FromError(new InvalidOperationException("ended"))
+                : new ZLinkActorReply(
+                    ZlinkStreamMessageKind.Response,
+                    ZlinkStreamCodec.Json,
+                    "{}"u8.ToArray(),
+                    ZlinkStreamHeaderFlags.None,
+                    ZlinkStreamMetadata.Empty
+                );
+        if (ended)
+            runtime.UnbindSessionActor(actor.ActorId, context, bound.BindingToken);
+        if (mode == 0)
+            await reply.Async();
+        else if (mode == 3)
+            await context.ReplyErrorAsync(
+                request,
+                new InvalidOperationException("ended"),
+                CancellationToken.None
+            );
+        else
+            await context.ReplyActorRawAsync(request, actorReply, CancellationToken.None);
+        Assert.Equal(
+            ended
+                ? ["$zlink.actor.bound", "$zlink.actor.unbound", ""]
+                : new[] { "$zlink.actor.bound", "" },
+            stream.Headers.Select(header => header.Name)
+        );
+        var terminal = stream.Headers.Last();
+        Assert.Equal(
+            mode >= 2 ? ZlinkStreamMessageKind.Error : ZlinkStreamMessageKind.Response,
+            terminal.Kind
+        );
+        Assert.Equal(ended ? (ushort?)null : bound.Slot, terminal.ActorSlot);
+        Assert.Equal(new ZlinkStreamRequestSeq(17), terminal.RequestSeq);
+        Assert.Equal("late-reply-correlation", terminal.CorrelationId);
+        context.ExitDispatch();
+    }
+
     [Fact]
     public async Task Bind_without_a_Session_owner_descriptor_is_rejected_as_Unavailable()
     {
@@ -3524,6 +3593,8 @@ public sealed class SessionActorCoordinatorTests
 
     private sealed class TestStream(RoutingId routingId, bool acceptsWrites = true) : IZLinkStream
     {
+        public List<ZlinkStreamHeader> Headers { get; } = [];
+
         public bool AcceptsWrites { get; set; } = acceptsWrites;
 
         public string SessionId { get; } = routingId.ToHex();
@@ -3547,6 +3618,7 @@ public sealed class SessionActorCoordinatorTests
             if (ZLinkStreamFrameCodec.TryDecode(encoded, out var headerBytes, out var body))
             {
                 var header = ZLinkStreamProtocolDefaults.DecodeHeader(headerBytes.ToArray());
+                Headers.Add(header);
                 if (header.Kind == ZlinkStreamMessageKind.Control)
                     ControlWrites.Add((encoded, flags));
                 else

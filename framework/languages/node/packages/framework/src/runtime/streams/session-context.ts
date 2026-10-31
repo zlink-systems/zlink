@@ -65,13 +65,14 @@ interface ZLinkSessionContextRuntime {
     payload: unknown,
     correlationId?: string
   ): Message;
-  createJsonReplyFrameMessage(
+  submitReply(
+    context: DefaultZLinkSessionContext,
     requestHeader: ZLinkStreamFrameHeader,
     kind: ZLinkStreamReplyMessageKind,
     metadata: ReadonlyMap<string, string>,
     compressed: boolean,
     payload: unknown
-  ): Message;
+  ): Promise<ZLinkSubmitResult>;
   decompressPayload(payload: Message): Message;
   bind(
     context: DefaultZLinkSessionContext,
@@ -267,20 +268,14 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
     );
   }
 
-  createJsonReplyFrameMessage(
+  submitReply(
     requestHeader: ZLinkStreamFrameHeader,
     kind: ZLinkStreamReplyMessageKind,
     metadata: ReadonlyMap<string, string>,
     compressed: boolean,
     payload: unknown
-  ): Message {
-    return this.runtime.createJsonReplyFrameMessage(
-      requestHeader,
-      kind,
-      metadata,
-      compressed,
-      payload
-    );
+  ): Promise<ZLinkSubmitResult> {
+    return this.runtime.submitReply(this, requestHeader, kind, metadata, compressed, payload);
   }
 
   enterDispatch(header: ZLinkStreamFrameHeader): void {

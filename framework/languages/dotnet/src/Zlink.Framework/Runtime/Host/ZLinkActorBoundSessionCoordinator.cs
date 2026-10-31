@@ -542,6 +542,12 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             )
         );
 
+    internal Task SubmitStreamReplyAsync(
+        ZLinkSessionContext context,
+        ZlinkStreamHeader header,
+        Func<ZlinkStreamHeader, Task> submit
+    ) => _sessionBindings.SubmitStreamReplyAsync(context, header, submit);
+
     public IReadOnlyCollection<IZLinkSessionActor> SnapshotSessionActors(
         ZLinkSessionContext context
     ) => AwaitStateLane(_sessionBindings.SnapshotActorsAsync(context));

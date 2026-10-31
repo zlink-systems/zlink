@@ -2264,19 +2264,56 @@ detail::session_actor_manager_access_t::find_slot (session_actor_manager_t &mana
 {
     if (actor_slot == 0 || !manager._binding_context)
         return std::nullopt;
-    return manager._state->sync ([&] () -> std::optional<session_actor_t> {
-        const auto &session_id = manager._binding_context->session_id;
-        const auto &ready_actors = manager._binding_context->ready_actors;
-        for (const auto &[_, actor] : manager._state->actors_by_id) {
-            if (ready_actors.contains (std::string (actor.ref.actor_id ().value ())) && actor.bound
-                && !actor.disconnected && actor.binding_session_id == session_id
-                && actor.actor_slot == actor_slot) {
-                return session_actor_t (manager._state, actor.ref, actor.binding_token,
-                                        manager._binding_context);
-            }
+    return manager._state->sync ([&] { return find_slot_on_lane (manager, actor_slot); });
+}
+
+std::optional<session_actor_t>
+detail::session_actor_manager_access_t::find_slot_on_lane (session_actor_manager_t &manager,
+                                                           std::uint16_t actor_slot)
+{
+    const auto &session_id = manager._binding_context->session_id;
+    const auto &ready_actors = manager._binding_context->ready_actors;
+    for (const auto &[_, actor] : manager._state->actors_by_id) {
+        if (ready_actors.contains (std::string (actor.ref.actor_id ().value ())) && actor.bound
+            && !actor.disconnected && actor.binding_session_id == session_id
+            && actor.actor_slot == actor_slot) {
+            return session_actor_t (manager._state, actor.ref, actor.binding_token,
+                                    manager._binding_context);
         }
-        return std::nullopt;
-    });
+    }
+    return std::nullopt;
+}
+
+task_t<void> detail::session_actor_manager_access_t::submit_terminal (
+  const stream_t &stream,
+  const stream_header_t &header,
+  const zlink::message_t &payload,
+  const std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> &submit)
+{
+    const auto slot = header.actor_slot ();
+    if (!slot
+        || (header.kind () != stream_message_kind_t::response
+            && header.kind () != stream_message_kind_t::error))
+        return submit (header, payload);
+    const auto submit_on_lane = [&] (session_actor_manager_t *manager) {
+        if (manager && manager->_binding_context && find_slot_on_lane (*manager, *slot))
+            return submit (header, payload);
+        auto flags = static_cast<stream_header_flags_t> (
+          static_cast<std::uint8_t> (header.flags ())
+          & ~static_cast<std::uint8_t> (stream_header_flags_t::has_actor_slot));
+        stream_header_t session_header (header.kind (), header.codec (), flags,
+                                        header.request_seq (), std::string (header.packet_name ()),
+                                        header.metadata ());
+        if (auto correlation = header.correlation_id ())
+            session_header.with_correlation_id (std::string (*correlation));
+        if (auto flow = header.flow_id ())
+            session_header.with_flow (std::string (*flow), *header.flow_origin ());
+        return submit (session_header, payload);
+    };
+    auto *manager = stream._state->actors.load (std::memory_order_acquire);
+    if (!manager)
+        return submit_on_lane (nullptr);
+    return manager->_state->sync ([&] { return submit_on_lane (manager); });
 }
 
 void detail::session_actor_manager_access_t::bind_disconnect (
