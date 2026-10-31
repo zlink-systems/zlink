@@ -255,10 +255,9 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
             var router = port.openRouter(localRid);
             set(node, "router", router);
             set(node, "localDescriptor", descriptor(localRid));
-            set(
-                    node,
-                    "topology",
-                    new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane()));
+            var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane());
+            set(node, "topology", topology);
+            topology.observeChanges(node::publishPeerObservation);
             String endpoint = "inproc://hello-cadence-" + java.util.UUID.randomUUID();
             peer.bind(endpoint);
             node.connectPeer(endpoint, remoteRid);
@@ -268,7 +267,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 assertTrue(System.nanoTime() < deadline, "Core route did not become selectable");
                 port.waitForReady(router, IO_DEADLINE);
             }
-            invoke(node, "observeSelectedRoutes");
+            node.observeTransportState(ZLinkJavaSocketReceivePoller.ROUTE_CHANGED);
             tick(node, now.get());
             var exchange = node.helloExchanges.get(remoteRid);
             exchange.submission().get(2, java.util.concurrent.TimeUnit.SECONDS);
@@ -319,10 +318,9 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
             router.bind(endpoint);
             set(node, "router", router);
             set(node, "localDescriptor", descriptor(localRid));
-            set(
-                    node,
-                    "topology",
-                    new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane()));
+            var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane());
+            set(node, "topology", topology);
+            topology.observeChanges(node::publishPeerObservation);
             if (withIntent) {
                 String peerEndpoint = descriptor(remoteRid, 2).advertisedEndpoint();
                 peer.bind(peerEndpoint);
@@ -337,11 +335,9 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 assertTrue(System.nanoTime() < deadline, "Core route did not become selectable");
                 port.waitForReady(router, IO_DEADLINE);
             }
-            invoke(node, "observeSelectedRoutes");
+            node.observeTransportState(ZLinkJavaSocketReceivePoller.ROUTE_CHANGED);
             if (pausePublication) {
-                var lane =
-                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                                field(node, "descriptorStateLane");
+                var lane = node.descriptorStateLaneForTest();
                 var entered = new java.util.concurrent.CompletableFuture<Void>();
                 var release = new java.util.concurrent.CompletableFuture<Void>();
                 lane.runAsync(
@@ -412,9 +408,20 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
             assertTrue(node.selectPlacementTarget().isEmpty());
             try (var body = Message.from(new byte[] {1})) {
                 assertNotReady(node.sendNode(remoteRid, null, List.of(body)));
-                assertNotReady(
+                var pendingRequest =
                         node.requestNode(
-                                remoteRid, null, List.of(body), IO_DEADLINE, null, null, null));
+                                        remoteRid,
+                                        null,
+                                        List.of(body),
+                                        IO_DEADLINE,
+                                        null,
+                                        null,
+                                        null)
+                                .toCompletableFuture();
+                assertFalse(pendingRequest.isDone(), "request must wait for remote ADMIT");
+                assertTrue(pendingRequest.cancel(false));
+                assertThrows(
+                        java.util.concurrent.CancellationException.class, pendingRequest::join);
                 assertNotReady(node.sendChannel("orders", null, List.of(body)));
                 assertNotReady(
                         node.requestChannel(
@@ -424,9 +431,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                     ZLinkJavaRawMeshNode.class.getDeclaredMethod(
                             "publishLocalDescriptor", ZLinkServiceNodeDescriptor.class);
             publish.setAccessible(true);
-            var lane =
-                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                            field(node, "descriptorStateLane");
+            var lane = node.descriptorStateLaneForTest();
             lane.runAsync(
                             () -> {
                                 try {
@@ -648,12 +653,6 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
 
     private static void tick(ZLinkJavaRawMeshNode node, long now) {
         node.tickLiveness(now);
-    }
-
-    private static void invoke(Object owner, String name) throws Exception {
-        var method = owner.getClass().getDeclaredMethod(name);
-        method.setAccessible(true);
-        method.invoke(owner);
     }
 
     private static Object field(Object owner, String name) throws Exception {

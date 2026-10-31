@@ -33,8 +33,8 @@ struct completion_turn_scope_t
 {
     const completion_turn_scope_t *previous;
     const void *identity;
-    completion_dispatcher_t *dispatcher;
-    completion_turn_scope_t (const void *owner, completion_dispatcher_t *target) :
+    completion_dispatcher_borrow_t dispatcher;
+    completion_turn_scope_t (const void *owner, completion_dispatcher_borrow_t target) :
         previous (completion_owner), identity (owner), dispatcher (target)
     {
         completion_owner = this;
@@ -46,9 +46,9 @@ std::mutex completion_creation_mutex;
 }
 
 
-// Publishers and posted turns borrow a live completion owner's context.
+// Registrations retain the dispatcher independently of its completion owners.
 // Closing its last owner drains accepted work before joining workers.
-class completion_dispatcher_t
+class completion_dispatcher_t : public std::enable_shared_from_this<completion_dispatcher_t>
 {
   public:
     completion_dispatcher_t ()
@@ -61,7 +61,7 @@ class completion_dispatcher_t
             _workers.emplace_back ([this] { _context.run (); });
     }
 
-    ~completion_dispatcher_t ()
+    void close ()
     {
         _work.reset ();
         for (auto &worker : _workers)
@@ -70,6 +70,9 @@ class completion_dispatcher_t
 
     template <typename Work> void post (Work &&work)
     {
+        if (_context.stopped ())
+            throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                         registered_execution_context_shutting_down_message);
         boost::asio::post (_context, std::forward<Work> (work));
     }
     void poll_one () { _context.poll_one (); }
@@ -106,7 +109,13 @@ std::shared_ptr<void> create_completion_owner ()
     auto dispatcher = active_completion_dispatcher.lock ();
     if (!dispatcher) {
         dispatcher = std::make_shared<completion_dispatcher_t> ();
-        active_completion_dispatcher = dispatcher;
+        std::shared_ptr<void> owner (dispatcher.get (), [dispatcher] (void *) mutable {
+            dispatcher->close ();
+            dispatcher.reset ();
+        });
+        active_completion_dispatcher =
+          std::shared_ptr<completion_dispatcher_t> (owner, dispatcher.get ());
+        return owner;
     }
     return dispatcher;
 }
@@ -126,7 +135,7 @@ completion_dispatcher_borrow_t borrow_completion_dispatcher ()
         return completion_owner->dispatcher;
     const auto *hooks = runtime_execution_hooks.load (std::memory_order_acquire);
     if (hooks != nullptr) {
-        if (auto *dispatcher = hooks->borrow_dispatcher ())
+        if (auto dispatcher = hooks->borrow_dispatcher ())
             return dispatcher;
     }
     const std::lock_guard lock (completion_creation_mutex);
@@ -134,7 +143,7 @@ completion_dispatcher_borrow_t borrow_completion_dispatcher ()
     if (!dispatcher)
         throw framework_exception_t (framework_error_kind_t::invalid_operation,
                                      "asynchronous completion requires a live completion owner");
-    return dispatcher.get ();
+    return dispatcher->shared_from_this ();
 }
 
 std::weak_ptr<completion_dispatcher_t> observe_completion_dispatcher ()
@@ -173,10 +182,9 @@ void dispatch_completion (std::function<void ()> work,
     }
     if (!dispatcher)
         dispatcher = borrow_completion_dispatcher ();
-    auto *target = dispatcher;
-    target->post ([work = std::move (work), owner, target] {
+    dispatcher->post ([work = std::move (work), owner, dispatcher] {
         const completion_turn_scope_t scope{owner != nullptr ? owner : &process_completion_owner,
-                                            target};
+                                            dispatcher};
         work ();
     });
 }
@@ -191,12 +199,10 @@ bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff,
     // Only Framework completions enter this context. Application system-executor
     // handlers cannot be consumed by the resource that just handed off receive.
     // An empty first rotation must not create workers just to attempt a dequeue.
-    if (existing_dispatcher) {
-        existing_dispatcher->poll_one ();
-    } else {
-        const auto observed = observe_completion_dispatcher ();
-        if (!observed.expired ())
-            borrow_completion_dispatcher ()->poll_one ();
+    if (const auto &dispatcher = existing_dispatcher) {
+        dispatcher->poll_one ();
+    } else if (const auto dispatcher = observe_completion_dispatcher ().lock ()) {
+        dispatcher->poll_one ();
     }
     return true;
 }

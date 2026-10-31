@@ -1647,12 +1647,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 }
                 ZLinkBackendReceived pending = firstRequest.get(2, TimeUnit.SECONDS);
                 assertEquals(1, caller.pendingCount());
-                var field = ZLinkJavaRawMeshNode.class.getDeclaredField("operations");
-                field.setAccessible(true);
-                var meshRegistry =
-                        (systems.zlink.framework.runtime.internal.service
-                                        .ZLinkServiceOperationRegistry)
-                                field.get(right);
+                var meshRegistry = right.operationRegistry();
                 assertEquals(0, meshRegistry.pendingCount());
                 assertEquals(
                         envelope.correlationId(),

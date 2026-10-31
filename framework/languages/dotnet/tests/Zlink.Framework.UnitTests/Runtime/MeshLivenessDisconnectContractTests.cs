@@ -211,15 +211,18 @@ public sealed partial class StatefulServiceRuntimeTests
     public async Task LivenessDisconnect_AlreadyMissingPhysicalPeerExpiresLogicalAdmission()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var socket = context.CreateRouterSocket();
         var scheduler = new GatedTaskScheduler();
+        var peers = new Dictionary<RoutingId, ZLinkMeshPeer>();
         await using var owner = new ZLinkManagedMeshNode(
             context,
             "mesh",
-            routedSubmitScheduler: scheduler
+            routedSubmitScheduler: scheduler,
+            peersByRid: peers,
+            directRequestSocket: socket
         );
         owner.SetRoutingId(RoutingId.From("liveness-missing-owner"));
         owner.SetBind("tcp://127.0.0.1:0");
-        using (var socket = context.CreateRouterSocket())
         using (var physicalPeer = context.CreateDealerSocket())
         {
             var rid = RoutingId.From("liveness-missing-peer");
@@ -238,14 +241,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 State = MeshPeerState.Admitted,
                 Liveness = new ZLinkServiceLiveness(0),
             };
-            LivenessField<Dictionary<RoutingId, ZLinkMeshPeer>>(owner, "_peersByRid")
-                .Add(rid, peer);
-            SetLivenessField(owner, "_socket", socket);
-            SetLivenessField(
-                owner,
-                "_activeSocketGeneration",
-                LivenessField<ulong>(owner, "_lifecycleGeneration")
-            );
+            peers.Add(rid, peer);
             try
             {
                 // No receive loop runs. Keep the accepted probe on its existing scheduler.
@@ -265,8 +261,6 @@ public sealed partial class StatefulServiceRuntimeTests
             finally
             {
                 await scheduler.ReleaseAsync();
-                SetLivenessField(owner, "_socket", null);
-                SetLivenessField(owner, "_activeSocketGeneration", 0UL);
             }
         }
     }
@@ -313,7 +307,9 @@ public sealed partial class StatefulServiceRuntimeTests
     public async Task LivenessDisconnect_ExplicitNativeDisconnectFailureKeepsPeer()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var owner = NewNode(context, "native-disconnect-failure");
+        var peers = new Dictionary<RoutingId, ZLinkMeshPeer>();
+        await using var owner = new ZLinkManagedMeshNode(context, "mesh", peersByRid: peers);
+        owner.SetRoutingId(RoutingId.From("native-disconnect-failure"));
         using var socket = context.CreateRouterSocket();
         using var physicalPeer = context.CreateDealerSocket();
         var rid = RoutingId.From("native-disconnect-failure-peer");
@@ -331,7 +327,7 @@ public sealed partial class StatefulServiceRuntimeTests
             Admitted = true,
             State = MeshPeerState.Admitted,
         };
-        LivenessField<Dictionary<RoutingId, ZLinkMeshPeer>>(owner, "_peersByRid").Add(rid, peer);
+        peers.Add(rid, peer);
         SetLivenessField(owner, "_socket", socket);
         var delivered = 0;
         typeof(ZLinkManagedMeshNode)
@@ -420,13 +416,6 @@ public sealed partial class StatefulServiceRuntimeTests
             throw;
         }
     }
-
-    private static T LivenessField<T>(object owner, string name) =>
-        (T)
-            owner
-                .GetType()
-                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(owner)!;
 
     private static void SetLivenessField(object owner, string name, object? value) =>
         owner

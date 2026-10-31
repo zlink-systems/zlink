@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistryTesting;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.Proxy;
 import java.net.URLClassLoader;
@@ -61,7 +62,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
             var topology =
                     new systems.zlink.framework.runtime.internal.service
                             .ZLinkServiceTopologyRegistry(actorDescriptor(local));
-            topology.admit(actorDescriptor(remote), "actor-route", 1);
+            topology.admit(actorDescriptor(remote), "1", ServiceWireConstants.COMMAND_ADMIT);
             var mesh =
                     ZLinkJavaRawMeshNodeTesting.create(
                             "actor-completion",
@@ -69,7 +70,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
                             fixture.router,
                             null,
                             topology,
-                            java.util.Map.of(),
+                            java.util.Map.of(remote, 1L),
                             Runnable::run);
             var meshOperations = mesh.operationRegistry();
             try {

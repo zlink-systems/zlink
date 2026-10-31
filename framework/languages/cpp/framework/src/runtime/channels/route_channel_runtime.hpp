@@ -160,9 +160,6 @@ class route_channel_runtime_t
                                     std::string target_spot_id,
                                     runtime::messaging::message_parts_t parts,
                                     std::chrono::steady_clock::time_point deadline);
-    static task_t<void> wait_until_ready (std::shared_ptr<state_t> state,
-                                          std::optional<zlink::routing_id_t> target,
-                                          std::chrono::steady_clock::time_point deadline);
     static std::optional<result_t<void>>
     ready_unlocked (const state_t &state,
                     const std::optional<zlink::routing_id_t> &target,

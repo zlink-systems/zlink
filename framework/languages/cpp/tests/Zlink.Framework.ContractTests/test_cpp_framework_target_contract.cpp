@@ -177,6 +177,8 @@ int main ()
       read_text_file (root / "framework/src/runtime/diagnostics/diagnostic_event_sink.hpp");
     const auto dispatch_error_reporter =
       read_text_file (root / "framework/src/runtime/diagnostics/dispatch_error_reporter.hpp");
+    const auto process_telemetry_delivery =
+      read_text_file (root / "framework/src/runtime/diagnostics/process_telemetry_delivery.cpp");
     const auto channel_reply_writer =
       read_text_file (root / "framework/src/runtime/channels/channel_reply_writer.cpp");
     const auto location_auto_connect = read_text_file (
@@ -1129,11 +1131,13 @@ int main ()
      * absence of an application logger never falls back to a process console. */
     gate.require (
       message_flow_tracer.find ("sample_current (") != std::string::npos
-        && message_flow_tracer.find ("add (dispatch_event_field::event_id, \"zlink.message_flow\")")
+        && process_telemetry_delivery.find (
+             "add (dispatch_event_field::event_id, \"zlink.message_flow\")")
              != std::string::npos
-        && dispatch_error_reporter.find (
+        && process_telemetry_delivery.find (
              "add (dispatch_event_field::event_id, \"zlink.dispatch_error\")")
              != std::string::npos
+        && dispatch_error_reporter.find ("report_lazy") != std::string::npos
         && message_flow_unit.find ("built.load (std::memory_order_relaxed) != 0")
              != std::string::npos
         && message_flow_unit.find ("report_lazy") != std::string::npos

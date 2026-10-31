@@ -19,7 +19,8 @@ class owner_lease_time_store_t final : public location_store_t
     {
         expired,
         live,
-        missing_expiry
+        missing_expiry,
+        clock_advanced
     };
 
     owner_lease_time_store_t (runtime::in_memory_location_store_t &inner,
@@ -49,7 +50,9 @@ class owner_lease_time_store_t final : public location_store_t
         auto result = co_await _inner->read (std::move (key));
         if (inject_owner_time) {
             if (auto *found = std::get_if<store_found_t> (&result)) {
-                if (_lease_view == lease_view_t::missing_expiry)
+                if (_lease_view == lease_view_t::clock_advanced)
+                    found->value.store_now += _store_clock_advance;
+                else if (_lease_view == lease_view_t::missing_expiry)
                     found->value.expires_at.reset ();
                 else
                     found->value.expires_at =
@@ -91,6 +94,11 @@ class owner_lease_time_store_t final : public location_store_t
         return _owner_read_in_expected_order;
     }
 
+    void advance_store_clock (std::chrono::system_clock::duration elapsed)
+    {
+        _store_clock_advance += elapsed;
+    }
+
   private:
     runtime::in_memory_location_store_t *_inner;
     std::string _owner_key;
@@ -101,6 +109,7 @@ class owner_lease_time_store_t final : public location_store_t
     unsigned _authority_reads_before_owner = 0;
     unsigned _watched_authority_reads = 0;
     bool _owner_read_in_expected_order = false;
+    std::chrono::system_clock::duration _store_clock_advance{};
 };
 
 } // namespace zlink::framework::tests

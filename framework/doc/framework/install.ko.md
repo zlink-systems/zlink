@@ -125,6 +125,9 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
     | `zlink-stream-connector` | 서버가 STREAM client도 될 때 |
     | `zlink-framework-testkit` | 테스트에서 runtime을 띄울 때 |
 
+    Message-flow 기록은 SLF4J provider로 전달된다. JUL로 보려면
+    `slf4j-jdk14` 등의 SLF4J→JUL binding을 구성한다.
+
     전부 `systems.zlink` group이다. 런타임은 JDK 25 이상이 필요하며, 첫 실행까지의 절차는
     [퀵스타트](java/quickstart.ko.md)가 다룬다.
 

@@ -9,13 +9,17 @@ import { zlink } from './node-backend-adapter-support';
 export class ZLinkNodeEventLoopPoller {
   private readonly poller = zlink.createPoller();
   private readonly events = zlink.createPollEvents(1);
-  private readableHandler: (receiveReady: boolean, routeReady: boolean) => void;
+  private readableHandler: (
+    receiveReady: boolean,
+    routeReady: boolean,
+    connectReady: boolean
+  ) => void;
   private disposed = false;
 
   constructor(
     socket: Socket,
     pollCompletion: boolean,
-    readableHandler: (receiveReady: boolean, routeReady: boolean) => void,
+    readableHandler: (receiveReady: boolean, routeReady: boolean, connectReady: boolean) => void,
     pollRoute = false
   ) {
     this.readableHandler = readableHandler;
@@ -24,7 +28,8 @@ export class ZLinkNodeEventLoopPoller {
       if (pollCompletion) pollEvents.push(zlink.PollEventFlag.PollCompletion);
       // A ROUTER selected-route change (Core ROUTER §10.1) wakes the same
       // handler, whose owner is the socket's one route observer.
-      if (pollRoute) pollEvents.push(zlink.PollEventFlag.PollRoute);
+      if (pollRoute)
+        pollEvents.push(zlink.PollEventFlag.PollRoute, zlink.PollEventFlag.PollConnect);
       this.poller.add(socket as BaseSocket, pollEvents, 0);
       socket.setReadableHandler(this.onReady);
     } catch (error) {
@@ -34,7 +39,9 @@ export class ZLinkNodeEventLoopPoller {
     }
   }
 
-  setReadableHandler(handler: (receiveReady: boolean, routeReady: boolean) => void): void {
+  setReadableHandler(
+    handler: (receiveReady: boolean, routeReady: boolean, connectReady: boolean) => void
+  ): void {
     this.readableHandler = handler;
   }
 
@@ -50,6 +57,8 @@ export class ZLinkNodeEventLoopPoller {
     const ready = this.poller.wait(this.events, 0);
     const receiveReady = ready === 0 || this.events.hasEvent(0, zlink.PollEventFlag.PollIn);
     const routeReady = ready > 0 && this.events.hasEvent(0, zlink.PollEventFlag.PollRoute);
-    if (receiveReady || routeReady) this.readableHandler(receiveReady, routeReady);
+    const connectReady = ready > 0 && this.events.hasEvent(0, zlink.PollEventFlag.PollConnect);
+    if (receiveReady || routeReady || connectReady)
+      this.readableHandler(receiveReady, routeReady, connectReady);
   };
 }

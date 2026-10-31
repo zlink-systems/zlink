@@ -1,18 +1,18 @@
 {
   "perf/server-support/src/test/java/systems/zlink/framework/perf/SendSendCorrelationTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 request 완료 이후 공개 결과와 참조 수명으로 보존 여부를 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: correlation Entry가 정확한 request 객체를 보유하고 close 후 참조를 null로 해제하는지 측정한다.",
     "accesses": {
       "371e1a0e94a2c99a264379889918da7cf06d2d161c556ea8e070db3518fac4f6": 1
     }
   },
   "samples/java/ZoneWorld/Server/src/test/java/systems/zlink/samples/zoneworld/server/zone/spots/ZoneSpotResidentIdentityTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 공개 join·leave callback에서 resident actor 객체 identity를 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: resident registry의 incarnation 객체 동일성과 늦은 이전 incarnation callback의 조건부 삭제를 직접 검사한다.",
     "accesses": {
       "99c05ae8a0ec29944066164a8d8f26804a0fdd4acd8af0639588d493f344c2c9": 1
     }
   },
   "samples/kotlin/ZoneWorld/Server/src/test/java/systems/zlink/samples/kotlin/zoneworld/server/zone/ZoneSpotResidentIdentityTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 공개 join·leave callback에서 resident actor 객체 identity를 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: resident registry의 incarnation 객체 동일성과 늦은 이전 incarnation callback의 조건부 삭제를 직접 검사한다.",
     "accesses": {
       "99c05ae8a0ec29944066164a8d8f26804a0fdd4acd8af0639588d493f344c2c9": 1
     }
@@ -37,7 +37,6 @@
   "zlink-framework-core/src/integrationTest/java/systems/zlink/framework/runtime/RuntimeTestSupport.java": {
     "reason": "공개 동작 관찰로 바꾸려면 기존 backend provider 주입과 공개 startup·shutdown·relocation 흐름으로 실패 경계를 고정하는 통합 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "0086a3c67fd11d469e8adae39952fc38b591c10786db1a8d8d58531123aa8d42": 1,
       "d82dc6f4384ac15e26924a34e9856173ffac312b679c5033270641c9324a24e4": 1
     }
   },
@@ -59,17 +58,16 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/execution/ZLinkActorDurablePrefixPermitTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 기존 queue·worker 협력자로 permit 수락·relocation barrier·완료 순서와 객체 수명을 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: Entry 공개 직전 durable ownership의 detach 상태와 분리된 claim의 hold·settlement 경쟁 순서를 검사한다.",
     "accesses": {
       "006f7996a0bdd8f2b37b7b43c578984fe7eddef1ccc2680265aa0ac302d59259": 1,
       "13f62cc9ec9e20bdaccd9b9fcf22e205ba2287bcaad3e2bd691d0d38265e994b": 1,
       "6739f67d4fd8ec84441e62746e72fa74946647c6df4e7d533e5e3b6574a7ce24": 1,
-      "95fcb79c24fdf7ed293b88f280afa53ac48a03fe60233611bb65a21dfb228daa": 1,
       "bba63265c9724ccba41c5a7d80f92c94960ab4d36e1ab90bb2f34dddc3bdc390": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/execution/ZLinkCompositeRelocationBarrierTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 기존 queue·worker 협력자로 permit 수락·relocation barrier·완료 순서와 객체 수명을 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: 내부 pending transition을 강제로 설치하여 abort 대기와 transition 정리 전 completion 노출을 검사한다. 미확인: transition null 조회를 기존 읽기 전용 관찰 경로로 이전하는 방법.",
     "accesses": {
       "a2069359db709c5740805ee769b441e63e847e81f1bc1fae248873167037c566": 2
     }
@@ -87,37 +85,28 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/StoredInstanceActivationTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 생성 시 주입한 저장소·scheduler·완료 callback으로 기존 내부 상태 단언과 같은 실패를 검출하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "01c6ed1a4bf5c32b07226488d05a5b3d2ccb0f3551bc3bd58e281ee0ba64941d": 1,
-      "f9e52dde686f49db626fdabc96ff71894bedf4fee7fc35f4c29169a45ebb506c": 1
+      "01c6ed1a4bf5c32b07226488d05a5b3d2ccb0f3551bc3bd58e281ee0ba64941d": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/ZLinkSessionRelocationSealTimeoutWiringTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 생성 시 주입한 저장소·scheduler·완료 callback으로 기존 내부 상태 단언과 같은 실패를 검출하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "b67d1bd7067fb8c6035c8d4871072051a37976e041bd6228c12a28f437becfee": 1,
-      "ec863211476dc1f398e9f89e0153705e53dfea3655f9b620e05b9a47e7dd96f4": 1
+      "b67d1bd7067fb8c6035c8d4871072051a37976e041bd6228c12a28f437becfee": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkActorDispatchSerialsTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 target claim 호출로 미사용 queue 생성을 검출하고 기존 package closeAsync 계약을 직접 호출하는 시험 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "816ff04704aa7d5f6f0658132aaa85c685612724d086a8800f0adbdd9fe8e8f8": 1,
-      "de1eb6236302117dedf52432820d547e72592712e6297a12398feaeeb830c811": 1
+      "816ff04704aa7d5f6f0658132aaa85c685612724d086a8800f0adbdd9fe8e8f8": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkActorPopulationMetricTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 공개 Actor 생성·bind·Join·relocation 결과와 기존 backend 협력자로 identity 및 수명 경계를 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: public setter가 거부하는 meshName=null 상태에서도 captured mesh에 Actor population metric을 귀속하는지 검사한다.",
     "accesses": {
       "1774d337e4c6e70923886fc63ff270ebf4e9a65888844d55867292ec9e300f05": 1,
       "20090b47551744aa38b6080b6776b0d19dfd28374c597f5db31ba1fc734a1b54": 1,
       "92d8ac680a62a3b256c8591ad6fe5a5d5df86863c32871f729473c16ed407533": 1,
       "c3f3f4ffc84ea44d1cbe3b2bf588d07c062a6bf48f91b7ece8200eccdc6fb576": 1
-    }
-  },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkActorRelocationStagingTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 공개 Actor 생성·bind·Join·relocation 결과와 기존 backend 협력자로 identity 및 수명 경계를 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "cd97a7e1b9faaf6409685e365a1d50d0600b433ecc4273b945d42e402cc9c662": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkSameNodeJoinCommitTest.java": {
@@ -127,7 +116,7 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkSessionActorBindingContractTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 공개 Actor 생성·bind·Join·relocation 결과와 기존 backend 협력자로 identity 및 수명 경계를 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: slot counter 강제 고갈과 오염된 ingress gate generation이 기존 binding을 손상시키지 않는지 검사한다. 미확인: seal terminal identity 조회와 만료 직접 호출을 같은 경계의 clock fixture로 이전하는 방법.",
     "accesses": {
       "4b568f16727ef751642b6d70cb1801e0af39354f1623fc054f04b6327d17defd": 1,
       "832a47208d03e8960ecff6e43492c88404e03d80ccb9a9b94e25c8f4ae706c68": 1,
@@ -147,18 +136,10 @@
       "d9fd253d7b75e6397973ebb2b1ef0c1ee0fd63676418e2a6439910ff130ecbf4": 1
     }
   },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaMeshNodeIsolationTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "4b413e3045f086c8ad6bdb34c9509bd7cb99624dd24eadccf3f8f5ba19759a32": 1
-    }
-  },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeAdmissionSourceTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "7989c533fbebee4d15598a117bee2feb3fc2891d14bda9053d6f3945d50a0b33": 1,
-      "7aca22396bc2d30f248f1e0868b322368babfadb7a735668262d1a1dbe121cc2": 1,
-      "e6ddc3b65f6d6c8994d2a8ff688d6b4708f96c068399f2e1f27144701bbad891": 1
+      "7989c533fbebee4d15598a117bee2feb3fc2891d14bda9053d6f3945d50a0b33": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeDescriptorOrderTest.java": {
@@ -169,25 +150,16 @@
       "d20edd2471afff3fdd8ded2b3a59f6b7572cecee7585bd3efd1931bde868bb20": 1
     }
   },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeHeaderAccessTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 1,
-      "fdf4a2f5556b8511c2fc4f42fb1334588540d17a974a1870cdb0d5224ea75b9e": 1
-    }
-  },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeHelloRetryTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
       "742b58790041bad1dc68efa296764d6d5d7d5701136cc489a3ec9ff92df5fa94": 1,
-      "ddd4b45e7b5eae4bea9001cb8229b01b56ba4d30a8c41d8bf24dd5cb891aa1d2": 1,
       "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 2
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeInfrastructureProgressTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: permit 고갈 때 drainIngressBatch(null)가 native receive에 진입하지 않는지 검사한다. 미확인: backpressure에 걸린 동일 liveness completion을 public ingress로 보류·관찰하는 fixture.",
     "accesses": {
-      "1f99cefdfd6261225ffac1923fc7f8a15d80f459cb5c656240bfe6e1e23f3318": 1,
       "4b5ca86be76aebc8d3733a8f1734f9eb7f06000554fbd0ece5d2f01405d1072d": 1,
       "5da108f730fefc70a4125d422a02e752e98cd7ff250bd158ca6efe2df0b332a3": 1,
       "7067b29f22db207ebf65ad814bbcc62afe1219f4c06d7bc7df15d88ad960b20a": 1,
@@ -198,15 +170,12 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeIngressAdmissionTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "84e00ccc2de89e033cf9bf84345c4a44747680f107cd28c74f64248185a59f82": 1,
-      "8ded5991f32d0a8152c8be12f8015a9a1dbe945dc61575e761df2a1ccabb4b92": 2,
-      "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 2
+      "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeLivenessCloseTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "1f99cefdfd6261225ffac1923fc7f8a15d80f459cb5c656240bfe6e1e23f3318": 1,
       "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 2
     }
   },
@@ -215,7 +184,6 @@
     "accesses": {
       "4c57fc5f875a131e9ea87b7636cc70bd127907bc91ac365ecee9cf395f370660": 1,
       "590bdb1c224d9df8b4f4cf61c89ca9e4da6cdc8a66891d3bd209d29cadcbc1d6": 1,
-      "5c104b02f79bd1dfdcde05002b724dfb31bc0626bd2c129fd92ea224583135c2": 1,
       "dcc0166f8f81eccb1068d31fd3c8e2bd87d0d2f676d9b524456f3cb7e7fb16ab": 1
     }
   },
@@ -226,7 +194,7 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodePumpTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: receive rotation executor 재제출 횟수와 pending permit grant의 실행 위치를 측정한다.",
     "accesses": {
       "6593742c1b3a7163b5c6608754f2f508ce8d0db33fa38373f6abd945b26e7cdb": 1,
       "dfef80c78f2bac9c85558a56ebac0463cf150a2c198e27573ddfbf6ea4afb99d": 1
@@ -235,14 +203,7 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeRouteEndTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "0af9c167c85c6013bb432fe0f72dd4c92b555eddc2a2c57182b7878d5d5380ce": 2,
-      "84e00ccc2de89e033cf9bf84345c4a44747680f107cd28c74f64248185a59f82": 1
-    }
-  },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeSelectedRouteTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 실제 HELLO/admission·descriptor 갱신·liveness를 제어하는 backend 수신 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 1
+      "0af9c167c85c6013bb432fe0f72dd4c92b555eddc2a2c57182b7878d5d5380ce": 2
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawMeshNodeShutdownSealTest.java": {
@@ -261,22 +222,15 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePortContractTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: socket ownership map의 역순 key와 중복 List 저장소 부재를 검사한다. 미확인: receiveFlowRegistration 교체의 동일한 close barrier·재진입 fixture는 공개 경로로 보존하지 못했다.",
     "accesses": {
-      "924b4821674e9f951c25814618da0ce85100434fc76572f5ab707909722b9b1e": 1,
-      "fb60bc3138eadf2eaaa65ec9502a486cc3d8d4afff736b99b9f015cb2d804dca": 1
+      "924b4821674e9f951c25814618da0ce85100434fc76572f5ab707909722b9b1e": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNodeBoundSessionAdmissionOwnershipTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
       "7906c66e00186ac139d07d124091239fe9fe29740ce768c8fbbcc926ae0127b4": 1
-    }
-  },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNodeM6BTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "5c104b02f79bd1dfdcde05002b724dfb31bc0626bd2c129fd92ea224583135c2": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawSpotNodeReplyLifetimeTest.java": {
@@ -300,12 +254,6 @@
       "c3801a737e4484e1999e6a48cf50a35d4f08c669f4643d9d65fd1da4389a64de": 1
     }
   },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaSourceTransportOwnerTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "33894f48e07f7358b8db984cd4672ec9177f701db7b866886719ef5254cd5907": 1
-    }
-  },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaStreamMonitorProgressTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
@@ -314,7 +262,7 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaStreamSocketAsyncTerminalTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: idle receive·submit의 state owner post 0회를 측정한다. 미확인: monitor 오류·callback thread 경계의 정상 ingress fixture는 확인하지 못했다.",
     "accesses": {
       "147bddbdac666e2a5116b27eb10c83d3ff70fd9b1186c41b2048318f4ba67d48": 2,
       "8bcfec60c91977242ba3a3b1bd79c04bd0f8005277d43db43ffbc502b4194432": 2,
@@ -322,19 +270,10 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkJavaSubmissionTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: standalone send owner 생성 시 deadline maintenance가 시작되지 않는지 검사한다. 미확인: standalone socket pending 수와 최초 terminal 보존을 공개 결과만으로 모두 관찰하는 경로는 확인하지 못했다.",
     "accesses": {
-      "62d3491a93c9fa8f2b0eb231239b3e77105c1753c068ce476f2fb28a5d82eca8": 1,
-      "a4ba7f5a13d4caa41b635bc79a7355a60d151c6d1a0a4329629c83dc0f4c5623": 1,
-      "b0f65dc0c876e9d931741a93cbe689fd4d0dd789c9beb6855ff2fc19a98d6586": 1,
       "ee3796ebe62e27493663704320a8d86f8fc0b6e36f60914b00870a0ed7fb2dc4": 1,
       "f1dd979437ba45ebbcda3ca0f747af1f47ebe9f173aa472e61353554585396f0": 2
-    }
-  },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkRelocationRawSessionFixture.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 monitor·비동기 제출 완료·transport 종료 실패를 생성 시 주입하고 공개 backend 결과로 확인하는 fixture와 감독자 socket 검증가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "0af9c167c85c6013bb432fe0f72dd4c92b555eddc2a2c57182b7878d5d5380ce": 2
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/channels/ZLinkChannelRuntimeTest.java": {
@@ -367,7 +306,7 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/channels/ZLinkHandlerPreparationTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 handler 준비 결과와 서비스 조회 횟수를 공개 활성화 경로에서 세는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: dispatch construction에서 catalog service key의 hash 호출 0회를 측정한다.",
     "accesses": {
       "e9107d3c5e52282601ccfeceaf7baf04b8fab7964321032113ead6fec9d8cfa0": 1
     }
@@ -383,7 +322,6 @@
     "accesses": {
       "29c6282f02248e7e72432f312889b9dbfeebb6d4c0af23038c3992206b14c6f1": 1,
       "40464960c8f222d9b10edf8df348a5ce42656494cf72c8756f2393ddbe84e943": 1,
-      "4b061a0ae8866494b9e4da2e879f6ba872624f4dd5604a50ea45463adc24a25a": 1,
       "4dcc176bea2de82f3fe3b77ce5e93afb0beb45e52d4efb61e0b36cd8232cf3cf": 1
     }
   },
@@ -435,16 +373,9 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/internal/ZLinkCompletionBridgeTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 생성 시 주입한 저장소·scheduler·완료 callback으로 기존 내부 상태 단언과 같은 실패를 검출하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: hidden lambda capture graph에서 호출별 closure 할당 수를 측정한다.",
     "accesses": {
       "c1a05bc4028b4a2e9b7aab19d90890e885e9f723314a8b724e8fb85b421c8b2a": 1
-    }
-  },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/internal/execution/ZLinkStateLaneTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 기존 queue·worker 협력자로 permit 수락·relocation barrier·완료 순서와 객체 수명을 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "9dacc14a4173623ca8c7b6266c461e9b24c6b707851efb79d15e3af15f3b714a": 1,
-      "b73bf527dd42beaa690dfd05edd1c1acc754800b1985292785ec20f26564bcd1": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/internal/monitoring/ZLinkStatusPublisherTest.java": {
@@ -455,15 +386,9 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceOperationRegistryTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 공개 등록·완료·해제로 slot 재사용과 예외 객체 수명까지 구분하는 할당 관찰 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: 성공 request의 pending entry가 Throwable을 선할당하지 않는지 측정한다.",
     "accesses": {
       "4d784ae46bbda5a6e0134ee616206bfd2349694d3389ba4c11ea3438f88986cd": 1
-    }
-  },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/locations/ZLinkAutoConnectLoopTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 생성 시 주입한 저장소·scheduler·완료 callback으로 기존 내부 상태 단언과 같은 실패를 검출하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "f6704b5293e1141cf9e0543e2dca75cf7b1b95ea969de7985c30b1a0f7bacca0": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/locations/ZLinkCapacityMetricPollingTest.java": {
@@ -514,18 +439,10 @@
     "accesses": {
       "138597c5613a6eeefbce740b51ae9ccf204fbc9c7889e33429b580fab441fd17": 1,
       "2b80d6e51bb777712061cef59507dc0c1b8a19729a3e2656c9a003acb76dcfb1": 1,
-      "3ab4de9f28d8398094b0ba46527d3058ec50d30192851bf2930703a86141ade7": 1,
       "4e1f42fb89ae385a4b8f2d4815a32985febfd21355fbadfb1ffaebbbd4e176bc": 1,
       "88e529b760365fcf5928848f7cfdde69169bd79e67f61b96227181ff2cec6ef7": 1,
       "939c0fd16e9000a3eeabd6718a376269e83fb46a4333f676cc93212daeab4183": 1,
-      "ba1225118c127b552a96d300b5d3c1c74202ea1f78dc9e007a9410486360e7e6": 1,
-      "c717c32c0a003d24448806b8a08c2480144bc88b9cd33fd472279d2644f1bbb1": 1
-    }
-  },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkCanonicalRelocationReadySubmissionTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 공개 Spot 생성·Join·relocation·종료 흐름과 기존 backend 주입으로 activation 및 수락 경계를 준비하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "fde5fb7e2900116d40e56eb908ce45733f7d7ee756fef10c2dcd91f7105d04ef": 1
+      "ba1225118c127b552a96d300b5d3c1c74202ea1f78dc9e007a9410486360e7e6": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkCanonicalRelocationSettlementTest.java": {
@@ -540,7 +457,6 @@
     "accesses": {
       "0428b331cd080312e684d6bc61b5318f9fdd9c8c25fbd106f01d9f5c5cfe2b66": 1,
       "1f05871791e6ddc7bac34154bd43b71aaca95b7d79925fd73803738a9a82d8f4": 1,
-      "7962bf701bae592127769684ac84e45b3e8a25ad5191f9675bc332ec9520f9d4": 1,
       "c7bef1b8a939d1b3e19ca97326b7a6e97f6add0d671b39e7d40e5905218491e8": 2,
       "cb54954468607ebc0a95ba27afff5b18f2bd9e30070ef07051482edc1d6b90bb": 1
     }
@@ -589,13 +505,6 @@
       "7271639c976e434f18e5f5436418ea45ef1016772ddfaec98c2e76e0e9083a1a": 1
     }
   },
-  "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkLocalRequestAdmissionDeadlineTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 공개 Spot 생성·Join·relocation·종료 흐름과 기존 backend 주입으로 activation 및 수락 경계를 준비하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "516383b0f6108b4c63e2d89ac7a650249cbafd68addf0ba9553fa29357bcc8d9": 1,
-      "ad965e27ceefddf5b7f62bee19092337cad7674d7212fc153428bbadf37908aa": 1
-    }
-  },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkRelocatedTimerLifecycleTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 공개 Spot 생성·Join·relocation·종료 흐름과 기존 backend 주입으로 activation 및 수락 경계를 준비하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
@@ -610,7 +519,7 @@
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkSpotCloseCoordinatorTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 공개 Spot 생성·Join·relocation·종료 흐름과 기존 backend 주입으로 activation 및 수락 경계를 준비하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: 미완료 Close commit·step에 성공 terminal을 강제로 넣을 때 drain assertion의 거부를 검사한다.",
     "accesses": {
       "37a0f2a2e52efbd14e738e73de1b0d6bf5fa40f7f545a39d6ca65e1340046775": 1
     }
@@ -651,15 +560,13 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkStandaloneActorRelocationSourceBuilderTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 공개 Spot 생성·Join·relocation·종료 흐름과 기존 backend 주입으로 activation 및 수락 경계를 준비하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 1,
-      "f4b107867ebfffbad023eadba84c996065540d967eff5f0e73c96f3e99f6b6ac": 1
+      "f330286a2791a2beab2836025f5b60dde364e8aa8f900f035ffc29ddcc25b275": 1
     }
   },
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkStandaloneActorRelocationStagingOwnerTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 공개 Spot 생성·Join·relocation·종료 흐름과 기존 backend 주입으로 activation 및 수락 경계를 준비하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
       "2ab9cbb74899933c3f6ff6deadabae53e15015204bf336698ed5ae83249251a3": 1,
-      "5a2c12e1d3f1f2fe6d65a86fb1630bb82f4293dbd910714a31cab290f626cfd0": 1,
       "76a3634bf4a855460948e1f53c60130ff29da72d015720b1d004b4046a80b132": 1,
       "ddab10de04e35037810a96b0e1a9e88febbee042f0c82e3065183cd23e8e58f1": 1
     }
@@ -667,7 +574,6 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkUserSpotAggregateStagingOwnerTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 공개 Spot 생성·Join·relocation·종료 흐름과 기존 backend 주입으로 activation 및 수락 경계를 준비하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "5a2c12e1d3f1f2fe6d65a86fb1630bb82f4293dbd910714a31cab290f626cfd0": 1,
       "6df94ee610bf68f13bd5ab00e9556ecbf509bed633c7e1344bf6a74a5c4d10bf": 1
     }
   },
@@ -682,11 +588,9 @@
   "zlink-framework-core/src/test/java/systems/zlink/framework/runtime/streams/ZLinkStreamRuntimeIngressTest.java": {
     "reason": "공개 동작 관찰로 바꾸려면 공개 backend receive·Session 생성·종료 callback으로 내부 session 보존과 control 처리를 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
     "accesses": {
-      "1fc422ed49f8ffd718ebc3c622f345f55742c4974712c9a555b6c322e89f9d14": 1,
       "26636e097dae5e9797ed802ab5c5443af7b3ae85abf43c446fc325fe8385c5cb": 1,
       "6bae03d3ded0e6d9f89f32cb040ed19a43bca05c3041145d04a49d690dfb2f79": 1,
-      "92a6341da380f075a2519bf72f6eaab45daf8e30c370cc0608c0915ed64cb554": 1,
-      "b476ef50057759f577699cfa2be4a4eb8aa60b478003d08ace0aba58f094e23c": 1
+      "92a6341da380f075a2519bf72f6eaab45daf8e30c370cc0608c0915ed64cb554": 1
     }
   },
   "zlink-framework-locations-redis/src/test/java/systems/zlink/framework/locations/redis/ZLinkRedisLocationConnectionTest.java": {
@@ -716,15 +620,9 @@
     }
   },
   "zlink-stream-connector/src/test/java/systems/zlink/stream/connector/DefaultZLinkStreamConnectorTraceTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 transport·scheduler의 생성 시 주입과 공개 연결·write·close 결과로 순서 및 sequence 소진을 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
+    "reason": "의도된 내부 시험: trace 비활성 상태에서 traceWrite의 completion callback 등록 수가 0인지 측정한다.",
     "accesses": {
       "f49bc943351d0c08b317abd1d9bdbd5748c5a97af9e299ca1c04184b522ac2ad": 1
-    }
-  },
-  "zlink-stream-connector/src/test/java/systems/zlink/stream/connector/ZLinkStreamActorRegistryTest.java": {
-    "reason": "공개 동작 관찰로 바꾸려면 transport·scheduler의 생성 시 주입과 공개 연결·write·close 결과로 순서 및 sequence 소진을 확인하는 fixture가 필요하다. 후속 작업은 #2309에서 이어서 처리한다.",
-    "accesses": {
-      "27745a86303bdfbde2777b8b71df5a87e4b5802b13c9f5a6cd8b82b19f96c056": 1
     }
   },
   "zlink-stream-connector/src/test/java/systems/zlink/stream/connector/ZLinkStreamConnectorTest.java": {

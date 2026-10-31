@@ -584,7 +584,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                 var reclaim = await TryReclaimStaleAuthorityAsync(
                         current,
                         cancellationToken,
-                        request,
+                        request.Key,
+                        request.ObjectRelocationPolicy,
                         noteTakeover
                     )
                     .ConfigureAwait(false);
@@ -722,12 +723,13 @@ internal sealed partial class ZLinkProviderLocationRepository
     private async ValueTask<StaleAuthorityReclaimResult> TryReclaimStaleAuthorityAsync(
         StoredAuthority current,
         CancellationToken cancellationToken,
-        ZLinkObjectReservationRequest? request = null,
+        ZLinkAuthorityKey? creationKey = null,
+        byte? creationRelocationPolicy = null,
         Action? noteTakeover = null
     )
     {
         var active = current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active;
-        if (active && request is null)
+        if (active && creationKey is null)
             return StaleAuthorityReclaimResult.NotReclaimable;
 
         // Relocation authority retains its own recovery protocol.
@@ -755,11 +757,11 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             if (ownerLive)
                 return StaleAuthorityReclaimResult.OwnerLive;
-            if (request?.ObjectRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
+            if (creationRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                    && ZLinkAuthorityKeyCodec.TryDecodeSpot(request!.Key, out var unavailableSpotId)
+                    && ZLinkAuthorityKeyCodec.TryDecodeSpot(current.Key, out var unavailableSpotId)
                         ? $"User Spot '{unavailableSpotId}' owner lease is not live."
                         : "Object owner lease is unavailable.",
                     ZLinkRetryAdvice.RetryAfterStateChange
@@ -1009,14 +1011,27 @@ internal sealed partial class ZLinkProviderLocationRepository
     public async ValueTask<bool> ReleaseEndedReservationAsync(
         ZLinkAuthorityKey key,
         string expectedStoreVersion,
+        ZLinkCreationAuthorityRecovery? creationRecovery = null,
         CancellationToken cancellationToken = default
     )
     {
-        var current = await ReadAuthorityRecordAsync(key, cancellationToken).ConfigureAwait(false);
-        if (current is null || current.Snapshot.StoreVersion != expectedStoreVersion)
-            return false;
-        return await TryReclaimStaleAuthorityAsync(current, cancellationToken).ConfigureAwait(false)
-            == StaleAuthorityReclaimResult.Reclaimed;
+        for (; ; )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var current = await ReadAuthorityRecordAsync(key, cancellationToken)
+                .ConfigureAwait(false);
+            if (current is null || current.Snapshot.StoreVersion != expectedStoreVersion)
+                return false;
+            var result = await TryReclaimStaleAuthorityAsync(
+                    current,
+                    cancellationToken,
+                    creationRecovery is null ? null : key,
+                    creationRecovery?.RelocationPolicy
+                )
+                .ConfigureAwait(false);
+            if (result != StaleAuthorityReclaimResult.Conflict)
+                return result == StaleAuthorityReclaimResult.Reclaimed;
+        }
     }
 
     public ValueTask<ZLinkObjectCommitResult> CommitAsync(

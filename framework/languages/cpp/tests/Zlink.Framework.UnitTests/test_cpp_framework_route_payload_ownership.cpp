@@ -18,25 +18,159 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "../support/allocation_counter.hpp"
+#include "../support/telemetry_observation.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/scope_exit.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 
 #include <array>
 #include <chrono>
+#include <coroutine>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iostream>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <sstream>
 #include <thread>
 #include <tuple>
+#include <utility>
 
 namespace
 {
 using namespace zlink::framework;
+
+struct task_registration_probe_t
+{
+    struct promise_type
+    {
+        explicit promise_type (std::atomic_bool &resumed) : resumed (resumed) {}
+
+        task_registration_probe_t get_return_object ()
+        {
+            return task_registration_probe_t{
+              std::coroutine_handle<promise_type>::from_promise (*this)};
+        }
+        std::suspend_always initial_suspend () noexcept { return {}; }
+        std::suspend_always final_suspend () noexcept { return {}; }
+        void return_void () noexcept { resumed.store (true, std::memory_order_release); }
+        void unhandled_exception () noexcept { std::terminate (); }
+
+        std::atomic_bool &resumed;
+    };
+
+    using handle_t = std::coroutine_handle<promise_type>;
+
+    explicit task_registration_probe_t (handle_t value) : handle (value) {}
+    task_registration_probe_t (task_registration_probe_t &&other) noexcept : handle (other.handle)
+    {
+        other.handle = {};
+    }
+    task_registration_probe_t (const task_registration_probe_t &) = delete;
+    task_registration_probe_t &operator= (const task_registration_probe_t &) = delete;
+    task_registration_probe_t &operator= (task_registration_probe_t &&) = delete;
+    ~task_registration_probe_t ()
+    {
+        if (handle)
+            handle.destroy ();
+    }
+
+    handle_t handle;
+};
+
+task_registration_probe_t task_registration_probe (std::atomic_bool &resumed)
+{
+    co_return;
+}
+
+task_t<void> eager_registration_child (bool &child_started)
+{
+    child_started = true;
+    co_return;
+}
+
+task_t<void> eager_registration_parent (bool &parent_started, bool &child_started)
+{
+    parent_started = true;
+    co_await eager_registration_child (child_started);
+}
+
+template <typename TState>
+std::shared_ptr<detail::task_wait_registration_t>
+make_continuation_registration (TState &state, std::coroutine_handle<> continuation)
+{
+    detail::task_scheduler_t scheduler = [] (std::function<void ()> &&work) { work (); };
+    if constexpr (requires (TState &candidate, std::coroutine_handle<> handle,
+                            detail::task_scheduler_t resume) {
+                      candidate.set_continuation (handle, std::move (resume));
+                  }) {
+        return std::make_shared<detail::task_wait_registration_t> (continuation,
+                                                                   std::move (scheduler));
+    } else {
+        return std::make_shared<detail::task_wait_registration_t> ();
+    }
+}
+
+template <typename TTask>
+inline constexpr bool has_task_promise_registration_v =
+  requires (typename TTask::promise_type &promise) { promise.continuation_registration (); };
+
+template <typename TState, typename TRegistration>
+std::size_t
+measure_continuation_link_allocations (TState &state,
+                                       const std::shared_ptr<TRegistration> &registration,
+                                       std::coroutine_handle<> continuation)
+{
+    detail::task_scheduler_t scheduler = [] (std::function<void ()> &&work) { work (); };
+    if constexpr (requires (TState &candidate, const std::shared_ptr<TRegistration> &prepared,
+                            std::coroutine_handle<> handle, detail::task_scheduler_t resume) {
+                      prepared->prepare (handle, resume);
+                      candidate.set_continuation (prepared);
+                  }) {
+        registration->prepare (continuation, std::move (scheduler));
+        return zlink::framework::tests::count_allocations (
+          [&] { state.set_continuation (registration); });
+    } else {
+        return zlink::framework::tests::count_allocations (
+          [&] { state.set_continuation (continuation, std::move (scheduler)); });
+    }
+}
+
+TEST (TaskContinuationRegistration, ReservesBeforeEagerStartAndLinksWithoutAllocation)
+{
+    bool parent_started = false;
+    bool child_started = false;
+
+    auto &allocations_before_failure = zlink::framework::tests::allocations_before_failure;
+    constexpr bool has_promise_registration = has_task_promise_registration_v<task_t<void>>;
+    allocations_before_failure = has_promise_registration ? 1 : 2;
+    bool allocation_failed = false;
+    try {
+        auto task = eager_registration_parent (parent_started, child_started);
+        (void) task;
+    }
+    catch (const std::bad_alloc &) {
+        allocation_failed = true;
+    }
+    const bool injected = !allocations_before_failure.has_value ();
+    allocations_before_failure.reset ();
+
+    EXPECT_TRUE (allocation_failed);
+    EXPECT_TRUE (injected);
+    EXPECT_FALSE (parent_started);
+    EXPECT_FALSE (child_started);
+
+    auto state = std::make_shared<detail::task_shared_state_t<void>> ();
+    std::atomic_bool resumed{false};
+    auto continuation = task_registration_probe (resumed);
+    auto registration = make_continuation_registration (*state, continuation.handle);
+    EXPECT_EQ (0u,
+               measure_continuation_link_allocations (*state, registration, continuation.handle));
+    EXPECT_TRUE (state->complete (result_t<void>::success ()));
+    EXPECT_TRUE (resumed.load (std::memory_order_acquire));
+}
 
 struct suspended_route_state_t
 {
@@ -767,18 +901,6 @@ TEST (RoutePayloadOwnership, TypedSendRetainsPayloadWhenSerializerDestroysTheCal
     EXPECT_FALSE (delivered);
 }
 
-// Size of the one allocation that `make` performs: a task's shared state.
-template <typename TMake> std::size_t single_allocation_size (TMake make)
-{
-    std::array<tests::allocation_event_t, 8> events{};
-    tests::allocation_event_log_t log{events.data (), events.size ()};
-    tests::allocation_event_log = &log;
-    const auto count = tests::count_allocations (make);
-    tests::allocation_event_log = nullptr;
-    EXPECT_EQ (1u, count);
-    return count == 1 ? events[0].size : 0;
-}
-
 struct route_send_fixture_t
 {
     serializer_registry_t serializers;
@@ -805,21 +927,25 @@ struct route_send_fixture_t
 // The transport boundary is the only coroutine between the call and the transport task.
 TEST (RoutePayloadOwnership, NodeSendCreatesOneTaskAboveTheTransport)
 {
-    const auto public_state =
-      single_allocation_size ([] { task_t<void> ready (result_t<void>::success ()); });
-    const auto transport_state = single_allocation_size ([] {
-        task_t<result_t<void>> ready (
-          result_t<result_t<void>>::success (result_t<void>::success ()));
-    });
-    ASSERT_NE (0u, public_state);
-    ASSERT_NE (0u, transport_state);
-    ASSERT_NE (public_state, transport_state);
     int delivered = 0;
+    std::size_t before_transport = 0;
+    std::size_t codec_buffers = 0;
+    std::size_t transport_states = 0;
     route_send_fixture_t fixture (
-      [&] (const zlink::routing_id_t &, runtime::messaging::message_parts_t) {
+      [&] (const zlink::routing_id_t &, runtime::messaging::message_parts_t parts) {
           ++delivered;
-          return task_t<result_t<void>> (
-            result_t<result_t<void>>::success (result_t<void>::success ()));
+          const auto before = tests::tracked_allocation_count;
+          if (tests::tracking_allocations) {
+              before_transport = before;
+              const auto &log = *tests::allocation_event_log;
+              for (std::size_t index = 0; index < log.count; ++index)
+                  codec_buffers += log.events[index].memory == parts.items ().data () ? 1 : 0;
+          }
+          auto ready =
+            task_t<result_t<void>> (result_t<result_t<void>>::success (result_t<void>::success ()));
+          if (tests::tracking_allocations)
+              transport_states = tests::tracked_allocation_count - before;
+          return ready;
       });
     for (int warmup = 0; warmup < 4; ++warmup) {
         auto call = fixture.send ();
@@ -832,14 +958,15 @@ TEST (RoutePayloadOwnership, NodeSendCreatesOneTaskAboveTheTransport)
     const auto total = tests::count_allocations ([&] { call.async ().result ().value (); });
     tests::allocation_event_log = nullptr;
     ASSERT_FALSE (log.overflow);
-    std::size_t public_states = 0;
-    std::size_t transport_states = 0;
+    // A coroutine allocates its frame before constructing its promise. Before
+    // transport entry, the remaining allocations are the public state and the
+    // codec vector, identified by its buffer address rather than allocation size.
+    ASSERT_EQ (1u, codec_buffers);
+    ASSERT_GE (before_transport, 1u + codec_buffers);
+    const auto public_states = before_transport - 1 - codec_buffers;
     std::ostringstream sizes;
-    for (std::size_t index = 0; index < log.count; ++index) {
+    for (std::size_t index = 0; index < log.count; ++index)
         sizes << events[index].size << ' ';
-        public_states += events[index].size == public_state ? 1 : 0;
-        transport_states += events[index].size == transport_state ? 1 : 0;
-    }
     std::cout << "route-send allocations=" << total << " public-task-states=" << public_states
               << " result-task-states=" << transport_states << " sizes=" << sizes.str () << '\n';
     EXPECT_EQ (5, delivered);
@@ -847,6 +974,7 @@ TEST (RoutePayloadOwnership, NodeSendCreatesOneTaskAboveTheTransport)
     // between them adds a task state and a frame for every message.
     EXPECT_EQ (1u, public_states);
     EXPECT_EQ (1u, transport_states);
+    EXPECT_EQ (4u, total);
 }
 
 // Hot path E4: a deferred transport exception becomes internal_failure at the transport
@@ -931,18 +1059,26 @@ struct copy_counting_permit_t
 {
     int *copies;
     int *calls;
+    const route_boundary_handler_t *handler;
     std::array<std::byte, 1024> storage{};
 
-    copy_counting_permit_t (int &copy_count, int &call_count) :
-        copies (&copy_count), calls (&call_count)
+    copy_counting_permit_t (int &copy_count,
+                            int &call_count,
+                            const route_boundary_handler_t &owner) :
+        copies (&copy_count), calls (&call_count), handler (&owner)
     {
     }
     copy_counting_permit_t (const copy_counting_permit_t &other) :
-        copies (other.copies), calls (other.calls)
+        copies (other.copies), calls (other.calls), handler (other.handler)
     {
         ++*copies;
     }
-    void operator() () const { ++*calls; }
+    void operator() () const
+    {
+        ++*calls;
+        EXPECT_EQ (1, *calls);
+        EXPECT_EQ (0, handler->calls);
+    }
 };
 
 TEST (RouteHandlerBoundary, DispatcherOwnsPermitCallbackForSuspension)
@@ -965,17 +1101,15 @@ TEST (RouteHandlerBoundary, DispatcherOwnsPermitCallbackForSuspension)
             detail::no_route_internal_packet_dispatcher_t internal;
             int copies = 0;
             int calls = 0;
-            int dispatched = 0;
-            std::function<void ()> permit = copy_counting_permit_t (copies, calls);
+            auto observations =
+              std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
+            std::function<void ()> permit = copy_counting_permit_t (copies, calls, owner);
             dispatch_options_t options;
             options.message_flow (mode);
             detail::dispatch_options_access_t::set_observer_for_tests (
-              options, [&] (const message_flow_event_t &event) {
-                  if (event.outcome == message_flow_outcome_t::dispatched) {
-                      ++dispatched;
-                      EXPECT_EQ (1, calls);
-                      EXPECT_EQ (0, owner.calls);
-                  }
+              options, [observations] (const message_flow_event_t &event) {
+                  if (event.outcome == message_flow_outcome_t::dispatched)
+                      observations->record (event);
               });
             detail::route_packet_dispatcher_t dispatcher (
               "mesh", provider, serializers, handlers, internal, options, nullptr,
@@ -996,39 +1130,54 @@ TEST (RouteHandlerBoundary, DispatcherOwnsPermitCallbackForSuspension)
             EXPECT_EQ (1, copies);
             EXPECT_EQ (1, calls);
             EXPECT_EQ (1, owner.calls);
-            EXPECT_EQ (mode == message_flow_log_mode_t::off ? 0 : 1, dispatched);
+            test::acknowledge_delivery ();
+            EXPECT_EQ (mode == message_flow_log_mode_t::off ? 0u : 1u,
+                       observations->snapshot ().size ());
         }
     }
 }
 
 TEST (RouteHandlerBoundary, DispatcherResolvesHandlerOnce)
 {
-    service_collection_t services;
-    services.add_singleton<route_boundary_handler_t> ();
-    auto provider = services.build_provider ();
-    serializer_registry_t serializers;
-    detail::route_handler_registry_t handlers;
-    const std::string packet (4096, 'p');
-    handlers.on_send<route_boundary_handler_t, int> ("mesh", packet,
-                                                     &route_boundary_handler_t::send);
-    detail::no_route_internal_packet_dispatcher_t internal;
-    detail::route_packet_dispatcher_t dispatcher ("mesh", provider, serializers, handlers,
-                                                  internal);
-    runtime::messaging::envelope_header_t header;
-    header.kind = runtime::messaging::message_kind_t::command;
-    header.channel_name = "mesh";
-    header.message_name = packet;
-    header.content_type = "application/json";
-    auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
-      header, zlink::message_t::from (std::string ("42")));
-    detail::route_received_packet_t received{zlink::routing_id_t::from ("source"), std::nullopt,
-                                             std::move (encoded)};
-    ASSERT_TRUE (dispatcher.dispatch (received, header).result ());
-    // Only the header and context copy the packet name; lookup borrows both key strings.
-    const auto copies = tests::count_allocations (
-      [&] { EXPECT_TRUE (dispatcher.dispatch (received, header).result ()); }, packet.size () + 1);
-    EXPECT_EQ (2u, copies);
-    EXPECT_EQ (2, provider.get_required<route_boundary_handler_t> ().calls);
+    const auto measure_dispatch = [] (std::size_t packet_length) {
+        service_collection_t services;
+        services.add_singleton<route_boundary_handler_t> ();
+        auto provider = services.build_provider ();
+        serializer_registry_t serializers;
+        detail::route_handler_registry_t handlers;
+        const std::string packet (packet_length, 'p');
+        handlers.on_send<route_boundary_handler_t, int> ("mesh", packet,
+                                                         &route_boundary_handler_t::send);
+        detail::no_route_internal_packet_dispatcher_t internal;
+        detail::route_packet_dispatcher_t dispatcher ("mesh", provider, serializers, handlers,
+                                                      internal);
+        runtime::messaging::envelope_header_t header;
+        header.kind = runtime::messaging::message_kind_t::command;
+        header.channel_name = "mesh";
+        header.message_name = packet;
+        header.content_type = "application/json";
+        auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+          header, zlink::message_t::from (std::string ("42")));
+        detail::route_received_packet_t received{zlink::routing_id_t::from ("source"), std::nullopt,
+                                                 std::move (encoded)};
+        EXPECT_TRUE (dispatcher.dispatch (received, header).result ());
+        const auto measured = tests::measure_allocations (
+          [&] { EXPECT_TRUE (dispatcher.dispatch (received, header).result ()); });
+        EXPECT_EQ (2, provider.get_required<route_boundary_handler_t> ().calls);
+        return measured;
+    };
+    constexpr std::size_t packet_length = 4096;
+    constexpr std::size_t longer_packet_length = 8192;
+    const auto original = measure_dispatch (packet_length);
+    const auto longer = measure_dispatch (longer_packet_length);
+    // Only the header and context copy the packet name; lookup borrows both key
+    // strings. Their byte growth distinguishes copies from fixed-size allocations.
+    EXPECT_EQ (original.count, longer.count);
+    ASSERT_GE (longer.bytes, original.bytes);
+    const auto extra_bytes = longer.bytes - original.bytes;
+    const auto length_growth = longer_packet_length - packet_length;
+    EXPECT_EQ (0u, extra_bytes % length_growth);
+    EXPECT_EQ (2u, extra_bytes / length_growth);
 }
 
 TEST (RouteHandlerBoundary, DecodeFailureDoesNotReleasePermitForHandlerStart)
@@ -1411,9 +1560,13 @@ TEST (RoutePayloadOwnership, MeshIngressRepliesToInvalidRequestHeadersForEveryOw
     msg::envelope_codec_t codec;
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
+    auto observations =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     std::vector<message_dispatch_error_event_t> errors;
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      options, [&] (const message_dispatch_error_event_t &event) { errors.push_back (event); });
+      options, [observations] (const message_dispatch_error_event_t &event) {
+          observations->record (event);
+      });
     for (auto kind : {host::record_kind_t::spot_request, host::record_kind_t::node_request,
                       host::record_kind_t::channel_request}) {
         SCOPED_TRACE (static_cast<int> (kind));
@@ -1463,6 +1616,8 @@ TEST (RoutePayloadOwnership, MeshIngressRepliesToInvalidRequestHeadersForEveryOw
             EXPECT_FALSE (rejected);
             EXPECT_EQ (rejected.error_kind (), framework_error_kind_t::protocol_error);
             EXPECT_EQ (replies, previous_replies + 1);
+            test::acknowledge_delivery ();
+            errors = observations->snapshot ();
             ASSERT_EQ (errors.size (), previous_errors + 1);
             EXPECT_EQ (errors.back ().action, dispatch_error_action_t::reply_error);
             EXPECT_EQ (errors.back ().reason, dispatch_error_reason_t::invalid_frame);
@@ -1484,6 +1639,8 @@ TEST (RoutePayloadOwnership, MeshIngressRepliesToInvalidRequestHeadersForEveryOw
         auto unreadable = std::vector<zlink::message_t>{zlink::message_t::from ("invalid header")};
         EXPECT_FALSE (runtime::decode_mesh_record_header (record, unreadable, true, options));
         EXPECT_EQ (replies, previous_replies);
+        test::acknowledge_delivery ();
+        errors = observations->snapshot ();
         ASSERT_EQ (errors.size (), previous_errors + 1);
         EXPECT_EQ (errors.back ().action, dispatch_error_action_t::drop);
         EXPECT_FALSE (errors.back ().correlation_id);
@@ -1496,9 +1653,13 @@ TEST (RoutePayloadOwnership, MeshIngressDropsInvalidSendsAndReportsOnceForEveryO
     namespace msg = runtime::messaging;
     dispatch_options_t options;
     options.message_flow (message_flow_log_mode_t::normal);
+    auto observations =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
     std::vector<message_dispatch_error_event_t> errors;
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      options, [&] (const message_dispatch_error_event_t &event) { errors.push_back (event); });
+      options, [observations] (const message_dispatch_error_event_t &event) {
+          observations->record (event);
+      });
     for (auto kind : {host::record_kind_t::actor_send, host::record_kind_t::spot_send,
                       host::record_kind_t::node_send, host::record_kind_t::channel_send}) {
         SCOPED_TRACE (static_cast<int> (kind));
@@ -1516,6 +1677,8 @@ TEST (RoutePayloadOwnership, MeshIngressDropsInvalidSendsAndReportsOnceForEveryO
         EXPECT_FALSE (decoded);
         EXPECT_EQ (decoded.error_kind (), framework_error_kind_t::protocol_error);
         EXPECT_EQ (replies, 0);
+        test::acknowledge_delivery ();
+        errors = observations->snapshot ();
         ASSERT_EQ (errors.size (), previous_errors + 1);
         EXPECT_EQ (errors.back ().reason, dispatch_error_reason_t::invalid_frame);
         EXPECT_EQ (errors.back ().action, dispatch_error_action_t::drop);
@@ -1603,15 +1766,20 @@ TEST (RoutePayloadOwnership, MalformedReplyRouteMatchesSharedFourLanguageContrac
             }
             dispatch_options_t options;
             options.message_flow (message_flow_log_mode_t::normal);
+            auto observations =
+              std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
             std::vector<message_dispatch_error_event_t> errors;
             detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-              options,
-              [&] (const message_dispatch_error_event_t &event) { errors.push_back (event); });
+              options, [observations] (const message_dispatch_error_event_t &event) {
+                  observations->record (event);
+              });
             auto parts = std::vector<zlink::message_t>{zlink::message_t::from (json),
                                                        zlink::message_t::from ("request")};
             auto result = runtime::decode_mesh_record_header (record, parts, false, options);
             EXPECT_FALSE (result);
             EXPECT_EQ (replies, action == "reply_error" ? 1 : 0);
+            test::acknowledge_delivery ();
+            errors = observations->snapshot ();
             ASSERT_EQ (errors.size (), 1u);
             EXPECT_EQ (errors[0].reason, dispatch_error_reason_t::invalid_frame);
             EXPECT_EQ (errors[0].action, action == "reply_error"

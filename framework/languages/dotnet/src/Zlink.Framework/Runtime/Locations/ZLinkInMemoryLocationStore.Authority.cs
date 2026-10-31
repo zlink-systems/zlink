@@ -393,7 +393,15 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     || existing.Allocation.StableType != request.StableType
                 )
                     return new ZLinkObjectReserveResult.TypeMismatch(existing);
-                if (!TryReleaseEndedReservation(request.Key, existing, now, request))
+                if (
+                    !TryReleaseEndedReservation(
+                        request.Key,
+                        existing,
+                        now,
+                        request.Key,
+                        request.ObjectRelocationPolicy
+                    )
+                )
                     return existing.Allocation.State == ZLinkPlacementAllocationState.Active
                         ? new ZLinkObjectReserveResult.AlreadyExists(existing)
                         : new ZLinkObjectReserveResult.Conflict(
@@ -677,6 +685,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
     public ValueTask<bool> ReleaseEndedReservationAsync(
         ZLinkAuthorityKey key,
         string expectedStoreVersion,
+        ZLinkCreationAuthorityRecovery? creationRecovery = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -684,7 +693,13 @@ internal sealed partial class ZLinkInMemoryLocationStore
         return _lane.RunAsync(() =>
             _authorities.TryGetValue(key.Value, out var current)
             && current.StoreVersion == expectedStoreVersion
-            && TryReleaseEndedReservation(key, current, _time.GetUtcNow())
+            && TryReleaseEndedReservation(
+                key,
+                current,
+                _time.GetUtcNow(),
+                creationRecovery is null ? null : key,
+                creationRecovery?.RelocationPolicy
+            )
         );
     }
 
@@ -692,13 +707,14 @@ internal sealed partial class ZLinkInMemoryLocationStore
         ZLinkAuthorityKey key,
         ZLinkAuthoritySnapshot current,
         DateTimeOffset now,
-        ZLinkObjectReservationRequest? request = null
+        ZLinkAuthorityKey? creationKey = null,
+        byte? creationRelocationPolicy = null
     )
     {
         if (
             (
                 current.Allocation.State == ZLinkPlacementAllocationState.Active
-                    ? request is null
+                    ? creationKey is null
                     : current.ReservedCreation is null
             ) || IsAuthorityInPreparedAggregate(key)
         )
@@ -715,11 +731,11 @@ internal sealed partial class ZLinkInMemoryLocationStore
         {
             if (ownerLive)
                 return false;
-            if (request?.ObjectRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
+            if (creationRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     current.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                    && ZLinkAuthorityKeyCodec.TryDecodeSpot(request!.Key, out var unavailableSpotId)
+                    && ZLinkAuthorityKeyCodec.TryDecodeSpot(key, out var unavailableSpotId)
                         ? $"User Spot '{unavailableSpotId}' owner lease is not live."
                         : "Object owner lease is unavailable.",
                     ZLinkRetryAdvice.RetryAfterStateChange

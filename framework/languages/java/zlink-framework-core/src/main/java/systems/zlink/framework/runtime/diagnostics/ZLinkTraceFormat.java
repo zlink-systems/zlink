@@ -4,6 +4,8 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEven
 
 /** Spec 26 structured-log projection. */
 final class ZLinkTraceFormat {
+    static final String TIMESTAMP_FIELD = "timestamp";
+
     private ZLinkTraceFormat() {}
 
     static String flowLine(ZLinkMessageFlowEvent flow, Long size) {

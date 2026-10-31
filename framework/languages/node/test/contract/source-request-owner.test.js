@@ -202,7 +202,10 @@ test('SourceRequestOwner uses received RID bytes instead of its display string',
     return { ownerId: 'owner', leaseGeneration: 3n, nodeRid: rid, nodeGeneration: generation };
   });
   const ingress = { sourceRoutingId: 'display', sourceRoute: Buffer.from('ff00', 'hex') };
-  await runtime.acceptRequestSource(ingress);
+  assert.equal(
+    await runtime.prepareDispatch({ ingress, stateful: {} }, new AbortController().signal),
+    true
+  );
   assert.equal(ingress.requestSource.ownerId, 'owner');
 });
 
@@ -295,8 +298,11 @@ test('SourceRequestOwner reports typed Store failure and retains its cause', asy
   const events = [];
   const replies = [];
   let queued;
+  let receive;
   const raw = {
-    setServiceIngress() {},
+    setServiceIngress(handler) {
+      receive = handler;
+    },
     topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) },
     mailbox: {
       tryEnqueue(record) {
@@ -316,7 +322,7 @@ test('SourceRequestOwner reports typed Store failure and retains its cause', asy
     resolver.accept('mesh', rid, generation, storageKey, signal)
   );
   assert.equal(
-    await runtime.ingress({
+    await receive({
       command: M6bServiceWireCommand.actorRequest,
       flags: 0,
       sourceRoutingId: 'sender',
@@ -375,9 +381,15 @@ for (const asynchronous of [false, true]) {
         return asynchronous ? Promise.resolve(source) : source;
       });
       const ingress = { sourceRoutingId: source.nodeRid };
-      await runtime.acceptRequestSource(ingress);
+      assert.equal(
+        await runtime.prepareDispatch({ ingress, stateful: {} }, new AbortController().signal),
+        true
+      );
       assert.strictEqual(ingress.requestSource, source);
-      await runtime.acceptRequestSource(ingress);
+      assert.equal(
+        await runtime.prepareDispatch({ ingress, stateful: {} }, new AbortController().signal),
+        true
+      );
       assert.equal(reads, 1);
     });
   }

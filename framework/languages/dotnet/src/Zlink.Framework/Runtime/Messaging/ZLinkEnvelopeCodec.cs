@@ -140,6 +140,9 @@ internal static class ZLinkEnvelopeCodec
     private static readonly Queue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
     private static HeaderCacheEntry[] DecodedHeaderCache = [];
 
+    internal static (int SimpleHeaders, int DecodedHeaders) SnapshotCacheCounts() =>
+        (Volatile.Read(ref SimpleHeaderCache).Count, Volatile.Read(ref DecodedHeaderCache).Length);
+
     public static string DefaultContentType => JsonContentType;
 
     public static IReadOnlyList<Message> EncodeParts(
