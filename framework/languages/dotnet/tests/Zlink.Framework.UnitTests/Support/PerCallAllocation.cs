@@ -11,20 +11,51 @@ internal static class PerCallAllocation
 {
     public const int Windows = 8;
 
-    // Background GC can charge unused allocation-context space to this thread's counter
-    // (dotnet/runtime#134724). Reserve space before measuring instead of discarding
-    // windows whose own allocations cause GC. Exhaustion still fails the measurement.
-    private readonly struct MeasurementRegion : IDisposable
+    // A region is process-wide: allocations or induced collections on another thread
+    // can end it before the measured action returns. Only intact windows count.
+    internal static async ValueTask<T> MeasureWindowAsync<T>(
+        Func<ValueTask<T>> measure,
+        long budgetBytes = 8 * 1024 * 1024,
+        Action? beforeWindow = null,
+        Action? afterWindow = null
+    )
     {
-        public MeasurementRegion()
+        const int attempts = 4;
+        for (var attempt = 0; attempt < attempts; attempt++)
         {
-            if (!GC.TryStartNoGCRegion(8 * 1024 * 1024))
-                throw new InvalidOperationException(
-                    "Could not reserve a GC-free measurement window."
-                );
+            beforeWindow?.Invoke();
+            try
+            {
+                if (!GC.TryStartNoGCRegion(budgetBytes))
+                    throw new InvalidOperationException(
+                        "Could not reserve a GC-free measurement window."
+                    );
+                try
+                {
+                    var result = await measure();
+                    if (
+                        System.Runtime.GCSettings.LatencyMode
+                        == System.Runtime.GCLatencyMode.NoGCRegion
+                    )
+                        return result;
+                }
+                finally
+                {
+                    if (
+                        System.Runtime.GCSettings.LatencyMode
+                        == System.Runtime.GCLatencyMode.NoGCRegion
+                    )
+                        GC.EndNoGCRegion();
+                }
+            }
+            finally
+            {
+                afterWindow?.Invoke();
+            }
         }
-
-        public void Dispose() => GC.EndNoGCRegion();
+        throw new InvalidOperationException(
+            $"GC-free measurement window ended during all {attempts} attempts; no valid allocation measurement was obtained."
+        );
     }
 
     public static long MinWindow(
@@ -55,16 +86,19 @@ internal static class PerCallAllocation
         var minimum = long.MaxValue;
         for (var window = 0; window < windows; window++)
         {
-            beforeWindow?.Invoke(window);
-            long bytes;
-            using (new MeasurementRegion())
-            {
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                for (var index = 0; index < callsPerWindow; index++)
-                    action(index);
-                bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            }
-            afterWindow?.Invoke(window);
+            var bytes = MeasureWindowAsync(
+                    () =>
+                    {
+                        var before = GC.GetAllocatedBytesForCurrentThread();
+                        for (var index = 0; index < callsPerWindow; index++)
+                            action(index);
+                        return new ValueTask<long>(GC.GetAllocatedBytesForCurrentThread() - before);
+                    },
+                    beforeWindow: () => beforeWindow?.Invoke(window),
+                    afterWindow: () => afterWindow?.Invoke(window)
+                )
+                .GetAwaiter()
+                .GetResult();
             minimum = Math.Min(minimum, bytes);
         }
         return minimum;
@@ -86,15 +120,20 @@ internal static class PerCallAllocation
         var minimumSecond = long.MaxValue;
         for (var window = 0; window < windows; window++)
         {
-            using var region = new MeasurementRegion();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < callsPerWindow; index++)
-                first(index);
-            var firstBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            before = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < callsPerWindow; index++)
-                second(index);
-            var secondBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            var (firstBytes, secondBytes) = MeasureWindowAsync(() =>
+                {
+                    var before = GC.GetAllocatedBytesForCurrentThread();
+                    for (var index = 0; index < callsPerWindow; index++)
+                        first(index);
+                    var firstBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+                    before = GC.GetAllocatedBytesForCurrentThread();
+                    for (var index = 0; index < callsPerWindow; index++)
+                        second(index);
+                    var secondBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+                    return new ValueTask<(long, long)>((firstBytes, secondBytes));
+                })
+                .GetAwaiter()
+                .GetResult();
             minimumFirst = Math.Min(minimumFirst, firstBytes);
             minimumSecond = Math.Min(minimumSecond, secondBytes);
         }
@@ -110,11 +149,13 @@ internal static class PerCallAllocation
         var minimum = long.MaxValue;
         for (var window = 0; window < windows; window++)
         {
-            using var region = new MeasurementRegion();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < callsPerWindow; index++)
-                await action();
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            var bytes = await MeasureWindowAsync(async () =>
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                for (var index = 0; index < callsPerWindow; index++)
+                    await action();
+                return GC.GetAllocatedBytesForCurrentThread() - before;
+            });
             minimum = Math.Min(minimum, bytes);
         }
         return minimum;
