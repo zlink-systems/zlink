@@ -182,7 +182,8 @@ for lang in $langs; do
     node)  # framework-node.yml: Node 22(+20) verify:ci, WebGL bundle 불변, Chromium E2E
         nd=framework/languages/node
         (cd "$nd" && npm ci && run_with_optional_affinity "$TEST_CPUS" npm run verify:ci) > "$L/node22.log" 2>&1
-        record "Node $(node -v) npm run verify:ci" "$L/node22.log" $?
+        rc=$?  # $(node -v) in the label would overwrite $? before it is expanded
+        record "Node $(node -v) npm run verify:ci" "$L/node22.log" "$rc"
         git diff --exit-code -- framework/languages/unity/com.zlink.stream-connector.webgl > "$L/node-webgl.log" 2>&1
         record "WebGL bundle 불변(git diff --exit-code)" "$L/node-webgl.log" $?
         (cd "$nd" && npm run browser:install:ci && run_with_optional_affinity "$TEST_CPUS" npm run test:browser) > "$L/node-browser.log" 2>&1
