@@ -21,6 +21,21 @@ bool has_original (const service_mailbox_record_t &record) noexcept
 }
 } // namespace
 
+std::shared_ptr<const service_mailbox_record_t> service_mailbox_record_t::reply_source () const
+{
+    auto source = std::make_shared<service_mailbox_record_t> ();
+    source->domain = service_mailbox_domain_t::infrastructure;
+    source->source_routing_id = source_routing_id;
+    source->reply_token = reply_token;
+    source->correlation = correlation;
+    return source;
+}
+
+bool service_mailbox_settlement_t::operator() () const
+{
+    return _claim && service_mailbox_t::settle (*this);
+}
+
 void service_mailbox_t::start_source_lookup (const request_source_lookup_t &lookup) const
 {
     request_source_lookup_state_t::start_t start;
@@ -80,6 +95,12 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
     auto &queue = target.owners[owner];
     if (record.domain == service_mailbox_domain_t::application && _state->application_prepare)
         _state->application_prepare (record);
+    if (record.application_permit) {
+        // Admission follows handler entry or terminal, independently of claim credit.
+        auto before = record.application_permit->defer_handler_entry ();
+        record.application_permit.reset ();
+        record.before_application_handler = std::move (before);
+    }
     if (admitted)
         admitted ();
     queue.records.push_back (std::move (record));
@@ -248,7 +269,9 @@ service_mailbox_record_t service_mailbox_t::transfer_locked (service_mailbox_rec
 {
     // Moving out leaves the slot without parts or application: the taken mark. The
     // slot's claim credit moves with the original.
-    return std::move (slot);
+    auto transferred = std::move (slot);
+    slot.application.reset ();
+    return transferred;
 }
 
 std::optional<std::vector<std::vector<service_mailbox_record_t>>>
@@ -343,6 +366,7 @@ bool service_mailbox_t::release (service_mailbox_claim_t &claim)
     if (settles_last (claim, settled))
         notify = finish_locked (*_state, claim);
     lock.unlock ();
+    // Supply delivery may reenter the mailbox, so return admission outside its lock.
     discarded.clear ();
     if (notify)
         notify_application_ready ();

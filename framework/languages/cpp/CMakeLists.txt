@@ -1211,16 +1211,23 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
-  add_executable(test_cpp_framework_receive_role
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role.cpp
-    framework/src/runtime/dispatch/offload_executor.cpp)
-  target_compile_features(test_cpp_framework_receive_role PRIVATE cxx_std_20)
-  target_include_directories(test_cpp_framework_receive_role PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  target_link_libraries(test_cpp_framework_receive_role PRIVATE Threads::Threads)
+  add_executable(test_cpp_framework_offload_executor
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_offload_executor.cpp
+    framework/src/runtime/dispatch/offload_executor.cpp
+    tests/support/allocation_counter.cpp)
+  target_compile_features(test_cpp_framework_offload_executor PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_offload_executor PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
+  target_link_libraries(test_cpp_framework_offload_executor PRIVATE Threads::Threads)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_definitions(test_cpp_framework_offload_executor PRIVATE ZLINK_TEST_WRAP_NOTIFY_ONE)
+    target_link_options(test_cpp_framework_offload_executor PRIVATE
+      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv")
+  endif()
   zlink_framework_cpp_add_test(
-    NAME test_cpp_framework_receive_role
-    COMMAND test_cpp_framework_receive_role
+    NAME test_cpp_framework_offload_executor
+    COMMAND test_cpp_framework_offload_executor
     LABELS "framework-unit;execution;resource"
     TIER unit
     TIMEOUT 30)
@@ -2172,16 +2179,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
      AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
      AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     add_zlink_framework_test(
-      test_cpp_framework_receive_handoff_turn
-      tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_handoff_turn.cpp
+      test_cpp_framework_mailbox_owner_dispatch
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_mailbox_owner_dispatch.cpp
       "framework-unit;framework-regression;execution;resource"
       unit)
-    target_include_directories(test_cpp_framework_receive_handoff_turn PRIVATE
+    target_include_directories(test_cpp_framework_mailbox_owner_dispatch PRIVATE
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-    zlink_framework_cpp_add_boost_headers(test_cpp_framework_receive_handoff_turn)
-    target_link_options(test_cpp_framework_receive_handoff_turn PRIVATE
-      "LINKER:--wrap=zlink_router_recv"
-      "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t15try_assign_roleESt10shared_ptrINS2_6role_tEE")
+    zlink_framework_cpp_add_boost_headers(test_cpp_framework_mailbox_owner_dispatch)
+    target_link_options(test_cpp_framework_mailbox_owner_dispatch PRIVATE
+      "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t10start_roleESt10shared_ptrINS2_6role_tEE"
+      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
+      "LINKER:--wrap=zlink_router_recv")
     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
       "_ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")
     target_compile_definitions(test_cpp_framework_receive_role_completion PRIVATE
@@ -2772,6 +2780,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_claim_dispatch_cost PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_handler_entry_permit
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_entry_permit.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_use_zlink_gtest_main(test_cpp_framework_handler_entry_permit)
+  target_include_directories(test_cpp_framework_handler_entry_permit PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_actor_header_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_header_allocations.cpp
     "framework-unit;framework-regression;messaging;stream")
@@ -2875,7 +2891,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
     target_link_options(test_cpp_framework_idle_receive_cost PRIVATE
       "-Wl,--wrap=_ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_16receive_record_tESt6vectorINS_9message_tESaISD_EEEEbS3_IFbvEE"
-      "-Wl,--wrap=_ZN5zlink9framework6detail35dispatch_completion_receive_handoffERKSt8functionIFbvEERKSt10shared_ptrINS1_23completion_dispatcher_tEE"
       "-Wl,--wrap=_ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE"
     )
   endif()

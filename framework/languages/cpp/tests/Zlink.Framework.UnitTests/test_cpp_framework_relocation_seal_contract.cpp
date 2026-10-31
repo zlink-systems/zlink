@@ -236,7 +236,7 @@ mesh::service_mailbox_record_t local_native_spot_record (host::public_host_runti
     const auto bytes = protocol::message_bytes (original.parts.front ());
     const auto header =
       protocol::decode_spot_message_header (bytes, protocol::decode_header (bytes).kind);
-    original.application = std::make_shared<host::local_application_dispatch_t> ();
+    original.application.emplace ();
     original.application->owner.owner_kind = host::owner_kind_t::spot;
     original.application->owner.spot_id = spot.key;
     original.application->record.kind = host::record_kind_t::spot_send;
@@ -1715,7 +1715,7 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
         mesh::service_mailbox_record_t original;
         original.owner = "node";
         original.domain = mesh::service_mailbox_domain_t::application;
-        original.application = std::make_shared<host::local_application_dispatch_t> ();
+        original.application.emplace ();
         original.application->owner.owner_kind = host::owner_kind_t::node;
         original.application->record.kind = host::record_kind_t::channel_send;
         original.application->parts = detail::backend::materialize_binding_parts ({{1}});
@@ -1731,7 +1731,7 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
           std::rethrow_exception (injected);
       },
       [&] { ++started; }, [&] { ++rejected; });
-    EXPECT_TRUE (failed.result ().value ());
+    EXPECT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
     EXPECT_EQ (calls, 64u);
     EXPECT_EQ (reported, 64u);
     EXPECT_EQ (started, 64u);
@@ -1741,7 +1741,7 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
     unsigned dispatched = 0;
     auto next = host->dispatch_application_owner (
       "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [] {}, [] {});
-    EXPECT_TRUE (next.result ().value ());
+    EXPECT_TRUE (zlink::framework::test::application_owner_result (next).value ());
     EXPECT_EQ (dispatched, 1u);
     host->close ();
 }
@@ -1991,7 +1991,7 @@ TEST (FrameworkRelocationSealContract, cut_local_exception_reports_original_caus
     application->record.reply_route_id = 1;
     mesh::service_mailbox_record_t original;
     original.domain = mesh::service_mailbox_domain_t::application;
-    original.application = application;
+    original.application.emplace (std::move (*application));
     ASSERT_TRUE (
       host::public_host_runtime_test_access_t::ingest_cut (*host, spot, std::move (original))
         .result ());
@@ -2368,7 +2368,7 @@ TEST (FrameworkRelocationSealContract, native_spot_fallback_rereads_remote_and_l
                 application->parts =
                   protocol::decode_application_parts (protocol::decode_application_payload (
                     protocol::message_bytes (original.parts.back ())));
-                original.application = std::move (application);
+                original.application.emplace (std::move (*application));
                 original.parts.clear ();
             }
             const auto slot = zlink::framework::test::publish_stateful_claim (

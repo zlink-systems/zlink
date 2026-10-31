@@ -1,10 +1,24 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include <variant>
+#include <zlink/framework/contracts/dispatch/task.hpp>
 #include <opentelemetry/metrics/provider.h>
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 namespace zlink::framework::test
 {
+inline bool application_owner_ready (const std::variant<bool, task_t<bool>> &result)
+{
+    return std::holds_alternative<bool> (result) || std::get<task_t<bool>> (result).await_ready ();
+}
+
+inline result_t<bool> application_owner_result (const std::variant<bool, task_t<bool>> &result)
+{
+    if (const auto ready = std::get_if<bool> (&result))
+        return result_t<bool>::success (*ready);
+    return std::get<task_t<bool>> (result).result ();
+}
+
 inline auto runtime_failure_monitoring ()
 {
     auto monitoring = std::make_shared<detail::monitoring_runtime_state_t> ();

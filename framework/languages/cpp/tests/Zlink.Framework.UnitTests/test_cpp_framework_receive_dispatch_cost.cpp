@@ -51,7 +51,7 @@ RECEIVE_COST_NOINLINE pending_t empty_receive_reference (runtime::state_lane_t &
       result_t<runtime::mesh::service_liveness_tick_t>::success (
         runtime::mesh::service_liveness_tick_t{}));
     (void) co_await pending_t (result_t<std::size_t>::success (0));
-    lane.run ([] {}).get ();
+    lane.run_sync ([] {});
     co_return 0;
 }
 #undef RECEIVE_COST_NOINLINE

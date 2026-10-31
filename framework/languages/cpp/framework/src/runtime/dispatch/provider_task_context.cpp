@@ -75,7 +75,6 @@ class completion_dispatcher_t : public std::enable_shared_from_this<completion_d
                                          registered_execution_context_shutting_down_message);
         boost::asio::post (_context, std::forward<Work> (work));
     }
-    void poll_one () { _context.poll_one (); }
     std::size_t worker_count () const noexcept { return _workers.size (); }
 
   private:
@@ -187,24 +186,6 @@ void dispatch_completion (std::function<void ()> work,
                                             dispatcher};
         work ();
     });
-}
-
-bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff,
-                                          const completion_dispatcher_borrow_t &existing_dispatcher)
-{
-    // Completion publication and lane-current scopes have returned before entry.
-    // Only the executor can reserve an idle resource for the next receive turn.
-    if (!handoff ())
-        return false;
-    // Only Framework completions enter this context. Application system-executor
-    // handlers cannot be consumed by the resource that just handed off receive.
-    // An empty first rotation must not create workers just to attempt a dequeue.
-    if (const auto &dispatcher = existing_dispatcher) {
-        dispatcher->poll_one ();
-    } else if (const auto dispatcher = observe_completion_dispatcher ().lock ()) {
-        dispatcher->poll_one ();
-    }
-    return true;
 }
 
 std::size_t completion_dispatcher_worker_count () noexcept

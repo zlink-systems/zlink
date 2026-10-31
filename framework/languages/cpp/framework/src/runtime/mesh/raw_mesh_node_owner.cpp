@@ -1902,12 +1902,10 @@ bool raw_mesh_node_owner_t::reply (const service_mailbox_record_t &request,
     if (!request.correlation) {
         throw std::invalid_argument ("raw mesh reply requires a request mailbox record");
     }
-    const auto port = _lane
-                        .run ([this] {
-                            std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                            return _port;
-                        })
-                        .get ();
+    const auto port = _lane.run_sync ([this] {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        return _port;
+    });
     if (!port)
         return false;
     detail::backend::raw_message_t parts;
@@ -1934,12 +1932,10 @@ bool raw_mesh_node_owner_t::reply_failure (const service_mailbox_record_t &reque
     }
     if (!request.reply_token)
         return false;
-    const auto port = _lane
-                        .run ([this] {
-                            std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                            return _port;
-                        })
-                        .get ();
+    const auto port = _lane.run_sync ([this] {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        return _port;
+    });
     if (!port)
         return false;
     detail::backend::raw_message_t parts{
@@ -3497,20 +3493,18 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
             (void) protocol::decode_reject (protocol::message_bytes (received->parts.front ()));
             std::vector<std::function<void ()>> notifications;
             try {
-                _lane
-                  .run ([this, &received, &notifications] {
-                      const auto peer = _topology.peer (received->source_routing_id);
-                      if (!peer)
-                          return;
-                      auto publication = _topology.disconnect_on_lane (received->source_routing_id,
-                                                                       peer->connection_id);
-                      if (publication.second)
-                          notifications.push_back (std::move (publication.second));
-                      (void) _liveness.disconnect_owned (received->source_routing_id,
-                                                         peer->connection_id);
-                      refresh_admission_due_on_lane ();
-                  })
-                  .get ();
+                _lane.run_sync ([this, &received, &notifications] {
+                    const auto peer = _topology.peer (received->source_routing_id);
+                    if (!peer)
+                        return;
+                    auto publication = _topology.disconnect_on_lane (received->source_routing_id,
+                                                                     peer->connection_id);
+                    if (publication.second)
+                        notifications.push_back (std::move (publication.second));
+                    (void) _liveness.disconnect_owned (received->source_routing_id,
+                                                       peer->connection_id);
+                    refresh_admission_due_on_lane ();
+                });
             }
             catch (...) {
                 std::rethrow_exception (
@@ -3532,13 +3526,10 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
             std::array<std::uint8_t, sizeof (received->route_generation)> connection_id;
             detail::backend::encode_route_connection_id (received->route_generation, connection_id);
             if (record.kind == protocol::command::livenessProbe) {
-                const auto ack =
-                  _lane
-                    .run ([this, &received, &connection_id, &record] {
-                        return _liveness.acknowledge_probe_owned (received->source_routing_id,
-                                                                  connection_id, record.probe_id);
-                    })
-                    .get ();
+                const auto ack = _lane.run_sync ([this, &received, &connection_id, &record] {
+                    return _liveness.acknowledge_probe_owned (received->source_routing_id,
+                                                              connection_id, record.probe_id);
+                });
                 if (!ack)
                     return raw_mesh_pump_result_t::protocol_error;
                 const auto submitted = submit_header_only (
@@ -3547,12 +3538,10 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                 if (submitted == send_start_state_t::terminated)
                     return raw_mesh_pump_result_t::protocol_error;
             } else {
-                (void) _lane
-                  .run ([this, &received, &connection_id, &record, now] {
-                      return _liveness.acknowledge_owned (received->source_routing_id,
-                                                          connection_id, record.probe_id, now);
-                  })
-                  .get ();
+                (void) _lane.run_sync ([this, &received, &connection_id, &record, now] {
+                    return _liveness.acknowledge_owned (received->source_routing_id, connection_id,
+                                                        record.probe_id, now);
+                });
             }
             return raw_mesh_pump_result_t::infrastructure;
         }
