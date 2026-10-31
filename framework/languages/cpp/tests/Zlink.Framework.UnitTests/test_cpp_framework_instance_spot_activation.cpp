@@ -2907,6 +2907,7 @@ static void verify_activation_failure_terminal (bool local,
     auto target = std::make_shared<host::public_host_runtime_t> (std::move (options));
     int dispatches = 0;
     int cleanups = 0;
+    std::exception_ptr terminal_exception;
     std::promise<void> preparation_cleaned;
     auto delivery_release = std::make_shared<fw::task_completion_source_t<void>> ();
     auto delivery_completed = std::make_shared<std::promise<void>> ();
@@ -2995,8 +2996,9 @@ static void verify_activation_failure_terminal (bool local,
             auto activation = host::public_host_runtime_test_access_t::activate (
               *target, {header, std::nullopt, payload},
               [terminals, accepted_terminals, terminal_ready, failure, expected_kind, hold_delivery,
-               delivery_release, delivery_completed] (const auto &result) {
+               delivery_release, delivery_completed, &terminal_exception] (const auto &result) {
                   ++*terminals;
+                  terminal_exception = result.exception;
                   terminal_ready->set_value ();
                   // This is the actual local operation result, before telemetry projection.
                   // Remote send rows independently cover admission and owned diagnostics.
@@ -3165,10 +3167,14 @@ static void verify_activation_failure_terminal (bool local,
                event.reason);
     EXPECT_EQ (fw::message_flow_result_t::dropped, event.result);
     ASSERT_TRUE (event.exception);
+    if (local)
+        EXPECT_EQ (terminal_exception, event.exception);
+    std::string terminal_error_message;
     try {
         std::rethrow_exception (event.exception);
     }
     catch (const std::exception &error) {
+        terminal_error_message = error.what ();
         if (failure == activation_failure_t::factory)
             EXPECT_STREQ ("factory terminal failure", error.what ());
         else if (failure == activation_failure_t::cancelled) {
@@ -3189,6 +3195,7 @@ static void verify_activation_failure_terminal (bool local,
     EXPECT_EQ (failure == activation_failure_t::shutdown ? 0 : 1, cleanups);
     ASSERT_EQ (1u, errors.size ());
     const auto &error = errors.front ();
+    EXPECT_EQ (event.exception, error.exception);
     EXPECT_EQ (fw::dispatch_error_surface_t::instance_spot, error.surface);
     EXPECT_EQ (fw::dispatch_message_kind_t::send, error.message_kind);
     EXPECT_EQ (fw::dispatch_error_action_t::drop, error.action);
@@ -3214,9 +3221,9 @@ static void verify_activation_failure_terminal (bool local,
     else if (failure == activation_failure_t::shutdown)
         EXPECT_EQ ("Instance Spot activation target stopped", error.error_message);
     else if (deadline_failure)
-        EXPECT_EQ (expire_admission ? "Activation admission expired"
-                                    : "Instance Spot activation deadline expired",
-                   error.error_message);
+        // Admission expiry and provider commit share the deadline. Preserve the
+        // winning terminal cause rather than requiring either path to win.
+        EXPECT_EQ (terminal_error_message, error.error_message);
     if (failure != activation_failure_t::shutdown) {
         const auto authority =
           store->read_authority (rt::spot_authority_key ("terminal-room")).result ().value ();
