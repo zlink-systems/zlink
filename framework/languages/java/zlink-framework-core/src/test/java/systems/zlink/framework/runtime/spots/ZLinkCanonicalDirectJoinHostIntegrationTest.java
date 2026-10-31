@@ -737,7 +737,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 assertBefore("source.queue.restored", "command44.abort");
                 assertEquals(0, targetCommits.get());
                 assertFalse(EVENTS.contains("target.open"));
-                assertEquals(0, sourceAttemptCount(sourceJoin));
+                assertEquals(0, sourceJoin.sourceAttemptCountForTest());
                 var targetShutdown = targetHost.shutdown(TIMEOUT).toCompletableFuture();
                 var sourceShutdown = sourceHost.shutdown(TIMEOUT).toCompletableFuture();
                 assertEquals(
@@ -1016,7 +1016,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 TimeUnit.MILLISECONDS.sleep(250);
                 assertEquals(
                         0,
-                        sourceAttemptCount(sourceJoin),
+                        sourceJoin.sourceAttemptCountForTest(),
                         "Message Follow retention must bound the source attempt even "
                                 + "while OnLeave remains pending");
             }
@@ -1029,7 +1029,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             link.leftCompletion.get().toCompletableFuture().get(3, TimeUnit.SECONDS);
             assertEquals(1, EVENTS.stream().filter("source.leave"::equals).count());
             assertTrue(sourceActors.localActor(ACTOR_ID).isEmpty());
-            assertEquals(0, sourceAttemptCount(sourceJoin));
+            assertEquals(0, sourceJoin.sourceAttemptCountForTest());
         }
     }
 
@@ -1461,12 +1461,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         assertTrue(left < right, () -> first + " must precede " + second + ": " + EVENTS);
     }
 
-    private static int sourceAttemptCount(ZLinkActorJoinCanonicalAdapter adapter) throws Exception {
-        Field field = ZLinkActorJoinCanonicalAdapter.class.getDeclaredField("sources");
-        field.setAccessible(true);
-        return ((Map<?, ?>) field.get(adapter)).size();
-    }
-
     private static void setMessageFollowDuration(
             DefaultZLinkFrameworkOptions options, Duration retention) {
         var locationOptions = options.registration().locations().options();
@@ -1551,7 +1545,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 new AtomicReference<>();
         private final AtomicReference<Runnable> readyHook = new AtomicReference<>();
         private final AtomicReference<CompletionStage<Void>> b2Accepted = new AtomicReference<>();
-        private final AtomicReference<Object> sourceLeftHandler = new AtomicReference<>();
+        private final AtomicReference<ZLinkInternalMeshNode.ActorLeftHandler> sourceLeftHandler =
+                new AtomicReference<>();
         private final AtomicReference<CompletionStage<Void>> leftCompletion =
                 new AtomicReference<>();
         private final AtomicReference<byte[]> cutover = new AtomicReference<>();
@@ -1724,7 +1719,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                         case "status" -> status;
                                         case "setActorLeftHandler" -> {
                                             if (sourceSide) {
-                                                sourceLeftHandler.set(arguments[0]);
+                                                sourceLeftHandler.set(
+                                                        (ZLinkInternalMeshNode.ActorLeftHandler)
+                                                                arguments[0]);
                                             }
                                             yield null;
                                         }
@@ -1904,15 +1901,11 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             invokeSourceLeft(lastLeft);
         }
 
-        @SuppressWarnings("unchecked")
         private void invokeSourceLeft(ZLinkServiceM6BWireCodec.ActorLeft left) throws Exception {
-            Object handler = sourceLeftHandler.get();
+            var handler = sourceLeftHandler.get();
             assertNotNull(handler);
-            Method method = handler.getClass().getDeclaredMethods()[0];
-            method.setAccessible(true);
             EVENTS.add("leave.handler");
-            CompletionStage<Void> completion =
-                    (CompletionStage<Void>) method.invoke(handler, TARGET_RID, left);
+            CompletionStage<Void> completion = handler.handle(TARGET_RID, left);
             leftCompletion.compareAndSet(null, completion);
         }
     }
