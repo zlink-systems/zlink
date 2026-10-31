@@ -5,6 +5,12 @@ name: Framework Format
 on:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      concurrency_key:
+        description: Unique concurrency key supplied by the calling workflow.
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "0 18 * * *"
   # Mergify merge-queue batches and backports run CI on their own branches only,
@@ -18,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ inputs.concurrency_key || github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
