@@ -122,16 +122,16 @@ final class ZLinkActorLocationCoordinator {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("Location Store resolver is unavailable"));
         }
-        resolvers.invalidateActorRoute(actorId);
-        return resolvers.resolveActor(actorId);
+        return resolvers.readActor(actorId);
     }
 
     CompletionStage<Optional<ActorRef>> findStoredActorRefExact(String actorId) {
         if (resolvers == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
-        resolvers.invalidateActorRoute(actorId);
-        return findStoredActorRef(actorId);
+        return resolvers
+                .readActor(actorId)
+                .thenApply(row -> row == null ? Optional.empty() : Optional.of(row.actorRef()));
     }
 
     CompletionStage<Void> actorJoinedSpot(
@@ -150,15 +150,8 @@ final class ZLinkActorLocationCoordinator {
         if (meshName == null || meshName.isBlank()) {
             return CompletableFuture.completedFuture(null);
         }
-        CompletionStage<Void> joined =
-                lifecycle.notifyActorJoinedSpot(
-                        actorType, actor.context().actorId(), meshName, spotId, cancellation);
-        return joined.thenRun(
-                () -> {
-                    if (resolvers != null) {
-                        resolvers.invalidateActorRoute(actor.context().actorId());
-                    }
-                });
+        return lifecycle.notifyActorJoinedSpot(
+                actorType, actor.context().actorId(), meshName, spotId, cancellation);
     }
 
     CompletionStage<Void> actorMovedToEntrySpot(ZLinkActor actor, RoutingId nodeRid) {
@@ -186,20 +179,13 @@ final class ZLinkActorLocationCoordinator {
         if (actorType == null) {
             return CompletableFuture.completedFuture(null);
         }
-        return lifecycle
-                .notifyActorMovedToEntrySpot(
-                        actorType,
-                        actor.context().actorId(),
-                        nodeRid,
-                        entrySpotId,
-                        entrySpotGeneration,
-                        cancellation)
-                .thenRun(
-                        () -> {
-                            if (resolvers != null) {
-                                resolvers.invalidateActorRoute(actor.context().actorId());
-                            }
-                        });
+        return lifecycle.notifyActorMovedToEntrySpot(
+                actorType,
+                actor.context().actorId(),
+                nodeRid,
+                entrySpotId,
+                entrySpotGeneration,
+                cancellation);
     }
 
     CompletionStage<Void> releaseActor(String actorType, String actorId) {
