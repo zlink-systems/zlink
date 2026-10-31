@@ -553,6 +553,10 @@ class raw_mesh_node_owner_t
                                 std::vector<std::uint8_t> header);
     void send_descriptor_update_on_lane (const service_node_descriptor_t &descriptor,
                                          const std::vector<admitted_peer_t> &peers);
+    service_topology_registry_t::peer_observer_t
+    observe_request_peer (const std::vector<std::uint8_t> &target_routing_id) const;
+    service_topology_registry_t::peer_observer_t
+    observe_request_peer_on_lane (const std::vector<std::uint8_t> &target_routing_id) const;
     task_t<bool> request_with_header (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
@@ -562,7 +566,6 @@ class raw_mesh_node_owner_t
       std::optional<std::uint64_t> correlation = std::nullopt,
       bool target_claimed = false,
       mesh_request_metric_t request_metric = {},
-      service_liveness_registry_t::connection_t admission = {},
       std::optional<foundation::operation_registry_t::request_identity_t> request = {});
     task_t<bool> request_infrastructure (
       const std::vector<std::uint8_t> &target_routing_id,
@@ -571,8 +574,9 @@ class raw_mesh_node_owner_t
         &decode_reply,
       foundation::operation_registry_t::clock_t::time_point deadline,
       foundation::operation_registry_t::callback_t callback);
-    bool
-    observe_request (foundation::call_id_t operation,
+    static bool
+    observe_request (std::shared_ptr<foundation::operation_registry_t> operations,
+                     foundation::call_id_t operation,
                      std::uint64_t correlation,
                      std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running);
     void trace_admission_phase (const std::vector<std::uint8_t> &node_routing_id,

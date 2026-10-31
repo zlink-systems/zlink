@@ -158,6 +158,7 @@ class room_t final : public fw::spot_t<member_t>
     {
         _context.handlers ().add_actor_request<&room_t::where> ();
         _context.handlers ().add_handler<&room_t::prefix> ();
+        _context.handlers ().add_handler<&room_t::probe> ();
     }
     void prefix (fw::message_context_t &, const prefix_t &message)
     {
@@ -165,7 +166,15 @@ class room_t final : public fw::spot_t<member_t>
             received (message.value);
     }
     std::function<void (int)> received;
+    std::function<void ()> requested;
     std::function<fw::task_t<std::vector<std::byte>> ()> capture;
+
+    where_t probe (fw::message_context_t &, const where_t &)
+    {
+        if (requested)
+            requested ();
+        return {std::string (_context.spot_id ()), {}, room_type};
+    }
 
     where_t where (member_t &actor, fw::message_context_t &, const where_t &)
     {
@@ -225,6 +234,64 @@ template <class Predicate> bool observe (Predicate predicate)
     while (!predicate () && std::chrono::steady_clock::now () < deadline)
         std::this_thread::yield ();
     return predicate ();
+}
+
+TEST (SpotRequestAdmission, NewHostRequestsExistingSpotImmediatelyAfterReady)
+{
+    auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    std::atomic<unsigned> requests = 0;
+    const auto configure = [&] (host_t &host, const char *rid) {
+        auto &options = host.app.add_zlink_framework ();
+        options.add_location_store (locations);
+        options.add_relocation_store (relocations);
+        options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
+        host.app.logging ().use_file (std::string (rid) + "-first-request.flow");
+        options.add_route_mesh ("request-admission")
+          .set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from (rid))
+          .listen ("tcp://127.0.0.1:0")
+          .add_spot_factory<room_t> (
+            room_type,
+            [&] (fw::spot_context_t context) {
+                auto spot = std::make_shared<room_t> (std::move (context));
+                spot->requested = [&] { ++requests; };
+                return spot;
+            },
+            [] (auto &factory) { factory.recreate_on_relocation (); });
+    };
+    host_t owner, requester;
+    configure (owner, "first-request-owner");
+    owner.start ();
+    ASSERT_TRUE (observe ([&] { return owner.app.is_ready (); }));
+    auto owner_services = owner.app.advanced ().services ().build_provider ();
+    const auto created = owner_services.get_required<fw::spot_manager_t> ()
+                           .get_or_create (fw::spot_id_t (room_id), room_type)
+                           .async ()
+                           .result ();
+    ASSERT_TRUE (created);
+    ASSERT_EQ (created.value ().state, fw::spot_create_state_t::created);
+
+    configure (requester, "first-request-caller");
+    requester.start ();
+    ASSERT_TRUE (observe ([&] { return requester.app.is_ready (); }));
+    auto services = requester.app.advanced ().services ().build_provider ();
+    const auto existing = services.get_required<fw::spot_manager_t> ()
+                            .get_or_create (fw::spot_id_t (room_id), room_type)
+                            .async ()
+                            .result ();
+    ASSERT_TRUE (existing);
+    ASSERT_EQ (existing.value ().state, fw::spot_create_state_t::existing);
+    ASSERT_EQ (existing.value ().spot.node_rid ().value (), "first-request-owner");
+    auto route = requester.app.advanced ().zlink ().route_client (
+      services.get_required<fw::serializer_registry_t> ());
+    const auto reply = route.request_to_spot (fw::spot_id_t (room_id), where_t{})
+                         .timeout (wait_budget)
+                         .async<where_t> ()
+                         .result ();
+    ASSERT_TRUE (reply) << (reply.error () ? reply.error ()->what () : "");
+    EXPECT_EQ (reply.value ().spot, room_id);
+    EXPECT_EQ (requests.load (), 1u);
 }
 
 TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)

@@ -178,14 +178,38 @@ final class ZLinkSpotDirectOutbound {
             Class<TReply> replyType,
             CompletableFuture<Void> requestAdmission) {
         CompletableFuture<TReply> result = new CompletableFuture<>();
+        var outboundFlow = captureOutboundFlow();
+        result.whenComplete(
+                (reply, failure) -> {
+                    var terminal = flow.beginRequestTerminal(failure, result);
+                    if (terminal == null) return;
+                    Throwable cause = failure;
+                    while ((cause instanceof java.util.concurrent.CompletionException
+                                    || cause instanceof java.util.concurrent.ExecutionException)
+                            && cause.getCause() != null) cause = cause.getCause();
+                    terminal.trace(
+                            new ZLinkMessageFlowEvent(
+                                    ZLinkMessageFlowOutcome.REPLY_RECEIVED,
+                                    ZLinkDispatchErrorSurface.SPOT_ROUTE,
+                                    ZLinkDispatchMessageKind.REQUEST,
+                                    packetName.orElse(null),
+                                    null,
+                                    null,
+                                    null,
+                                    targetNodeRid.toString(),
+                                    spotId,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    cause == null ? null : cause.getClass().getSimpleName(),
+                                    cause == null ? null : cause.getMessage(),
+                                    outboundFlow == null ? null : outboundFlow.flowId(),
+                                    outboundFlow == null ? null : outboundFlow.origin()));
+                });
         List<Message> requestParts =
                 messages.encodeRequest(
-                        "",
-                        packetName,
-                        payload,
-                        contentType,
-                        metadata.values(),
-                        captureOutboundFlow());
+                        "", packetName, payload, contentType, metadata.values(), outboundFlow);
         AtomicBoolean requestPartsClosed = new AtomicBoolean();
         Runnable closeRequestParts =
                 () -> {
@@ -199,7 +223,8 @@ final class ZLinkSpotDirectOutbound {
                 packetName,
                 null,
                 targetNodeRid,
-                spotId);
+                spotId,
+                outboundFlow);
         try {
             spot.requestToSpot(
                             targetNodeRid,
@@ -216,13 +241,6 @@ final class ZLinkSpotDirectOutbound {
                                     result.completeExceptionally(failure);
                                     return;
                                 }
-                                trace(
-                                        ZLinkMessageFlowOutcome.REPLY_RECEIVED,
-                                        ZLinkDispatchMessageKind.RESPONSE,
-                                        packetName,
-                                        null,
-                                        targetNodeRid,
-                                        spotId);
                                 try {
                                     if (reply.result() != ZLinkBackendRequestResult.OK) {
                                         //  A backend request terminal is framework-generated;
@@ -284,25 +302,39 @@ final class ZLinkSpotDirectOutbound {
             String topic,
             RoutingId targetNodeRid,
             String spotId) {
+        trace(outcome, kind, packetName, topic, targetNodeRid, spotId, null);
+    }
+
+    private void trace(
+            ZLinkMessageFlowOutcome outcome,
+            ZLinkDispatchMessageKind kind,
+            Optional<String> packetName,
+            String topic,
+            RoutingId targetNodeRid,
+            String spotId,
+            ZLinkFlowContext.State context) {
         ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(outcome);
         if (tracePoint == null) {
             return;
         }
         tracePoint.trace(
                 new ZLinkMessageFlowEvent(
-                        outcome,
-                        topic == null
-                                ? ZLinkDispatchErrorSurface.SPOT_ROUTE
-                                : ZLinkDispatchErrorSurface.SPOT_SUBSCRIPTION,
-                        kind,
-                        packetName.orElse(null),
-                        null,
-                        topic,
-                        null,
-                        targetNodeRid == null ? null : targetNodeRid.toString(),
-                        spotId == null ? null : spotId.toString(),
-                        null,
-                        null));
+                                outcome,
+                                topic == null
+                                        ? ZLinkDispatchErrorSurface.SPOT_ROUTE
+                                        : ZLinkDispatchErrorSurface.SPOT_SUBSCRIPTION,
+                                kind,
+                                packetName.orElse(null),
+                                null,
+                                topic,
+                                null,
+                                targetNodeRid == null ? null : targetNodeRid.toString(),
+                                spotId == null ? null : spotId.toString(),
+                                null,
+                                null)
+                        .withFlow(
+                                context == null ? null : context.flowId(),
+                                context == null ? null : context.origin()));
     }
 }
 

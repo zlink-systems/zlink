@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/telemetry_observation.hpp"
 #include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 
@@ -187,15 +188,12 @@ TEST (ChannelHostReplyAdmission, MissingRouteReportsOneTerminalAndReleasesOrdina
     const auto server_rid = zlink::routing_id_t::from ("framework-channel-reply-server");
     const auto source_rid = zlink::routing_id_t::from ("framework-channel-reply-source");
 
-    std::mutex errors_mutex;
-    std::vector<zlink::framework::message_dispatch_error_event_t> errors;
+    auto observations = std::make_shared<zlink::framework::test::telemetry_observations_t<
+      zlink::framework::message_dispatch_error_event_t>> ();
     zlink::framework::dispatch_options_t options;
     options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
     zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      options, [&] (const auto &event) {
-          std::lock_guard lock (errors_mutex);
-          errors.push_back (event);
-      });
+      options, [observations] (const auto &event) { observations->record (event); });
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     zlink::framework::detail::apply_dispatch_options (builder, options);
     builder.channel ("reply-admission")
@@ -278,11 +276,18 @@ TEST (ChannelHostReplyAdmission, MissingRouteReportsOneTerminalAndReleasesOrdina
     handler.release ();
     ASSERT_TRUE (handler.wait_until_returned (2s));
 
-    // Stop drains the accepted handler and its binding reply terminal before assertions.
-    // A retry or duplicate submission would produce another missing-route terminal.
-    host.stop ();
+    // Observe the reply terminal while the Host registration is live.
+    const auto terminal_deadline = std::chrono::steady_clock::now () + 2s;
+    ASSERT_TRUE (wait_until ([&] { return !observations->snapshot ().empty (); }, 2s));
+    ASSERT_TRUE (wait_until (
+      [&] {
+          return context->core_hwm_budget_snapshot ().outstanding_application_lease_count () == 0u;
+      },
+      std::chrono::duration_cast<std::chrono::milliseconds> (terminal_deadline
+                                                             - std::chrono::steady_clock::now ())));
+    zlink::framework::test::acknowledge_delivery (terminal_deadline);
     {
-        std::lock_guard lock (errors_mutex);
+        const auto errors = observations->snapshot ();
         ASSERT_EQ (1u, errors.size ());
         EXPECT_EQ (zlink::framework::dispatch_error_surface_t::channel, errors.front ().surface);
         EXPECT_EQ (zlink::framework::dispatch_message_kind_t::response,
@@ -291,9 +296,12 @@ TEST (ChannelHostReplyAdmission, MissingRouteReportsOneTerminalAndReleasesOrdina
                    errors.front ().reason);
         EXPECT_EQ (zlink::framework::dispatch_error_action_t::drop, errors.front ().action);
         EXPECT_TRUE (errors.front ().exception);
+        EXPECT_TRUE (errors.front ().error_type && !errors.front ().error_type->empty ());
+        EXPECT_TRUE (errors.front ().error_message && !errors.front ().error_message->empty ());
     }
 
     EXPECT_EQ (0u, context->core_hwm_budget_snapshot ().outstanding_application_lease_count ());
+    host.stop ();
 
     // Discard the reply waiter at scope exit; this test observes lease release.
     (void) pending_request;
@@ -313,15 +321,12 @@ TEST_P (ChannelMessageFlow, ClientServerRequestAndSendRecordAllReceiverStages)
     const auto server_rid = zlink::routing_id_t::from ("framework-channel-reply-server");
     const auto source_rid = zlink::routing_id_t::from ("framework-channel-reply-source");
 
-    std::mutex events_mutex;
-    std::vector<zlink::framework::message_flow_event_t> events;
+    auto observations = std::make_shared<
+      zlink::framework::test::telemetry_observations_t<zlink::framework::message_flow_event_t>> ();
     zlink::framework::dispatch_options_t options;
     options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-      options, [&] (const auto &event) {
-          std::lock_guard lock (events_mutex);
-          events.push_back (event);
-      });
+      options, [observations] (const auto &event) { observations->record (event); });
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     zlink::framework::detail::apply_dispatch_options (builder, options);
     builder.channel ("reply-admission")
@@ -405,22 +410,19 @@ TEST_P (ChannelMessageFlow, ClientServerRequestAndSendRecordAllReceiverStages)
     }
 
     ASSERT_TRUE (handler.wait_until_entered (2s));
+    zlink::framework::test::acknowledge_delivery (std::chrono::steady_clock::now () + 2s);
     using phase_t = zlink::framework::message_flow_outcome_t;
     {
-        std::lock_guard lock (events_mutex);
+        const auto events = observations->snapshot ();
         ASSERT_EQ (3u, events.size ());
         EXPECT_EQ (phase_t::received, events[0].outcome);
         EXPECT_EQ (phase_t::admitted, events[1].outcome);
         EXPECT_EQ (phase_t::dispatched, events[2].outcome);
     }
     handler.release ();
-    ASSERT_TRUE (wait_until (
-      [&] {
-          std::lock_guard lock (events_mutex);
-          return events.size () == 4;
-      },
-      2s));
-    std::lock_guard lock (events_mutex);
+    ASSERT_TRUE (wait_until ([&] { return observations->snapshot ().size () == 4; }, 2s));
+    zlink::framework::test::acknowledge_delivery (std::chrono::steady_clock::now () + 2s);
+    const auto events = observations->snapshot ();
     EXPECT_EQ (request ? phase_t::replied : phase_t::completed, events.back ().outcome);
     for (const auto &event : events) {
         EXPECT_EQ (header.flow_id, event.flow_id);

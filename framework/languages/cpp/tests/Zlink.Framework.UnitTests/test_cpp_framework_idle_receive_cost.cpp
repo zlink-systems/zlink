@@ -56,12 +56,14 @@ extern "C" bool real_handoff (
   const std::function<bool ()> &handoff,
   const fw::detail::completion_dispatcher_borrow_t
     &dispatcher) __asm__ ("__real__ZN5zlink9framework6detail35dispatch_completion_receive_"
-                          "handoffERKSt8functionIFbvEERKPNS1_23completion_dispatcher_tE");
+                          "handoffERKSt8functionIFbvEERKSt10shared_ptrINS1_23completion_dispatcher_"
+                          "tEE");
 extern "C" bool wrap_handoff (
   const std::function<bool ()> &handoff,
   const fw::detail::completion_dispatcher_borrow_t
     &dispatcher) __asm__ ("__wrap__ZN5zlink9framework6detail35dispatch_completion_receive_"
-                          "handoffERKSt8functionIFbvEERKPNS1_23completion_dispatcher_tE");
+                          "handoffERKSt8functionIFbvEERKSt10shared_ptrINS1_23completion_dispatcher_"
+                          "tEE");
 extern "C" bool real_wait (
   fw::runtime::host::public_host_runtime_t *self,
   std::chrono::milliseconds timeout,

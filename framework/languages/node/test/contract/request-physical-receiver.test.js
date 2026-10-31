@@ -2986,7 +2986,7 @@ for (const shared of [false, true]) {
           } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
           const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
           const {
-            RequestResult
+            RequestResult, ZLinkBackendResultError
           } = require('../../packages/framework/dist/runtime/backend/runtime-values');
           let now = 1000;
           t.mock.method(performance, 'now', () => now);
@@ -3090,7 +3090,10 @@ for (const shared of [false, true]) {
               runtime.close();
               requests?.close();
             }
-            if (terminal === 'lifecycle') intentRemoved('target');
+            if (terminal === 'lifecycle') {
+              assert.equal(intentRemoved, undefined, 'ready submission has no admission intent observer');
+              submitted.fail(new ZLinkBackendResultError('request', RequestResult.NotConnected));
+            }
             if (terminal === 'deadline') {
               now += 50;
               if (shared) t.mock.timers.tick(50);

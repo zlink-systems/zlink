@@ -291,6 +291,8 @@ class app_state_t
     }
     ~app_state_t ()
     {
+        if (framework_options)
+            dispatch_options_access_t::retire_telemetry (framework_options->dispatch_options ());
         delays.stop_and_join ();
         wait_relocation_cleanup ();
         if (application_job_queue)
@@ -347,6 +349,8 @@ class app_state_t
 
     void close_framework_resources (service_provider_t &provider) noexcept
     {
+        if (framework_options)
+            dispatch_options_access_t::retire_telemetry (framework_options->dispatch_options ());
         const auto &failures = monitoring->runtime_failures;
         failures->capture ([&] { channel_runtime_t::from (zlink.message_bus ()).shutdown (); });
         failures->capture ([&] { drain_zlink_builder_runtime (zlink); });
@@ -1213,6 +1217,9 @@ void app_t::_apply_zlink_framework ()
           options.configure_dispatch (),
           _state->logging.factory ().create ("zlink.framework.dispatch"));
     }
+    detail::dispatch_options_access_t::bind_telemetry (options.configure_dispatch (),
+                                                       _state->monitoring->metric_provider,
+                                                       _state->monitoring->metric_meter);
     const auto http_snapshot = options.http ().snapshot ();
     const auto job_queue_configuration = runtime::resolve_application_job_queue_configuration (
       options.application_job_queue_profile (), options.max_queued_application_jobs (),
