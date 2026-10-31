@@ -2004,7 +2004,7 @@ class spot_node_runtime_t
                            const std::vector<zlink::message_t> &parts,
                            service_provider_t &services,
                            serializer_registry_t &serializers,
-                           std::function<void ()> before_application_handler = {},
+                           runtime::handler_entry_t before_application_handler = {},
                            std::function<void ()> transfer_owner_reservation = {},
                            std::size_t transferred_owner_byte_cost = 0,
                            const service::receive_record_t *multicast = nullptr) const;
@@ -2017,7 +2017,7 @@ class spot_node_runtime_t
       serializer_registry_t &serializers,
       std::function<void ()> deferred_terminal = {},
       bool *terminal_deferred = nullptr,
-      std::function<void ()> before_application_handler = {},
+      runtime::handler_entry_t before_application_handler = {},
       runtime::serial_execution_queue_t::async_completion_t application_completed = {});
     void set_route_client (route_client_t route_client);
     void on_destroy_actor (std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor);
@@ -2341,7 +2341,7 @@ class spot_node_runtime_t
       serializer_registry_t &serializers,
       spot_inbound_message_t metadata = {},
       const runtime::protocol::actor_route_fence_t *admitted_message_follow_target = nullptr,
-      std::function<void ()> before_application_handler = {},
+      runtime::handler_entry_t before_application_handler = {},
       std::function<void ()> after_application_admission = {},
       // The inbound caller's own identity (spec 28.en:
       // 584-591): a synthesized-fence relay (a cold probe

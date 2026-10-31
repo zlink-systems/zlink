@@ -6855,8 +6855,8 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation,
         if (!submitted || !*submitted || submitted->value () != zlink::submit_result_t::ok)
             return 7;
         bool received = false;
-        const auto dispatched = finite_task_result (
-          fixture.reply_host->dispatch_ready ([&] (const auto &, const auto &incoming, auto parts) {
+        const auto dispatched = finite_task_result (fixture.reply_host->dispatch_ready (
+          [&] (const auto &, const auto &incoming, auto parts, auto) {
               if (incoming.kind != runtime::host::record_kind_t::actor_request)
                   return;
               record = incoming;
@@ -8642,20 +8642,20 @@ int actor_native_terminal_cause (std::string_view cause,
         const auto opened = spots.open_local_actor_handoff (actor).result ();
         accepted = opened && opened.value ();
     } else {
-        accepted =
-          runtime->native_node ()
-            .transport ()
-            .mailbox ()
-            .notify_stateful_ready ("terminal:actor:2799",
-                                    [&, supplied = false] (const auto &dispatch) mutable {
-                                        if (std::exchange (supplied, true))
-                                            return false;
-                                        ++takes;
-                                        dispatch (owner, record, std::move (encoded).take_items ());
-                                        return true;
-                                    })
-            .result ()
-            .value ();
+        accepted = runtime->native_node ()
+                     .transport ()
+                     .mailbox ()
+                     .notify_stateful_ready ("terminal:actor:2799",
+                                             [&, supplied = false] (const auto &dispatch) mutable {
+                                                 if (std::exchange (supplied, true))
+                                                     return false;
+                                                 ++takes;
+                                                 dispatch (owner, record,
+                                                           std::move (encoded).take_items (), {});
+                                                 return true;
+                                             })
+                     .result ()
+                     .value ();
     }
     if (forwarded) {
         assert (following.wait_for (5s) == std::future_status::ready);

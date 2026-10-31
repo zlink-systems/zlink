@@ -1183,11 +1183,11 @@ void serial_execution_queue_t::settle_application_owned (const std::string &name
     }
 }
 
-std::pair<std::function<void ()>, std::function<void ()>>
+std::pair<runtime::handler_entry_t, std::function<void ()>>
 serial_execution_queue_t::accept_application_locked (
   work_item_t &item, const std::shared_ptr<serial_application_record_t> &preceding) noexcept
 {
-    std::function<void ()> initial;
+    runtime::handler_entry_t initial;
     if (item.lane != serial_work_lane_t::application || !item.application_record)
         return {};
     if (item.application_record->saved_work () || (preceding && preceding->admission.durable ()))
@@ -1431,7 +1431,7 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
             return true;
         std::optional<std::deque<work_item_t>> suffix;
         std::vector<work_item_t> prepared;
-        std::vector<std::pair<std::shared_ptr<serial_turn_handle_impl_t>, std::function<void ()>>>
+        std::vector<std::pair<std::shared_ptr<serial_turn_handle_impl_t>, runtime::handler_entry_t>>
           releases;
         std::exception_ptr primary;
         std::size_t queued = 0;
@@ -1475,7 +1475,7 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
                         if (!item.application_record)
                             continue;
                         auto &initial =
-                          releases.emplace_back (item.turn, std::function<void ()>{}).second;
+                          releases.emplace_back (item.turn, runtime::handler_entry_t{}).second;
                         item.application_record->admission.take_over (&initial);
                         releases.emplace_back (
                           item.turn, std::exchange (item.application_record->transferred, {}));
@@ -1487,7 +1487,7 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
                                        : _lifecycle.queue[lifecycle_index++];
                         if (item.application_record) {
                             auto &initial =
-                              releases.emplace_back (item.turn, std::function<void ()>{}).second;
+                              releases.emplace_back (item.turn, runtime::handler_entry_t{}).second;
                             item.application_record->admission.take_over (&initial);
                             releases.emplace_back (
                               item.turn, std::exchange (item.application_record->transferred, {}));
@@ -1527,11 +1527,10 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
             lock.unlock ();
         suffix.reset ();
         for (auto &release : releases)
-            settle_application_owned (release.first->_name, primary,
-                                      [callback = std::exchange (release.second, {})] {
-                                          if (callback)
-                                              callback ();
-                                      });
+            settle_application_owned (release.first->_name, primary, [&release] {
+                if (auto callback = std::exchange (release.second, {}))
+                    callback ();
+            });
         if (!adopted) {
             const auto reject = [this, &primary] (work_item_t &item) {
                 const auto failure = [&primary] {
@@ -2652,7 +2651,7 @@ void serial_execution_queue_t::import_publications ()
 void serial_execution_queue_t::import_publications_until (publication_node_t *cut)
 {
     while (_publication_cursor != cut) {
-        std::pair<std::function<void ()>, std::function<void ()>> released;
+        std::pair<runtime::handler_entry_t, std::function<void ()>> released;
         std::function<void ()> control;
         {
             std::unique_lock producer (_mutex, std::defer_lock);
@@ -2813,7 +2812,7 @@ bool serial_execution_queue_t::enqueue_locked (std::unique_lock<std::mutex> &pro
     auto &lane = lane_locked (options.lane);
     work_item_t item;
     std::shared_ptr<serial_turn_handle_impl_t> admitted_turn;
-    std::pair<std::function<void ()>, std::function<void ()>> released;
+    std::pair<runtime::handler_entry_t, std::function<void ()>> released;
     std::function<void ()> continuation;
     bool accepted;
     try {
@@ -2928,7 +2927,7 @@ bool serial_execution_queue_t::enqueue_locked (std::unique_lock<std::mutex> &pro
         std::exception_ptr primary;
         const auto &settlement_name = admitted_turn->_name;
         settle_application_owned (settlement_name, primary,
-                                  [release = std::exchange (released.first, {})] {
+                                  [release = std::exchange (released.first, {})] () mutable {
                                       if (release)
                                           release ();
                                   });

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
@@ -379,7 +380,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     bool resume_suspended_owned (const std::shared_ptr<serial_turn_handle_impl_t> &turn,
                                  std::function<void ()> work);
     bool prepare_application_head_owned ();
-    std::pair<std::function<void ()>, std::function<void ()>> accept_application_locked (
+    std::pair<runtime::handler_entry_t, std::function<void ()>> accept_application_locked (
       work_item_t &item, const std::shared_ptr<serial_application_record_t> &preceding) noexcept;
     template <typename Mutation>
     void mutate_fifo_locked (lane_state_t &lane,

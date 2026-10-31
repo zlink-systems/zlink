@@ -95,12 +95,6 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
     auto &queue = target.owners[owner];
     if (record.domain == service_mailbox_domain_t::application && _state->application_prepare)
         _state->application_prepare (record);
-    if (record.application_permit) {
-        // Admission follows handler entry or terminal, independently of claim credit.
-        auto before = record.application_permit->defer_handler_entry ();
-        record.application_permit.reset ();
-        record.before_application_handler = std::move (before);
-    }
     if (admitted)
         admitted ();
     queue.records.push_back (std::move (record));

@@ -4462,12 +4462,10 @@ catch (...) {
       detail::current_exception_result<zlink::submit_result_t> ());
 }
 
-task_t<std::size_t>
-mesh_node_runtime_t::dispatch_ready (std::function<void (const host::ready_record_t &,
-                                                         const host::receive_record_t &,
-                                                         std::vector<zlink::message_t>)> dispatch,
-                                     bool accept_application_receive,
-                                     std::function<bool ()> next_application_receive)
+task_t<std::size_t> mesh_node_runtime_t::dispatch_ready (
+  runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
+  bool accept_application_receive,
+  std::function<bool ()> next_application_receive)
 {
     try {
         if (!dispatch)

@@ -16,7 +16,7 @@ namespace zlink::framework::runtime
 // The FIFO owns payload, position and the single current supply lease.
 struct serial_application_admission_t
 {
-    using initial_t = std::function<void ()>;
+    using initial_t = runtime::handler_entry_t;
     struct durable_t
     {
         std::

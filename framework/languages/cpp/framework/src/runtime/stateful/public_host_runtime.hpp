@@ -843,18 +843,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                        pending_operation_t &operation,
                                                        std::chrono::milliseconds timeout);
     // The coroutine owns both callbacks; a caller may discard the task.
-    task_t<std::size_t> dispatch_ready (
-      std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
-      bool accept_application_receive = true,
-      std::function<bool ()> next_application_receive = {});
+    task_t<std::size_t> dispatch_ready (mesh::service_mailbox_t::application_dispatch_t dispatch,
+                                        bool accept_application_receive = true,
+                                        std::function<bool ()> next_application_receive = {});
     using application_owner_result_t = std::variant<bool, task_t<bool>>;
-    application_owner_result_t dispatch_application_owner (
-      std::string owner,
-      const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
-      std::function<void ()> started,
-      std::function<void ()> rejected);
+    application_owner_result_t
+    dispatch_application_owner (std::string owner,
+                                const mesh::service_mailbox_t::application_dispatch_t dispatch,
+                                std::function<void ()> started,
+                                std::function<void ()> rejected);
     bool wait_for_dispatch_activity (
       std::chrono::milliseconds timeout,
       bool accept_application_receive,
@@ -1030,12 +1027,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                const mesh::service_mailbox_t::application_dispatch_t &dispatch);
     task_t<bool>
     // A restoring seal is passed by the gate admission that observed it.
-    dispatch_stateful_owner (
-      const stateful::object_ref_t &object,
-      const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
-      std::shared_ptr<runtime::serial_execution_queue_t> gate = {},
-      std::shared_ptr<stateful::relocation_seal_binding_t> restoring = {});
+    dispatch_stateful_owner (const stateful::object_ref_t &object,
+                             const mesh::service_mailbox_t::application_dispatch_t &dispatch,
+                             std::shared_ptr<runtime::serial_execution_queue_t> gate = {},
+                             std::shared_ptr<stateful::relocation_seal_binding_t> restoring = {});
     bool
     dispatch_stateful_delivery (const stateful::object_ref_t &object,
                                 stateful::stateful_delivery_t delivery,
@@ -1337,11 +1332,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     mutable runtime::state_lane_t _lifecycle_configuration_lane;
 
     mutable runtime::state_lane_t _local_dispatch_completion_lane;
-    std::deque<local_application_dispatch_t> _local_application_dispatches;
+    std::deque<mesh::service_mailbox_application_t> _local_application_dispatches;
     relocation_gate_t _relocation_gate;
     native_spot_target_t _native_spot_target;
     mesh::service_mailbox_t::application_dispatch_t _relocation_resume;
-    void publish_local_application (local_application_dispatch_t dispatch);
+    void publish_local_application (mesh::service_mailbox_application_t dispatch);
     task_t<void> ingest_cut_original (stateful::object_ref_t owner,
                                       mesh::service_mailbox_record_t original);
     // dispatch is the query of the shared original application, which stays read-only until
@@ -1365,7 +1360,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              std::vector<zlink::message_t> parts,
                              std::shared_ptr<const std::vector<std::uint8_t>> metadata,
                              zlink::routing_id_t source_node,
-                             std::function<void ()> before_application_handler = {});
+                             std::function<void ()> before_application_handler = {},
+                             application_job_queue_t::permit_t application_permit = {});
     std::map<std::string, std::pair<std::string, stateful::object_ref_t>> _actors;
 
     mutable runtime::state_lane_t _spot_actor_index_lane;

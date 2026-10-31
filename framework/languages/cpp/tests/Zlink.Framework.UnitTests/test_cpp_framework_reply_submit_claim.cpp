@@ -421,7 +421,12 @@ void verify_source_wait_original (bool seal_first, bool reject, bool restore)
             assert (target.mailbox ().release (*restored));
         } else
             assert (target.mailbox ().release (*claim));
-        sealed->before_application_handler ();
+        auto sealed_permit = sealed->application_permit
+                               ? std::move (*sealed->application_permit)
+                               : zlink::framework::runtime::application_job_queue_t::permit_t{};
+        zlink::framework::runtime::handler_entry_t sealed_before_application_handler (
+          sealed->before_application_handler, std::move (sealed_permit));
+        sealed_before_application_handler ();
         assert (permits == 1);
     } else {
         assert (result == stateful::stateful_error_t::none);
@@ -486,9 +491,24 @@ void verify_partial_prefix_and_stale_claim (bool local)
     auto second = mailbox.take ({restored, 0});
     auto third = mailbox.take ({restored, 1});
     assert (second && third && second->operation->second == 2 && third->operation->second == 3);
-    gate->before_application_handler ();
-    second->before_application_handler ();
-    third->before_application_handler ();
+    auto gate_permit = gate->application_permit
+                         ? std::move (*gate->application_permit)
+                         : zlink::framework::runtime::application_job_queue_t::permit_t{};
+    zlink::framework::runtime::handler_entry_t gate_before_application_handler (
+      gate->before_application_handler, std::move (gate_permit));
+    gate_before_application_handler ();
+    auto second_permit = second->application_permit
+                           ? std::move (*second->application_permit)
+                           : zlink::framework::runtime::application_job_queue_t::permit_t{};
+    zlink::framework::runtime::handler_entry_t second_before_application_handler (
+      second->before_application_handler, std::move (second_permit));
+    second_before_application_handler ();
+    auto third_permit = third->application_permit
+                          ? std::move (*third->application_permit)
+                          : zlink::framework::runtime::application_job_queue_t::permit_t{};
+    zlink::framework::runtime::handler_entry_t third_before_application_handler (
+      third->before_application_handler, std::move (third_permit));
+    third_before_application_handler ();
     assert (permits == 3);
     assert (mailbox.release (*restored));
     assert (!mailbox.release (*restored));
