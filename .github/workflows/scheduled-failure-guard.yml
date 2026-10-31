@@ -1,0 +1,167 @@
+name: Scheduled failure guard
+
+on:
+  workflow_run:
+    workflows:
+      - Framework Format
+      - Framework Node
+      - Framework .NET
+      - Framework C++ Verify
+      - Framework Java
+      - Examples smoke
+    types:
+      - completed
+
+permissions:
+  actions: read
+  issues: write
+
+jobs:
+  guard:
+    if: >-
+      ${{ github.event.workflow_run.event == 'schedule' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          (github.event.workflow_run.conclusion == 'failure' ||
+           github.event.workflow_run.conclusion == 'timed_out') }}
+    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPOSITORY: ${{ github.repository }}
+      MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+      WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+
+    steps:
+      - name: Create or update nightly failure issue
+        id: incident
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          title="nightly: ${WORKFLOW_NAME} 실패"
+          label="nightly-failure"
+          manual_unpause="수동 해제: 원인을 확인한 뒤 Mergify CLI에서 mergify queue unpause를 실행하거나 Mergify 대시보드에서 merge queue를 재개하세요."
+
+          find_matching_issue() {
+            local issues_json="$1"
+            local expected_title="$2"
+            local expected_label="$3"
+            local label_exists="$4"
+            jq -c --arg title "$expected_title" --arg label "$expected_label" --argjson label_exists "$label_exists" '
+              first(
+                .[]
+                | select(.title == $title)
+                | select((($label_exists | not) or any(.labels[]?; .name == $label)))
+              ) // empty
+            ' <<< "$issues_json"
+          }
+
+          if [[ "${DRY_RUN:-false}" == "true" ]]; then
+            match="$(find_matching_issue "${FAKE_OPEN_ISSUES_JSON:?}" "$title" "$label" "${FAKE_LABEL_EXISTS:?}")"
+            if [[ -n "$match" ]]; then
+              jq -r '"duplicate=true number=" + (.number | tostring) + " url=" + .url' <<< "$match"
+            else
+              echo 'duplicate=false'
+            fi
+            exit 0
+          fi
+
+          jobs_json="$(gh run view "$RUN_ID" --repo "$GH_REPOSITORY" --json jobs)"
+          failed_jobs="$(jq -r '
+            [.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | .name]
+            | unique
+            | if length == 0 then ["실패 job 이름을 찾지 못했습니다."] else . end
+            | .[]
+          ' <<< "$jobs_json")"
+          failed_job_lines="$(sed 's/^/- /' <<< "$failed_jobs")"
+
+          label_state=unknown
+          if labels_json="$(gh label list --repo "$GH_REPOSITORY" --limit 1000 --json name)"; then
+            label_exists="$(jq -r --arg label "$label" 'any(.[]; .name == $label)' <<< "$labels_json")"
+            if [[ "$label_exists" == true ]]; then
+              label_state=present
+            else
+              label_state=missing
+            fi
+          else
+            echo '::warning::Could not list repository labels; nightly-failure label availability is unknown.'
+            label_exists=false
+          fi
+
+          if [[ "$label_state" == missing ]]; then
+            echo '::warning::The nightly-failure label is missing; create it manually. This workflow will not create labels.'
+          elif [[ "$label_state" == unknown ]]; then
+            echo '::warning::Could not verify nightly-failure label availability; the issue will be recorded without a label.'
+          fi
+          search_query="\"${title}\" in:title"
+          open_issues="$(gh issue list --repo "$GH_REPOSITORY" --state open --search "$search_query" --limit 1000 --json number,title,url,labels)"
+
+          existing="$(find_matching_issue "$open_issues" "$title" "$label" "$label_exists")"
+          label_note=""
+          if [[ "$label_state" != present ]]; then
+            label_note=$'\n\nnightly-failure 라벨 없이 기록했습니다. 저장소에서 라벨 상태를 확인하고, 없으면 생성해야 합니다.'
+          fi
+
+          if [[ -n "$existing" ]]; then
+            issue_number="$(jq -r '.number' <<< "$existing")"
+            issue_url="$(jq -r '.url' <<< "$existing")"
+            comment="예약 실행 실패가 다시 확인되었습니다.
+          - 실행: ${RUN_URL}
+          - Head SHA: ${HEAD_SHA}
+          - 실패 job:
+          ${failed_job_lines}${label_note}"
+            gh issue comment "$issue_number" --repo "$GH_REPOSITORY" --body "$comment"
+          else
+            body="${manual_unpause}
+
+          예약 실행이 실패했습니다.
+          - Workflow: ${WORKFLOW_NAME}
+          - 실행: ${RUN_URL}
+          - Head SHA: ${HEAD_SHA}
+          - Conclusion: ${RUN_CONCLUSION}
+          - 실패 job:
+          ${failed_job_lines}${label_note}"
+            if [[ "$label_exists" == true ]]; then
+              issue_url="$(gh issue create --repo "$GH_REPOSITORY" --title "$title" --body "$body" --label "$label")"
+            else
+              issue_url="$(gh issue create --repo "$GH_REPOSITORY" --title "$title" --body "$body")"
+            fi
+          fi
+
+          printf 'issue_url=%s\n' "$issue_url" >> "$GITHUB_OUTPUT"
+
+      # Recovery is manual after the cause is confirmed: run mergify queue unpause
+      # or resume the queue from the Mergify dashboard. This workflow never unpauses.
+      - name: Pause Mergify merge queue
+        if: env.MERGIFY_TOKEN != ''
+        env:
+          ISSUE_URL: ${{ steps.incident.outputs.issue_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          reason="Scheduled failure: ${WORKFLOW_NAME} — ${ISSUE_URL}"
+          payload="$(jq -n --arg reason "$reason" '{reason: $reason}')"
+          owner="${GH_REPOSITORY%%/*}"
+          repository="${GH_REPOSITORY#*/}"
+          http_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --request PUT \
+            --header "Authorization: Bearer ${MERGIFY_TOKEN}" \
+            --header 'Content-Type: application/json' \
+            --data "$payload" \
+            "https://api.mergify.com/v1/repos/${owner}/${repository}/merge-queue/pause")"
+          if [[ "$http_status" != 200 ]]; then
+            echo "::error::Mergify merge queue pause failed with HTTP ${http_status}."
+            exit 1
+          fi
+          echo "Mergify merge queue paused. Reason includes ${ISSUE_URL}."
+
+      - name: Warn that Mergify queue was not paused
+        if: env.MERGIFY_TOKEN == ''
+        env:
+          ISSUE_URL: ${{ steps.incident.outputs.issue_url }}
+        shell: bash
+        run: |
+          echo "::warning::MERGIFY_TOKEN is not configured; the failure issue at ${ISSUE_URL} was recorded but the merge queue was not paused."
