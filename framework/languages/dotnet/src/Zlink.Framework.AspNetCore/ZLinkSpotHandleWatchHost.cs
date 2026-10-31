@@ -173,7 +173,6 @@ internal sealed class ZLinkSpotHandleWatchHost(
 
         if (change.Key is not ZLinkLocationKey.Actor(var actorKey))
             return;
-        rows.InvalidateActorRoute(actorKey);
         if (change.ChangeType is ZLinkLocationChangeType.Removed or ZLinkLocationChangeType.Expired)
         {
             if (handles is not null)
@@ -181,8 +180,7 @@ internal sealed class ZLinkSpotHandleWatchHost(
             return;
         }
 
-        var actor = await rows.ResolveActorRowAsync(actorKey, cancellationToken)
-            .ConfigureAwait(false);
+        var actor = await rows.ReadActorRowAsync(actorKey, cancellationToken).ConfigureAwait(false);
         if (actor is not null && handles is not null)
             await handles.UpdateActorAsync(actor).ConfigureAwait(false);
     }
