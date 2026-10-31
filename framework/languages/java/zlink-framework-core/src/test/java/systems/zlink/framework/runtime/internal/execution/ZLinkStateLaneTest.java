@@ -416,25 +416,22 @@ final class ZLinkStateLaneTest {
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
     void closeWaitsForAnAdmissionThatHasNotYetPublishedItsTurn(boolean post) throws Exception {
-        var lane = new ZLinkStateLane();
         var adding = new java.util.concurrent.CountDownLatch(1);
         var publish = new java.util.concurrent.CountDownLatch(1);
-        var mailbox = ZLinkStateLane.class.getDeclaredField("mailbox");
-        mailbox.setAccessible(true);
-        mailbox.set(
-                lane,
-                new java.util.concurrent.ConcurrentLinkedQueue<Object>() {
-                    @Override
-                    public boolean add(Object turn) {
-                        adding.countDown();
-                        try {
-                            assertTrue(publish.await(5, TimeUnit.SECONDS));
-                        } catch (InterruptedException failure) {
-                            throw new AssertionError(failure);
-                        }
-                        return super.add(turn);
-                    }
-                });
+        var lane =
+                new ZLinkStateLane(
+                        new java.util.concurrent.ConcurrentLinkedQueue<ZLinkStateLane.WorkItem>() {
+                            @Override
+                            public boolean add(ZLinkStateLane.WorkItem turn) {
+                                adding.countDown();
+                                try {
+                                    assertTrue(publish.await(5, TimeUnit.SECONDS));
+                                } catch (InterruptedException failure) {
+                                    throw new AssertionError(failure);
+                                }
+                                return super.add(turn);
+                            }
+                        });
         var ran = new AtomicBoolean();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             var submitted =
@@ -635,9 +632,7 @@ final class ZLinkStateLaneTest {
     void defaultLanesShareExecutorButKeepIndependentTurnsAndClose() throws Exception {
         ZLinkStateLane first = new ZLinkStateLane();
         ZLinkStateLane second = new ZLinkStateLane();
-        var executor = ZLinkStateLane.class.getDeclaredField("executor");
-        executor.setAccessible(true);
-        assertSame(executor.get(first), executor.get(second));
+        assertTrue(first.sharesExecutorWith(second));
 
         CompletableFuture<Void> entered = new CompletableFuture<>();
         CompletableFuture<Void> release = new CompletableFuture<>();

@@ -42,6 +42,12 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
                         });
     }
 
+    long scheduledDelayNanosForTest() {
+        synchronized (lifecycleGate) {
+            return task.getDelay(TimeUnit.NANOSECONDS);
+        }
+    }
+
     CompletionStage<Void> start() {
         synchronized (lifecycleGate) {
             running = true;
