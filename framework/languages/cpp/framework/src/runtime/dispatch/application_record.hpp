@@ -152,7 +152,7 @@ struct reply_token_t
     std::weak_ptr<public_host_runtime_t> host;
     std::shared_ptr<mesh::service_mailbox_record_t> request;
     std::function<bool (const std::vector<zlink::message_t> &)> local_reply;
-    std::function<bool (const actor_join_operation_result_t &,
+    std::function<bool (const result_t<actor_join_operation_result_t> &,
                         const std::vector<zlink::message_t> &)>
       local_actor_join;
 };
@@ -225,7 +225,7 @@ struct receive_record_t
     int terminal_result = 0;
     int failure_errno = 0;
     reply_token_t reply_token;
-    std::optional<actor_join_completion_t> join_completion;
+    std::optional<result_t<actor_join_completion_t>> join_completion;
     std::optional<actor_control_t> actor_control;
     std::optional<send_ready_data_t> send_ready;
     /* The owner queue keeps the original byte reservation while this record

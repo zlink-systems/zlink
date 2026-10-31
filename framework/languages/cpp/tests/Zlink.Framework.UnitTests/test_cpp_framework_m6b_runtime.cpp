@@ -1833,7 +1833,9 @@ void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_sea
       {protocol::bound_session_binding_state_t::active, 17}};
     assert (await_task (source->transport ().request_bound_session_bind (
       local.routing_id ().to_bytes (), bind, 2s,
-      [&] (foundation::operation_terminal_t, zlink::message_t payload) {
+      [&] (foundation::operation_terminal_t,
+           ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+          auto payload = std::move (completion_payload.value ());
           reply = protocol::decode_reply_header (protocol::message_bytes (payload));
       })));
     while (!reply && std::chrono::steady_clock::now () < deadline) {
@@ -2922,7 +2924,7 @@ void verify_actor_create_does_not_replay_after_reciprocal_handover ()
                                    std::chrono::duration_cast<std::chrono::milliseconds> (
                                      deadline - std::chrono::steady_clock::now ()),
                                    [&promise] (auto terminal, auto payload) {
-                                       promise.set_value ({terminal, payload.to_bytes ()});
+                                       promise.set_value ({terminal, payload.value ().to_bytes ()});
                                    })));
     const auto receive = [&] {
         std::shared_ptr<mesh::service_mailbox_claim_t> claim;
@@ -3334,11 +3336,11 @@ void verify_session_binding_and_terminal_once ()
     foundation::call_id_t id{};
     id.low = 1;
     std::atomic_size_t terminal_count{0};
-    assert (
-      operations.register_operation (id, foundation::operation_registry_t::clock_t::now () + 1s,
-                                     [&] (foundation::operation_terminal_t, zlink::message_t) {
-                                         terminal_count.fetch_add (1, std::memory_order_release);
-                                     }));
+    assert (operations.register_operation (
+      id, foundation::operation_registry_t::clock_t::now () + 1s,
+      [&] (foundation::operation_terminal_t, ::zlink::framework::result_t<zlink::message_t>) {
+          terminal_count.fetch_add (1, std::memory_order_release);
+      }));
     assert (operations.complete (id, zlink::message_t::from (std::vector<std::uint8_t>{1})));
     assert (!operations.cancel (id));
     const auto terminal_deadline = std::chrono::steady_clock::now () + 5s;
@@ -5982,18 +5984,19 @@ void verify_raw_spot_and_actor_routing ()
     using request_result_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
     std::promise<request_result_t> promise;
     auto future = promise.get_future ();
-    assert (
-      source
-        .request_to_actor (
-          target_descriptor.node_routing_id, std::nullopt, actor_fence,
-          {"ActorPacket", "application/json", bytes ("request")}, 2s,
-          [&promise] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
-              auto payload = native_payload.to_bytes ();
-              promise.set_value ({terminal, std::move (payload)});
-          },
-          protocol::wire_operation_id_t{77, 88})
-        .result ()
-        .value ());
+    assert (source
+              .request_to_actor (
+                target_descriptor.node_routing_id, std::nullopt, actor_fence,
+                {"ActorPacket", "application/json", bytes ("request")}, 2s,
+                [&promise] (foundation::operation_terminal_t terminal,
+                            ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+                    auto native_payload = std::move (completion_payload.value ());
+                    auto payload = native_payload.to_bytes ();
+                    promise.set_value ({terminal, std::move (payload)});
+                },
+                protocol::wire_operation_id_t{77, 88})
+              .result ()
+              .value ());
     mesh::raw_mesh_pump_result_t actor_pump = mesh::raw_mesh_pump_result_t::no_data;
     while (actor_pump != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
@@ -6052,18 +6055,20 @@ void verify_raw_spot_and_actor_routing ()
     const protocol::wire_operation_id_t bound_operation{0xa1, 0xa2};
     std::promise<request_result_t> bound_promise;
     auto bound_future = bound_promise.get_future ();
-    assert (source
-              .request_to_actor (
-                target_descriptor.node_routing_id, std::nullopt, actor_fence,
-                {"ActorPacket", "application/json", bytes ("bound")}, 2s,
-                [&bound_promise] (foundation::operation_terminal_t terminal,
-                                  zlink::message_t native_payload) {
-                    auto payload = native_payload.to_bytes ();
-                    bound_promise.set_value ({terminal, std::move (payload)});
-                },
-                bound_operation, bound_session_tail, 91)
-              .result ()
-              .value ());
+    assert (
+      source
+        .request_to_actor (
+          target_descriptor.node_routing_id, std::nullopt, actor_fence,
+          {"ActorPacket", "application/json", bytes ("bound")}, 2s,
+          [&bound_promise] (foundation::operation_terminal_t terminal,
+                            ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+              auto native_payload = std::move (completion_payload.value ());
+              auto payload = native_payload.to_bytes ();
+              bound_promise.set_value ({terminal, std::move (payload)});
+          },
+          bound_operation, bound_session_tail, 91)
+        .result ()
+        .value ());
     mesh::raw_mesh_pump_result_t bound_pump = mesh::raw_mesh_pump_result_t::no_data;
     while (bound_pump != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
@@ -6225,18 +6230,20 @@ void verify_raw_spot_and_actor_routing ()
     std::promise<request_result_t> stale_promise;
     auto stale_future = stale_promise.get_future ();
     std::size_t stale_terminal_count = 0;
-    assert (source
-              .request_to_actor (
-                target_descriptor.node_routing_id, std::nullopt, stale_fence,
-                {"ActorPacket", "application/json", bytes ("stale")}, 2s,
-                [&stale_promise, &stale_terminal_count] (foundation::operation_terminal_t terminal,
-                                                         zlink::message_t native_payload) {
-                    auto payload = native_payload.to_bytes ();
-                    ++stale_terminal_count;
-                    stale_promise.set_value ({terminal, std::move (payload)});
-                })
-              .result ()
-              .value ());
+    assert (
+      source
+        .request_to_actor (target_descriptor.node_routing_id, std::nullopt, stale_fence,
+                           {"ActorPacket", "application/json", bytes ("stale")}, 2s,
+                           [&stale_promise, &stale_terminal_count] (
+                             foundation::operation_terminal_t terminal,
+                             ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+                               auto native_payload = std::move (completion_payload.value ());
+                               auto payload = native_payload.to_bytes ();
+                               ++stale_terminal_count;
+                               stale_promise.set_value ({terminal, std::move (payload)});
+                           })
+        .result ()
+        .value ());
     actor_pump = mesh::raw_mesh_pump_result_t::no_data;
     while (actor_pump != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
@@ -6558,7 +6565,9 @@ void verify_node_request_requires_remote_admission ()
     auto submitted = source.request_to_node (
       target_descriptor.node_routing_id, {"DeferredRequest", "application/json", bytes ("request")},
       2s,
-      [&promise] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+      [&promise] (foundation::operation_terminal_t terminal,
+                  ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+          auto native_payload = std::move (completion_payload.value ());
           promise.set_value ({terminal, native_payload.to_bytes ()});
       },
       4242);
@@ -6717,14 +6726,17 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
     std::promise<std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>>
       accepted_promise;
     auto accepted = accepted_promise.get_future ();
-    assert (source
-              .request_to_node (published_target.node_routing_id, payload, 5s,
-                                [&accepted_promise] (foundation::operation_terminal_t terminal,
-                                                     zlink::message_t failure) {
-                                    accepted_promise.set_value ({terminal, failure.to_bytes ()});
-                                })
-              .result ()
-              .value ());
+    assert (
+      source
+        .request_to_node (
+          published_target.node_routing_id, payload, 5s,
+          [&accepted_promise] (foundation::operation_terminal_t terminal,
+                               ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+              auto failure = std::move (completion_payload.value ());
+              accepted_promise.set_value ({terminal, failure.to_bytes ()});
+          })
+        .result ()
+        .value ());
     mesh::raw_mesh_pump_result_t queued = mesh::raw_mesh_pump_result_t::no_data;
     while (queued != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
@@ -6766,11 +6778,12 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
     std::promise<foundation::operation_terminal_t> independent_promise;
     auto independent = independent_promise.get_future ();
     assert (source
-              .request_to_channel ("independent-channel", payload, 5s,
-                                   [&independent_promise] (
-                                     foundation::operation_terminal_t terminal, zlink::message_t) {
-                                       independent_promise.set_value (terminal);
-                                   })
+              .request_to_channel (
+                "independent-channel", payload, 5s,
+                [&independent_promise] (foundation::operation_terminal_t terminal,
+                                        ::zlink::framework::result_t<zlink::message_t>) {
+                    independent_promise.set_value (terminal);
+                })
               .result ()
               .value ());
     mesh::raw_mesh_pump_result_t independent_pump = mesh::raw_mesh_pump_result_t::no_data;
@@ -7372,7 +7385,9 @@ void verify_restored_request_completes_local_native_alias ()
     assert (await_task (target->transport ().request_to_actor (
       remote.node_routing_id, std::nullopt, old_route,
       protocol::application_payload_t::from_parts ({zlink::message_t::from ("request")}), 10s,
-      [&] (foundation::operation_terminal_t terminal, zlink::message_t payload) {
+      [&] (foundation::operation_terminal_t terminal,
+           ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+          auto payload = std::move (completion_payload.value ());
           assert (terminal == foundation::operation_terminal_t::completed);
           const auto parts = protocol::decode_application_parts (
             protocol::decode_application_payload (payload.to_bytes ()));
@@ -7835,15 +7850,17 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
            static_cast<std::uint64_t> (reservation->fence.target.owner.lease_generation),
            reservation->fence.capacity_bundle.spot_slots},
           deadline_ms};
-        const auto submitted = target
-                                 ->create_user_spot_remote (
-                                   target->status ().routing_id (), request, 5s,
-                                   [&] (foundation::operation_terminal_t terminal,
-                                        protocol::user_spot_create_reply_t reply,
-                                        std::optional<protocol::application_payload_t>) {
-                                       reply_completion.set_value ({terminal, std::move (reply)});
-                                   })
-                                 .result ();
+        const auto submitted =
+          target
+            ->create_user_spot_remote (
+              target->status ().routing_id (), request, 5s,
+              [&] (foundation::operation_terminal_t terminal,
+                   result_t<protocol::user_spot_create_reply_t> completion_reply,
+                   std::optional<protocol::application_payload_t>) {
+                  auto reply = std::move (completion_reply.value ());
+                  reply_completion.set_value ({terminal, std::move (reply)});
+              })
+            .result ();
         assert (submitted && submitted.value ());
         auto dispatched =
           target->dispatch_ready ([] (const host::ready_record_t &, const host::receive_record_t &,
@@ -8687,8 +8704,9 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                   ->create_user_spot_remote (
                     target->status ().routing_id (), request, 5s,
                     [&] (foundation::operation_terminal_t terminal,
-                         protocol::user_spot_create_reply_t result,
+                         result_t<protocol::user_spot_create_reply_t> completion_reply,
                          std::optional<protocol::application_payload_t>) {
+                        auto result = std::move (completion_reply.value ());
                         assert (terminal == foundation::operation_terminal_t::completed);
                         reply = std::move (result);
                     })
@@ -8721,17 +8739,18 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
       static_cast<std::uint64_t> (invalid_reservation->fence.target.owner.lease_generation),
       invalid_reservation->fence.capacity_bundle.spot_slots};
     std::optional<protocol::user_spot_create_reply_t> invalid_reply;
-    assert (
-      source
-        ->create_user_spot_remote (
-          target->status ().routing_id (), invalid_create, 5s,
-          [&] (foundation::operation_terminal_t terminal, protocol::user_spot_create_reply_t reply,
-               std::optional<protocol::application_payload_t>) {
-              assert (terminal == foundation::operation_terminal_t::completed);
-              invalid_reply = std::move (reply);
-          })
-        .result ()
-        .value ());
+    assert (source
+              ->create_user_spot_remote (
+                target->status ().routing_id (), invalid_create, 5s,
+                [&] (foundation::operation_terminal_t terminal,
+                     result_t<protocol::user_spot_create_reply_t> completion_reply,
+                     std::optional<protocol::application_payload_t>) {
+                    auto reply = std::move (completion_reply.value ());
+                    assert (terminal == foundation::operation_terminal_t::completed);
+                    invalid_reply = std::move (reply);
+                })
+              .result ()
+              .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!invalid_reply && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
@@ -8750,17 +8769,18 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                     std::chrono::system_clock::now ().time_since_epoch () + 100ms)
                                     .count ());
     std::optional<protocol::user_spot_create_reply_t> mismatch_reply;
-    assert (
-      source
-        ->create_user_spot_remote (
-          target->status ().routing_id (), mismatch_create, 5s,
-          [&] (foundation::operation_terminal_t terminal, protocol::user_spot_create_reply_t reply,
-               std::optional<protocol::application_payload_t>) {
-              assert (terminal == foundation::operation_terminal_t::completed);
-              mismatch_reply = std::move (reply);
-          })
-        .result ()
-        .value ());
+    assert (source
+              ->create_user_spot_remote (
+                target->status ().routing_id (), mismatch_create, 5s,
+                [&] (foundation::operation_terminal_t terminal,
+                     result_t<protocol::user_spot_create_reply_t> completion_reply,
+                     std::optional<protocol::application_payload_t>) {
+                    auto reply = std::move (completion_reply.value ());
+                    assert (terminal == foundation::operation_terminal_t::completed);
+                    mismatch_reply = std::move (reply);
+                })
+              .result ()
+              .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!mismatch_reply && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
@@ -8772,17 +8792,18 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
     assert (mismatch_reply->header.failure_code
             == static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch));
     std::optional<protocol::user_spot_create_reply_t> replayed_mismatch_reply;
-    assert (
-      source
-        ->create_user_spot_remote (
-          target->status ().routing_id (), mismatch_create, 5s,
-          [&] (foundation::operation_terminal_t terminal, protocol::user_spot_create_reply_t reply,
-               std::optional<protocol::application_payload_t>) {
-              assert (terminal == foundation::operation_terminal_t::completed);
-              replayed_mismatch_reply = std::move (reply);
-          })
-        .result ()
-        .value ());
+    assert (source
+              ->create_user_spot_remote (
+                target->status ().routing_id (), mismatch_create, 5s,
+                [&] (foundation::operation_terminal_t terminal,
+                     result_t<protocol::user_spot_create_reply_t> completion_reply,
+                     std::optional<protocol::application_payload_t>) {
+                    auto reply = std::move (completion_reply.value ());
+                    assert (terminal == foundation::operation_terminal_t::completed);
+                    replayed_mismatch_reply = std::move (reply);
+                })
+              .result ()
+              .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!replayed_mismatch_reply && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
@@ -8851,8 +8872,10 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
     bool create_has_application_reply = false;
     std::size_t create_terminal_count = 0;
     const auto record_create =
-      [&] (foundation::operation_terminal_t terminal, protocol::user_spot_create_reply_t reply,
+      [&] (foundation::operation_terminal_t terminal,
+           result_t<protocol::user_spot_create_reply_t> completion_reply,
            std::optional<protocol::application_payload_t> application_reply) {
+          auto reply = std::move (completion_reply.value ());
           create_operation_terminal = terminal;
           create_reply = std::move (reply);
           create_has_application_reply = application_reply.has_value ();
@@ -8885,17 +8908,18 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
     assert (committed_snapshot
             && committed_snapshot->allocation.state == placement_allocation_state_t::active);
     std::optional<protocol::user_spot_create_reply_t> replayed_create_reply;
-    assert (
-      source
-        ->create_user_spot_remote (
-          target->status ().routing_id (), create, 5s,
-          [&] (foundation::operation_terminal_t terminal, protocol::user_spot_create_reply_t reply,
-               std::optional<protocol::application_payload_t>) {
-              assert (terminal == foundation::operation_terminal_t::completed);
-              replayed_create_reply = std::move (reply);
-          })
-        .result ()
-        .value ());
+    assert (source
+              ->create_user_spot_remote (
+                target->status ().routing_id (), create, 5s,
+                [&] (foundation::operation_terminal_t terminal,
+                     result_t<protocol::user_spot_create_reply_t> completion_reply,
+                     std::optional<protocol::application_payload_t>) {
+                    auto reply = std::move (completion_reply.value ());
+                    assert (terminal == foundation::operation_terminal_t::completed);
+                    replayed_create_reply = std::move (reply);
+                })
+              .result ()
+              .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!replayed_create_reply && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
@@ -8909,17 +8933,18 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
     auto distinct_create = create;
     distinct_create.operation = {99, 3};
     std::optional<protocol::user_spot_create_reply_t> distinct_reply;
-    assert (
-      source
-        ->create_user_spot_remote (
-          target->status ().routing_id (), distinct_create, 5s,
-          [&] (foundation::operation_terminal_t terminal, protocol::user_spot_create_reply_t reply,
-               std::optional<protocol::application_payload_t>) {
-              assert (terminal == foundation::operation_terminal_t::completed);
-              distinct_reply = std::move (reply);
-          })
-        .result ()
-        .value ());
+    assert (source
+              ->create_user_spot_remote (
+                target->status ().routing_id (), distinct_create, 5s,
+                [&] (foundation::operation_terminal_t terminal,
+                     result_t<protocol::user_spot_create_reply_t> completion_reply,
+                     std::optional<protocol::application_payload_t>) {
+                    auto reply = std::move (completion_reply.value ());
+                    assert (terminal == foundation::operation_terminal_t::completed);
+                    distinct_reply = std::move (reply);
+                })
+              .result ()
+              .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!distinct_reply && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
@@ -8939,17 +8964,18 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                     std::chrono::system_clock::now ().time_since_epoch () - 1ms)
                                     .count ());
     std::optional<protocol::user_spot_create_reply_t> expired_reply;
-    assert (
-      source
-        ->create_user_spot_remote (
-          target->status ().routing_id (), expired_create, 5s,
-          [&] (foundation::operation_terminal_t terminal, protocol::user_spot_create_reply_t reply,
-               std::optional<protocol::application_payload_t>) {
-              assert (terminal == foundation::operation_terminal_t::completed);
-              expired_reply = std::move (reply);
-          })
-        .result ()
-        .value ());
+    assert (source
+              ->create_user_spot_remote (
+                target->status ().routing_id (), expired_create, 5s,
+                [&] (foundation::operation_terminal_t terminal,
+                     result_t<protocol::user_spot_create_reply_t> completion_reply,
+                     std::optional<protocol::application_payload_t>) {
+                    auto reply = std::move (completion_reply.value ());
+                    assert (terminal == foundation::operation_terminal_t::completed);
+                    expired_reply = std::move (reply);
+                })
+              .result ()
+              .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!expired_reply && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
@@ -8989,17 +9015,18 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                     std::chrono::system_clock::now ().time_since_epoch () + 200ms)
                                     .count ());
     std::optional<protocol::user_spot_create_reply_t> capacity_filler_reply;
-    assert (
-      source
-        ->create_user_spot_remote (
-          target->status ().routing_id (), capacity_filler, 5s,
-          [&] (foundation::operation_terminal_t terminal, protocol::user_spot_create_reply_t reply,
-               std::optional<protocol::application_payload_t>) {
-              assert (terminal == foundation::operation_terminal_t::completed);
-              capacity_filler_reply = std::move (reply);
-          })
-        .result ()
-        .value ());
+    assert (source
+              ->create_user_spot_remote (
+                target->status ().routing_id (), capacity_filler, 5s,
+                [&] (foundation::operation_terminal_t terminal,
+                     result_t<protocol::user_spot_create_reply_t> completion_reply,
+                     std::optional<protocol::application_payload_t>) {
+                    auto reply = std::move (completion_reply.value ());
+                    assert (terminal == foundation::operation_terminal_t::completed);
+                    capacity_filler_reply = std::move (reply);
+                })
+              .result ()
+              .value ());
     deadline = std::chrono::steady_clock::now () + 5s;
     while (!capacity_filler_reply && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);

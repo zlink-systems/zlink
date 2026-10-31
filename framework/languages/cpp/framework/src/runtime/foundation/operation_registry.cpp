@@ -24,7 +24,7 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
 {
   public:
     using clock_t = std::chrono::steady_clock;
-    using callback_t = std::function<void (operation_terminal_t, zlink::message_t)>;
+    using callback_t = std::function<void (operation_terminal_t, result_t<zlink::message_t>)>;
     using before_dispatch_t = std::function<void ()>;
     // The management budget reads this clock; tests inject a deterministic one.
     using now_t = clock_t::time_point (*) ();
@@ -48,19 +48,21 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
     bool contains (const call_id_t &id) const;
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
                              operation_terminal_t terminal);
-    bool complete (const call_id_t &id, zlink::message_t payload);
+    bool complete (const call_id_t &id, result_t<zlink::message_t> payload);
     // Packed infrastructure replies retain their delivery terminal and payload
     // for the caller to decode; request_terminal observes their semantic result.
     bool complete (const call_id_t &id,
-                   zlink::message_t payload,
+                   result_t<zlink::message_t> payload,
                    before_dispatch_t before_dispatch,
                    operation_terminal_t request_terminal = operation_terminal_t::completed);
     bool complete_async (const call_id_t &id, std::function<task_t<void> ()> before_dispatch);
     bool cancel (const call_id_t &id);
-    bool fail (const call_id_t &id, operation_terminal_t terminal, zlink::message_t payload = {});
     bool fail (const call_id_t &id,
                operation_terminal_t terminal,
-               zlink::message_t payload,
+               result_t<zlink::message_t> payload = result_t<zlink::message_t>::success ({}));
+    bool fail (const call_id_t &id,
+               operation_terminal_t terminal,
+               result_t<zlink::message_t> payload,
                before_dispatch_t before_dispatch,
                std::optional<operation_terminal_t> request_terminal = {});
     bool unregister (const call_id_t &id);
@@ -193,7 +195,7 @@ struct operation_completion_item_t
     operation_registry_state_t::callback_t callback;
     std::shared_ptr<operation_registry_drain_state_t> drain_state;
     operation_terminal_t terminal = operation_terminal_t::transport_failed;
-    zlink::message_t payload;
+    result_t<zlink::message_t> payload = result_t<zlink::message_t>::success ({});
     std::unique_ptr<operation_completion_item_t> next;
     mesh_request_metric_t request_metric;
 };
@@ -202,7 +204,7 @@ struct operation_completion_chain_t
 {
     void append (std::unique_ptr<operation_completion_item_t> completion,
                  operation_terminal_t terminal,
-                 zlink::message_t payload = {},
+                 result_t<zlink::message_t> payload = result_t<zlink::message_t>::success ({}),
                  std::optional<operation_terminal_t> request_terminal = {}) noexcept
     {
         completion->finish_metrics (request_terminal.value_or (terminal));
@@ -329,7 +331,7 @@ namespace
 {
 void notify (std::unique_ptr<operation_completion_item_t> completion,
              operation_terminal_t terminal,
-             zlink::message_t payload,
+             result_t<zlink::message_t> payload,
              std::optional<operation_terminal_t> request_terminal = {}) noexcept
 {
     operation_completion_chain_t completions;
@@ -498,13 +500,13 @@ bool operation_registry_state_t::take (const call_id_t &id,
     return true;
 }
 
-bool operation_registry_state_t::complete (const call_id_t &id, zlink::message_t payload)
+bool operation_registry_state_t::complete (const call_id_t &id, result_t<zlink::message_t> payload)
 {
     return complete (id, std::move (payload), {});
 }
 
 bool operation_registry_state_t::complete (const call_id_t &id,
-                                           zlink::message_t payload,
+                                           result_t<zlink::message_t> payload,
                                            before_dispatch_t before_dispatch,
                                            operation_terminal_t request_terminal)
 {
@@ -517,8 +519,9 @@ bool operation_registry_state_t::complete (const call_id_t &id,
             before_dispatch ();
     }
     catch (...) {
-        payload.close ();
-        notify (std::move (completion), operation_terminal_t::transport_failed, {});
+        payload = result_t<zlink::message_t>::success ({});
+        notify (std::move (completion), operation_terminal_t::transport_failed,
+                result_t<zlink::message_t>::success ({}));
         return true;
     }
     notify (std::move (completion), operation_terminal_t::completed, std::move (payload),
@@ -534,7 +537,7 @@ task_t<void> finish_completion_async (std::unique_ptr<operation_completion_item_
     const auto prepared = co_await runtime::await_result (before_dispatch ());
     notify (std::move (completion),
             prepared ? operation_terminal_t::completed : operation_terminal_t::transport_failed,
-            {});
+            result_t<zlink::message_t>::success ({}));
 }
 } // namespace
 
@@ -555,20 +558,21 @@ bool operation_registry_state_t::cancel (const call_id_t &id)
     if (!take (id, completion)) {
         return false;
     }
-    notify (std::move (completion), operation_terminal_t::cancelled, {});
+    notify (std::move (completion), operation_terminal_t::cancelled,
+            result_t<zlink::message_t>::success ({}));
     return true;
 }
 
 bool operation_registry_state_t::fail (const call_id_t &id,
                                        operation_terminal_t terminal,
-                                       zlink::message_t payload)
+                                       result_t<zlink::message_t> payload)
 {
     return fail (id, terminal, std::move (payload), {});
 }
 
 bool operation_registry_state_t::fail (const call_id_t &id,
                                        operation_terminal_t terminal,
-                                       zlink::message_t payload,
+                                       result_t<zlink::message_t> payload,
                                        before_dispatch_t before_dispatch,
                                        std::optional<operation_terminal_t> request_terminal)
 {
@@ -586,7 +590,7 @@ bool operation_registry_state_t::fail (const call_id_t &id,
     catch (...) {
         terminal = operation_terminal_t::transport_failed;
         request_terminal.reset ();
-        payload.close ();
+        payload = result_t<zlink::message_t>::success ({});
     }
     notify (std::move (completion), terminal, std::move (payload), request_terminal);
     return true;
@@ -837,13 +841,13 @@ std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &
     return _state->fail_target (std::move (target_routing_id), std::move (terminal));
 }
 
-bool operation_registry_t::complete (const call_id_t &id, zlink::message_t payload)
+bool operation_registry_t::complete (const call_id_t &id, result_t<zlink::message_t> payload)
 {
     return _state->complete (std::move (id), std::move (payload));
 }
 
 bool operation_registry_t::complete (const call_id_t &id,
-                                     zlink::message_t payload,
+                                     result_t<zlink::message_t> payload,
                                      before_dispatch_t before_dispatch,
                                      operation_terminal_t request_terminal)
 {
@@ -864,14 +868,14 @@ bool operation_registry_t::cancel (const call_id_t &id)
 
 bool operation_registry_t::fail (const call_id_t &id,
                                  operation_terminal_t terminal,
-                                 zlink::message_t payload)
+                                 result_t<zlink::message_t> payload)
 {
     return _state->fail (std::move (id), std::move (terminal), std::move (payload));
 }
 
 bool operation_registry_t::fail (const call_id_t &id,
                                  operation_terminal_t terminal,
-                                 zlink::message_t payload,
+                                 result_t<zlink::message_t> payload,
                                  before_dispatch_t before_dispatch,
                                  std::optional<operation_terminal_t> request_terminal)
 {

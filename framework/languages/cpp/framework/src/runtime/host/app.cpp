@@ -2449,7 +2449,7 @@ void app_t::_apply_zlink_framework ()
                         && native.transport ().register_prepared_local_operation (
                           *prepared_operation, deadline,
                           [completion] (runtime::foundation::operation_terminal_t terminal,
-                                        const zlink::message_t &) {
+                                        result_t<zlink::message_t>) {
                               completion->complete (result_t<reply_t>::failure (
                                 terminal == runtime::foundation::operation_terminal_t::timed_out
                                   ? framework_error_kind_t::deadline_exceeded

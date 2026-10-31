@@ -6136,11 +6136,6 @@ spot_node_runtime_t::commit_accepted_actor_join (
             throw framework_exception_t (framework_error_kind_t::shutting_down,
                                          "spot serial queue is closed or stopping");
         }
-        if (!create_result)
-            throw framework_exception_t (create_result.error_kind (),
-                                         create_result.error ()
-                                           ? create_result.error ()->what ()
-                                           : "Entry Spot actor creation callback failed");
         if (!create_result.value ().accepted)
             throw framework_exception_t (framework_error_kind_t::rejected,
                                          "Entry Spot rejected Actor creation");
@@ -6808,19 +6803,9 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
         else if (leave)
             leave ({});
     }
-    catch (const framework_exception_t &error) {
-        fail_local_commit ();
-        co_return detail::result_access_t::failure<actor_join_reply_t> (error);
-    }
-    catch (const std::exception &error) {
-        fail_local_commit ();
-        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
-                                                         error.what ());
-    }
     catch (...) {
         fail_local_commit ();
-        co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::internal_failure,
-                                                         "actor join commit failed");
+        co_return detail::current_exception_result<actor_join_reply_t> ();
     }
     co_return result_t<actor_join_reply_t>::success (
       actor_join_reply_t{0, committed, framework_reply_or_empty (response.reply, serializers)});
@@ -12995,12 +12980,11 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                           erase_actor_route_unlocked (*_state, key);
                       })
                       .get ();
+                    if (!created)
+                        co_return detail::propagate_failure<std::optional<zlink::message_t>> (
+                          created, "Entry Spot Actor creation failed");
                     co_return result_t<std::optional<zlink::message_t>>::failure (
-                      created ? framework_error_kind_t::rejected : created.error_kind (),
-                      created && !created.value ().accepted
-                        ? "Entry Spot rejected Actor creation"
-                        : (created.error () ? created.error ()->what ()
-                                            : "Entry Spot Actor creation failed"));
+                      framework_error_kind_t::rejected, "Entry Spot rejected Actor creation");
                 }
                 created_entry_actor = true;
             }

@@ -202,6 +202,7 @@
         <Compile Include="Runtime/SameTargetInstanceActivationTests.cs"/>
         <Compile Include="Runtime/InstanceSpotSendDeadlineTests.cs"/>
         <Compile Include="Runtime/SpotStoreFailureKindTests.cs"/>
+        <Compile Include="Runtime/LocalCallbackCauseTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeTests.cs"/>
         <Compile Include="Runtime/LocationStoreOperationMetricsTests.cs"/>
         <Compile Include="Runtime/MaintenanceRuntimeTests.cs"/>

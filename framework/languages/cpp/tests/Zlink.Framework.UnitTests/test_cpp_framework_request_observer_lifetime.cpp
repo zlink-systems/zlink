@@ -222,11 +222,11 @@ measurement_t verify_pending_reply_after_submission_task_destruction (std::size_
               [&completed, &payload, &callback_failed] (auto terminal, auto reply) {
                   try {
                       if (terminal != foundation::operation_terminal_t::completed
-                          || !reply.valid ())
+                          || !reply.value ().valid ())
                           callback_failed.store (true, std::memory_order_release);
                       else {
                           const auto decoded = protocol::decode_application_payload (
-                            protocol::message_bytes (reply), false);
+                            protocol::message_bytes (reply.value ()), false);
                           if (decoded.packet_name != "Reply"
                               || decoded.content_type != "application/json"
                               || decoded.payload_bytes () != payload.payload_bytes ())

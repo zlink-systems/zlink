@@ -845,7 +845,7 @@ void verify_local_join_timeout_releases_membership ()
     auto second = retried.completion->task ();
     assert (second.result ());
     assert (second.result ().value ().record.join_completion);
-    assert (second.result ().value ().record.join_completion->join_result
+    assert (second.result ().value ().record.join_completion->value ().join_result
             == host::join_admission_t::accepted);
     assert (!first.result ());
     node.stop ();

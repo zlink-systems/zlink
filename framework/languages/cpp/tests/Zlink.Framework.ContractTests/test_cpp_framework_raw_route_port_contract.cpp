@@ -1027,7 +1027,8 @@ static void verify_request_deadline_preserves_timeout_boundary ()
     const runtime::call_id_t id{0, 1};
     requests.register_operation (
       id, std::chrono::steady_clock::now (),
-      [&] (runtime::foundation::operation_terminal_t terminal, zlink::message_t) {
+      [&] (runtime::foundation::operation_terminal_t terminal,
+           ::zlink::framework::result_t<zlink::message_t>) {
           assert (terminal == runtime::foundation::operation_terminal_t::timed_out);
           operation.complete (detail::boundary_failure<int> (detail::boundary_error_t::timed_out,
                                                              "request deadline expired"));

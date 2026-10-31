@@ -5154,7 +5154,9 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
             {actor.key, actor.object_generation, src.node_routing_id, src.lifecycle_generation,
              actor.authority_owner_generation, 1},
             {"ActorPacket", "application/json", {static_cast<std::uint8_t> (id)}}, 5s,
-            [&, id] (foundation::operation_terminal_t terminal, zlink::message_t native_bytes) {
+            [&, id] (foundation::operation_terminal_t terminal,
+                     ::zlink::framework::result_t<zlink::message_t> completion_payload) {
+                auto native_bytes = std::move (completion_payload.value ());
                 auto bytes = native_bytes.to_bytes ();
                 if (id == 92 || (source_expired && id == 77)) {
                     if (terminal != foundation::operation_terminal_t::transport_failed

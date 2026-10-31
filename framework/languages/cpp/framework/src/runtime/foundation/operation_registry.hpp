@@ -44,7 +44,7 @@ class operation_registry_t
 {
   public:
     using clock_t = std::chrono::steady_clock;
-    using callback_t = std::function<void (operation_terminal_t, zlink::message_t)>;
+    using callback_t = std::function<void (operation_terminal_t, result_t<zlink::message_t>)>;
     using before_dispatch_t = std::function<void ()>;
     // The management budget reads this clock; tests inject a deterministic one.
     using now_t = clock_t::time_point (*) ();
@@ -77,21 +77,48 @@ class operation_registry_t
     bool contains (const call_id_t &id) const;
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
                              operation_terminal_t terminal);
-    bool complete (const call_id_t &id, zlink::message_t payload);
+    bool complete (const call_id_t &id, zlink::message_t payload)
+    {
+        return complete (id, result_t<zlink::message_t>::success (std::move (payload)));
+    }
+    bool complete (const call_id_t &id, result_t<zlink::message_t> payload);
     // Packed infrastructure replies retain their delivery terminal and payload
     // for the caller to decode; request_terminal observes their semantic result.
     bool complete (const call_id_t &id,
-                   zlink::message_t payload,
+                   result_t<zlink::message_t> payload,
                    before_dispatch_t before_dispatch,
                    operation_terminal_t request_terminal = operation_terminal_t::completed);
+    bool complete (const call_id_t &id,
+                   zlink::message_t payload,
+                   before_dispatch_t before_dispatch,
+                   operation_terminal_t request_terminal = operation_terminal_t::completed)
+    {
+        return complete (id, result_t<zlink::message_t>::success (std::move (payload)),
+                         std::move (before_dispatch), request_terminal);
+    }
     bool complete_async (const call_id_t &id, std::function<task_t<void> ()> before_dispatch);
     bool cancel (const call_id_t &id);
-    bool fail (const call_id_t &id, operation_terminal_t terminal, zlink::message_t payload = {});
+    bool fail (const call_id_t &id,
+               operation_terminal_t terminal,
+               result_t<zlink::message_t> payload = result_t<zlink::message_t>::success ({}));
+    bool fail (const call_id_t &id,
+               operation_terminal_t terminal,
+               result_t<zlink::message_t> payload,
+               before_dispatch_t before_dispatch,
+               std::optional<operation_terminal_t> request_terminal = {});
+    bool fail (const call_id_t &id, operation_terminal_t terminal, zlink::message_t payload)
+    {
+        return fail (id, terminal, result_t<zlink::message_t>::success (std::move (payload)));
+    }
     bool fail (const call_id_t &id,
                operation_terminal_t terminal,
                zlink::message_t payload,
                before_dispatch_t before_dispatch,
-               std::optional<operation_terminal_t> request_terminal = {});
+               std::optional<operation_terminal_t> request_terminal = {})
+    {
+        return fail (id, terminal, result_t<zlink::message_t>::success (std::move (payload)),
+                     std::move (before_dispatch), request_terminal);
+    }
     bool unregister (const call_id_t &id);
     task_t<std::size_t> expire (clock_t::time_point now);
     // An already reserved visit survives terminal removal, including the last entry.
