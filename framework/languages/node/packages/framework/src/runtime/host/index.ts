@@ -883,8 +883,8 @@ export class ZLinkFrameworkRuntimeHost
         clear: () => this.boundSessionRelay.boundSessions.clearServiceWireSessionRelocations()
       },
       trackInstanceSpot: (input) => this.locationOwner.currentLifecycle?.trackInstanceSpot(input),
-      invalidateActorRoute: (actorId) =>
-        this.actorClientLocationResolver?.invalidateActorRoute(actorId),
+      observeActorAuthorityVersion: (actorId, storeVersion) =>
+        this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion),
       reconcileStatefulAuthorityRoutes: (signal) =>
         this.statefulAuthorityRoutes?.reconcile(signal) ?? Promise.resolve(),
       runtimeEventPublisher: this.runtimeEventPublisher,
@@ -2853,7 +2853,7 @@ export class ZLinkFrameworkRuntimeHost
             `Actor '${actorRef.actorId}' authority requires its RouteMesh Entry Spot.`
           );
         }
-        await publishInitialActorAuthority(
+        const authority = await publishInitialActorAuthority(
           store,
           {
             actorType,
@@ -2867,7 +2867,10 @@ export class ZLinkFrameworkRuntimeHost
           },
           signal
         );
-        this.actorClientLocationResolver?.invalidateActorRoute(actorRef.actorId);
+        this.actorClientLocationResolver?.observeActorAuthorityVersion(
+          actorRef.actorId,
+          authority.storeVersion.value
+        );
       },
       reportPostCommitError: (error) =>
         this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
