@@ -564,6 +564,36 @@ internal sealed class ZLinkSessionActorBindingTable
             _entries.Remove(key.ActorId);
     }
 
+    internal async Task SubmitStreamReplyAsync(
+        ZLinkSessionContext context,
+        ZlinkStreamHeader header,
+        Func<ZlinkStreamHeader, Task> submit
+    )
+    {
+        var submission = await _lane
+            .RunAsync(() =>
+            {
+                var current =
+                    header.ActorSlot is not { } slot
+                    || _entries.Values.Any(bindings =>
+                        bindings.Current is { } entry
+                        && ReferenceEquals(entry.Context, context)
+                        && entry.ActorRef.Slot == slot
+                    );
+                return submit(
+                    current
+                        ? header
+                        : header with
+                        {
+                            ActorSlot = null,
+                            Flags = header.Flags & ~ZlinkStreamHeaderFlags.HasActorSlot,
+                        }
+                );
+            })
+            .ConfigureAwait(false);
+        await submission.ConfigureAwait(false);
+    }
+
     internal ValueTask<ZLinkSessionOutboundAdmission> AdmitOutboundAsync(
         ZLinkSessionOutboundTenure tenure,
         byte[] frame

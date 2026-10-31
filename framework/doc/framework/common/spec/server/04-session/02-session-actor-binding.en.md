@@ -307,7 +307,11 @@ uses a copy outside those linearization points.**
    that arrives after the commit became observable is never judged against
    derived state that has not yet been updated. Ending a binding runs the
    reverse order: new slotted submissions are stopped first, the frames already
-   accepted are submitted, and `$zlink.actor.unbound` goes into the same queue.
+   accepted are submitted, and `$zlink.actor.unbound` goes into the same queue. The Session
+   owner's single ordered submission path decides a terminal reply's Actor slot
+   once in the submission turn. If that binding has already ended, it removes
+   `actor_slot` and submits a session reply with the same request sequence.
+   The binding state at reply creation is not used for this decision.
 3. **There is one judging authority.** A push's current judgment uses only the
    session-owner validation items enumerated by
    [§8.1](#81-seal-held-messages-and-route-switchover). A derived copy being stale or mismatched is never grounds
@@ -1055,6 +1059,9 @@ here.
   `$zlink.actor.unbound` after the last one.
 - A push and the reply of a request relayed to the Actor carry the binding's
   Actor slot.
+- If a binding ends after reply creation and before terminal submission, the
+  observed order is `bound → unbound → Response/Error`; the terminal has no slot
+  and completes the client's request with the same sequence.
 - The dispatch context of a packet with an `actor_slot` points at that
   binding's Actor.
 - A packet that arrives with a slot that is not a current binding doesn't

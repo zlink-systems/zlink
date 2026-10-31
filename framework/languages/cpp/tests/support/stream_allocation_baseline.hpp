@@ -488,7 +488,7 @@ class stream_allocation_test_access_t
                                            "STREAM reply requires request sequence"));
             }
             auto reply_header = detail::stream_runtime_t::make_terminal_header (
-              *this, stream_message_kind_t::response, *request_header);
+              stream_message_kind_t::response, *request_header);
             auto call = write_packet_with_header (std::move (reply_header), payload);
             if (!_reply_submission->try_claim ())
                 throw std::runtime_error ("raw baseline reply already consumed");

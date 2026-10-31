@@ -1471,8 +1471,12 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
 
         auto error_header = detail::stream_runtime_t::make_terminal_header (
-          stream, stream_message_kind_t::error, request_header);
-        auto send = send_core_frame (rid, error_header, stream_error_payload (error));
+          stream_message_kind_t::error, request_header);
+        auto send = detail::session_actor_manager_access_t::submit_terminal (
+          stream, error_header, stream_error_payload (error),
+          [&] (const stream_header_t &header, const zlink::message_t &payload) {
+              return send_core_frame (rid, header, payload);
+          });
         detail::observe_task_completion (
           send, [this, rid, completed = std::move (completed)] (const result_t<void> &result) {
               if (!result) {
@@ -3198,10 +3202,16 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             return;
         }
         auto error_header = detail::stream_runtime_t::make_terminal_header (
-          stream, stream_message_kind_t::error, request_header);
-        if (!queue_frame (owner, connection, error_header, stream_error_payload (error)))
-            throw framework_exception_t (framework_error_kind_t::unavailable,
-                                         "STREAM error reply connection is closing");
+          stream_message_kind_t::error, request_header);
+        auto send = detail::session_actor_manager_access_t::submit_terminal (
+          stream, error_header, stream_error_payload (error),
+          [&] (const stream_header_t &header, const zlink::message_t &payload) {
+              if (!queue_frame (owner, connection, header, payload))
+                  throw framework_exception_t (framework_error_kind_t::unavailable,
+                                               "STREAM error reply connection is closing");
+              return task_t<void> (result_t<void>::success ());
+          });
+        send.result ();
     }
 
     template <typename TStream>
