@@ -157,6 +157,22 @@ public interface ZLinkLocationRepository {
 
     CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner);
 
+    default CompletionStage<Long> removeAllByOwner(
+            ZLinkLocationOwnerToken owner, ZLinkStoreCancellation cancellation) {
+        if (cancellation.isCancellationRequested())
+            return CompletableFuture.failedFuture(
+                    new java.util.concurrent.TimeoutException("host shutdown deadline expired"));
+        return removeAllByOwner(owner);
+    }
+
+    default CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+            ZLinkLocationOwnerToken token, ZLinkStoreCancellation cancellation) {
+        if (cancellation.isCancellationRequested())
+            return CompletableFuture.failedFuture(
+                    new java.util.concurrent.TimeoutException("host shutdown deadline expired"));
+        return releaseOwnerLease(token);
+    }
+
     default CompletionStage<OptionalLong> getMeshNodeChangeStamp(String meshName) {
         return CompletableFuture.completedFuture(OptionalLong.empty());
     }

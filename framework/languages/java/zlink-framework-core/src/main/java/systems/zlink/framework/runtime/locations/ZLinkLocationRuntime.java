@@ -9,6 +9,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationStoreFail
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseGenerationExhausted;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 import java.time.Duration;
@@ -379,31 +380,29 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         if (!state.shouldStop()) return state.completion();
         long deadlineNanos = deadlineNanos(deadline);
         ZLinkLocationOwnerToken token = state.token();
+        ZLinkStoreCancellation cleanupCancellation =
+                () -> deadlineNanos - monotonicNow.getAsLong() <= 0L;
         CompletionStage<Void> cleanup =
-                withinDeadline(state.lifecycle().cleanup(), deadlineNanos)
+                state.lifecycle()
+                        .cleanup()
                         .handle((ignored, failure) -> failure)
                         .thenCompose(
                                 pendingFailure ->
                                         (token == null
                                                         ? CompletableFuture.completedFuture(0L)
-                                                        : withinDeadline(
-                                                                () ->
-                                                                        stores.unifiedStore()
-                                                                                .removeAllByOwner(
-                                                                                        token),
-                                                                deadlineNanos))
+                                                        : stores.unifiedStore()
+                                                                .removeAllByOwner(
+                                                                        token, cleanupCancellation))
                                                 .thenCompose(
                                                         ignored ->
                                                                 token == null
                                                                         ? CompletableFuture
                                                                                 .completedFuture(
                                                                                         null)
-                                                                        : withinDeadline(
-                                                                                        () ->
-                                                                                                stores.ownerLeaseStore()
-                                                                                                        .releaseOwnerLease(
-                                                                                                                token),
-                                                                                        deadlineNanos)
+                                                                        : stores.ownerLeaseStore()
+                                                                                .releaseOwnerLease(
+                                                                                        token,
+                                                                                        cleanupCancellation)
                                                                                 .thenApply(
                                                                                         released ->
                                                                                                 null))
@@ -434,6 +433,11 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                             if (failure != null)
                                                                 throw new CompletionException(
                                                                         unwrap(failure));
+                                                            if (cleanupCancellation
+                                                                    .isCancellationRequested())
+                                                                throw new CompletionException(
+                                                                        new TimeoutException(
+                                                                                "host shutdown deadline expired"));
                                                             return null;
                                                         }));
         cleanup.whenComplete(
@@ -994,6 +998,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                         });
         cancel(state.heartbeat());
         heartbeatExecutor.shutdownNow();
+        heartbeatExecutor.close();
     }
 
     private void renewOwnerLeaseOnHeartbeat(CompletableFuture<Void> lifecycle, long scheduledAt) {

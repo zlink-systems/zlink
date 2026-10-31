@@ -473,110 +473,77 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
             throw new ArgumentOutOfRangeException(nameof(owner));
 
         var removed = 0L;
-        removed += await RemoveOwnedDescriptorsAsync(
-                "mesh-node\0",
-                owner,
-                static bytes =>
-                {
-                    var descriptor = DecodeDescriptor<ZLinkMeshNodeDescriptor>(bytes).Descriptor;
-                    return new ZLinkLocationOwnerToken(
-                        descriptor.OwnerId,
-                        descriptor.LeaseGeneration
-                    );
-                },
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        removed += await RemoveOwnedDescriptorsAsync(
-                "client-server\0",
-                owner,
-                static bytes =>
-                {
-                    var descriptor = DecodeDescriptor<ZLinkClientServerServerDescriptor>(
-                        bytes
-                    ).Descriptor;
-                    return new ZLinkLocationOwnerToken(
-                        descriptor.OwnerId,
-                        descriptor.LeaseGeneration
-                    );
-                },
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        removed += await RemoveOwnedDescriptorsAsync(
-                "fanout-publisher\0",
-                owner,
-                static bytes =>
-                {
-                    var descriptor = DecodeDescriptor<ZLinkFanoutPublisherDescriptor>(
-                        bytes
-                    ).Descriptor;
-                    return new ZLinkLocationOwnerToken(
-                        descriptor.OwnerId,
-                        descriptor.LeaseGeneration
-                    );
-                },
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        return removed;
-    }
-
-    private async ValueTask<long> RemoveOwnedDescriptorsAsync(
-        string prefix,
-        ZLinkLocationOwnerToken owner,
-        Func<ReadOnlyMemory<byte>, ZLinkLocationOwnerToken> readOwner,
-        CancellationToken cancellationToken
-    )
-    {
-        while (true)
+        var rows = new List<KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>>();
+        ZLinkStoreScanCursor? cursor = null;
+        do
         {
-            var rows = new List<KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>>();
-            ZLinkStoreScanCursor? cursor = null;
-            var expired = false;
-            do
+            cancellationToken.ThrowIfCancellationRequested();
+            var scan = await _provider
+                .ScanAsync(
+                    new ZLinkStoreScanRequest(
+                        AuthorityCanonicalPreimagePrefix,
+                        cursor,
+                        ZLinkPageRequestPolicy.MaximumPageSize
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (scan is ZLinkStoreScanResult.Expired)
             {
-                var result = await _provider
-                    .ScanAsync(
-                        new ZLinkStoreScanRequest(
-                            prefix,
-                            cursor,
-                            ZLinkPageRequestPolicy.MaximumPageSize
-                        ),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                if (result is ZLinkStoreScanResult.Expired)
-                {
-                    expired = true;
-                    break;
-                }
-                var page = ((ZLinkStoreScanResult.Page)result).Value;
-                rows.AddRange(page.Items);
-                cursor = page.NextCursor;
-            } while (cursor is not null);
-            if (expired)
+                rows.Clear();
+                cursor = null;
                 continue;
-
-            var removed = 0L;
-            foreach (var row in rows)
+            }
+            var page = ((ZLinkStoreScanResult.Page)scan).Value;
+            rows.AddRange(page.Items);
+            cursor = page.NextCursor;
+            if (cursor is null)
+                break;
+        } while (true);
+        foreach (var row in rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var meta = DecodeAuthorityMeta(row.Value.Bytes);
+            if (
+                meta.OwnerId != owner.OwnerId
+                || meta.OwnerLeaseGeneration != owner.LeaseGeneration
+                || meta.AggregateFence is not null
+            )
+                continue;
+            var key = DecodeAuthorityKey(row.Key);
+            if (meta.Allocation.State == ZLinkPlacementAllocationState.Active)
             {
-                if (readOwner(row.Value.Bytes) != owner)
-                    continue;
-                var result = await _provider
-                    .WriteAsync(
-                        new ZLinkStoreWriteRequest(
-                            [new ZLinkStoreCondition.Version(row.Key, row.Value.Version)],
-                            [new ZLinkStoreMutation.Delete(row.Key)]
-                        ),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                if (result is ZLinkStoreWriteResult.Applied)
+                if (
+                    await CompareExchangeAuthorityAsync(
+                            key,
+                            row.Value.Version.Value,
+                            new ZLinkAuthorityMutation.Delete(),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false) is ZLinkAuthorityCompareExchangeResult.Deleted
+                )
                     removed++;
             }
-            return removed;
+            else if (meta.ReservedCreation is { } pending)
+            {
+                var reservation = new ZLinkObjectReservation(
+                    key,
+                    row.Value.Version.Value,
+                    meta.ObjectGeneration,
+                    meta.AuthorityOwnerGeneration,
+                    pending.ReservationId,
+                    meta.Allocation.Descriptor,
+                    meta.Allocation.DescriptorLifecycleGeneration,
+                    owner
+                );
+                if (
+                    await AbortAsync(reservation, cancellationToken).ConfigureAwait(false)
+                    is ZLinkObjectAbortResult.Aborted
+                )
+                    removed++;
+            }
         }
+        return removed;
     }
 
     private async ValueTask<ZLinkLocationWriteResult> UpdateDescriptorAsync<T>(

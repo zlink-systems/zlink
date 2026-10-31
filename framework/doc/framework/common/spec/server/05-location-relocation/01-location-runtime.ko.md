@@ -1482,9 +1482,6 @@ Host 명령의 상태와 최종 결과는 [Host relocation와 shutdown](05-host-
 정의한다. 이 절은 Location runtime이 Store record와 process 내부 resource를 정리하는 순서만
 정의한다.
 
-Framework는 같은 시점의 목록 읽기로 descriptor와 owner lease 삭제 후보를 찾는다. 각 key를
-다시 읽고 처음 읽은 version이 그대로일 때만 여러 record를 함께 삭제한다.
-
 Actor·Spot의 현재 위치 record는 [§6.1](#61-read와-cas)의 명시적 `Delete`나 조건부 해제로만 제거한다. `Delete`는 `StoreVersion`,
 현재 owner와 사용 중인 수용 공간을 확인한다. Host descriptor가 사라졌다는 이유만으로
 object의 위치 record를 삭제하지 않는다.
@@ -1499,8 +1496,9 @@ Store에 남는다. 이를 대상으로 삼지 않는 규칙은 §4.1이 정한�
 [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)이 정한다. 두 정리 경로는
 서로 독립적이며 서로 다른 lifetime으로 동작한다.
 
-Deadline을 넘으면 `ForceStopped` 결과를 한 번만 완료한다. Timer, Store callback, 재연결
-작업과 observer는 Framework가 소유한 runtime resource보다 오래 남지 않아야 한다.
+Owner lease는 종료 lifecycle이 보유한 동일 token으로 해제한다. 다른 lifecycle의 lease를
+다시 읽어 해제하지 않는다. Store 정리의 시간 범위와 `ForceStopped` 반환 경계는
+[Host shutdown §14](05-host-relocation-flow.ko.md#14-shutdown과-relocate의-경쟁)를 따른다.
 
 ## 12. 구현 및 contract test 검증 요구
 

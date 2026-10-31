@@ -139,8 +139,8 @@ test('in-memory location store lists filters pages and bumps change stamps', asy
   });
   assert.deepEqual([...resolvedRoute.value], [1, 2, 3, 4]);
 
-  assert.equal(await store.removeAllByOwner(ownerA.token), 5n);
-  assert.equal((await store.listSpots({ meshName: 'play' })).items.length, 0);
+  assert.equal(await store.removeAllByOwner(ownerA.token), 0n);
+  assert.equal((await store.listSpots({ meshName: 'play' })).items.length, 2);
 });
 
 test('in-memory location store matches the formal operation trace for core write statuses', async () => {
@@ -284,7 +284,7 @@ test('in-memory location store matches the formal operation trace for core write
     'route-remove=Stored:1',
     'route-reclaim=Stored:2',
     'peer-claim=Stored:1',
-    'remove-all-by-owner=4',
+    'remove-all-by-owner=0',
     'lease-a-remove=released',
     'peer-claim-after-lease-removed=Stored:2'
   ]);

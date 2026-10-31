@@ -69,6 +69,139 @@ class ZLinkInMemoryLocationStoreTest {
     private static final RoutingId NODE_A = RoutingId.from(new byte[] {0x01});
 
     @Test
+    void forceStop2646ReplacementLeasePreservesOldGeneration() throws Exception {
+        var store = new ZLinkInMemoryLocationStore(Clock.fixed(NOW, ZoneOffset.UTC));
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("replacement-owner", Duration.ofSeconds(30))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var descriptor = meshNodeDescriptor(owner, 1, "tcp://127.0.0.1:7000");
+        store.updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .get();
+        String key = ZLinkAuthorityKeyCodec.actor("replacement-actor");
+        assertInstanceOf(
+                ZLinkObjectReserved.class,
+                store.reserve(
+                                new ZLinkObjectReservationRequest(
+                                        ZLinkPlacementObjectKind.ACTOR,
+                                        key,
+                                        "player",
+                                        "root",
+                                        new byte[32],
+                                        32,
+                                        new ZLinkMeshNodeDescriptorKey("mesh", NODE_A),
+                                        7,
+                                        owner,
+                                        new byte[] {1},
+                                        ZLinkPlacementCapacityBundle.actor(1)),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
+        assertEquals(
+                ZLinkOwnerLeaseReleaseResult.RELEASED,
+                store.releaseOwnerLease(owner).toCompletableFuture().get());
+        var replacement =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease(owner.ownerId(), Duration.ofSeconds(30))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        assertEquals(0L, store.removeAllByOwner(replacement).toCompletableFuture().get());
+        assertInstanceOf(
+                ZLinkAuthoritySnapshot.class,
+                store.read(key, () -> false).toCompletableFuture().get());
+        assertEquals(
+                ZLinkOwnerLeaseReleaseResult.STALE,
+                store.releaseOwnerLease(owner).toCompletableFuture().get());
+        assertEquals(
+                replacement,
+                assertInstanceOf(
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkOwnerLeaseFound.class,
+                                store.readOwnerLease(owner.ownerId()).toCompletableFuture().get())
+                        .token());
+        assertEquals(
+                1,
+                store.listMeshNodes("mesh", ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .get()
+                        .items()
+                        .size());
+    }
+
+    @Test
+    void forceStop2646SweepMatchesOwnerAndPreservesDescriptors() throws Exception {
+        var store = new ZLinkInMemoryLocationStore(Clock.fixed(NOW, ZoneOffset.UTC));
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("cleanup-owner", Duration.ofSeconds(30))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var other =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("other-owner", Duration.ofSeconds(30))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        for (var token : List.of(owner, other)) {
+            var rid = token.equals(owner) ? NODE_A : RoutingId.from(new byte[] {2});
+            var descriptor =
+                    meshNodeDescriptor(token, rid, 7, 1, "tcp://127.0.0.1:7000", token.ownerId());
+            store.updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .toCompletableFuture()
+                    .get();
+            String key = ZLinkAuthorityKeyCodec.actor(token.ownerId());
+            assertInstanceOf(
+                    ZLinkObjectReserved.class,
+                    store.reserve(
+                                    new ZLinkObjectReservationRequest(
+                                            ZLinkPlacementObjectKind.ACTOR,
+                                            key,
+                                            "player",
+                                            "root",
+                                            new byte[32],
+                                            32,
+                                            new ZLinkMeshNodeDescriptorKey("mesh", rid),
+                                            7,
+                                            token,
+                                            new byte[] {1},
+                                            ZLinkPlacementCapacityBundle.actor(1)),
+                                    () -> false)
+                            .toCompletableFuture()
+                            .get());
+        }
+        assertEquals(1L, store.removeAllByOwner(owner).toCompletableFuture().get());
+        assertEquals(
+                2,
+                store.listMeshNodes("mesh", ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .get()
+                        .items()
+                        .size());
+        assertInstanceOf(
+                systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing.class,
+                store.read(ZLinkAuthorityKeyCodec.actor(owner.ownerId()), () -> false)
+                        .toCompletableFuture()
+                        .get());
+        assertInstanceOf(
+                ZLinkAuthoritySnapshot.class,
+                store.read(ZLinkAuthorityKeyCodec.actor(other.ownerId()), () -> false)
+                        .toCompletableFuture()
+                        .get());
+        assertInstanceOf(
+                systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound.class,
+                store.readOwnerLease(owner.ownerId()).toCompletableFuture().get());
+    }
+
+    @Test
     void reincarnatePreservesOwnerAllocationAndFencesThePreviousGeneration() throws Exception {
         var store = newAuthorityStore();
         var owner = new ZLinkLocationOwnerToken("close-owner", 1);

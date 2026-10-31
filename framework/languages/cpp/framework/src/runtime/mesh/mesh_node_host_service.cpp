@@ -3434,19 +3434,28 @@ void mesh_node_host_service_t::stop () noexcept
     _completion_dispatcher.reset ();
     for (auto &node : _nodes)
         _runtime_failures->capture ([&] { node->bind_descriptor_publisher ({}); });
-    const auto owner = current_location_owner ();
-    if (_location_store && owner)
-        std::erase_if (_published_mesh_nodes, [&] (const auto &key) {
-            return _runtime_failures->capture ([&] {
+    if (_location_store)
+        for (const auto &descriptor : _published_mesh_descriptors) {
+            if (descriptor.owner_id.empty ())
+                continue;
+            _runtime_failures->capture ([&] {
+                const auto &lifecycle = _registrations.at (0)->spot_state->host_lifecycle;
+                if (lifecycle) {
+                    const auto shutdown = lifecycle ();
+                    if (shutdown.shutdown_deadline
+                        && std::chrono::system_clock::now () >= *shutdown.shutdown_deadline)
+                        return;
+                }
                 infrastructure_result ([&] {
-                    return _location_store->remove_mesh_node (key, *owner);
+                    return _location_store->remove_mesh_node (
+                      {descriptor.mesh_name, descriptor.rid},
+                      {descriptor.owner_id, descriptor.lease_generation});
                 }).value ();
             });
-        });
-    if (_published_mesh_nodes.empty ()) {
-        _published_mesh_descriptors.clear ();
-        _location_runtime = nullptr;
-    }
+        }
+    _published_mesh_nodes.clear ();
+    _published_mesh_descriptors.clear ();
+    _location_runtime = nullptr;
     for (auto &node : _nodes) {
         _runtime_failures->capture ([&] { node->stop (); });
         if (_listener_statuses)

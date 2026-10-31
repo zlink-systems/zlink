@@ -568,6 +568,11 @@ test('late startup claim release uses the stop shutdown signal', async () => {
     await starting;
     assert.equal(runtime.isStarted, false);
     shutdown.abort(new Error('Host shutdown deadline exceeded.'));
+    let settled = false;
+    observedStop.then(() => { settled = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false);
+    completeRelease();
     assert.match((await observedStop).message, /Host shutdown deadline exceeded/u);
   } finally {
     completeRelease?.();
@@ -1182,8 +1187,8 @@ test('location runtime stamps owner id, reports stale ownership, and removes row
   await oldOwner.stop();
 
   assert.deepEqual(await store.readOwnerLease('owner-a'), { kind: 'missing' });
-  assert.equal((await store.listMeshNodes('play')).items.length, 0);
-  assert.equal(await store.resolveSpot({ meshName: 'play', spotId: 'spot-1' }), undefined);
+  assert.equal((await store.listMeshNodes('play')).items.length, 1);
+  assert.notEqual(await store.resolveSpot({ meshName: 'play', spotId: 'spot-1' }), undefined);
 });
 
 test('location runtime exposes owner cleanup failure instead of completing stop successfully', async () => {
@@ -1979,6 +1984,8 @@ test('store location resolvers seed reusable SpotHandle snapshots from live rows
   assert.equal(secondSpotRef.spotId, 'spot-1');
   assert.equal(spotResolveCount, 1);
 
+  await node.lifecycle.releaseActor('player', 'actor-1');
+  await node.lifecycle.releaseSpot('play', 'spot-1');
   await node.runtime.stop();
   resolvers.invalidateSpotRoute('spot-1', 'play');
   resolvers.invalidateActorRoute('actor-1', 'play');
@@ -2250,6 +2257,8 @@ test('location spot route resolver bridges internal routed transport', async () 
   assert.equal(address.spotId, 'spot-1');
   assert.equal(address.spotKind, framework.ZLinkSpotKind.User);
 
+  await node.lifecycle.releaseActor('player', 'actor-1');
+  await node.lifecycle.releaseSpot('play', 'spot-1');
   await node.runtime.stop();
   resolver.invalidate('spot-1');
   await assert.rejects(
@@ -2993,7 +3002,7 @@ test('production repository rejects legacy public records without recordVersion'
   );
 });
 
-test('production repository removes provider-owned records in one fenced conditional batch', async () => {
+test('production owner sweep preserves descriptors without issuing delete writes', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const writes = [];
@@ -3040,17 +3049,17 @@ test('production repository removes provider-owned records in one fenced conditi
     updatedAt: now
   }, internal.ZLinkLocationWriteIntent.NewClaim);
   writes.length = 0;
-  assert.equal(await repository.removeAllByOwner(claimed.token), 3n);
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0].mutations.length, 3);
-  assert.equal(writes[0].conditions.length, 4);
-  assert.equal(writes[0].mutations.every(mutation => mutation.kind === 'delete'), true);
+  assert.equal(await repository.removeAllByOwner(claimed.token), 0n);
+  assert.equal(writes.length, 0);
+  assert.equal((await repository.listMeshNodes('play')).items.length, 1);
+  assert.equal((await repository.listClientServers('orders')).items.length, 1);
+  assert.equal((await repository.listFanoutPublishers('events')).items.length, 1);
 });
 
 test('production repository restarts an expired owner cleanup scan from its first page', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
-  let expireNextScan = true;
+  let expireNextScan = false;
   let scanCalls = 0;
   const provider = {
     read: inner.read.bind(inner),
@@ -3073,9 +3082,13 @@ test('production repository restarts an expired owner cleanup scan from its firs
     leaseGeneration: claimed.token.leaseGeneration
   }, internal.ZLinkLocationWriteIntent.NewClaim);
 
+  const descriptor = (await repository.listMeshNodes('play')).items[0];
+  assert.equal((await repository.reserve(authorityReserveRequest('expired-scan-actor', descriptor, claimed.token))).kind, 'reserved');
+  expireNextScan = true;
+  scanCalls = 0;
   assert.equal(await repository.removeAllByOwner(claimed.token), 1n);
-  assert.equal(scanCalls > 6, true);
-  assert.equal((await repository.listMeshNodes('play')).items.length, 0);
+  assert.equal(scanCalls >= 2, true);
+  assert.equal((await repository.listMeshNodes('play')).items.length, 1);
 });
 
 test('production repository does not delete a row after its owner lease is replaced', async () => {
@@ -3106,7 +3119,10 @@ test('production repository does not delete a row after its owner lease is repla
     leaseGeneration: ownerToken.leaseGeneration
   }, internal.ZLinkLocationWriteIntent.NewClaim);
 
+  const descriptor = (await repository.listMeshNodes('play')).items[0];
+  assert.equal((await repository.reserve(authorityReserveRequest('replacement-actor', descriptor, ownerToken))).kind, 'reserved');
   assert.equal(await repository.removeAllByOwner(ownerToken), 0n);
+  assert.equal(replaced, true);
   assert.equal((await repository.listMeshNodes('play')).items.length, 1);
 });
 
@@ -3153,11 +3169,8 @@ test('location runtime preserves a corrupt owner lease error during claim confir
   assert.match(status.lastError, /Location Store owner lease record is invalid/);
   assert.equal(provider.observedWrites, 2);
   await assert.rejects(repository.readOwnerLease('owner-corrupt'), /invalid/);
-  await assert.rejects(runtime.stop(), (error) => {
-    assert.equal(error.name, 'ZLinkOwnerCleanupError');
-    assert.match(error.cause.message, /Location Store owner lease record is invalid/);
-    return true;
-  });
+  await runtime.stop();
+  assert.match(runtime.lastError, /Location Store owner lease record is invalid/);
 });
 
 test('production repository rejects an ambiguous owner lease without an expiry as corrupt', async () => {
@@ -3275,9 +3288,9 @@ test('production repository shares ClientServer and fanout discovery through onl
   assert.equal(renewedPublisher.status, internal.ZLinkLocationWriteStatus.Stored);
   assert.equal((await writer.listFanoutPublishers('events')).items[0].descriptorRevision, 2n);
 
-  assert.equal(await reader.removeAllByOwner(claimed.token), 2n);
-  assert.equal((await writer.listClientServers('orders')).items.length, 0);
-  assert.equal((await writer.listFanoutPublishers('events')).items.length, 0);
+  assert.equal(await reader.removeAllByOwner(claimed.token), 0n);
+  assert.equal((await writer.listClientServers('orders')).items.length, 1);
+  assert.equal((await writer.listFanoutPublishers('events')).items.length, 1);
 });
 
 class ReplyLossLocationStore {
@@ -3412,10 +3425,10 @@ test('production repository shares Spot Actor and route ownership through only o
   assert.equal((await reader.listActors({ spotId: 'room-1' })).items.length, 1);
   assert.equal((await reader.listRoutes({ ownerId: 'owner-a' })).items.length, 1);
 
-  assert.equal(await reader.removeAllByOwner(claimed.token), 3n);
-  assert.equal(await writer.resolveSpot({ meshName: 'play', spotId: 'room-1' }), undefined);
-  assert.equal(await writer.resolveActor({ meshName: 'play', actorId: 'actor-1' }), undefined);
-  assert.equal(await writer.resolveRoute({
+  assert.equal(await reader.removeAllByOwner(claimed.token), 0n);
+  assert.notEqual(await writer.resolveSpot({ meshName: 'play', spotId: 'room-1' }), undefined);
+  assert.notEqual(await writer.resolveActor({ meshName: 'play', actorId: 'actor-1' }), undefined);
+  assert.notEqual(await writer.resolveRoute({
     routeKind: internal.ZLinkRouteKind.ActorSession,
     routeKey: 'actor-1'
   }), undefined);
@@ -3879,4 +3892,94 @@ test('sameLifecycleDescriptorRepublishRebuildsQualifiedConflictWithoutRepeatingF
   assert.equal(fixture.writes.length, 2);
   assert.equal(factoryCalls, 1);
   assert.equal(callbackCalls, 1);
+});
+
+test('#2646 owner sweep preserves publisher descriptors in both stores', async () => {
+  for (const store of [new internal.ZLinkInMemoryLocationStore(),
+    new internal.ZLinkLocationStoreRepository(new internal.ZLinkInMemoryProviderLocationStore())]) {
+    const owner = await store.claimOwnerLease('cleanup-owner', 30_000);
+    assert.equal(owner.kind, 'claimed');
+    await store.updateMeshNode({
+      ...placementDescriptor('cleanup-node', 'Player', 100, 0, 0),
+      ownerId: owner.token.ownerId,
+      leaseGeneration: owner.token.leaseGeneration
+    }, internal.ZLinkLocationWriteIntent.NewClaim);
+    assert.equal(await store.removeAllByOwner(owner.token), 0n);
+    assert.equal((await store.listMeshNodes('play')).items.length, 1);
+    assert.equal((await store.readOwnerLease(owner.token.ownerId)).kind, 'found');
+  }
+});
+
+test('#2646 stop observes an in-flight cleanup and starts no release after cancellation', async () => {
+  let finish;
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const pending = new Promise(resolve => { finish = resolve; });
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const runtime = runtimeFor(store, { locationStore: {
+    async removeAllByOwner(_owner, signal) {
+      entered();
+      await pending;
+      signal.throwIfAborted();
+      return 0n;
+    }
+  }});
+  await runtime.start(rid('cleanup-node'));
+  const controller = new AbortController();
+  let settled = false;
+  const stop = runtime.stop(controller.signal).finally(() => { settled = true; });
+  const failure = assert.rejects(stop);
+  await started;
+  controller.abort(new DOMException('deadline', 'AbortError'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  finish();
+  await failure;
+  assert.equal((await store.readOwnerLease(runtime.ownerId)).kind, 'found');
+});
+
+test('#2646 stop preserves replacement leases before and after deadline', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  let sweeps = 0;
+  const runtime = runtimeFor(store, { ownerId: 'deadline-owner', locationStore: {
+    async removeAllByOwner() { sweeps++; return 0n; }
+  }});
+  await runtime.start(rid('deadline-node'));
+  const old = runtime.currentOwnerToken;
+  await store.releaseOwnerLease(old);
+  const replacement = await store.claimOwnerLease(old.ownerId, 30_000);
+  const controller = new AbortController();
+  controller.abort(new DOMException('deadline', 'AbortError'));
+  await assert.rejects(runtime.stop(controller.signal));
+  assert.equal(sweeps, 0);
+  assert.deepEqual((await store.readOwnerLease(old.ownerId)).token, replacement.token);
+
+  const replacedRuntime = runtimeFor(store, { ownerId: 'replaced-live-owner' });
+  await replacedRuntime.start(rid('replaced-live-node'));
+  const previous = replacedRuntime.currentOwnerToken;
+  await store.releaseOwnerLease(previous);
+  const liveReplacement = await store.claimOwnerLease(previous.ownerId, 30_000);
+  await replacedRuntime.stop();
+  assert.deepEqual((await store.readOwnerLease(previous.ownerId)).token, liveReplacement.token);
+});
+
+test('#2646 owner sweep deletes matching authority and preserves another owner', async () => {
+  for (const store of [new internal.ZLinkInMemoryLocationStore(),
+    new internal.ZLinkLocationStoreRepository(new internal.ZLinkInMemoryProviderLocationStore())]) {
+    const owner = await store.claimOwnerLease('authority-cleanup-owner', 30_000);
+    const other = await store.claimOwnerLease('authority-other-owner', 30_000);
+    for (const token of [owner.token, other.token]) {
+      const descriptor = {
+        ...placementDescriptor(token.ownerId, 'Player', 100, 0, 0),
+        ownerId: token.ownerId, leaseGeneration: token.leaseGeneration
+      };
+      await store.updateMeshNode(descriptor, internal.ZLinkLocationWriteIntent.NewClaim);
+      assert.equal((await store.reserve(authorityReserveRequest(token.ownerId, descriptor, token))).kind, 'reserved');
+    }
+    assert.equal(await store.removeAllByOwner({...owner.token, leaseGeneration: 999n}), 0n);
+    assert.equal(await store.removeAllByOwner(owner.token), 1n);
+    assert.equal((await store.readAuthority(authorityKeys.encodeAuthorityKey('actor', owner.token.ownerId))).kind, 'missing');
+    assert.equal((await store.readAuthority(authorityKeys.encodeAuthorityKey('actor', other.token.ownerId))).kind, 'snapshot');
+    assert.equal((await store.listMeshNodes('play')).items.length, 2);
+  }
 });

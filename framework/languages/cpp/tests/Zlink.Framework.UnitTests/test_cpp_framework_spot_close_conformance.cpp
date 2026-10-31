@@ -1761,7 +1761,8 @@ class scenario_client_t final : public zf::hosted_service_t
             current ().shutdown_runtime = &services.get_required<zf::framework_runtime_t> ();
             auto shutdown = _app->shutdown (500ms);
             stopping = true;
-            const auto terminal = shutdown.result_for (3s);
+            auto terminal = shutdown.result_for (3s);
+            actual["completedBeforeRelease"] = terminal.has_value ();
             {
                 std::lock_guard lock (current ().mutex);
                 const auto context = current ().closing_context;
@@ -1776,6 +1777,7 @@ class scenario_client_t final : public zf::hosted_service_t
                 actual["contextAliveAtCancellation"] = current ().cleanup_context_preserved.load ();
             }
             current ().closing_released.complete (zf::result_t<void>::success ());
+            terminal = shutdown.result ();
             actual["terminalObserved"] = terminal.has_value ();
             actual["deadlineExceeded"] =
               terminal && terminal->value ().reason == zf::termination_reason_t::deadline_exceeded;
@@ -1799,6 +1801,7 @@ class scenario_client_t final : public zf::hosted_service_t
                 store.release_held_commit (false);
                 throw std::runtime_error ("Close did not reach authority release");
             }
+            auto &repository = services.get_required<zf::location_repository_t> ();
             auto shutdown = _app->shutdown (expires ? 100ms : 3s);
             stopping = true;
             if (!expires) {
@@ -1831,6 +1834,8 @@ class scenario_client_t final : public zf::hosted_service_t
             actual["deadlineExceeded"] =
               result.reason == zf::termination_reason_t::deadline_exceeded;
             actual["stopped"] = result.outcome == zf::termination_outcome_t::stopped;
+            actual["descriptorsAfterShutdown"] =
+              repository.list_mesh_nodes (mesh_name).result ().value ().items.size ();
             return;
         }
         if (authority == "Closing") {
@@ -2751,7 +2756,8 @@ TEST (ZLinkFrameworkSpotCloseConformance, ShutdownDeadlineCancelsClosingCleanup)
                                   {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}}},
                                   {"act", "shutdownOnClosing"},
                                   {"expect",
-                                   {{"deadlinePreserved", true},
+                                   {{"completedBeforeRelease", false},
+                                    {"deadlinePreserved", true},
                                     {"shutdownReason", true},
                                     {"stoppedAtInvocation", false},
                                     {"cleanupStopped", true},
@@ -2777,12 +2783,17 @@ TEST (ZLinkFrameworkSpotCloseConformance, ShutdownJoinsExplicitCloseBeforeOwnerC
 
 TEST (ZLinkFrameworkSpotCloseConformance, ShutdownCloseJoinUsesDrainDeadline)
 {
-    run_and_check (nlohmann::json{
-      {"name", "shutdown-close-deadline"},
-      {"given", {{"authority", "Ready"}, {"deadlineExpires", true}}},
-      {"act", "shutdownDuringClose"},
-      {"expect",
-       {{"completedBeforeRelease", true}, {"deadlineExceeded", true}, {"stopped", false}}}});
+    run_and_check (nlohmann::json{{"name", "shutdown-close-deadline"},
+                                  {"given", {{"authority", "Ready"}, {"deadlineExpires", true}}},
+                                  {"act", "shutdownDuringClose"},
+                                  {"expect",
+                                   {{"completedBeforeRelease", false},
+                                    {"authorityBeforeRelease", "Ready"},
+                                    {"ownerDeletedBeforeRelease", false},
+                                    {"closeSucceeded", true},
+                                    {"deadlineExceeded", true},
+                                    {"descriptorsAfterShutdown", 1},
+                                    {"stopped", false}}}});
 }
 
 TEST (ZLinkFrameworkSpotCloseConformance, RunsEveryFixtureScenario)

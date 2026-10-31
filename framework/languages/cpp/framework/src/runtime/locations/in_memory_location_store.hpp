@@ -1260,37 +1260,20 @@ class in_memory_location_repository_t : public location_repository_t
               if (!owner_token_is_live (owner, clock_t::now ()))
                   return completed (std::int64_t{0});
               std::int64_t removed = 0;
-              std::vector<std::string> mesh_node_keys;
-              for (const auto &[key, descriptor] : _mesh_nodes) {
-                  if (descriptor.owner_id == owner.owner_id
-                      && descriptor.lease_generation == owner.lease_generation)
-                      mesh_node_keys.push_back (key);
+              for (auto it = _authorities.begin (); it != _authorities.end ();) {
+                  const auto &row = it->second;
+                  if (!same_owner (row.owner, owner)) {
+                      ++it;
+                      continue;
+                  }
+                  apply_capacity_bundle (
+                    row.allocation.state == placement_allocation_state_t::active
+                      ? _active_by_placement
+                      : _pending_by_placement,
+                    row.allocation.target, row.allocation.capacity_bundle, false);
+                  it = _authorities.erase (it);
+                  ++removed;
               }
-              for (const auto &key : mesh_node_keys) {
-                  const auto descriptor = _mesh_nodes.find (key);
-                  if (descriptor != _mesh_nodes.end ())
-                      remove_entry_spot_id_claim (descriptor->second, key);
-                  _mesh_nodes.erase (key);
-              }
-              removed += static_cast<std::int64_t> (mesh_node_keys.size ());
-              std::vector<std::string> client_server_keys;
-              for (const auto &[key, descriptor] : _client_servers) {
-                  if (descriptor.owner_id == owner.owner_id
-                      && descriptor.lease_generation == owner.lease_generation)
-                      client_server_keys.push_back (key);
-              }
-              for (const auto &key : client_server_keys)
-                  _client_servers.erase (key);
-              removed += static_cast<std::int64_t> (client_server_keys.size ());
-              std::vector<std::string> fanout_keys;
-              for (const auto &[key, descriptor] : _fanout_publishers) {
-                  if (descriptor.owner_id == owner.owner_id
-                      && descriptor.lease_generation == owner.lease_generation)
-                      fanout_keys.push_back (key);
-              }
-              for (const auto &key : fanout_keys)
-                  _fanout_publishers.erase (key);
-              removed += static_cast<std::int64_t> (fanout_keys.size ());
               return completed (removed);
           })
           .get ();

@@ -181,7 +181,15 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     @Override
     public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
             ZLinkLocationOwnerToken token) {
-        return observeStore(LocationOperation.RELEASE, () -> owners.release(token));
+        return releaseOwnerLease(token, () -> false);
+    }
+
+    @Override
+    public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+            ZLinkLocationOwnerToken token, ZLinkStoreCancellation cancellation) {
+        return observeStore(
+                LocationOperation.RELEASE,
+                () -> owners.release(token, cancellation::isCancellationRequested));
     }
 
     @Override
@@ -368,7 +376,15 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
 
     @Override
     public CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner) {
-        return observeStore(LocationOperation.RELEASE, () -> authority.removeAllByOwner(owner));
+        return removeAllByOwner(owner, () -> false);
+    }
+
+    @Override
+    public CompletionStage<Long> removeAllByOwner(
+            ZLinkLocationOwnerToken owner, ZLinkStoreCancellation cancellation) {
+        return observeStore(
+                LocationOperation.RELEASE,
+                () -> authority.removeAllByOwner(owner, cancellation::isCancellationRequested));
     }
 
     @Override
