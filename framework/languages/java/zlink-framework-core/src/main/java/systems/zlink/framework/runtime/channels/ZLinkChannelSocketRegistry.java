@@ -82,7 +82,7 @@ final class ZLinkChannelSocketRegistry {
     private final Map<String, ZLinkBackendPublisherSocket> publishers = new HashMap<>();
     private final Map<String, RoutingId> publisherRoutingIds = new HashMap<>();
     private final Map<String, ZLinkBackendSubscriberSocket> subscribers = new HashMap<>();
-    private final Map<String, RouteRouterRecord> routeRouters = new HashMap<>();
+    private volatile Map<String, RouteRouterRecord> routeRouters = Map.of();
     private final Map<String, ClientServerConnection> clientServerConnections = new HashMap<>();
     private final Map<String, ZLinkClientServerServerDescriptor> clientServerServerDescriptors =
             new HashMap<>();
@@ -220,9 +220,11 @@ final class ZLinkChannelSocketRegistry {
         registerReceiveFlow(socket);
         inStateLane(
                 () -> {
-                    routeRouters.put(channelName, new RouteRouterRecord(socket, List.of()));
+                    var routes = new HashMap<>(routeRouters);
+                    routes.put(channelName, new RouteRouterRecord(socket, List.of()));
                     routeSocketLocks.put(channelName, new Object());
                     ownedSockets.add(socket);
+                    routeRouters = Map.copyOf(routes);
                     return null;
                 });
     }
@@ -237,9 +239,11 @@ final class ZLinkChannelSocketRegistry {
                                     record.socket().lastEndpoint(), null);
                     List<String> endpoints = new ArrayList<>(record.boundEndpoints());
                     endpoints.add(boundEndpoint);
-                    routeRouters.put(
+                    var routes = new HashMap<>(routeRouters);
+                    routes.put(
                             channelName,
                             new RouteRouterRecord(record.socket(), List.copyOf(endpoints)));
+                    routeRouters = Map.copyOf(routes);
                     return null;
                 });
     }
@@ -495,7 +499,7 @@ final class ZLinkChannelSocketRegistry {
             java.util.function.Consumer<Throwable> rejectedSubmission) {
         long started =
                 ZLinkRequestCalls.startTime(timeoutOverride, defaultTimeout, requestNanoTime);
-        return selectAndSubmit(
+        return prepareAndSubmit(
                 () -> {
                     Duration timeout =
                             requestTimeoutCore(channelName, timeoutOverride, defaultTimeout);
@@ -521,7 +525,8 @@ final class ZLinkChannelSocketRegistry {
                     throw new ZLinkConfigurationException(
                             "route mesh channel is not configured: " + channelName);
                 },
-                rejectedSubmission);
+                rejectedSubmission,
+                null);
     }
 
     /** Local owner, configured bridge, and registered node keep their existing precedence. */
@@ -588,8 +593,9 @@ final class ZLinkChannelSocketRegistry {
 
     private <T> Supplier<CompletionStage<T>> nodeSubmission(
             ZLinkInternalSpotNode node, Supplier<CompletionStage<T>> submission) {
-        var owner = node.sourceTransportLane();
-        if (owner == null || owner == stateLane) {
+        var sourceOwner = node.sourceTransportLane();
+        var owner = sourceOwner != null ? sourceOwner : stateLane;
+        if (owner == stateLane && owner.isOnLane()) {
             var submitted = submission.get();
             return () -> submitted;
         }
@@ -612,6 +618,13 @@ final class ZLinkChannelSocketRegistry {
     private <T> CompletionStage<T> selectAndSubmit(
             Supplier<Supplier<CompletionStage<T>>> selection,
             java.util.function.Consumer<Throwable> rejectedSubmission) {
+        return prepareAndSubmit(selection, rejectedSubmission, stateLane);
+    }
+
+    private <T> CompletionStage<T> prepareAndSubmit(
+            Supplier<Supplier<CompletionStage<T>>> selection,
+            java.util.function.Consumer<Throwable> rejectedSubmission,
+            ZLinkStateLane selectorOwner) {
         ZLinkFlowContext.State flow = ZLinkFlowContext.current();
         Supplier<Supplier<CompletionStage<T>>> work =
                 () -> {
@@ -631,7 +644,10 @@ final class ZLinkChannelSocketRegistry {
                 };
         try {
             // Release selection ownership before entering the selected node's operation turn.
-            var submission = stateLane.isOnLane() ? work.get() : stateLane.awaitTurn(work);
+            var submission =
+                    selectorOwner == null || selectorOwner.isOnLane()
+                            ? work.get()
+                            : selectorOwner.awaitTurn(work);
             try (var ignored =
                     flow == null ? ZLinkFlowContext.suppress() : ZLinkFlowContext.enter(flow)) {
                 return submission.get();
