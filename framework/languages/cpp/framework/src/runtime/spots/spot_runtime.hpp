@@ -595,13 +595,15 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
     {
         std::atomic_store (&_preparation, preparation);
         preparation->release_aliases =
-          [self = shared_from_this (), preparation,
+          [weak_self = weak_from_this (), weak_preparation = std::weak_ptr (preparation),
            previous = std::move (preparation->release_aliases)] (result_t<void> result) mutable {
               try {
-                  auto expected = preparation;
-                  if (std::atomic_compare_exchange_strong (&self->_preparation, &expected,
-                                                           std::shared_ptr<preparation_t>{}))
-                      self->update_preparation_policy ({});
+                  if (auto self = weak_self.lock ()) {
+                      auto expected = weak_preparation.lock ();
+                      if (std::atomic_compare_exchange_strong (&self->_preparation, &expected,
+                                                               std::shared_ptr<preparation_t>{}))
+                          self->update_preparation_policy ({});
+                  }
               }
               catch (...) {
                   if (result)
@@ -958,8 +960,11 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
     {
         if (!preparation || !std::atomic_load (&preparation->admission))
             return {};
-        return [preparation] (const std::shared_ptr<const void> &message) noexcept {
-            const auto admission = std::atomic_load (&preparation->admission);
+        return [weak_preparation = std::weak_ptr (preparation)] (
+                 const std::shared_ptr<const void> &message) noexcept {
+            const auto preparation = weak_preparation.lock ();
+            const auto admission =
+              preparation ? std::atomic_load (&preparation->admission) : nullptr;
             if (!admission)
                 return true;
             const auto first = std::get_if<preparation_t::first_record_t> (admission.get ());
