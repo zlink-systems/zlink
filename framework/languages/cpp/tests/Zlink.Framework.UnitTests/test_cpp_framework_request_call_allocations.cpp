@@ -17,7 +17,22 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <span>
 #include <variant>
+
+#if defined(ZLINK_TEST_COUNT_REPLY_NOTIFICATIONS)
+namespace
+{
+thread_local std::size_t *reply_notifications = nullptr;
+}
+extern "C" void __real__ZNSt18condition_variable10notify_allEv (void *condition);
+extern "C" void __wrap__ZNSt18condition_variable10notify_allEv (void *condition)
+{
+    if (reply_notifications != nullptr)
+        ++*reply_notifications;
+    __real__ZNSt18condition_variable10notify_allEv (condition);
+}
+#endif
 
 namespace
 {
@@ -140,8 +155,7 @@ allocation_sample_t encode_allocations (fw::serializer_registry_t &serializers,
     });
 }
 
-allocation_sample_t internal_projection_allocations (
-  std::optional<channel_transport_t> channel_transport = std::nullopt)
+allocation_sample_t channel_projection_allocations (channel_transport_t channel_transport)
 {
     fw::task_completion_source_t<transport_reply_t> source;
     auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
@@ -152,37 +166,17 @@ allocation_sample_t internal_projection_allocations (
     std::optional<fw::request_task_t<zlink::message_t>> projected;
     const std::shared_ptr<fw::detail::route_client_state_t> state;
     std::string packet_name = payload_t::packet_name;
-    if (channel_transport) {
-        std::string channel_name = "c";
-        return sample_allocations ([&] {
-            projected.emplace (fw::detail::project_request_reply<zlink::message_t> (
-              selected,
-              [state, transport = std::move (*channel_transport),
-               packet_name = std::move (packet_name), channel_name = std::move (channel_name)] (
-                const fw::result_t<transport_reply_t> &) -> fw::result_t<zlink::message_t> {
-                  (void) state;
-                  (void) transport;
-                  (void) packet_name;
-                  (void) channel_name;
-                  return fw::result_t<zlink::message_t>::success (zlink::message_t{});
-              }));
-        });
-    }
-    node_transport_t transport;
-    std::string router_channel_id = "m";
-    std::shared_ptr<const zlink::routing_id_t> target_owner;
+    std::string channel_name = "c";
     return sample_allocations ([&] {
         projected.emplace (fw::detail::project_request_reply<zlink::message_t> (
           selected,
-          [state, transport = std::move (transport), packet_name = std::move (packet_name),
-           router_channel_id = std::move (router_channel_id),
-           target_owner = std::move (target_owner)] (
+          [state, transport = std::move (channel_transport), packet_name = std::move (packet_name),
+           channel_name = std::move (channel_name)] (
             const fw::result_t<transport_reply_t> &) -> fw::result_t<zlink::message_t> {
               (void) state;
               (void) transport;
               (void) packet_name;
-              (void) router_channel_id;
-              (void) target_owner;
+              (void) channel_name;
               return fw::result_t<zlink::message_t>::success (zlink::message_t{});
           }));
     });
@@ -204,6 +198,41 @@ allocation_sample_t public_projection_allocations (fw::serializer_registry_t &re
               (void) serializers;
               return fw::result_t<payload_t>::success (payload_t{});
           }));
+    });
+}
+
+allocation_sample_t node_receiver_allocations (fw::serializer_registry_t &registry)
+{
+    fw::task_completion_source_t<transport_reply_t> physical;
+    std::optional<fw::request_task_t<payload_t>> pending;
+    const std::shared_ptr<fw::detail::route_client_state_t> state;
+    node_transport_t transport;
+    std::string packet_name = payload_t::packet_name;
+    std::string router_channel_id = "m";
+    std::shared_ptr<const zlink::routing_id_t> target_owner;
+    return sample_allocations ([&] {
+        pending.emplace (
+          fw::detail::request_task_access_t::receive_public<payload_t, zlink::message_t> (
+            [&] (auto receiver) {
+                auto parts = receiver.template project<transport_reply_t> (
+                  [state, transport, packet_name = std::move (packet_name),
+                   router_channel_id = std::move (router_channel_id),
+                   target_owner] (const fw::result_t<transport_reply_t> &) {
+                      (void) state;
+                      (void) transport;
+                      (void) packet_name;
+                      (void) router_channel_id;
+                      (void) target_owner;
+                      return fw::result_t<zlink::message_t>::success (zlink::message_t{});
+                  });
+                parts.admitted->complete (fw::result_t<void>::success ());
+                auto reply = physical.task ();
+                fw::detail::observe_task_terminal (reply, std::move (parts.complete));
+            },
+            [serializers = &registry] (const fw::result_t<zlink::message_t> &) {
+                (void) serializers;
+                return fw::result_t<payload_t>::success (payload_t{});
+            }));
     });
 }
 
@@ -249,7 +278,84 @@ parts_t reply_parts (int value)
  * transport's admission source. The public reply adds its own state, which
  * ends at an admission failure before the physical terminal, and the
  * observer of that admission. No coroutine or task wraps a layer again. */
-TEST (RequestCallAllocations, NodeRequestAddsOneReplyPerReplyTypeAboveTheTransport)
+TEST (RequestCallAllocations, NodeReplyConstructsOnlyFinalPublicAndPhysicalResultStates)
+{
+    fw::serializer_registry_t serializers;
+    add_payload (serializers);
+    auto builder = fw::test::runtime_failure_builder ();
+    auto channel = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    auto state = fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> (
+      "result-chain-count");
+    fw::detail::mesh_node_runtime_t mesh (state);
+    fw::runtime::host::pending_operation_t operation;
+    auto submitted = fw::task_t<zlink::submit_result_t> (
+      fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok));
+    const zlink::routing_id_t *borrowed_target = nullptr;
+    channel.bind_mesh_node_transport ("m", {}, [&] (const auto &target, auto, auto, auto receiver) {
+        borrowed_target = &target;
+        mesh.compose_node_request_reply (operation, std::move (submitted), std::move (receiver));
+    });
+    auto client = builder.route_client (serializers);
+    auto call = client.request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{});
+    const auto mesh_state = sample_allocations ([] {
+        (void) std::make_shared<fw::detail::application_task_shared_state_t<transport_reply_t>> ();
+    });
+    const auto channel_state = sample_allocations ([] {
+        (void) std::make_shared<fw::detail::application_task_shared_state_t<zlink::message_t>> ();
+    });
+    const auto typed_state = sample_allocations (
+      [] { (void) std::make_shared<fw::detail::application_task_shared_state_t<payload_t>> (); });
+    ASSERT_EQ (mesh_state.count, 1u);
+    ASSERT_EQ (channel_state.count, 1u);
+    ASSERT_EQ (typed_state.count, 1u);
+    // Use this standard library's allocation sizes, including its control blocks.
+    // Admission and submission are different result types and remain out of scope.
+    const auto is_reply_state = [&] (std::size_t size) {
+        return size == mesh_state.events[0].size || size == channel_state.events[0].size
+               || size == typed_state.events[0].size;
+    };
+    std::optional<fw::request_task_t<payload_t>> pending;
+    const auto sample = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
+    ASSERT_NE (borrowed_target, nullptr);
+    const auto target_allocation = allocation_containing (sample, borrowed_target);
+    ASSERT_TRUE (target_allocation.has_value ());
+    EXPECT_EQ (borrowed_target->to_string (), "n");
+    std::size_t reply_states = 0;
+    for (std::size_t index = 0; index < sample.count; ++index) {
+        // RID storage can share a size with a reply state; identify it by its live address.
+        if (index != *target_allocation)
+            reply_states += is_reply_state (sample.events[index].size);
+    }
+    std::printf (
+      "node reply states/request=%zu total allocations/request=%zu state sizes=%zu/%zu/%zu\n",
+      reply_states, sample.total, mesh_state.events[0].size, channel_state.events[0].size,
+      typed_state.events[0].size);
+    EXPECT_EQ (reply_states, 2u) << sample.diagnostics;
+    // Prove the allocation guard also rejects an injected conversion state.
+    const auto injected = sample_allocations ([] {
+        (void) std::make_shared<fw::detail::application_task_shared_state_t<transport_reply_t>> ();
+    });
+    EXPECT_TRUE (is_reply_state (injected.events[0].size));
+    fw::runtime::host::operation_completion_t reply;
+    reply.record.terminal_result = static_cast<int> (zlink::request_result_t::ok);
+    reply.parts = std::move (reply_parts (41)).take_items ();
+#if defined(ZLINK_TEST_COUNT_REPLY_NOTIFICATIONS)
+    std::size_t notifications = 0;
+    reply_notifications = &notifications;
+#endif
+    operation.completion->complete (
+      fw::result_t<fw::runtime::host::operation_completion_t>::success (std::move (reply)));
+#if defined(ZLINK_TEST_COUNT_REPLY_NOTIFICATIONS)
+    reply_notifications = nullptr;
+    std::printf ("node terminal notify_all calls/request=%zu\n", notifications);
+    EXPECT_EQ (notifications, 3u); // Host terminal, final physical, final public.
+#endif
+    ASSERT_TRUE (pending->result ());
+    EXPECT_EQ (pending->result ().value ().value, 41);
+}
+
+TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTransport)
 {
     fw::serializer_registry_t serializers;
     add_payload (serializers);
@@ -257,15 +363,14 @@ TEST (RequestCallAllocations, NodeRequestAddsOneReplyPerReplyTypeAboveTheTranspo
     auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
     fw::task_completion_source_t<transport_reply_t> physical;
-    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
-    admitted->complete (fw::result_t<void>::success ());
-    std::optional<fw::request_task_t<transport_reply_t>> prepared;
+    std::shared_ptr<fw::task_completion_source_t<void>> admitted;
     unsigned submitted = 0;
-    runtime.bind_mesh_node_transport ("m", {}, [&] (const auto &, auto, auto) {
+    runtime.bind_mesh_node_transport ("m", {}, [&] (const auto &, auto, auto, auto receiver) {
         ++submitted;
-        auto selected = std::move (*prepared);
-        prepared.reset ();
-        return selected;
+        admitted = receiver.admitted;
+        admitted->complete (fw::result_t<void>::success ());
+        auto reply = physical.task ();
+        fw::detail::observe_task_terminal (reply, std::move (receiver.complete));
     });
     auto client = builder.route_client (serializers);
     const auto first_encode = encode_allocations (serializers, "m").total;
@@ -274,26 +379,21 @@ TEST (RequestCallAllocations, NodeRequestAddsOneReplyPerReplyTypeAboveTheTranspo
     // A transport may borrow its target until the physical terminal.
     const auto target_owner = sample_allocations (
       [] { (void) std::make_shared<const zlink::routing_id_t> (zlink::routing_id_t::from ("n")); });
-    const auto internal_projection = internal_projection_allocations ();
-    const auto public_projection = public_projection_allocations (serializers);
+    const auto receiver = node_receiver_allocations (serializers);
     print_allocation_sizes ("node encode reference", encode);
     print_allocation_sizes ("node target reference", target_owner);
-    print_allocation_sizes ("node internal projection reference", internal_projection);
-    print_allocation_sizes ("node public projection reference", public_projection);
+    print_allocation_sizes ("node receiver reference", receiver);
     SCOPED_TRACE ("node encode reference\n" + encode.diagnostics);
     SCOPED_TRACE ("node target reference\n" + target_owner.diagnostics);
-    SCOPED_TRACE ("node internal projection reference\n" + internal_projection.diagnostics);
-    SCOPED_TRACE ("node public projection reference\n" + public_projection.diagnostics);
+    SCOPED_TRACE ("node receiver reference\n" + receiver.diagnostics);
 
-    prepared.emplace (physical.task (), admitted);
     auto call = client.request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{});
     std::optional<fw::request_task_t<payload_t>> pending;
     const auto actual = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
     print_allocation_sizes ("node request above transport", actual);
     SCOPED_TRACE ("node request above transport\n" + actual.diagnostics);
     EXPECT_EQ (submitted, 1u);
-    EXPECT_EQ (actual.total, encode.total + target_owner.total + internal_projection.total
-                               + public_projection.total);
+    EXPECT_EQ (actual.total, encode.total + target_owner.total + receiver.total);
 
     ASSERT_TRUE (pending.has_value ());
     EXPECT_EQ (fw::detail::request_task_access_t::admission_source (*pending), admitted);
@@ -329,7 +429,7 @@ TEST (RequestCallAllocations, ChannelRequestAddsOneReplyPerReplyTypeAboveTheTran
     const auto encode = encode_allocations (serializers, "c");
     const auto selection = channel_selection_allocations (requester);
     const auto internal_projection =
-      internal_projection_allocations (channel_transport_t (std::in_place_index<1>, requester));
+      channel_projection_allocations (channel_transport_t (std::in_place_index<1>, requester));
     const auto public_projection = public_projection_allocations (serializers);
     print_allocation_sizes ("channel encode reference", encode);
     print_allocation_sizes ("channel selection reference", selection);
@@ -594,9 +694,10 @@ TEST (RequestCallAllocations, AdmissionFailureEndsThePublicReplyBeforeThePhysica
             return fw::request_task_t<transport_reply_t> (physical.task (), admitted);
         };
         runtime.bind_mesh_channel_transport ("c", {}, request);
-        runtime.bind_mesh_node_transport ("m", {}, [&] (const auto &, auto parts, auto timeout) {
-            return request (std::move (parts), timeout);
-        });
+        runtime.bind_mesh_node_transport (
+          "m", {}, [&] (const auto &, auto parts, auto timeout, auto receiver) {
+              receiver.observe (request (std::move (parts), timeout));
+          });
         auto client = builder.route_client (serializers);
         auto pending =
           (channel_request
@@ -623,6 +724,106 @@ TEST (RequestCallAllocations, AdmissionFailureEndsThePublicReplyBeforeThePhysica
 fw::task_t<bool> one_ready_admission_result ()
 {
     return fw::task_t<bool> (fw::result_t<bool>::success (false));
+}
+
+TEST (RequestCallAllocations, ReceiverPreparationFailureDoesNotSubmitOrEscapeAsync)
+{
+    fw::serializer_registry_t serializers;
+    add_payload (serializers);
+    auto builder = fw::test::runtime_failure_builder ();
+    auto channel = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    unsigned submitted = 0;
+    channel.bind_mesh_node_transport ("m", {},
+                                      [&] (const auto &, auto, auto, auto) { ++submitted; });
+    auto call = builder.route_client (serializers)
+                  .request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{});
+    std::optional<fw::request_task_t<payload_t>> pending;
+    fw::tests::allocations_before_failure = 0;
+    EXPECT_NO_THROW (pending.emplace (call.async<payload_t> ()));
+    fw::tests::allocations_before_failure.reset ();
+    ASSERT_TRUE (pending.has_value ());
+    EXPECT_EQ (submitted, 0u);
+    ASSERT_TRUE (pending->await_ready ());
+    EXPECT_THROW (pending->result ().value (), std::bad_alloc);
+    auto physical = fw::detail::request_task_access_t::physical_reply (*pending);
+    ASSERT_TRUE (physical.await_ready ());
+    EXPECT_THROW (physical.result ().value (), std::bad_alloc);
+    ASSERT_TRUE (pending->admitted ().await_ready ());
+    EXPECT_THROW (pending->admitted ().result ().value (), std::bad_alloc);
+}
+
+TEST (RequestCallAllocations, PreparedReceiverDecodesAndReleasesPhysicalReplyAfterAdmissionFailure)
+{
+    // Success, typed decode failure and malformed envelope retain the first public failure.
+    for (const int mode : {0, 1, 2}) {
+        fw::serializer_registry_t serializers;
+        unsigned decoded = 0;
+        serializers.add<payload_t> (
+          [] (const payload_t &payload) {
+              return fw::encoded_payload_t::from_string (std::to_string (payload.value));
+          },
+          [&] (const fw::encoded_payload_t &payload) {
+              ++decoded;
+              if (mode == 1)
+                  throw fw::framework_exception_t (fw::framework_error_kind_t::protocol_error,
+                                                   "typed reply decode failed");
+              return payload_t{std::stoi (payload.to_string ())};
+          },
+          "x/y");
+        auto builder = fw::test::runtime_failure_builder ();
+        auto channel = fw::detail::channel_runtime_t::from (builder.message_bus ());
+        channel.bind_serializers (serializers);
+        std::optional<fw::detail::request_receiver_t<transport_reply_t>> receiver;
+        channel.bind_mesh_node_transport ("m", {}, [&] (const auto &, auto, auto, auto selected) {
+            receiver.emplace (std::move (selected));
+        });
+        auto pending = builder.route_client (serializers)
+                         .request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{})
+                         .async<payload_t> ();
+        auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+        ASSERT_TRUE (receiver.has_value ());
+        ASSERT_FALSE (pending.await_ready ());
+        receiver->admitted->complete (fw::result_t<void>::failure (
+          fw::framework_error_kind_t::unavailable, "admission refused"));
+        ASSERT_TRUE (pending.await_ready ());
+        EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+        EXPECT_FALSE (physical.await_ready ());
+        unsigned released = 0;
+        struct body_storage_t
+        {
+            std::vector<std::uint8_t> bytes;
+            unsigned *released;
+        };
+        auto storage = std::make_unique<body_storage_t> (body_storage_t{{'5', '1'}, &released});
+        auto parts = std::move (reply_parts (51)).take_items ();
+        parts[1] = zlink::advanced::external_message_t::from (
+          std::span<std::uint8_t> (storage->bytes),
+          [] (void *, void *hint) {
+              std::unique_ptr<body_storage_t> body (static_cast<body_storage_t *> (hint));
+              ++*body->released;
+          },
+          storage.get ());
+        ASSERT_TRUE (parts[1].valid ());
+        storage.release ();
+        if (mode == 2)
+            parts[0] = zlink::message_t::from (std::string ("{"));
+        receiver->complete (fw::result_t<transport_reply_t>::success (
+          transport_reply_t::success (parts_t (std::move (parts)))));
+        receiver.reset ();
+        ASSERT_TRUE (physical.await_ready ());
+        if (mode == 0) {
+            ASSERT_TRUE (physical.result ());
+            EXPECT_EQ (physical.result ().value ().value, 51);
+        } else {
+            EXPECT_EQ (physical.result ().error_kind (),
+                       fw::framework_error_kind_t::protocol_error);
+        }
+        EXPECT_EQ (decoded, mode == 2 ? 0u : 1u);
+        EXPECT_EQ (released, 1u);
+        EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+        EXPECT_STREQ (pending.result ().error ()->what (), "admission refused");
+    }
 }
 
 TEST (RequestCallAllocations, RawNodeRequestDoesNotWrapItsAdmissionTask)
@@ -845,10 +1046,12 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
     auto builder = fw::test::runtime_failure_builder ();
     auto channel = fw::detail::channel_runtime_t::from (builder.message_bus ());
     channel.bind_serializers (serializers);
-    channel.bind_mesh_node_transport ("m", {}, [] (const auto &, auto, auto) {
-        return fw::request_task_t<transport_reply_t> (
-          fw::result_t<transport_reply_t>::success (transport_reply_t::failure (
-            fw::framework_error_kind_t::not_found, "MeshNode request target was not found")));
+    channel.bind_mesh_node_transport ("m", {}, [] (const auto &, auto, auto, auto receiver) {
+        auto failure = transport_reply_t::failure (fw::framework_error_kind_t::not_found,
+                                                   "MeshNode request target was not found");
+        receiver.admitted->complete (
+          fw::detail::result_access_t::failure<void> (failure.exception ()));
+        receiver.complete (fw::result_t<transport_reply_t>::success (std::move (failure)));
     });
     auto reference = builder.route_client (serializers);
     const auto target_bytes = sample_allocations ([&] { (void) target.to_bytes (); });

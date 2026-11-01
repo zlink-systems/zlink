@@ -4,6 +4,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime_failure_fixture.hpp"
 #include <cstdio>
+#include <array>
 #include <atomic>
 #include <optional>
 namespace
@@ -11,40 +12,53 @@ namespace
 namespace fw = zlink::framework;
 using reply_t = fw::result_t<fw::runtime::messaging::message_parts_t>;
 
-TEST (RequestCallAllocations, ReadyNodeReplyAddsOnlyItsProjectionAndAdmission)
+TEST (RequestCallAllocations, ReadyNodeReplyRegistersWithoutAConversionResultState)
 {
     auto state =
       fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("ready-projection");
     fw::detail::mesh_node_runtime_t runtime (state);
-    fw::runtime::host::pending_operation_t reference_operation;
-    std::shared_ptr<fw::task_completion_source_t<void>> reference_admitted;
-    std::optional<fw::task_t<reply_t>> reference_reply;
-    const auto baseline = fw::tests::count_allocations ([&] {
-        reference_admitted = std::make_shared<fw::task_completion_source_t<void>> ();
-        reference_reply.emplace (
-          runtime.await_request_reply (reference_operation, "MeshNode request"));
-        fw::detail::observe_request_failure (*reference_reply, reference_admitted);
-        reference_admitted->complete (fw::result_t<void>::success ());
-    });
+    std::array<fw::tests::allocation_event_t, 64> events{};
+    fw::tests::allocation_event_log_t log{events.data (), events.size ()};
+    std::size_t conversion_state_size = 0;
+    {
+        fw::tests::allocation_event_scope_t scope (log);
+        const auto calibration = fw::tests::count_allocations (
+          [] { (void) std::make_shared<fw::detail::application_task_shared_state_t<reply_t>> (); });
+        ASSERT_EQ (calibration, 1u);
+        ASSERT_EQ (log.count, 1u);
+        conversion_state_size = events[0].size;
+    }
     fw::runtime::host::pending_operation_t operation;
     auto submitted = fw::task_t<zlink::submit_result_t> (
       fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok));
-    std::optional<fw::request_task_t<reply_t>> pending;
-    const auto measured = fw::tests::count_allocations ([&] {
-        pending.emplace (runtime.compose_node_request_reply (operation, std::move (submitted)));
-    });
-    std::printf ("ready node reply: measured=%zu projection_and_admission=%zu\n", measured,
-                 baseline);
-    EXPECT_EQ (measured, baseline);
-    EXPECT_FALSE (pending->await_ready ());
-    ASSERT_TRUE (pending->admitted ().await_ready ());
-    EXPECT_TRUE (pending->admitted ().result ());
+    std::optional<fw::detail::request_receiver_t<reply_t>> receiver;
+    auto pending = fw::detail::request_task_access_t::receive_internal<reply_t> (
+      [&] (auto prepared) { receiver.emplace (std::move (prepared)); });
+    log.count = 0;
+    std::size_t measured = 0;
+    {
+        fw::tests::allocation_event_scope_t scope (log);
+        measured = fw::tests::count_allocations ([&] {
+            runtime.compose_node_request_reply (operation, std::move (submitted),
+                                                std::move (*receiver));
+        });
+    }
+    ASSERT_FALSE (log.overflow);
+    std::size_t conversion_states = 0;
+    for (std::size_t index = 0; index < log.count; ++index)
+        conversion_states += events[index].size == conversion_state_size;
+    std::printf ("ready node reply: conversion_states=%zu state_bytes=%zu allocations=%zu\n",
+                 conversion_states, conversion_state_size, measured);
+    EXPECT_EQ (conversion_states, 0u) << fw::tests::describe_allocations (log);
+    EXPECT_FALSE (pending.await_ready ());
+    ASSERT_TRUE (pending.admitted ().await_ready ());
+    EXPECT_TRUE (pending.admitted ().result ());
     fw::runtime::host::operation_completion_t reply;
     reply.record.terminal_result = static_cast<int> (zlink::request_result_t::ok);
     reply.parts.push_back (zlink::message_t::from (std::string ("reply")));
     operation.completion->complete (
       fw::result_t<fw::runtime::host::operation_completion_t>::success (std::move (reply)));
-    const auto &result = pending->result ();
+    const auto &result = pending.result ();
     ASSERT_TRUE (result);
     ASSERT_TRUE (result.value ());
     EXPECT_EQ (result.value ().value ().items ().size (), 1u);
@@ -56,9 +70,14 @@ TEST (RequestCallAllocations, ReadyAdmissionKeepsALateReplyFailureSeparate)
       "late-projection-failure");
     fw::detail::mesh_node_runtime_t runtime (state);
     fw::runtime::host::pending_operation_t operation;
-    auto pending = runtime.compose_node_request_reply (
-      operation, fw::task_t<zlink::submit_result_t> (
-                   fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok)));
+    auto pending =
+      fw::detail::request_task_access_t::receive_internal<reply_t> ([&] (auto receiver) {
+          runtime.compose_node_request_reply (
+            operation,
+            fw::task_t<zlink::submit_result_t> (
+              fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok)),
+            std::move (receiver));
+      });
     ASSERT_TRUE (pending.admitted ().result ());
     operation.completion->complete (
       fw::result_t<fw::runtime::host::operation_completion_t>::failure (
