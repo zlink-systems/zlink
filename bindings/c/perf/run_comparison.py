@@ -584,6 +584,7 @@ def run_command_with_metrics(
                         pass
             else:
                 stderr_buffer.append(line)
+                emit_benchmark_diag_line(line)
                 if on_stderr_line is not None:
                     try:
                         on_stderr_line(line)
@@ -889,8 +890,64 @@ _AUTO_HWM_DETAIL_TABLE_SEEN = set()
 
 def emit_benchmark_diag_line(line):
     stripped = (line or "").strip()
-    if stripped.startswith("MATCHED_DIAG,"):
+    if stripped.startswith(("MATCHED_DIAG,", "PACED_DIAG,", "BENCH_DIAG,")):
         print(stripped, flush=True)
+
+
+def forward_multi_phase(line, source, pattern, server, client, expected_sizes):
+    """Forward one-way phase gates to the process that owns the next phase."""
+    if pattern not in ("DEALER_DEALER", "PUBSUB"):
+        return False
+    token, separator, size_text = line.strip().partition(",")
+    if not separator or token not in ("PHASE_DRAINED", "PHASE_COMPLETE", "PHASE_DONE"):
+        return False
+    if token in ("PHASE_DRAINED", "PHASE_COMPLETE"):
+        size_text, separator, count_text = size_text.partition(",")
+        if not separator or not count_text.isascii() or not count_text.isdecimal():
+            return False
+        try:
+            received = int(count_text)
+        except ValueError:
+            return False
+        if not (0 if token == "PHASE_COMPLETE" else 1) <= received <= (1 << 64) - 1:
+            return False
+    if token == "PHASE_DONE":
+        if pattern != "PUBSUB":
+            return False
+        size_text, separator, phase_text = size_text.partition(",")
+        if not separator or phase_text not in ("1", "3"):
+            return False
+    try:
+        size = int(size_text)
+    except ValueError:
+        return False
+    if size <= 0 or size not in expected_sizes:
+        return False
+    sender_role = "server" if pattern == "PUBSUB" else "client"
+    receiver_role = "client" if sender_role == "server" else "server"
+    expected_source = "server" if token == "PHASE_DONE" else receiver_role
+    if source != expected_source:
+        return False
+    target = client if source == "server" else server
+    if target is None or target.stdin is None:
+        return False
+    try:
+        forwarded_token = "PHASE_PACED" if token == "PHASE_DRAINED" else token
+        forwarded_line = f"{forwarded_token},{size}"
+        if token in ("PHASE_DRAINED", "PHASE_COMPLETE"):
+            forwarded_line += f",{count_text}"
+        if token == "PHASE_DONE":
+            forwarded_line += f",{phase_text}"
+        target.stdin.write(forwarded_line + "\n")
+        target.stdin.flush()
+    except (BrokenPipeError, OSError, ValueError):
+        return False
+    return True
+
+
+def multi_latency_phase_seconds(duration_seconds):
+    latency_duration = parse_env_int("PERF_MULTI_LATENCY_DURATION_SECONDS", duration_seconds)
+    return 0.5 + max(1, latency_duration)
 
 
 def emit_auto_hwm_detail_line(line):
@@ -1575,6 +1632,7 @@ def run_sizes_test_stream_shared(
         timeout_sec = timeout_override
     else:
         timeout_sec = max(60, duration_seconds * max(1, len(sizes)) * 4 + 30)
+        timeout_sec += multi_latency_phase_seconds(duration_seconds) * max(1, len(sizes))
     ready_timeout_ms = max(0, parse_env_int("PERF_SERVER_READY_TIMEOUT_MS", 10000))
     shutdown_timeout_ms = max(0, parse_env_int("PERF_SERVER_SHUTDOWN_TIMEOUT_MS", 5000))
     ready_timeout_ms, shutdown_timeout_ms = _resolve_server_timeouts(
@@ -1757,6 +1815,7 @@ def run_sizes_test_stream_shared(
                 append_server_stdout_line(line)
             else:
                 server_stderr_buffer.append(line)
+                emit_benchmark_diag_line(line)
                 if debug_transitions:
                     sys.stderr.write(f"[server] {line}")
 
@@ -1772,6 +1831,7 @@ def run_sizes_test_stream_shared(
                 append_server_stdout_line(line)
             else:
                 server_stderr_buffer.append(line)
+                emit_benchmark_diag_line(line)
                 if debug_transitions:
                     sys.stderr.write(f"[server] {line}")
 
@@ -1840,6 +1900,7 @@ def run_sizes_test_stream_shared(
                     control_endpoint = parsed_ctrl_ep
             else:
                 server_stderr_buffer.append(line)
+                emit_benchmark_diag_line(line)
 
         if early_status in ("unsupported", "skip"):
             stop_server()
@@ -1912,6 +1973,7 @@ def run_sizes_test_stream_shared(
                     append_server_stdout_line(queued_line)
                 else:
                     server_stderr_buffer.append(queued_line)
+                    emit_benchmark_diag_line(queued_line)
                     if debug_transitions:
                         sys.stderr.write(f"[server] {queued_line}")
             return control_connected[0]
@@ -2168,6 +2230,7 @@ def run_sizes_test_split(
             timeout_sec = max(240, duration_seconds * size_count * 12 + 60)
         else:
             timeout_sec = max(45, duration_seconds * size_count * 3 + 20)
+        timeout_sec += multi_latency_phase_seconds(duration_seconds) * size_count
 
     ready_timeout_ms = max(0, parse_env_int("PERF_SERVER_READY_TIMEOUT_MS", 10000))
     shutdown_timeout_ms = max(0, parse_env_int("PERF_SERVER_SHUTDOWN_TIMEOUT_MS", 5000))
@@ -2267,6 +2330,9 @@ def run_sizes_test_split(
         server_stdout_buffer.append(line)
         emit_auto_hwm_detail_line(line)
         emit_benchmark_diag_line(line)
+        forward_multi_phase(
+            line, "server", pattern_name, server_proc, client_proc[0], expected_sizes
+        )
         if pattern_name in ("PUBSUB", "DEALER_DEALER") and line.startswith("PHASE_ACTIVE,"):
             try:
                 phase_size = int(line.split(",", 1)[1])
@@ -2345,6 +2411,7 @@ def run_sizes_test_split(
                 append_server_stdout_line(line)
             else:
                 server_stderr_buffer.append(line)
+                emit_benchmark_diag_line(line)
                 if debug_transitions:
                     sys.stderr.write(f"[server] {line}")
 
@@ -2360,6 +2427,7 @@ def run_sizes_test_split(
                 append_server_stdout_line(line)
             else:
                 server_stderr_buffer.append(line)
+                emit_benchmark_diag_line(line)
                 if debug_transitions:
                     sys.stderr.write(f"[server] {line}")
 
@@ -2428,6 +2496,7 @@ def run_sizes_test_split(
                     control_endpoint = parsed_ctrl_ep
             else:
                 server_stderr_buffer.append(line)
+                emit_benchmark_diag_line(line)
 
         if early_status in ("unsupported", "skip"):
             stop_server()
@@ -2519,6 +2588,7 @@ def run_sizes_test_split(
                     append_server_stdout_line(line)
                 else:
                     server_stderr_buffer.append(line)
+                    emit_benchmark_diag_line(line)
                     if debug_transitions:
                         sys.stderr.write(f"[server] {line}")
 
@@ -2559,6 +2629,7 @@ def run_sizes_test_split(
                     append_server_stdout_line(queued_line)
                 else:
                     server_stderr_buffer.append(queued_line)
+                    emit_benchmark_diag_line(queued_line)
                     if debug_transitions:
                         sys.stderr.write(f"[server] {queued_line}")
             return control_connected[0]
@@ -2567,6 +2638,9 @@ def run_sizes_test_split(
             pump_server_output_nonblocking()
             emit_auto_hwm_detail_line(line)
             emit_benchmark_diag_line(line)
+            forward_multi_phase(
+                line, "client", pattern_name, server_proc, client_proc[0], expected_sizes
+            )
             client_endpoint = parse_client_endpoint(line)
             if use_control_plane and client_endpoint:
                 try:
@@ -2608,6 +2682,8 @@ def run_sizes_test_split(
                                 server_proc.stdin.flush()
                         except (BrokenPipeError, OSError, ValueError):
                             pass
+                        if pattern_name == "PUBSUB" and stop_requested_sizes == expected_sizes:
+                            stop_client()
                 return
             emit_result_metrics_from_line(
                 line, transport, expected_sizes, result_line_callback
@@ -3978,6 +4054,13 @@ def build_effective_option_items(args, selected_patterns):
         items.extend(
             [
                 ("duration_seconds", str(parse_env_int("PERF_DURATION_SECONDS", 5))),
+                (
+                    "latency_duration_seconds",
+                    str(parse_env_int(
+                        "PERF_MULTI_LATENCY_DURATION_SECONDS",
+                        parse_env_int("PERF_DURATION_SECONDS", 5),
+                    )),
+                ),
                 ("clients", clients_meta),
                 ("default_clients", str(default_clients)),
                 ("default_stream_clients", str(default_stream_clients)),
@@ -4184,6 +4267,7 @@ def parse_args():
         "Options:\n"
         "  --runs N                     Iterations per configuration (default: 1)\n"
         "  --duration N                 Override PERF_SINGLE_DURATION_SECONDS (single patterns)\n"
+        "  --latency-duration N         Multi latency seconds (default: throughput duration)\n"
         "  --build-dir PATH             Official build directory (default: <repo>/core/build)\n"
         "  --pin-cpu                    Pin CPU core during benchmarks (Linux taskset)\n"
         "  --results-dir PATH           Results root directory (default: bindings/c/perf/results)\n"
@@ -4200,6 +4284,7 @@ def parse_args():
     p_req = "ALL"
     num_runs = DEFAULT_NUM_RUNS
     single_duration_seconds = None
+    latency_duration_seconds = os.environ.get("PERF_MULTI_LATENCY_DURATION_SECONDS")
     build_dir = ""
     pin_cpu = False
 
@@ -4261,6 +4346,14 @@ def parse_args():
             except ValueError:
                 print("Error: --duration must be an integer.", file=sys.stderr)
                 sys.exit(1)
+        elif arg == "--latency-duration":
+            if i + 1 >= len(sys.argv):
+                print("Error: --latency-duration requires a value.", file=sys.stderr)
+                sys.exit(1)
+            latency_duration_seconds = sys.argv[i + 1]
+            i += 1
+        elif arg.startswith("--latency-duration="):
+            latency_duration_seconds = arg.split("=", 1)[1]
         elif arg == "--build-dir":
             if i + 1 >= len(sys.argv):
                 print("Error: --build-dir requires a value.", file=sys.stderr)
@@ -4385,6 +4478,15 @@ def parse_args():
     if single_duration_seconds is not None and single_duration_seconds < 1:
         print("Error: --duration must be >= 1.", file=sys.stderr)
         sys.exit(1)
+    if latency_duration_seconds is not None:
+        if (
+            not str(latency_duration_seconds).isascii()
+            or not str(latency_duration_seconds).isdigit()
+            or int(latency_duration_seconds) < 1
+        ):
+            print("Error: --latency-duration must be a positive integer.", file=sys.stderr)
+            sys.exit(1)
+        latency_duration_seconds = int(latency_duration_seconds)
     for key, value in (
         ("multi-transport-transition-ms", transport_transition_ms),
         ("multi-pattern-transition-ms", pattern_transition_ms),
@@ -4402,6 +4504,7 @@ def parse_args():
         "pattern_request": p_req,
         "num_runs": num_runs,
         "single_duration_seconds": single_duration_seconds,
+        "latency_duration_seconds": latency_duration_seconds,
         "build_dir": build_dir,
         "pin_cpu": pin_cpu,
         "results_dir": results_dir,
@@ -4439,6 +4542,10 @@ def main():
         duration_seconds = str(args["single_duration_seconds"])
         base_env["PERF_SINGLE_DURATION_SECONDS"] = duration_seconds
         os.environ["PERF_SINGLE_DURATION_SECONDS"] = duration_seconds
+    if args["latency_duration_seconds"] is not None:
+        latency_duration = str(args["latency_duration_seconds"])
+        base_env["PERF_MULTI_LATENCY_DURATION_SECONDS"] = latency_duration
+        os.environ["PERF_MULTI_LATENCY_DURATION_SECONDS"] = latency_duration
     timeout_env_values = {
         "PERF_SERVER_READY_TIMEOUT_MS": str(args["server_ready_timeout_ms"]),
         "PERF_SERVER_SHUTDOWN_TIMEOUT_MS": str(

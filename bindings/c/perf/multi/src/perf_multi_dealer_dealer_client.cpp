@@ -1,6 +1,7 @@
 #include "../common/perf_common.hpp"
 #include "../common/perf_common_multi.hpp"
 #include "../common/perf_multi_metric_header.hpp"
+#include "../common/perf_multi_measurement.hpp"
 #include "../common/perf_multi_client_helpers.hpp"
 #include "../common/perf_multi_handshake.hpp"
 
@@ -48,6 +49,9 @@ struct dd_send_slot_t
     // dropped from the interest set so a writable peer cannot spin the loop;
     // the token's WRITABLE record still wakes POLLCOMPLETION.
     bool pollout_suppressed;
+    uint64_t active_deadline_ns = 0;
+    uint64_t active_accepted = 0;
+    perf_multi_measurement::schedule_t *schedule = NULL;
     std::vector<char> retained_payload;
 };
 
@@ -186,6 +190,11 @@ inline send_status_t submit_retained_message (dd_send_slot_t *slot)
     zlink_multipart_close (parts, multipart ? 2u : 1u);
 
     if (rc == ZLINK_SUBMIT_OK && wait_token == 0) {
+        const uint64_t accepted_ns = perf_multi_metric::now_ns ();
+        if (accepted_ns < slot->active_deadline_ns)
+            ++slot->active_accepted;
+        if (slot->schedule)
+            slot->schedule->accepted (accepted_ns);
         clear_retained_message (slot);
         return send_status_ok;
     }
@@ -256,7 +265,8 @@ inline bool record_dd_writable (dd_send_slot_t *slot,
     return false;
 }
 
-inline bool drain_dd_writable (dd_send_state_t *state, dd_send_slot_t *slot)
+inline bool
+drain_dd_writable (dd_send_state_t *state, dd_send_slot_t *slot, bool enforce_schedule = true)
 {
     if (!state || !slot || !slot->socket)
         return false;
@@ -285,7 +295,9 @@ inline bool drain_dd_writable (dd_send_state_t *state, dd_send_slot_t *slot)
     }
 
     send_status_t retry_status = send_status_ok;
-    if (slot->retry_ready)
+    if (slot->retry_ready
+        && (!enforce_schedule || !slot->schedule
+            || slot->schedule->due (perf_multi_metric::now_ns ())))
         retry_status = submit_retained_message (slot);
     if (retry_status == send_status_fatal)
         return false;
@@ -296,7 +308,10 @@ inline bool drain_dd_writable (dd_send_state_t *state, dd_send_slot_t *slot)
     return true;
 }
 
-inline bool service_dd_events (dd_send_state_t *state, int timeout_ms, int *event_count_out = NULL)
+inline bool service_dd_events (dd_send_state_t *state,
+                               int timeout_ms,
+                               int *event_count_out = NULL,
+                               bool enforce_schedule = true)
 {
     if (event_count_out)
         *event_count_out = 0;
@@ -322,7 +337,7 @@ inline bool service_dd_events (dd_send_state_t *state, int timeout_ms, int *even
             return false;
         }
         if ((event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
-            && !drain_dd_writable (state, slot)) {
+            && !drain_dd_writable (state, slot, enforce_schedule)) {
             return false;
         }
     }
@@ -355,7 +370,12 @@ inline bool drain_dd_retained_sends (dd_send_state_t *state, int timeout_ms)
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (std::max (1, timeout_ms));
     while (dd_has_retained_send (*state) && std::chrono::steady_clock::now () < deadline) {
-        if (!service_dd_events (state, dd_wait_ms (deadline, 50)))
+        for (size_t i = 0; i < state->slots.size (); ++i) {
+            if (state->slots[i].retry_ready && !drain_dd_writable (state, &state->slots[i], false))
+                return false;
+        }
+        if (dd_has_retained_send (*state)
+            && !service_dd_events (state, dd_wait_ms (deadline, 50), NULL, false))
             return false;
     }
     if (dd_has_retained_send (*state)) {
@@ -387,24 +407,34 @@ inline bool send_stop_token (void *socket)
     });
 }
 
-inline bool run_active_send_window (dd_send_state_t *state,
-                                    size_t payload_size,
-                                    uint32_t run_id,
-                                    size_t msg_size,
-                                    double duration_seconds,
-                                    uint64_t *seq)
+inline bool run_send_window (dd_send_state_t *state,
+                             size_t payload_size,
+                             uint32_t run_id,
+                             size_t msg_size,
+                             double duration_seconds,
+                             uint64_t *seq,
+                             perf_multi_measurement::schedule_t *schedule = NULL)
 {
     if (!state || !state->poller || state->slots.empty () || !seq || duration_seconds <= 0.0)
         return false;
 
     const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now ()
+      (schedule
+         ? std::chrono::steady_clock::time_point (std::chrono::nanoseconds (schedule->epoch_ns))
+         : std::chrono::steady_clock::now ())
       + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
         std::chrono::duration<double> (duration_seconds));
 
+    const uint64_t active_deadline_ns = static_cast<uint64_t> (
+      std::chrono::duration_cast<std::chrono::nanoseconds> (deadline.time_since_epoch ()).count ());
+    if (!schedule) {
+        for (size_t i = 0; i < state->slots.size (); ++i)
+            state->slots[i].active_deadline_ns = active_deadline_ns;
+    }
+
     if (bench_transition_debug_enabled ()) {
-        std::cerr << "[multi-dealer-dealer-client] active send begin msg_size=" << msg_size
-                  << std::endl;
+        std::cerr << "[multi-dealer-dealer-client] phase=" << (schedule ? "paced" : "active")
+                  << " send begin msg_size=" << msg_size << std::endl;
     }
 
     size_t rr = 0;
@@ -414,14 +444,38 @@ inline bool run_active_send_window (dd_send_state_t *state,
         const size_t start = rr;
         for (size_t attempts = 0; attempts < state->slots.size (); ++attempts) {
             dd_send_slot_t &slot = state->slots[(start + attempts) % state->slots.size ()];
+            // A WRITABLE token may arrive before its absolute slot is due.
+            // Revisit that retained request here without waiting for a second event.
+            if (schedule && slot.retry_ready && schedule->due (perf_multi_metric::now_ns ())
+                && !drain_dd_writable (state, &slot))
+                return false;
             if (slot.retained)
                 continue;
             while (!g_stop_requested.load (std::memory_order_acquire)
                    && std::chrono::steady_clock::now () < deadline
                    && !slot.retained) {
-                const send_status_t send_rc = send_one_message (
-                  &slot, payload_size, run_id, perf_multi_metric::phase_active,
-                  msg_size, *seq);
+                const uint64_t now_ns = schedule ? perf_multi_metric::now_ns () : 0;
+                if (schedule && now_ns >= active_deadline_ns)
+                    break;
+                if (schedule && !schedule->due (now_ns)) {
+                    const uint64_t next_ns = std::min (active_deadline_ns, schedule->next_ns ());
+                    if (next_ns <= now_ns)
+                        break;
+                    const int wait_ms =
+                      static_cast<int> (std::min<uint64_t> (50, (next_ns - now_ns) / 1000000ULL));
+                    if (wait_ms > 0 && perf_socket_poll (NULL, 0, wait_ms) < 0
+                        && zlink_errno () != EINTR)
+                        return false;
+                    continue;
+                }
+                const perf_multi_metric::phase_t phase =
+                  !schedule ? perf_multi_metric::phase_active
+                            : (perf_multi_measurement::latency_sample (now_ns, schedule->epoch_ns,
+                                                                       duration_seconds - 0.5)
+                                 ? perf_multi_metric::phase_latency
+                                 : perf_multi_metric::phase_warmup);
+                const send_status_t send_rc =
+                  send_one_message (&slot, payload_size, run_id, phase, msg_size, *seq);
                 if (send_rc == send_status_ok) {
                     ++(*seq);
                     submitted = true;
@@ -441,8 +495,16 @@ inline bool run_active_send_window (dd_send_state_t *state,
         }
         rr = (start + 1) % state->slots.size ();
 
-        const int timeout_ms = submitted ? 0 : dd_wait_ms (deadline, 50);
-        if (timeout_ms == 0 && !submitted)
+        int timeout_ms = submitted ? 0 : dd_wait_ms (deadline, 50);
+        if (schedule) {
+            const uint64_t now_ns = perf_multi_metric::now_ns ();
+            const uint64_t next_ns = std::min (active_deadline_ns, schedule->next_ns ());
+            timeout_ms =
+              next_ns > now_ns
+                ? static_cast<int> (std::min<uint64_t> (50, (next_ns - now_ns) / 1000000ULL))
+                : 0;
+        }
+        if (timeout_ms == 0 && !submitted && !schedule)
             break;
         if (!service_dd_events (state, timeout_ms))
             return false;
@@ -454,8 +516,8 @@ inline bool run_active_send_window (dd_send_state_t *state,
         return false;
 
     if (bench_transition_debug_enabled ()) {
-        std::cerr << "[multi-dealer-dealer-client] active send end msg_size=" << msg_size
-                  << std::endl;
+        std::cerr << "[multi-dealer-dealer-client] phase=" << (schedule ? "paced" : "active")
+                  << " send end msg_size=" << msg_size << std::endl;
     }
     return true;
 }
@@ -482,10 +544,34 @@ inline bool run_single_size_case (const std::vector<void *> &sockets,
         return false;
 
     uint64_t seq = 1;
-    const bool ok =
-      run_active_send_window (&state, payload_size, run_id, msg_size, active_s, &seq)
-      && send_phase_stop_tokens (sockets);
-
+    bool ok = run_send_window (&state, payload_size, run_id, msg_size, active_s, &seq)
+              && send_phase_stop_tokens (sockets);
+    uint64_t active_sends = 0;
+    for (size_t i = 0; i < state.slots.size (); ++i)
+        active_sends += state.slots[i].active_accepted;
+    size_t received = 0;
+    if (ok)
+        ok = perf_multi_handshake::wait_for_start_from_stdin (msg_size, "PHASE_PACED,", &received);
+    const uint64_t epoch = perf_multi_metric::now_ns ();
+    perf_multi_measurement::schedule_t schedule (
+      perf_multi_measurement::target_rate (received, active_s), epoch);
+    for (size_t i = 0; i < state.slots.size (); ++i)
+        state.slots[i].schedule = &schedule;
+    ok = ok && schedule.rate > 0.0
+         && run_send_window (&state, payload_size, run_id, msg_size,
+                             0.5 + settings.latency_duration_seconds, &seq, &schedule);
+    ok = ok && send_phase_stop_tokens (sockets);
+    for (size_t i = 0; i < state.slots.size (); ++i)
+        state.slots[i].schedule = NULL;
+    // Admission of a stop token does not prove receipt. Keep the sockets open
+    // until the receiver has consumed every paced tail and published results.
+    size_t paced_received = 0;
+    if (ok)
+        ok = perf_multi_handshake::wait_for_start_from_stdin (msg_size, "PHASE_COMPLETE,",
+                                                              &paced_received);
+    perf_multi_measurement::print_diagnostic (
+      k_pattern, msg_size, active_sends, active_s, schedule, received,
+      paced_received / static_cast<double> (settings.latency_duration_seconds));
     close_dd_send_state (&state);
     return ok;
 }

@@ -117,7 +117,7 @@ inline recv_result_t receive_one_message (void *server,
         return recv_fatal;
     }
 
-    perf_multi_metric::header_t header;
+    perf_multi_metric::header_t header = {};
     const bool matched =
       decode_and_match_header (&part, expected_msg_size, expected_run_id, expected_phase, &header);
 
@@ -129,7 +129,11 @@ inline recv_result_t receive_one_message (void *server,
                   << " got_phase=" << static_cast<unsigned int> (header.phase)
                   << " got_size=" << header.msg_size << std::endl;
     }
-    if (matched && count_message && message_count)
+    const bool paced_warmup =
+      expected_phase == perf_multi_metric::phase_latency
+      && perf_multi_metric::is_expected (header, expected_run_id, perf_multi_metric::phase_warmup,
+                                         expected_msg_size);
+    if ((matched || paced_warmup) && count_message && message_count)
         (*message_count)++;
     if (matched && detail_emitted && !*detail_emitted && transport) {
         perf_print_auto_hwm_snapshot (server, false, "server", *transport, true, expected_msg_size,
@@ -152,38 +156,6 @@ inline recv_result_t receive_one_message (void *server,
     return recv_ok;
 }
 
-inline bool drain_non_blocking_messages (void *server,
-                                         size_t expected_msg_size,
-                                         uint32_t expected_run_id,
-                                         perf_multi_metric::phase_t expected_phase,
-                                         bool *detail_emitted,
-                                         const std::string *transport,
-                                         bool count_message,
-                                         bool collect_latency,
-                                         long *message_count,
-                                         double *lat_sum,
-                                         long *lat_count,
-                                         bench_latency_sampler_t *lat_samples,
-                                         size_t *stop_count)
-{
-    while (!perf_stop_requested ().load (std::memory_order_acquire)) {
-        const recv_result_t status =
-          receive_one_message (server, ZLINK_DONTWAIT, expected_msg_size, expected_run_id,
-                               expected_phase, detail_emitted, transport, count_message,
-                               collect_latency, message_count, lat_sum, lat_count, lat_samples);
-        if (status == recv_none)
-            break;
-        if (status == recv_fatal)
-            return false;
-        if (status == recv_stop) {
-            if (stop_count)
-                ++(*stop_count);
-            continue;
-        }
-    }
-    return true;
-}
-
 inline bool run_receive_window (void *server,
                                 size_t expected_msg_size,
                                 uint32_t expected_run_id,
@@ -197,129 +169,48 @@ inline bool run_receive_window (void *server,
                                 double *lat_sum,
                                 long *lat_count,
                                 bench_latency_sampler_t *lat_samples,
-                                size_t expected_stop_count)
+                                size_t expected_stop_count,
+                                uint64_t *paced_received = NULL)
 {
     if (!server)
         return false;
     if (measure_seconds <= 0.0)
         return true;
 
-    zlink_pollitem_t poll_item;
-    poll_item.socket = server;
-    poll_item.fd = 0;
-    poll_item.events = ZLINK_POLLIN;
-    poll_item.revents = 0;
+    const auto deadline = std::chrono::steady_clock::now ()
+                          + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+                            std::chrono::duration<double> (measure_seconds));
+    const double drain_seconds = expected_msg_size >= 65536 ? std::max (10.0, measure_seconds * 2.0)
+                                                            : std::max (2.0, measure_seconds);
+    const auto drain_deadline = deadline
+                                + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+                                  std::chrono::duration<double> (drain_seconds));
+    const auto sample_start = deadline - std::chrono::duration<double> (measure_seconds - 0.5);
     size_t stop_count = 0;
-    const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now ()
-      + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-        std::chrono::duration<double> (measure_seconds));
-
-    while (!perf_stop_requested ().load (std::memory_order_acquire)) {
-        if (std::chrono::steady_clock::now () >= deadline)
-            break;
-
-        poll_item.revents = 0;
-        // A stop token may be consumed while draining an already-ready
-        // socket.  It is the final wire signal for this phase.  Once seen,
-        // wait only for the remainder of the active interval so the next
-        // empty poll cannot leave the server blocked forever.
-        long poll_timeout = -1;
-        if (stop_count > 0) {
-            const long remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
-              deadline - std::chrono::steady_clock::now ()).count ();
-            poll_timeout = std::max<long> (1, remaining_ms);
-        }
-        const int poll_rc = perf_socket_poll (&poll_item, 1, poll_timeout);
-        if (poll_rc < 0) {
-            if (zlink_errno () == EINTR)
-                continue;
-            return false;
-        }
-        if (poll_rc == 0 || (poll_item.revents & ZLINK_POLLIN) == 0)
-            continue;
-
-        const recv_result_t status =
-          receive_one_message (server, ZLINK_DONTWAIT, expected_msg_size, expected_run_id,
-                               expected_phase, detail_emitted, transport, count_message,
-                               collect_latency, message_count, lat_sum, lat_count, lat_samples);
-        if (status == recv_none)
-            continue;
-        if (status == recv_fatal)
-            return false;
-        if (status == recv_stop) {
-            ++stop_count;
-        }
-
-        if (std::chrono::steady_clock::now () >= deadline) {
-            break;
-        }
-
-        if (!drain_non_blocking_messages (server, expected_msg_size, expected_run_id,
-                                          expected_phase, detail_emitted, transport, count_message,
-                                          collect_latency, message_count, lat_sum, lat_count,
-                                          lat_samples, &stop_count)) {
-            return false;
-        }
-
-        if (std::chrono::steady_clock::now () >= deadline) {
-            break;
-        }
-    }
-
-    (void) expected_stop_count;
-    return true;
-}
-
-inline bool drain_phase_until_idle (void *server,
-                                    size_t expected_msg_size,
-                                    uint32_t expected_run_id,
-                                    perf_multi_metric::phase_t expected_phase,
-                                    double max_wait_seconds,
-                                    int idle_wait_ms)
-{
-    if (!server)
-        return false;
-
-    if (max_wait_seconds <= 0.0)
-        return true;
-
-    if (idle_wait_ms <= 0)
-        idle_wait_ms = 50;
-
-    const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now ()
-      + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-        std::chrono::duration<double> (max_wait_seconds));
-    std::chrono::steady_clock::time_point idle_deadline =
-      std::chrono::steady_clock::now () + std::chrono::milliseconds (idle_wait_ms);
-
     while (!perf_stop_requested ().load (std::memory_order_acquire)
-           && std::chrono::steady_clock::now () < deadline) {
-        const recv_result_t status =
-          receive_one_message (server, ZLINK_DONTWAIT, expected_msg_size, expected_run_id,
-                               expected_phase, NULL, NULL, false, false, NULL, NULL, NULL, NULL);
+           && std::chrono::steady_clock::now () < drain_deadline) {
+        const bool in_window = std::chrono::steady_clock::now () < deadline;
+        long window_received = 0;
+        const recv_result_t status = receive_one_message (
+          server, ZLINK_DONTWAIT, expected_msg_size, expected_run_id, expected_phase,
+          detail_emitted, transport, in_window && (count_message || paced_received),
+          collect_latency, &window_received, lat_sum, lat_count, lat_samples);
+        if (message_count)
+            *message_count += window_received;
+        if (paced_received && std::chrono::steady_clock::now () >= sample_start)
+            *paced_received += window_received;
         if (status == recv_fatal)
             return false;
-        if (status == recv_ok) {
-            idle_deadline =
-              std::chrono::steady_clock::now () + std::chrono::milliseconds (idle_wait_ms);
-            continue;
-        }
-
-        if (std::chrono::steady_clock::now () >= idle_deadline)
+        if (status == recv_stop && ++stop_count == expected_stop_count)
             return true;
-
-        const long wait_ms = std::max<long> (
-          1, std::min<long> (idle_wait_ms, std::chrono::duration_cast<std::chrono::milliseconds> (
-                                             idle_deadline - std::chrono::steady_clock::now ())
-                                             .count ()));
-        if (perf_socket_poll (NULL, 0, wait_ms) < 0 && zlink_errno () != EINTR) {
-            return false;
+        if (status == recv_none) {
+            zlink_pollitem_t item = {server, 0, ZLINK_POLLIN, 0};
+            if (perf_socket_poll (&item, 1, 10) < 0 && zlink_errno () != EINTR)
+                return false;
         }
     }
-
-    return std::chrono::steady_clock::now () >= idle_deadline;
+    errno = ETIMEDOUT;
+    return false;
 }
 
 inline bool run_one_size_benchmark (void *server,
@@ -338,7 +229,7 @@ inline bool run_one_size_benchmark (void *server,
     bool detail_emitted = false;
     const bool active_ok = run_receive_window (
       server, msg_size, run_id, perf_multi_metric::phase_active, &detail_emitted, &transport,
-      active_s, true, true, &recv_count, &lat_sum, &lat_count, &lat_samples, settings.clients);
+      active_s, true, false, &recv_count, &lat_sum, &lat_count, &lat_samples, settings.clients);
     if (!active_ok) {
         if (bench_transition_debug_enabled ()) {
             std::cerr << "[multi-dealer-dealer-server] active failed size=" << msg_size
@@ -347,19 +238,16 @@ inline bool run_one_size_benchmark (void *server,
         return false;
     }
 
-    // This server process is reused across size cases. Drain the tail of the
-    // just-finished active phase so stale messages do not spill into the next
-    // run and keep later sizes permanently behind old backlog.
-    const double drain_wait_s =
-      msg_size >= 65536 ? std::max (10.0, active_s * 2.0) : std::max (2.0, active_s);
-    if (!drain_phase_until_idle (server, msg_size, run_id, perf_multi_metric::phase_active,
-                                 drain_wait_s, 50)) {
-        if (bench_transition_debug_enabled ()) {
-            std::cerr << "[multi-dealer-dealer-server] drain failed size=" << msg_size
-                      << " run=" << run_id << std::endl;
-        }
+    std::cout << "PHASE_DRAINED," << msg_size << ',' << recv_count << std::endl;
+    lat_sum = 0.0;
+    lat_count = 0;
+    lat_samples.reset ();
+    uint64_t paced_received = 0;
+    if (!run_receive_window (server, msg_size, run_id, perf_multi_metric::phase_latency,
+                             &detail_emitted, &transport, settings.latency_duration_seconds + 0.5,
+                             false, true, NULL, &lat_sum, &lat_count, &lat_samples,
+                             settings.clients, &paced_received))
         return false;
-    }
 
     if (recv_count <= 0 || lat_count <= 0) {
         if (bench_transition_debug_enabled ()) {
@@ -378,6 +266,7 @@ inline bool run_one_size_benchmark (void *server,
 
     print_result (lib_name, k_pattern, transport, msg_size, throughput, latency.mean_ns,
                   latency.p95_ns, latency.p99_ns);
+    std::cout << "PHASE_COMPLETE," << msg_size << ',' << paced_received << std::endl;
 
     return true;
 }

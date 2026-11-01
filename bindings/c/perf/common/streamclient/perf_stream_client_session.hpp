@@ -16,6 +16,7 @@
 #include "perf_stream_common.hpp"
 #include "perf_stream_frame_reassembly.hpp"
 #include "../../multi/common/perf_multi_metric_header.hpp"
+#include "../../multi/common/perf_multi_measurement.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -84,8 +85,9 @@ inline int resolve_stream_rcvbuf_bytes ()
 // Benchmark phase: controls whether sessions are ready or actively sending.
 enum phase_mode_t
 {
-    phase_ready = 0,  // no traffic
-    phase_active = 1, // traffic active, metrics collected
+    phase_ready = 0,   // no traffic
+    phase_active = 1,  // saturated throughput
+    phase_latency = 2, // paced latency
 };
 
 // Countdown barrier for operations dispatched to every connected session.
@@ -146,6 +148,10 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
         ws_read_buffer (),
         ws_pending_frame (),
         strand (boost::asio::make_strand (io_)),
+        pace_timer (io_),
+        pace_schedule (0.0, 0),
+        paced_attempt_ns (0),
+        active_admissions (0),
         closed (false),
         connected_flag (false),
         connect_started (false),
@@ -212,6 +218,23 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
                     --latch->pending;
             }
             latch->cv.notify_one ();
+        });
+    }
+
+    uint64_t active_send_count () const
+    {
+        return active_admissions.load (std::memory_order_relaxed);
+    }
+
+    void configure_pacing (double rate, uint64_t epoch_ns)
+    {
+        const std::shared_ptr<client_session_t> self = shared_from_this ();
+        boost::asio::dispatch (strand, [self, rate, epoch_ns] () {
+            self->pace_schedule = perf_multi_measurement::schedule_t (rate, epoch_ns);
+            if (epoch_ns == 0)
+                self->active_admissions.store (0, std::memory_order_relaxed);
+            boost::system::error_code ec;
+            self->pace_timer.cancel (ec);
         });
     }
 
@@ -461,6 +484,20 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
             return;
         if (!owner.allow_send ())
             return;
+        if (pace_schedule.epoch_ns != 0 && pace_schedule.rate <= 0.0)
+            return;
+        if (pace_schedule.rate > 0.0
+            && !pace_schedule.due (perf_stream_common::perf_stream_now_ns ())) {
+            pace_timer.expires_at (std::chrono::steady_clock::time_point (
+              std::chrono::nanoseconds (pace_schedule.next_ns ())));
+            const std::shared_ptr<client_session_t> self = shared_from_this ();
+            pace_timer.async_wait (
+              boost::asio::bind_executor (strand, [self] (const boost::system::error_code &ec) {
+                  if (!ec)
+                      self->maybe_send_more ();
+              }));
+            return;
+        }
         send_one ();
     }
 
@@ -498,6 +535,8 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
             // Use the same monotonic clock as the active cutoff so wall-clock
             // adjustments cannot inflate an in-window RTT.
             const uint64_t sent_ts_ns = perf_stream_common::perf_stream_now_ns ();
+            if (pace_schedule.rate > 0.0)
+                paced_attempt_ns = sent_ts_ns;
             (void) perf_multi_metric::stamp_payload (payload_write, size, owner.metric_run_id (),
                                                      owner.metric_phase (), size, seq, sent_ts_ns);
         }
@@ -563,6 +602,13 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
             return;
         }
 
+        if (owner.on_send_accepted ())
+            active_admissions.fetch_add (1, std::memory_order_relaxed);
+        if (pace_schedule.rate > 0.0) {
+            const uint64_t late_before = pace_schedule.late_count;
+            pace_schedule.accepted (paced_attempt_ns);
+            owner.on_paced_send (pace_schedule.late_count != late_before);
+        }
         start_read_header ();
         maybe_send_more ();
     }
@@ -825,9 +871,11 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
         if (payload_ptr && payload_bytes >= perf_multi_metric::header_size ()) {
             perf_multi_metric::header_t header;
             if (perf_multi_metric::decode_payload_header (payload_ptr, payload_bytes, &header)
-                && perf_multi_metric::is_expected (header, owner.metric_run_id (),
-                                                    perf_multi_metric::phase_active,
-                                                    chunk_size)
+                && perf_multi_metric::is_expected (
+                  header, owner.metric_run_id (),
+                  static_cast<perf_multi_metric::phase_t> (header.phase), chunk_size)
+                && (header.phase == perf_multi_metric::phase_active
+                    || header.phase == perf_multi_metric::phase_latency)
                 && header.sent_ts_ns > 0) {
                 sent_ts_ns = static_cast<uint64_t> (header.sent_ts_ns);
             } else {
@@ -857,6 +905,8 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
         if (closed)
             return;
         closed = true;
+        boost::system::error_code timer_ec;
+        pace_timer.cancel (timer_ec);
 
         if (outstanding > 0) {
             const long dropped = static_cast<long> (outstanding);
@@ -949,6 +999,10 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
     perf_stream_frame::buffer_t ws_pending_frame;
 
     boost::asio::strand<boost::asio::io_context::executor_type> strand; // serializes all callbacks
+    boost::asio::steady_timer pace_timer;
+    perf_multi_measurement::schedule_t pace_schedule;
+    uint64_t paced_attempt_ns;
+    std::atomic<uint64_t> active_admissions;
 
     std::atomic<bool> closed;         // permanently shut down
     std::atomic<bool> connected_flag; // connect succeeded
