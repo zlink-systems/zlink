@@ -2483,6 +2483,11 @@ void spot_context_state_t::request_close (service::spot_close_begin_t begin,
         return;
     }
     const auto barrier = reserved.value ();
+    // Preparation policy cleanup still uses the node lane after the Close
+    // continuation releases its activation and node references.
+    auto terminal = barrier->terminal ();
+    detail::observe_task_terminal (terminal,
+                                   [owner = state_lane_owner ()] (const result_t<void> &) {});
     auto executing = std::make_shared<task_t<void>> (barrier->run ([run, coordinator, barrier] {
         const auto operation = coordinator->begin_preparation (barrier);
         auto completion = std::make_shared<task_completion_source_t<void>> ();

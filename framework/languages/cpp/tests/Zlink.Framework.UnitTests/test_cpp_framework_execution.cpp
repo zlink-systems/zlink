@@ -513,6 +513,7 @@ bool verify_close_waits_for_timer_callback_barrier ()
     auto state = std::make_shared<zlink::framework::detail::spot_context_state_t> ();
     state->node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("timer-close-race");
+    const auto node_lifetime = std::weak_ptr (state->node);
     auto executor = std::make_shared<zlink::framework::runtime::offload_executor_t> (1);
     state->serial_executor = executor;
     state->serial_queue = std::make_shared<zlink::framework::runtime::serial_execution_queue_t> (
@@ -608,8 +609,9 @@ bool verify_close_waits_for_timer_callback_barrier ()
         return false;
     }
 
-    return tick_queued && timer.is_disposed () && cleanup->stop_calls == 1
-           && cleanup->close_calls == 1 && state->serial_queue->pending_count () == 0
+    return node_lifetime.expired () && tick_queued && timer.is_disposed ()
+           && cleanup->stop_calls == 1 && cleanup->close_calls == 1
+           && state->serial_queue->pending_count () == 0
            && timer_activation_handler_t::calls.load () == timer_calls_before + 1
            && timer_activation_handler_t::destroyed.load () == handlers_destroyed_before + 1
            && timer_activation_dependency_t::destroyed.load () == dependencies_destroyed_before + 1;
