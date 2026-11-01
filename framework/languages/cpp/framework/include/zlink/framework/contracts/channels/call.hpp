@@ -236,8 +236,8 @@ class channel_request_call_t
             return result_t<TReply>::success (
               serializers->get<TReply> ().deserialize (detail::encoded_payload_from_raw (reply)));
         }
-        catch (const framework_exception_t &error) {
-            return detail::result_access_t::failure<TReply> (error);
+        catch (const framework_exception_t &) {
+            return detail::current_exception_result<TReply> ();
         }
     }
     request_task_t<zlink::message_t> async_raw ()
