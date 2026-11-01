@@ -4,6 +4,7 @@
 
 #include "../support/committed_authority_fixture.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
@@ -607,6 +608,7 @@ namespace zf = zlink::framework;
 
 constexpr const char *mesh_name = "spot-close-mesh";
 constexpr const char *node_name = "spot-close-node";
+constexpr const char *queued_request_flow_id = "019fc5b9-9df3-786b-bb69-d55358f6d48b";
 
 // ---------------------------------------------------------------------------
 // Observation shared by the application types of one scenario.
@@ -2229,8 +2231,13 @@ class scenario_client_t final : public zf::hosted_service_t
                 current ().queued_request_admitted.emplace ();
                 admitted = current ().queued_request_admitted->get_future ();
             }
-            auto pending = std::async (std::launch::async,
-                                       [&] { return direct_request (spot_id, services, 1); });
+            auto pending = std::async (std::launch::async, [&] {
+                const auto flow = zf::runtime::flow_context_t::enter (
+                  std::optional<std::string> (queued_request_flow_id),
+                  zf::flow_origin_t::application, zf::message_flow_log_mode_t::detailed,
+                  zf::flow_origin_t::application, std::nullopt);
+                return direct_request (spot_id, services, 1);
+            });
             if (admitted.wait_for (3s) != std::future_status::ready) {
                 store.release_held_commit (true);
                 closing.join ();
@@ -2369,7 +2376,8 @@ nlohmann::json run_scenario (const nlohmann::json &scenario, std::string &failur
         auto &state = *observation_owner;
         if (event.outcome == zf::message_flow_outcome_t::admitted
             && event.packet_name == std::optional<std::string> (close_probe_request_t::packet_name)
-            && event.detail_stage == std::optional<std::string> ("invoke_erased.post_serial")) {
+            && event.detail_stage == std::optional<std::string> ("invoke_erased.post_serial")
+            && event.flow_id == std::optional<std::string> (queued_request_flow_id)) {
             std::lock_guard lock (state.mutex);
             if (state.queued_request_admitted) {
                 state.queued_request_admitted->set_value ();

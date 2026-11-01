@@ -4484,6 +4484,7 @@ TEST_P (JoinMembershipFailure, StorePreservesCommitFailureKind)
         runtime.request_stop ();
         runtime.cancel_pending_dispatch ();
         detail::drain_spot_node_executors (*node);
+        runtime.release_native_handles ();
         node->location_lifecycle = nullptr;
     }
     if (provider_backend && scenario >= 5 && scenario <= 6)

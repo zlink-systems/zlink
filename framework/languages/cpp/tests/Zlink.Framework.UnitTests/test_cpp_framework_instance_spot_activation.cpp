@@ -2148,6 +2148,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     EXPECT_TRUE (has_event_transition (traced_request_t::packet_name,
                                        zlink::framework::message_flow_outcome_t::replied,
                                        "operation-request"));
+    runtime->release_native_handles ();
 }
 
 } // namespace
@@ -2892,6 +2893,7 @@ static void verify_ready_recovery_root_deletion (bool local_available)
         EXPECT_FALSE (second_payload);
         EXPECT_EQ (1, entered.load ());
     }
+    local_spots->release_native_handles ();
 }
 
 TEST (CppFrameworkInstanceSpotActivation, ReadyLocalAdmissionSurvivesRecoveryRootDeletion)
