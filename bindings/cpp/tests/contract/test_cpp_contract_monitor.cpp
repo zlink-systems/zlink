@@ -271,11 +271,12 @@ void test_monitor_poller_mask_and_drain (bool tcp_)
     expect_rejected (static_cast<zlink::poll_event_flag_t> (0x4000),
                      zlink::config_result_t::invalid_argument, EINVAL);
     poller.add (monitor, zlink::poll_event_flag_t::pollin, 71);
+    // Monitor events are delivered on enqueue, so check for none before connecting.
+    zlink::poll_event_t event;
+    assert (poller.wait (&event, 1, std::chrono::milliseconds (0)) == 0);
     server.bind (tcp_ ? "tcp://127.0.0.1:*"
                      : zlink_cpp_contract::unique_inproc ("monitor-poller-mask"));
     client.connect (server.options ().last_endpoint ());
-    zlink::poll_event_t event;
-    assert (poller.wait (&event, 1, std::chrono::milliseconds (0)) == 0);
     const auto expect_modify_rejected = [&] (zlink::poll_event_flag_t mask,
                                              zlink::config_result_t expected, int expected_errno) {
         bool rejected = false;
