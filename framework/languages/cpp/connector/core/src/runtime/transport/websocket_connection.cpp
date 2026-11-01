@@ -207,63 +207,71 @@ void connect_websocket_async (
   std::function<void (boost::system::error_code)> close_completion,
   std::function<void (boost::system::error_code, std::unique_ptr<stream_connection_t>)> callback)
 {
-    auto resolver = std::make_shared<tcp::resolver> (io_context);
-    auto stream = std::make_shared<websocket::stream<tcp::socket>> (io_context);
+    const auto connect_strand = boost::asio::make_strand (io_context);
+    auto resolver = std::make_shared<tcp::resolver> (connect_strand);
+    auto stream = std::make_shared<websocket::stream<tcp::socket>> (connect_strand);
     control->set_cancel_handler (
-      [resolver, stream, close_completion = std::move (close_completion)] {
-          boost::system::error_code ignored;
-          resolver->cancel ();
-          stream->next_layer ().cancel (ignored);
-          boost::system::error_code close_error;
-          stream->next_layer ().close (close_error);
-          close_completion (close_error);
+      [connect_strand, resolver, stream, close_completion = std::move (close_completion)] {
+          boost::asio::post (connect_strand, [resolver, stream, close_completion] {
+              boost::system::error_code ignored;
+              resolver->cancel ();
+              stream->next_layer ().cancel (ignored);
+              boost::system::error_code close_error;
+              stream->next_layer ().close (close_error);
+              close_completion (close_error);
+          });
       });
     const auto host = endpoint.host;
     const auto port = endpoint.port;
-    resolver->async_resolve (
-      host, port,
-      [&io_context, resolver, stream, control, endpoint = std::move (endpoint),
-       callback = std::move (callback)] (boost::system::error_code error,
-                                         tcp::resolver::results_type endpoints) mutable {
-          if (control->cancelled ()) {
-              callback (asio::error::operation_aborted, nullptr);
-              return;
-          }
-          if (error) {
-              callback (error, nullptr);
-              return;
-          }
-          asio::async_connect (
-            stream->next_layer (), endpoints,
-            [&io_context, stream, control, endpoint = std::move (endpoint),
-             callback = std::move (callback)] (boost::system::error_code connect_error,
-                                               const tcp::endpoint &) mutable {
-                if (control->cancelled ()) {
-                    callback (asio::error::operation_aborted, nullptr);
-                    return;
-                }
-                if (connect_error) {
-                    callback (connect_error, nullptr);
-                    return;
-                }
-                stream->binary (true);
-                stream->async_handshake (
-                  endpoint.host, endpoint.target,
-                  [&io_context, stream, control, callback = std::move (callback)] (
-                    boost::system::error_code handshake_error) mutable {
-                      if (control->cancelled ()) {
-                          callback (asio::error::operation_aborted, nullptr);
-                          return;
-                      }
-                      if (handshake_error) {
-                          callback (handshake_error, nullptr);
-                          return;
-                      }
-                      callback ({}, std::make_unique<websocket_stream_connection_t<tcp::socket>> (
+    boost::asio::post (connect_strand, [&io_context, resolver, stream, control, host, port,
+                                        callback = std::move (callback),
+                                        endpoint = std::move (endpoint)] () mutable {
+        resolver->async_resolve (
+          host, port,
+          [&io_context, resolver, stream, control, endpoint = std::move (endpoint),
+           callback = std::move (callback)] (boost::system::error_code error,
+                                             tcp::resolver::results_type endpoints) mutable {
+              if (control->cancelled ()) {
+                  callback (asio::error::operation_aborted, nullptr);
+                  return;
+              }
+              if (error) {
+                  callback (error, nullptr);
+                  return;
+              }
+              asio::async_connect (
+                stream->next_layer (), endpoints,
+                [&io_context, stream, control, endpoint = std::move (endpoint),
+                 callback = std::move (callback)] (boost::system::error_code connect_error,
+                                                   const tcp::endpoint &) mutable {
+                    if (control->cancelled ()) {
+                        callback (asio::error::operation_aborted, nullptr);
+                        return;
+                    }
+                    if (connect_error) {
+                        callback (connect_error, nullptr);
+                        return;
+                    }
+                    stream->binary (true);
+                    stream->async_handshake (
+                      endpoint.host, endpoint.target,
+                      [&io_context, stream, control, callback = std::move (callback)] (
+                        boost::system::error_code handshake_error) mutable {
+                          if (control->cancelled ()) {
+                              callback (asio::error::operation_aborted, nullptr);
+                              return;
+                          }
+                          if (handshake_error) {
+                              callback (handshake_error, nullptr);
+                              return;
+                          }
+                          callback ({},
+                                    std::make_unique<websocket_stream_connection_t<tcp::socket>> (
                                       std::move (*stream), io_context));
-                  });
-            });
-      });
+                      });
+                });
+          });
+    });
 }
 
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
@@ -275,10 +283,11 @@ void connect_websocket_secure_async (
   std::function<void (boost::system::error_code)> close_completion,
   std::function<void (boost::system::error_code, std::unique_ptr<stream_connection_t>)> callback)
 {
+    const auto connect_strand = boost::asio::make_strand (io_context);
     auto context = std::make_shared<ssl::context> (ssl::context::tls_client);
     context->set_default_verify_paths ();
     auto stream =
-      std::make_shared<websocket::stream<ssl::stream<tcp::socket>>> (io_context, *context);
+      std::make_shared<websocket::stream<ssl::stream<tcp::socket>>> (connect_strand, *context);
     SSL_set_tlsext_host_name (stream->next_layer ().native_handle (), endpoint.host.c_str ());
     if (skip_server_certificate_validation) {
         stream->next_layer ().set_verify_mode (ssl::verify_none);
@@ -289,75 +298,83 @@ void connect_websocket_secure_async (
 
     const auto host = endpoint.host;
     const auto port = endpoint.port;
-    auto resolver = std::make_shared<tcp::resolver> (io_context);
+    auto resolver = std::make_shared<tcp::resolver> (connect_strand);
     control->set_cancel_handler (
-      [resolver, stream, close_completion = std::move (close_completion)] {
-          boost::system::error_code ignored;
-          resolver->cancel ();
-          beast::get_lowest_layer (*stream).cancel (ignored);
-          boost::system::error_code close_error;
-          beast::get_lowest_layer (*stream).close (close_error);
-          close_completion (close_error);
+      [connect_strand, resolver, stream, close_completion = std::move (close_completion)] {
+          boost::asio::post (connect_strand, [resolver, stream, close_completion] {
+              boost::system::error_code ignored;
+              resolver->cancel ();
+              beast::get_lowest_layer (*stream).cancel (ignored);
+              boost::system::error_code close_error;
+              beast::get_lowest_layer (*stream).close (close_error);
+              close_completion (close_error);
+          });
       });
-    resolver->async_resolve (
-      host, port,
-      [&io_context, resolver, context, stream, control, endpoint = std::move (endpoint),
-       callback = std::move (callback)] (boost::system::error_code error,
-                                         tcp::resolver::results_type endpoints) mutable {
-          if (control->cancelled ()) {
-              callback (asio::error::operation_aborted, nullptr);
-              return;
-          }
-          if (error) {
-              callback (error, nullptr);
-              return;
-          }
-          asio::async_connect (
-            beast::get_lowest_layer (*stream), endpoints,
-            [&io_context, context, stream, control, endpoint = std::move (endpoint),
-             callback = std::move (callback)] (boost::system::error_code connect_error,
-                                               const tcp::endpoint &) mutable {
-                if (control->cancelled ()) {
-                    callback (asio::error::operation_aborted, nullptr);
-                    return;
-                }
-                if (connect_error) {
-                    callback (connect_error, nullptr);
-                    return;
-                }
-                stream->next_layer ().async_handshake (
-                  ssl::stream_base::client,
-                  [&io_context, context, stream, control, endpoint = std::move (endpoint),
-                   callback = std::move (callback)] (boost::system::error_code tls_error) mutable {
-                      if (control->cancelled ()) {
-                          callback (asio::error::operation_aborted, nullptr);
-                          return;
-                      }
-                      if (tls_error) {
-                          callback (tls_error, nullptr);
-                          return;
-                      }
-                      stream->binary (true);
-                      stream->async_handshake (
-                        endpoint.host, endpoint.target,
-                        [&io_context, context, stream, control, callback = std::move (callback)] (
-                          boost::system::error_code websocket_error) mutable {
-                            if (control->cancelled ()) {
-                                callback (asio::error::operation_aborted, nullptr);
-                                return;
-                            }
-                            if (websocket_error) {
-                                callback (websocket_error, nullptr);
-                                return;
-                            }
-                            callback ({},
-                                      std::make_unique<
+    boost::asio::post (connect_strand, [&io_context, resolver, context, stream, control, host, port,
+                                        callback = std::move (callback),
+                                        endpoint = std::move (endpoint)] () mutable {
+        resolver->async_resolve (
+          host, port,
+          [&io_context, resolver, context, stream, control, endpoint = std::move (endpoint),
+           callback = std::move (callback)] (boost::system::error_code error,
+                                             tcp::resolver::results_type endpoints) mutable {
+              if (control->cancelled ()) {
+                  callback (asio::error::operation_aborted, nullptr);
+                  return;
+              }
+              if (error) {
+                  callback (error, nullptr);
+                  return;
+              }
+              asio::async_connect (
+                beast::get_lowest_layer (*stream), endpoints,
+                [&io_context, context, stream, control, endpoint = std::move (endpoint),
+                 callback = std::move (callback)] (boost::system::error_code connect_error,
+                                                   const tcp::endpoint &) mutable {
+                    if (control->cancelled ()) {
+                        callback (asio::error::operation_aborted, nullptr);
+                        return;
+                    }
+                    if (connect_error) {
+                        callback (connect_error, nullptr);
+                        return;
+                    }
+                    stream->next_layer ().async_handshake (
+                      ssl::stream_base::client,
+                      [&io_context, context, stream, control, endpoint = std::move (endpoint),
+                       callback =
+                         std::move (callback)] (boost::system::error_code tls_error) mutable {
+                          if (control->cancelled ()) {
+                              callback (asio::error::operation_aborted, nullptr);
+                              return;
+                          }
+                          if (tls_error) {
+                              callback (tls_error, nullptr);
+                              return;
+                          }
+                          stream->binary (true);
+                          stream->async_handshake (
+                            endpoint.host, endpoint.target,
+                            [&io_context, context, stream, control,
+                             callback = std::move (callback)] (
+                              boost::system::error_code websocket_error) mutable {
+                                if (control->cancelled ()) {
+                                    callback (asio::error::operation_aborted, nullptr);
+                                    return;
+                                }
+                                if (websocket_error) {
+                                    callback (websocket_error, nullptr);
+                                    return;
+                                }
+                                callback (
+                                  {}, std::make_unique<
                                         websocket_stream_connection_t<ssl::stream<tcp::socket>>> (
                                         std::move (*stream), io_context, std::move (context)));
-                        });
-                  });
-            });
-      });
+                            });
+                      });
+                });
+          });
+    });
 }
 #endif
 

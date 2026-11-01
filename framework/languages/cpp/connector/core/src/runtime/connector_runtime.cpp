@@ -1325,46 +1325,53 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
             operation->complete (state, boost::asio::error::operation_not_supported, nullptr);
 #endif
         } else {
-            auto resolver = std::make_shared<boost::asio::ip::tcp::resolver> (state->io_context);
-            auto socket = std::make_shared<boost::asio::ip::tcp::socket> (state->io_context);
-            control->set_cancel_handler ([resolver, socket, close_completion] {
-                boost::system::error_code ignored;
-                resolver->cancel ();
-                socket->cancel (ignored);
-                boost::system::error_code close_error;
-                socket->close (close_error);
-                close_completion (close_error);
+            const auto connect_strand = boost::asio::make_strand (state->io_context);
+            auto resolver = std::make_shared<boost::asio::ip::tcp::resolver> (connect_strand);
+            auto socket = std::make_shared<boost::asio::ip::tcp::socket> (connect_strand);
+            control->set_cancel_handler ([connect_strand, resolver, socket, close_completion] {
+                boost::asio::post (connect_strand, [resolver, socket, close_completion] {
+                    boost::system::error_code ignored;
+                    resolver->cancel ();
+                    socket->cancel (ignored);
+                    boost::system::error_code close_error;
+                    socket->close (close_error);
+                    close_completion (close_error);
+                });
             });
-            resolver->async_resolve (
-              parsed.tcp->host, parsed.tcp->port,
-              [resolver, socket, state, control, completion = std::move (completion)] (
-                boost::system::error_code error,
-                boost::asio::ip::tcp::resolver::results_type endpoints) mutable {
-                  if (control->cancelled ()) {
-                      completion (boost::asio::error::operation_aborted, nullptr);
-                      return;
-                  }
-                  if (error) {
-                      completion (error, nullptr);
-                      return;
-                  }
-                  boost::asio::async_connect (
-                    *socket, endpoints,
-                    [socket, state, control, completion = std::move (completion)] (
-                      boost::system::error_code connect_error,
-                      const boost::asio::ip::tcp::endpoint &) mutable {
-                        if (control->cancelled ()) {
-                            completion (boost::asio::error::operation_aborted, nullptr);
-                            return;
-                        }
-                        if (connect_error) {
-                            completion (connect_error, nullptr);
-                            return;
-                        }
-                        completion (
-                          {}, detail::make_tcp_connection (state->io_context, std::move (*socket)));
-                    });
-              });
+            boost::asio::post (connect_strand, [resolver, socket, state, control,
+                                                host = parsed.tcp->host, port = parsed.tcp->port,
+                                                completion = std::move (completion)] () mutable {
+                resolver->async_resolve (
+                  host, port,
+                  [resolver, socket, state, control, completion = std::move (completion)] (
+                    boost::system::error_code error,
+                    boost::asio::ip::tcp::resolver::results_type endpoints) mutable {
+                      if (control->cancelled ()) {
+                          completion (boost::asio::error::operation_aborted, nullptr);
+                          return;
+                      }
+                      if (error) {
+                          completion (error, nullptr);
+                          return;
+                      }
+                      boost::asio::async_connect (
+                        *socket, endpoints,
+                        [socket, state, control, completion = std::move (completion)] (
+                          boost::system::error_code connect_error,
+                          const boost::asio::ip::tcp::endpoint &) mutable {
+                            if (control->cancelled ()) {
+                                completion (boost::asio::error::operation_aborted, nullptr);
+                                return;
+                            }
+                            if (connect_error) {
+                                completion (connect_error, nullptr);
+                                return;
+                            }
+                            completion ({}, detail::make_tcp_connection (state->io_context,
+                                                                         std::move (*socket)));
+                        });
+                  });
+            });
         }
     }
     catch (const boost::system::system_error &error) {
