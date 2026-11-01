@@ -68,7 +68,9 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
                          mailbox_pre_post_t pre_post_ = NULL);
     void schedule_if_needed () noexcept;
     bool reschedule_if_needed ();
-    bool detach_io_context_if_idle ();
+    // Called by the current executor under its command turn. Pending work
+    // and its notification transfer to the next command owner.
+    void detach_io_context ();
 
     // Signaler support for ZLINK_INTERNAL_OPT_FD
     int add_signaler (signaler_t *signaler_);
