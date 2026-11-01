@@ -13507,11 +13507,11 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
                   if (staged_restore) {
                       co_await staged_restore (context_state->spot_instance.get ());
                   } else {
-                      auto &serializers = *context_state->channel_runtime->serializers;
                       staged_native = attach_native_spot (context_state, false, false);
                       if (!context_state->is_instance_spot () && plan.lifecycle.on_create)
                           response = co_await plan.lifecycle.on_create (
-                            context_state->spot_instance.get (), request, serializers);
+                            context_state->spot_instance.get (), request,
+                            *context_state->channel_runtime->serializers);
                   }
                   if (!response.accepted)
                       co_return;
