@@ -3717,6 +3717,104 @@ test('fanout builder and subscriber handle share the manual endpoint set', () =>
   );
 });
 
+test('RouteMesh send uses the started node RID after configured RID changes and restart', async () => {
+  const startRuntime = async (routingId) => {
+    const builder = nestjs.zlinkFramework();
+    const nodeBuilder = builder
+      .addRouteMesh('mesh')
+      .listen(ANY_LOOPBACK_PORT)
+      .routingId(routingId);
+    const module = nestjs.ZLinkModule.forRoot(builder.build());
+    const container = await resolveModuleProviders(module, [nestjs.ZLINK_FRAMEWORK_RUNTIME]);
+    const runtime = container.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
+    await runtime.start();
+    return { runtime, nodeBuilder, node: runtime.requirePrimaryMeshNode() };
+  };
+  const createTransport = (node, localSubmissions) =>
+    new framework.ZLinkRuntimeRouteTransport(
+      () => undefined,
+      undefined,
+      () => ({ meshNode: () => node, meshCompletionTable: () => undefined }),
+      undefined,
+      undefined,
+      (meshName, sourceNodeRid) => {
+        localSubmissions.push({ meshName, sourceNodeRid: String(sourceNodeRid) });
+        return { status: ZLinkSubmitStatus.Submitted };
+      }
+    );
+
+  let first;
+  try {
+    first = await startRuntime('node-lifecycle-started');
+    const localSubmissions = [];
+    const transport = createTransport(first.node, localSubmissions);
+    first.nodeBuilder.routingId('node-lifecycle-configured');
+
+    assert.equal(String(first.node.routingId), 'node-lifecycle-started');
+    assert.throws(
+      () => first.node.setRoutingId('node-lifecycle-configured'),
+      /immutable after construction/
+    );
+    assert.deepEqual(
+      await transport.submit(
+        'mesh',
+        'node-lifecycle-started',
+        undefined,
+        typedPacket('LifecycleNotice', { value: 'running' })
+      ),
+      { status: ZLinkSubmitStatus.Submitted }
+    );
+    assert.deepEqual(localSubmissions, [
+      { meshName: 'mesh', sourceNodeRid: 'node-lifecycle-started' }
+    ]);
+    assert.deepEqual(
+      await transport.submit(
+        'mesh',
+        'node-lifecycle-configured',
+        undefined,
+        typedPacket('LifecycleNotice', { value: 'configured' })
+      ),
+      { status: ZLinkSubmitStatus.RouteNotConnected }
+    );
+    assert.equal(localSubmissions.length, 1);
+  } finally {
+    await first?.runtime.stop();
+  }
+
+  let restarted;
+  try {
+    restarted = await startRuntime('node-lifecycle-configured');
+    const localSubmissions = [];
+    const transport = createTransport(restarted.node, localSubmissions);
+
+    assert.equal(String(restarted.node.routingId), 'node-lifecycle-configured');
+    assert.deepEqual(
+      await transport.submit(
+        'mesh',
+        'node-lifecycle-configured',
+        undefined,
+        typedPacket('LifecycleNotice', { value: 'restarted' })
+      ),
+      { status: ZLinkSubmitStatus.Submitted }
+    );
+    assert.deepEqual(localSubmissions, [
+      { meshName: 'mesh', sourceNodeRid: 'node-lifecycle-configured' }
+    ]);
+    assert.deepEqual(
+      await transport.submit(
+        'mesh',
+        'node-lifecycle-started',
+        undefined,
+        typedPacket('LifecycleNotice', { value: 'retired' })
+      ),
+      { status: ZLinkSubmitStatus.RouteNotConnected }
+    );
+    assert.equal(localSubmissions.length, 1);
+  } finally {
+    await restarted?.runtime.stop();
+  }
+});
+
 test('ZLinkModule route client uses runtime host route transport after bootstrap', async () => {
   const builder = nestjs.zlinkFramework();
   if (process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR !== undefined) {
