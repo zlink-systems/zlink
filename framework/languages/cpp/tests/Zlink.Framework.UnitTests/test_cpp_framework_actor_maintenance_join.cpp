@@ -2400,7 +2400,11 @@ void expired_sealed_request_preserves_next_live_actor_relay (bool remote)
     sealed_gap_session_t::binding = binding;
     struct binding_reset_t
     {
-        ~binding_reset_t () { sealed_gap_session_t::binding.reset (); }
+        ~binding_reset_t ()
+        {
+            sealed_gap_session_t::binding->bound.reset ();
+            sealed_gap_session_t::binding.reset ();
+        }
     } binding_reset;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();

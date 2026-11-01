@@ -662,8 +662,10 @@ bool verify_spot_close_waits_for_earlier_lifecycle_join ()
     (void) barrier.value ()->activate ([] {});
     const auto result = close.get ();
     state->drain_serial ();
-    return !completed_before_join && join_completed && result && !result.value ()
-           && closing_calls == 0 && !state->closed;
+    const auto passed = !completed_before_join && join_completed && result && !result.value ()
+                        && closing_calls == 0 && !state->closed;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 bool verify_suspended_lifecycle_keeps_fifo_and_allows_application ()
@@ -3712,6 +3714,7 @@ bool verify_released_spot_turn_does_not_inline_lifecycle_task ()
                   })
                 .result ();
             lifecycle_succeeded.store (static_cast<bool> (result), std::memory_order_release);
+            complete ([] {});
             completed.store (true, std::memory_order_release);
         })) {
         return false;
@@ -5139,12 +5142,15 @@ bool verify_remote_actor_prepare_is_idempotent ()
     target->serial_queue->close ();
     target->serial_queue->drain ();
     target->serial_executor->drain ();
-    return first && repeated && first.value ().accepted && repeated.value ().accepted
-           && first.value ().reply && repeated.value ().reply
-           && first.value ().reply->decode<std::string> () == "accepted"
-           && repeated.value ().reply->decode<std::string> () == "accepted" && !conflicting
-           && conflicting.error_kind () == framework_error_kind_t::protocol_error
-           && admission_calls == 1;
+    const auto passed = first && repeated && first.value ().accepted && repeated.value ().accepted
+                        && first.value ().reply && repeated.value ().reply
+                        && first.value ().reply->decode<std::string> () == "accepted"
+                        && repeated.value ().reply->decode<std::string> () == "accepted"
+                        && !conflicting
+                        && conflicting.error_kind () == framework_error_kind_t::protocol_error
+                        && admission_calls == 1;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 class wire_join_spot_resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
@@ -5555,10 +5561,12 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     target->serial_queue->close ();
     target->serial_queue->drain ();
     target->serial_executor->drain ();
-    return reply_round_trip && first_approved && approval_only && duplicate_parked
-           && reply_requires_serializers && later_attempt_wins && unknown_not_found
-           && stale_protocol_error && stale_target_store_fence_protocol_error && malformed_typed
-           && second_completed && unavailable_kind_preserved;
+    const auto passed = reply_round_trip && first_approved && approval_only && duplicate_parked
+                        && reply_requires_serializers && later_attempt_wins && unknown_not_found
+                        && stale_protocol_error && stale_target_store_fence_protocol_error
+                        && malformed_typed && second_completed && unavailable_kind_preserved;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 bool verify_wire_join_requires_active_local_target ()
@@ -5603,9 +5611,11 @@ bool verify_wire_join_requires_active_local_target ()
     receive ("following-target");
     const bool immediate_replies = unavailable == 3 && accepted == 0;
     node->worker_executor->drain ();
-    return immediate_replies && materializations == 0
-           && node->spot_contexts_by_id.count (spot_id_t ("cold-target")) == 0
-           && node->spot_contexts_by_id.count (spot_id_t ("following-target")) == 0;
+    const auto passed = immediate_replies && materializations == 0
+                        && node->spot_contexts_by_id.count (spot_id_t ("cold-target")) == 0
+                        && node->spot_contexts_by_id.count (spot_id_t ("following-target")) == 0;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 bool verify_relocation_abort_does_not_hold_receive_worker ()
@@ -6288,8 +6298,10 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
         std::cerr << "materialized Join SourceLeave: observations=" << source_leave_failures.load ()
                   << " identity=" << source_leave_identity.load () << '\n';
     }
-    return progressed && committed.load ()
-           && (lifecycle_failure ? failure_preserved : accepted_completed);
+    const auto passed = progressed && committed.load ()
+                        && (lifecycle_failure ? failure_preserved : accepted_completed);
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 class actor_cutover_probe_t final : public zlink::framework::actor_t
@@ -7590,7 +7602,9 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     target->serial_queue->close ();
     target->serial_queue->drain ();
     target->serial_executor->drain ();
-    return true;
+    const auto passed = true;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_delay = false,
@@ -8820,11 +8834,14 @@ bool verify_relocation_participant_resources (bool fail_reserve, bool abort)
               << " continued_before=" << continued_before << " continued=" << completions.load ()
               << " pending_first=" << actors[0]->pending_count ()
               << " pending_second=" << actors[1]->pending_count () << '\n';
-    return !result && !captured.load ()
-           && (abort
-               || (pending_before_continued == 0 && next_before_continued && continued_before == 0))
-           && completions.load () == 1 && actors[0]->pending_count () == 0
-           && actors[1]->pending_count () == 0;
+    const auto passed =
+      !result && !captured.load ()
+      && (abort
+          || (pending_before_continued == 0 && next_before_continued && continued_before == 0))
+      && completions.load () == 1 && actors[0]->pending_count () == 0
+      && actors[1]->pending_count () == 0;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 bool verify_relocation_membership_pending_releases_root_turn ()
@@ -8897,8 +8914,10 @@ bool verify_relocation_membership_pending_releases_root_turn ()
               << captured_while_node_pending << " captured=" << captured.load ()
               << " result=" << bool (result) << " continued=" << continued.load ()
               << " pending=" << spot->serial_queue->pending_count () << '\n';
-    return !captured_while_node_pending && captured.load () && result && continued.load () == 1
-           && spot->serial_queue->pending_count () == 0;
+    const auto passed = !captured_while_node_pending && captured.load () && result
+                        && continued.load () == 1 && spot->serial_queue->pending_count () == 0;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 bool verify_teardown_observes_actor_handoff_terminal ()
 {
@@ -8974,7 +8993,9 @@ bool verify_teardown_observes_actor_handoff_terminal ()
     std::cerr << "Actor source teardown pending=" << pending
               << " cancelled-before-teardown=" << cancelled_before_teardown
               << " sentinel-ran=" << sentinel_ran.load () << '\n';
-    return pending && cancelled_before_teardown && !sentinel_ran.load ();
+    const auto passed = pending && cancelled_before_teardown && !sentinel_ran.load ();
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 
@@ -9123,8 +9144,11 @@ bool verify_aggregate_capture_waits_for_participant_terminal ()
               << " checkpoint_admission=" << checkpoint_admission
               << " final_admission=" << membership_ran.load ()
               << " native_seal_error=" << static_cast<int> (error) << '\n';
-    return all_participants_required && membership_ran.load () && captured.load ()
-           && captured_after_terminal.load () && error == stateful::stateful_error_t::none;
+    const auto passed = all_participants_required && membership_ran.load () && captured.load ()
+                        && captured_after_terminal.load ()
+                        && error == stateful::stateful_error_t::none;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 bool verify_source_suffix_native_order_and_rollback ()
