@@ -279,6 +279,76 @@ public sealed class RouteMeshRuntimeServiceTests
     }
 
     [Fact]
+    public async Task SendTargetClassification_UsesTheRoutingIdOfTheStartedLifecycle()
+    {
+        var startedRid = RoutingId.From("started-lifecycle-rid");
+        var configuredRid = RoutingId.From("updated-configured-rid");
+        await using var fixture = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            routingId: startedRid
+        );
+
+        var frameworkRuntime = fixture.FrameworkRuntime;
+        var nodeRuntime = frameworkRuntime.GetMeshNodeRuntime(RuntimeFixture.MeshName);
+        Assert.Throws<InvalidOperationException>(() =>
+            nodeRuntime.Node.SetRoutingId(configuredRid)
+        );
+        nodeRuntime.Registration.RoutingId = configuredRid;
+
+        Assert.Equal(startedRid, nodeRuntime.Node.RoutingId);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.ReadyEligible,
+            frameworkRuntime.RequireKnownRouteMeshTarget(
+                nodeRuntime,
+                RuntimeFixture.MeshName,
+                startedRid,
+                ZLinkFrameworkRuntime.PacketRouteTarget,
+                "started-lifecycle-rid"
+            )
+        );
+        var configuredTargetError = Assert.Throws<ZLinkFrameworkException>(() =>
+            frameworkRuntime.RequireKnownRouteMeshTarget(
+                nodeRuntime,
+                RuntimeFixture.MeshName,
+                configuredRid,
+                ZLinkFrameworkRuntime.PacketRouteTarget,
+                "updated-configured-rid"
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, configuredTargetError.Kind);
+
+        await fixture.DisposeMeshNodeAsync();
+        await using var restarted = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            routingId: configuredRid
+        );
+        var restartedRuntime = restarted.FrameworkRuntime;
+        var restartedNode = restartedRuntime.GetMeshNodeRuntime(RuntimeFixture.MeshName);
+
+        Assert.Equal(configuredRid, restartedNode.Node.RoutingId);
+        Assert.Equal(
+            ZLinkRouteMeshTargetClassification.ReadyEligible,
+            restartedRuntime.RequireKnownRouteMeshTarget(
+                restartedNode,
+                RuntimeFixture.MeshName,
+                configuredRid,
+                ZLinkFrameworkRuntime.PacketRouteTarget,
+                "updated-configured-rid"
+            )
+        );
+        var retiredTargetError = Assert.Throws<ZLinkFrameworkException>(() =>
+            restartedRuntime.RequireKnownRouteMeshTarget(
+                restartedNode,
+                RuntimeFixture.MeshName,
+                startedRid,
+                ZLinkFrameworkRuntime.PacketRouteTarget,
+                "started-lifecycle-rid"
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, retiredTargetError.Kind);
+    }
+
+    [Fact]
     public async Task Remote_RouteMesh_Server_With_Zero_Weight_Is_Unavailable()
     {
         await using var target = await RuntimeFixture.StartAsync(
@@ -1104,6 +1174,9 @@ public sealed class RouteMeshRuntimeServiceTests
         internal IZLinkLocationRepository Store => _locations.Store;
 
         internal IZLinkRouteMeshRuntime Runtime { get; }
+
+        internal ZLinkFrameworkRuntime FrameworkRuntime =>
+            _provider.GetRequiredService<ZLinkFrameworkRuntime>();
 
         internal IZLinkRouteMeshRuntimeOptions RuntimeOptions { get; }
 
