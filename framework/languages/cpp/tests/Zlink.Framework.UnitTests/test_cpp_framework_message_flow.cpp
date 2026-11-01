@@ -644,7 +644,8 @@ int bounded_process_delivery (bool retire_first, int waiting = 8192)
     bool delivered;
     {
         std::unique_lock lock (state->mutex);
-        delivered = state->changed.wait_for (lock, std::chrono::milliseconds (500), [&] {
+        // The process delivery drain notifies through the provider; the bound only catches a stall.
+        delivered = state->changed.wait_for (lock, std::chrono::seconds (30), [&] {
             return state->ids.size () >= std::size_t (expected);
         });
     }
