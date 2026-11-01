@@ -9,6 +9,7 @@ import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
@@ -104,7 +105,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
             ZLinkActor actor,
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             ZLinkBoundSessionSendOptions options,
             ZLinkRelayMetadataPolicy metadataPolicy,
             AtomicBoolean submitGate)
@@ -115,7 +116,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 ZLinkActor actor,
                 RoutingId sourceNodeRid,
                 RoutingId sourceSessionRid,
-                Message payload,
+                ZLinkFrameworkMultipartView payload,
                 ZLinkBoundSessionSendOptions options,
                 ZLinkRelayMetadataPolicy metadataPolicy) {
             this(
@@ -166,10 +167,11 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
             try (var flowScope = actorRuntime.enterApplicationFlow()) {
                 ZLinkBackendActorRef currentActorRef = actorRuntime.actorRef(actor);
                 byte[] frameBytes;
+                Message message = payload.detachFirst();
                 try {
-                    frameBytes = metadataPolicy.actorToSession(options).encodeFrame(payload);
+                    frameBytes = metadataPolicy.actorToSession(options).encodeFrame(message);
                 } finally {
-                    payload.close();
+                    message.close();
                 }
                 Message frame = Message.from(frameBytes);
                 return submitBoundSessionFrame(spotNode, currentActorRef, frame);

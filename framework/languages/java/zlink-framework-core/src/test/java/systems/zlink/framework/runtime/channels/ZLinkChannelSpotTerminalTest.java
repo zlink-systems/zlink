@@ -11,6 +11,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.spots.SpotTerminalProbe;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
@@ -148,7 +149,7 @@ final class ZLinkChannelSpotTerminalTest {
                                 probe.address.spotGeneration(),
                                 probe.address.authorityOwnerGeneration(),
                                 probe.address.ownerLeaseGeneration(),
-                                java.util.List.of(payload));
+                                payload);
         probe.readyRequest =
                 (payload, timeout) ->
                         runtime.requestToSpot(
@@ -161,7 +162,7 @@ final class ZLinkChannelSpotTerminalTest {
                                 java.util.List.of(payload),
                                 timeout,
                                 null);
-        try (Message payload = Message.from(new byte[] {1})) {
+        try (var payload = ZLinkFrameworkMultipartView.owned(Message.from(new byte[] {1}))) {
             java.util.concurrent.CompletionStage<?> result;
             if (request) {
                 var call =

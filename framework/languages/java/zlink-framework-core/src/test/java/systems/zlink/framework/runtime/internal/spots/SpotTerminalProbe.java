@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.spots;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import java.time.Duration;
@@ -25,7 +26,8 @@ public final class SpotTerminalProbe
     public int activations;
     public int coordinatorCalls;
     public int submissions;
-    public java.util.function.Function<Message, CompletionStage<Void>> readySend;
+    public java.util.function.Function<ZLinkFrameworkMultipartView, CompletionStage<Void>>
+            readySend;
     public java.util.function.BiFunction<Message, Duration, CompletionStage<List<Message>>>
             readyRequest;
     public final java.util.ArrayList<UUID> operationIds = new java.util.ArrayList<>();
@@ -56,7 +58,7 @@ public final class SpotTerminalProbe
             String spotId,
             String stableType,
             String meshName,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
             Map<String, String> metadata,

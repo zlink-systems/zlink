@@ -10,6 +10,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.spots.SpotTerminalProbe;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
@@ -111,8 +112,10 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                                             probe.address.targetNodeRid(),
                                             probe.address.spotId(),
                                             probe.address.spotGeneration(),
-                                            java.util.List.of(payload))
-                                    .whenComplete((ignored, failure) -> payload.close());
+                                            payload)
+                                    .whenComplete(
+                                            (ignored, failure) ->
+                                                    ZLinkFrameworkMultipartView.closeAll(payload));
             probe.readyRequest =
                     (payload, timeout) ->
                             backend.requestToSpot(

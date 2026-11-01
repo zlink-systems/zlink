@@ -461,6 +461,10 @@ public final class ZLinkChannelEnvelope {
         return ZLinkFrameworkMultipartView.encoded(encodeHeaderBytesInternal(header), body);
     }
 
+    public static List<Message> encode(Header header, ZLinkFrameworkMultipartView body) {
+        return ZLinkFrameworkMultipartView.encoded(encodeHeaderBytesInternal(header), body);
+    }
+
     /**
      * Strict header decode with C++-equivalent semantics: JSON parse failure, a missing/mismatched
      * {@code formatMarker} or malformed flow fields are {@link

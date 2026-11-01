@@ -19,6 +19,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
@@ -44,7 +45,7 @@ final class ZLinkSpotDirectOutbound {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName) {
         return send(spot, targetNodeRid, spotId, spotGeneration, payload, packetName, null);
     }
@@ -54,7 +55,7 @@ final class ZLinkSpotDirectOutbound {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType) {
         return new ZLinkSpotDirectSendCall(
@@ -141,7 +142,7 @@ final class ZLinkSpotDirectOutbound {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
             ZLinkApplicationMetadata metadata) {
@@ -160,9 +161,18 @@ final class ZLinkSpotDirectOutbound {
                         contentType,
                         metadata.values(),
                         captureOutboundFlow());
+        CompletionStage<Void> submission;
+        try {
+            submission =
+                    spot.sendToSpot(
+                            targetNodeRid, spotId, spotGeneration, metadata.encode(), parts);
+        } catch (RuntimeException | Error failure) {
+            ZLinkFrameworkMultipartView.closeAll(parts);
+            throw failure;
+        }
         return ZLinkOneWayCalls.adaptOneWay(
-                spot.sendToSpot(targetNodeRid, spotId, spotGeneration, metadata.encode(), parts)
-                        .whenComplete((ignored, failure) -> parts.forEach(Message::close)));
+                submission.whenComplete(
+                        (ignored, failure) -> ZLinkFrameworkMultipartView.closeAll(parts)));
     }
 
     <TReply> CompletionStage<TReply> submitRequest(
@@ -345,7 +355,7 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
     private final RoutingId targetNodeRid;
     private final String spotId;
     private final long spotGeneration;
-    private final Message payload;
+    private final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
     private final String contentType;
     private final ZLinkApplicationMetadata metadata;
@@ -356,7 +366,7 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName) {
         this(
                 outbound,
@@ -376,7 +386,7 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType) {
         this(
@@ -397,7 +407,7 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
             ZLinkApplicationMetadata metadata) {
@@ -420,7 +430,7 @@ final class ZLinkSpotDirectSendCall implements ZLinkSendCall {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
             ZLinkApplicationMetadata metadata,

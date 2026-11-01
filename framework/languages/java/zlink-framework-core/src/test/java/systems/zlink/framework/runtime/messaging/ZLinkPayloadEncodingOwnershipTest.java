@@ -22,7 +22,8 @@ final class ZLinkPayloadEncodingOwnershipTest {
         registration.addSerializer(CONTENT_TYPE, codec, type -> type == String.class);
         var serializer = registration.serializerWithFallback(new ZLinkJsonMessageSerializer());
         var encoded = ZLinkPayloadEncoding.encode(serializer, "payload", CONTENT_TYPE);
-        try (var message = encoded.payload()) {
+        try (var payload = encoded.payload()) {
+            Message message = payload.getFirst();
             assertSame(codec.output, message);
             assertEquals("payload", message.toUtf8String());
             assertEquals(1, codec.serializations);
