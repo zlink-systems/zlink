@@ -7,6 +7,7 @@
 #include "stateful_object_sync.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
+#include "scope_exit.hpp"
 
 #include <array>
 #include <condition_variable>
@@ -15,6 +16,7 @@
 #if defined(__linux__) && defined(__GNUC__) && !defined(__clang__)
 #include <pthread.h>
 #endif
+#include <future>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -511,45 +513,106 @@ std::shared_ptr<detail::mesh_node_builder_state_t> mesh_state ()
     return state;
 }
 
-TEST (SendAllocations, LocalRoutingIdentityFollowsConfigurationAcrossTheNativeLifecycle)
+TEST (SendAllocations, LocalRoutingIdentityUsesTheNativeStartUntilShutdown)
+{
+    const auto first = zlink::routing_id_t::from ("source");
+    const auto next = zlink::routing_id_t::from ("next");
+    auto state = mesh_state ();
+    detail::mesh_node_runtime_t node (state);
+    const auto check_identity = [&] (std::optional<zlink::routing_id_t> expected) {
+        EXPECT_EQ (node.routing_id (), expected);
+        EXPECT_EQ (node.routing_id_async ().result ().value (), expected);
+        const auto identity = node.identity_async ().result ().value ();
+        EXPECT_EQ (identity.first, "send-allocation");
+        EXPECT_EQ (identity.second, expected);
+    };
+    check_identity (first);
+    state->lane.run_sync ([&] { state->routing_id = next; });
+    check_identity (next);
+    state->lane.run_sync ([&] { state->routing_id = first; });
+    node.start ();
+    check_identity (first);
+    state->lane.run_sync ([&] { state->routing_id = next; });
+    check_identity (first);
+    state->lane.run_sync ([&] { state->routing_id.reset (); });
+    check_identity (first);
+    state->lane.run_sync ([&] { state->routing_id = next; });
+    EXPECT_EQ (node.native_node ().transport ().topology ().local_descriptor ().node_routing_id,
+               first.to_bytes ());
+    auto &topology = node.native_node ().transport ().topology ();
+    auto changed_descriptor = topology.local_descriptor ();
+    changed_descriptor.node_routing_id = next.to_bytes ();
+    ++changed_descriptor.descriptor_revision;
+    EXPECT_THROW (topology.publish_local (changed_descriptor), std::invalid_argument);
+    EXPECT_EQ (topology.local_descriptor ().node_routing_id, first.to_bytes ());
+    node.stop ();
+    check_identity (next);
+    state->lane.run_sync ([&] { state->routing_id.reset (); });
+    check_identity (std::nullopt);
+    state->lane.run_sync ([&] { state->routing_id = next; });
+    node.start ();
+    check_identity (next);
+    EXPECT_EQ (node.native_node ().transport ().topology ().local_descriptor ().node_routing_id,
+               next.to_bytes ());
+    state->lane.run_sync ([&] { state->routing_id = first; });
+    check_identity (next);
+    node.stop ();
+    check_identity (first);
+}
+
+TEST (SendAllocations, RunningIdentityDoesNotEnterTheConfigurationLane)
 {
     auto state = mesh_state ();
     detail::mesh_node_runtime_t node (state);
-    const auto original = zlink::routing_id_t::from ("source");
-    const auto replacement = zlink::routing_id_t::from ("replacement");
-    const auto configure = [&] (std::optional<zlink::routing_id_t> identity) {
-        state->lane.run_sync ([&] { state->routing_id = std::move (identity); });
-    };
-    const auto expect_identity = [&] (std::optional<zlink::routing_id_t> identity) {
-        EXPECT_EQ (node.routing_id (), identity);
-        EXPECT_EQ (node.routing_id_async ().result ().value (), identity);
-    };
-    expect_identity (original);
-    configure (std::nullopt);
-    expect_identity (std::nullopt);
-    configure (original);
     node.start ();
-    auto &topology = node.native_node ().transport ().topology ();
-    const auto descriptor = topology.local_descriptor ();
-    EXPECT_EQ (descriptor.node_routing_id, original.to_bytes ());
-    configure (replacement);
-    expect_identity (replacement);
-    EXPECT_EQ (topology.local_descriptor ().node_routing_id, original.to_bytes ());
-    configure (std::nullopt);
-    expect_identity (std::nullopt);
-    EXPECT_EQ (topology.local_descriptor ().node_routing_id, original.to_bytes ());
-    auto changed_descriptor = descriptor;
-    changed_descriptor.node_routing_id = replacement.to_bytes ();
-    ++changed_descriptor.descriptor_revision;
-    EXPECT_THROW (topology.publish_local (changed_descriptor), std::invalid_argument);
-    EXPECT_EQ (topology.local_descriptor ().node_routing_id, original.to_bytes ());
-    configure (original);
+    state->lane.run_sync ([&] {
+        EXPECT_NO_THROW (EXPECT_EQ (node.routing_id (), state->routing_id));
+        EXPECT_NO_THROW (
+          EXPECT_EQ (node.routing_id_async ().result ().value (), state->routing_id));
+        EXPECT_NO_THROW (
+          EXPECT_EQ (node.identity_async ().result ().value ().second, state->routing_id));
+    });
     node.stop ();
-    expect_identity (original);
-    configure (std::nullopt);
-    expect_identity (std::nullopt);
-    configure (replacement);
-    expect_identity (replacement);
+}
+
+TEST (SendAllocations, LocalSendIdentityReadsKeepOnlyTheReadyResultAllocations)
+{
+    auto state = mesh_state ();
+    detail::mesh_node_runtime_t node (state);
+    node.start ();
+    const auto identity = node.routing_id ();
+    using identity_task_t = fw::task_t<std::optional<zlink::routing_id_t>>;
+    std::array<std::optional<identity_task_t>, 2> baseline_tasks, actual_tasks;
+    // app.cpp's NodeDirect send decision and submit_local_node_send each read
+    // routing_id_async. Hold the mutable configuration owner to expose any
+    // identity turn those two real reads would otherwise execute inline.
+    std::promise<void> entered, release;
+    auto released = release.get_future ().share ();
+    ASSERT_TRUE (state->lane.try_post ([&] {
+        entered.set_value ();
+        released.wait ();
+    }));
+    entered.get_future ().wait ();
+    fw::test::scope_exit_t cleanup ([&] { release.set_value (); });
+    const auto baseline = fw::tests::measure_allocations ([&] {
+        for (auto &task : baseline_tasks)
+            task.emplace (fw::result_t<std::optional<zlink::routing_id_t>>::success (identity));
+    });
+    const auto measured = fw::tests::measure_allocations ([&] {
+        for (auto &task : actual_tasks)
+            task.emplace (node.routing_id_async ());
+    });
+    const bool ready = actual_tasks[0]->await_ready () && actual_tasks[1]->await_ready ();
+    cleanup.run ();
+    for (auto &task : actual_tasks)
+        EXPECT_EQ (task->result ().value (), identity);
+    std::printf (
+      "local send identity reads (2/message): baseline=%zu/%zu actual=%zu/%zu ready=%d\n",
+      baseline.count, baseline.bytes, measured.count, measured.bytes, ready);
+    EXPECT_TRUE (ready);
+    EXPECT_EQ (measured.count, baseline.count);
+    EXPECT_EQ (measured.bytes, baseline.bytes);
+    node.stop ();
 }
 
 TEST (SendAllocations, KnownTargetForwardsTheNativeTaskWithoutAnotherResult)

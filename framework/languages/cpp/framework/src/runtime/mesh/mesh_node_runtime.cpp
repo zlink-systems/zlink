@@ -4533,11 +4533,18 @@ std::chrono::milliseconds mesh_node_runtime_t::default_request_timeout () const
 
 std::optional<zlink::routing_id_t> mesh_node_runtime_t::routing_id () const
 {
+    if (_node)
+        return zlink::routing_id_t::from (
+          _node->transport ().startup_descriptor ().node_routing_id);
     return _state->lane.run_sync ([&] { return _state->routing_id; });
 }
 
 task_t<std::optional<zlink::routing_id_t>> mesh_node_runtime_t::routing_id_async () const
 {
+    if (_node)
+        return task_t<std::optional<zlink::routing_id_t>> (
+          result_t<std::optional<zlink::routing_id_t>>::success (
+            zlink::routing_id_t::from (_node->transport ().startup_descriptor ().node_routing_id)));
     const auto state = _state;
     return state->lane.run_task ([state] { return state->routing_id; });
 }
@@ -4545,6 +4552,12 @@ task_t<std::optional<zlink::routing_id_t>> mesh_node_runtime_t::routing_id_async
 task_t<std::pair<std::string, std::optional<zlink::routing_id_t>>>
 mesh_node_runtime_t::identity_async () const
 {
+    if (_node) {
+        const auto &descriptor = _node->transport ().startup_descriptor ();
+        using identity_t = std::pair<std::string, std::optional<zlink::routing_id_t>>;
+        return task_t<identity_t> (result_t<identity_t>::success (
+          {descriptor.mesh_name, zlink::routing_id_t::from (descriptor.node_routing_id)}));
+    }
     const auto state = _state;
     return state->lane.run_task (
       [state] { return std::pair{state->mesh_name, state->routing_id}; });
