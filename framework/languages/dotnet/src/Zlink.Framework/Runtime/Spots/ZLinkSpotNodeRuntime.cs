@@ -933,8 +933,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
 
     private async Task DisposeCoreAsync(CancellationToken forceStopToken)
     {
-        var failures = new List<Exception>();
-        Capture(DetachManualConnections);
+        var failures = new ZLinkFailureCollector();
+        failures.Capture(DetachManualConnections);
         await CaptureAsync(async () =>
             {
                 try
@@ -955,44 +955,23 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         await CaptureAsync(_spots.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_bundles.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(DisposeEntrySpotAsync).ConfigureAwait(false);
-        await CaptureAsync(
+        // The node owns terminal completion drain. An expired host deadline
+        // must not detach that infrastructure cleanup with application work.
+        await failures
+            .CaptureAsync(
                 forceStopToken.CanBeCanceled
                     ? () => Node.ForceStopAsync(forceStopToken)
                     : Node.DisposeAsync
             )
             .ConfigureAwait(false);
-        if (failures.Count == 1)
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
-        if (failures.Count > 1)
-            throw new AggregateException(failures);
+        failures.ThrowIfAny();
         AwaitStateLane(_lane.RunAsync(DisposeStopSourceOnLane));
         return;
 
-        async ValueTask CaptureAsync(Func<ValueTask> cleanup)
-        {
-            try
-            {
-                // The host bounds observation; the owned cleanup retains its
-                // scopes and resources until its actual completion.
-                await cleanup().AsTask().WaitAsync(forceStopToken).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                failures.Add(exception);
-            }
-        }
-
-        void Capture(Action cleanup)
-        {
-            try
-            {
-                cleanup();
-            }
-            catch (Exception exception)
-            {
-                failures.Add(exception);
-            }
-        }
+        ValueTask CaptureAsync(Func<ValueTask> cleanup) =>
+            failures.CaptureAsync(() =>
+                new ValueTask(cleanup().AsTask().WaitAsync(forceStopToken))
+            );
     }
 
     internal void OwnManualConnectionAttachment(IDisposable attachment)
