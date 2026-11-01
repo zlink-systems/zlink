@@ -143,7 +143,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                           const handler_registry_t *filters,
                           const dispatch_options_t &dispatch_options,
                           serial_execution_queue_t::async_completion_t application_completed = {},
-                          offload_executor_t *executor = nullptr);
+                          offload_executor_t *executor = nullptr,
+                          application_job_queue_t::permit_t application_permit = {});
     static task_t<void>
     drain_application_owner (std::shared_ptr<detail::mesh_node_runtime_t> node,
                              std::shared_ptr<detail::mesh_node_builder_state_t> registration,

@@ -183,7 +183,7 @@ TEST (LocalEnqueueAllocations, SuccessfulLocalMessagesOnlyAllocateTheirPublished
         auto drain = [&] {
             unsigned handled = 0;
             while (runtime
-                     ->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+                     ->dispatch_ready ([&] (const auto &, const auto &record, auto, auto) {
                          ++handled;
                          if (record.reply_token.local_reply)
                              EXPECT_TRUE (record.reply_token.local_reply (parts));
@@ -369,7 +369,7 @@ TEST (LocalEnqueueAllocations, StatefulSpotSendAndRequestDrainWithStoreAuthority
             const auto before_drain = std::chrono::steady_clock::now ();
             const auto cost = tests::measure_allocations ([&] {
                 drained = runtime
-                            ->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+                            ->dispatch_ready ([&] (const auto &, const auto &record, auto, auto) {
                                 ++handled;
                                 EXPECT_NE (record.application_record, nullptr);
                                 if (record.reply_token.local_reply)
@@ -385,9 +385,10 @@ TEST (LocalEnqueueAllocations, StatefulSpotSendAndRequestDrainWithStoreAuthority
             ASSERT_TRUE (drained.has_value ());
             ASSERT_TRUE (*drained);
             EXPECT_EQ (handled, 1u);
-            while (
-              runtime->dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ()
-              != 0) {
+            while (runtime->dispatch_ready ([] (const auto &, const auto &, auto, auto) {})
+                     .result ()
+                     .value ()
+                   != 0) {
             }
             if (request_message) {
                 const auto complete =
@@ -651,7 +652,7 @@ TEST (LocalEnqueueAllocations, IdleActorNotificationAddsOnlyMailboxAndClaimStora
     auto &objects = runtime->objects ();
     auto &dispatch = host::public_host_runtime_test_access_t::stateful_dispatch (*runtime);
     const auto idle = [&] {
-        auto pending = runtime->dispatch_ready ([] (const auto &, const auto &, auto) {});
+        auto pending = runtime->dispatch_ready ([] (const auto &, const auto &, auto, auto) {});
         ASSERT_TRUE (pending.await_ready ());
         EXPECT_EQ (pending.result ().value (), 0u);
     };
@@ -742,7 +743,8 @@ TEST (LocalEnqueueAllocations, IdleManagementDoesNotAllocateInfrastructureBatchS
         const auto previous = tests::allocation_event_log;
         tests::allocation_event_log = &log;
         const auto measured = tests::measure_allocations ([&] {
-            auto task = runtime->dispatch_ready ([] (const auto &, const auto &, auto) {}, false);
+            auto task =
+              runtime->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false);
             ASSERT_TRUE (task.await_ready ());
             EXPECT_EQ (task.result ().value (), expected_records);
         });
@@ -873,7 +875,7 @@ TEST (LocalEnqueueAllocations, NativeSpotPublicationMovesCanonicalRecordStorage)
     std::size_t handled = 0;
     const auto measured = tests::measure_allocations ([&] {
         auto drained =
-          runtime->dispatch_ready ([&] (const auto &owner, const auto &received, auto parts) {
+          runtime->dispatch_ready ([&] (const auto &owner, const auto &received, auto parts, auto) {
               ++handled;
               EXPECT_EQ (owner.spot_id, spot_id);
               EXPECT_EQ (owner.channel_name.size (), 127u);
@@ -923,13 +925,14 @@ TEST (LocalEnqueueAllocations, StatefulSpotDrainRecordContinuationStaysWithinRec
         const auto previous_log = tests::allocation_event_log;
         tests::allocation_event_log = &log;
         const auto cost = tests::measure_allocations ([&] {
-            auto drained = runtime->dispatch_ready ([&] (const auto &, const auto &record, auto) {
-                ++handled;
-                if (record.reply_token.local_reply)
-                    EXPECT_TRUE (record.reply_token.local_reply (parts));
-                if (record.application_record)
-                    record.application_record->release_native_claim ();
-            });
+            auto drained =
+              runtime->dispatch_ready ([&] (const auto &, const auto &record, auto, auto) {
+                  ++handled;
+                  if (record.reply_token.local_reply)
+                      EXPECT_TRUE (record.reply_token.local_reply (parts));
+                  if (record.application_record)
+                      record.application_record->release_native_claim ();
+              });
             ASSERT_TRUE (drained.await_ready ());
             count = drained.result ().value ();
         });
@@ -1022,7 +1025,7 @@ TEST (LocalEnqueueAllocations, StatefulSpotDrainAdmitsOnceAndStaysOnIdleGateCall
                    zlink::submit_result_t::ok);
         const auto lookups_before = fixture.gate_lookups->load ();
         unsigned handled = 0, off_caller = 0;
-        auto drained = runtime->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+        auto drained = runtime->dispatch_ready ([&] (const auto &, const auto &record, auto, auto) {
             ++handled;
             if (std::this_thread::get_id () != caller)
                 ++off_caller;
@@ -1043,7 +1046,7 @@ TEST (LocalEnqueueAllocations, StatefulSpotDrainAdmitsOnceAndStaysOnIdleGateCall
         // The native publication asks the gate; the owner claim does not ask it again.
         EXPECT_EQ (fixture.gate_lookups->load () - lookups_before, 1u);
         const auto idle_before = fixture.gate_lookups->load ();
-        EXPECT_EQ (runtime->dispatch_ready ([] (const auto &, const auto &, auto) {})
+        EXPECT_EQ (runtime->dispatch_ready ([] (const auto &, const auto &, auto, auto) {})
                      .result_for (std::chrono::seconds (5))
                      ->value (),
                    0u);
@@ -1131,7 +1134,7 @@ TEST (LocalEnqueueAllocations, ReadyNativePublicationMovesFinalIdentityStorage)
         const auto cost = tests::measure_allocations ([&] {
             auto pending = runtime->dispatch_application_owner (
               owner,
-              [&] (const auto &, const auto &received, auto) {
+              [&] (const auto &, const auto &received, auto, auto) {
                   ++handled;
                   const auto copied = std::count_if (
                     events.begin () + publication_begin, events.begin () + log.count,

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "allocation_counter.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/mesh/application_dispatch_terminal_owner.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
@@ -26,20 +27,19 @@ namespace zlink::framework::runtime::host
 {
 struct public_host_runtime_test_access_t
 {
-    static task_t<std::size_t> dispatch_claim (public_host_runtime_t &host,
-                                               std::shared_ptr<mesh::service_mailbox_claim_t> claim)
+    static task_t<std::size_t>
+    dispatch_claim (public_host_runtime_t &host,
+                    std::shared_ptr<mesh::service_mailbox_claim_t> claim,
+                    mesh::service_mailbox_t::application_dispatch_t dispatch)
     {
-        return host.dispatch_application_claim (
-          std::move (claim), [] (const auto &, const auto &, auto) {
-              throw std::runtime_error ("multicast source reached application callback");
-          });
+        return host.dispatch_application_claim (std::move (claim), std::move (dispatch));
     }
     static task_t<void> forward_multicast (public_host_runtime_t &host,
                                            task_t<std::vector<stateful::object_ref_t>> targets,
-                                           std::function<void ()> before)
+                                           runtime::application_job_queue_t::permit_t permit)
     {
         return host.enqueue_local_multicast (std::move (targets), "c", "topic", {}, {},
-                                             host.status ().routing_id (), std::move (before));
+                                             host.status ().routing_id (), {}, std::move (permit));
     }
 };
 }
@@ -54,8 +54,7 @@ constexpr std::uint64_t request_correlation = 17;
 const std::vector<std::uint8_t> request_source = {'p', 'e', 'e', 'r'};
 constexpr auto domain = mesh::service_mailbox_domain_t::application;
 const auto owner = mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
-using dispatch_t = std::function<void (
-  const host::ready_record_t &, const host::receive_record_t &, std::vector<zlink::message_t>)>;
+using dispatch_t = mesh::service_mailbox_t::application_dispatch_t;
 const std::function<void ()> noop = [] {};
 std::string claim_owner (bool channel)
 {
@@ -153,7 +152,7 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
     // Measure the steady path after an idle worker has acquired its reusable buffer.
     enqueue (target.transport ().mailbox (), false, channel);
     require (dispatch (
-               target, [] (const auto &, const auto &, auto) {}, channel),
+               target, [] (const auto &, const auto &, auto, auto permit) {}, channel),
              "ordinary claim warmup failed");
     struct observation_t
     {
@@ -163,7 +162,7 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
         std::shared_ptr<int> injected;
         std::thread::id caller = std::this_thread::get_id ();
     } state{.channel = channel};
-    const dispatch_t invoke = [&state] (const auto &, const auto &record, auto) {
+    const dispatch_t invoke = [&state] (const auto &, const auto &record, auto, auto permit) {
         require (std::this_thread::get_id () == state.caller,
                  "ordinary claim left the allocation measurement thread");
         ++state.calls;
@@ -177,12 +176,13 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
     // A real drain callback may own heap storage. Permit exactly the API's
     // input copy; moving that argument into the claim must not clone it again.
     const dispatch_t callback =
-      owning_callback ? dispatch_t ([invoke, padding = std::array<std::uint64_t, 8>{}] (
-                                      const auto &ready, const auto &record, auto parts) {
-          require (padding.front () == 0, "callback capture changed");
-          invoke (ready, record, std::move (parts));
-      })
-                      : invoke;
+      owning_callback
+        ? dispatch_t ([invoke, padding = std::array<std::uint64_t, 8>{}] (
+                        const auto &ready, const auto &record, auto parts, auto permit) {
+              require (padding.front () == 0, "callback capture changed");
+              invoke (ready, record, std::move (parts), std::move (permit));
+          })
+        : invoke;
     const auto input_copy = tests::measure_allocations ([&] {
         const auto copy = callback;
         require (static_cast<bool> (copy), "callback copy calibration failed");
@@ -227,7 +227,7 @@ void verify_batch_record_cost (host::public_host_runtime_t &target)
         auto &mailbox = dispatch_records ? target.transport ().mailbox () : baseline;
         for (std::size_t index = 0; index < size; ++index)
             enqueue (mailbox);
-        const dispatch_t callback = [] (const auto &, const auto &, auto) {};
+        const dispatch_t callback = [] (const auto &, const auto &, auto, auto permit) {};
         return tests::measure_allocations ([&] {
             if (dispatch_records)
                 require (dispatch (target, callback), "batch cost dispatch failed");
@@ -261,17 +261,17 @@ void verify_retained_batch (host::public_host_runtime_t &target)
     enqueue (mailbox);
     enqueue (mailbox);
     std::vector<host::mailbox_callback_t> releases;
-    const dispatch_t callback = [&] (const auto &, const auto &record, auto) {
+    const dispatch_t callback = [&] (const auto &, const auto &record, auto, auto permit) {
         record.retain_mailbox_reservation ();
         releases.push_back (record.release_mailbox_reservation);
     };
     require (dispatch (target, callback) && releases.size () == 2, "batch dispatch changed");
     enqueue (mailbox, false, true);
-    const dispatch_t independent = [] (const auto &, const auto &, auto) {};
+    const dispatch_t independent = [] (const auto &, const auto &, auto, auto permit) {};
     require (dispatch (target, independent, true),
              "independent owner could not drain while first batch retained");
     enqueue (mailbox);
-    const dispatch_t next = [] (const auto &, const auto &, auto) {};
+    const dispatch_t next = [] (const auto &, const auto &, auto, auto permit) {};
     require (!dispatch (target, next), "retained claim released early");
     releases[0]();
     releases[0]();
@@ -310,9 +310,9 @@ void verify_nested_batch (host::public_host_runtime_t &target)
     lifetime.reset ();
     enqueue (mailbox, true);
     host::reply_token_t outer_reply, nested_reply;
-    const dispatch_t outer = [&] (const auto &, const auto &record, auto) {
+    const dispatch_t outer = [&] (const auto &, const auto &record, auto, auto permit) {
         outer_reply = record.reply_token;
-        const dispatch_t inner = [&] (const auto &, const auto &nested, auto) {
+        const dispatch_t inner = [&] (const auto &, const auto &nested, auto, auto permit) {
             nested_reply = nested.reply_token;
         };
         require (dispatch (target, inner, true), "nested independent owner failed to drain");
@@ -349,8 +349,11 @@ void measure_permit_ownership_cost ()
             require (claim && claim->claimed_messages == count, "cost claim failed");
             for (std::size_t i = 0; i < count; ++i) {
                 auto original = mailbox.take ({claim, i});
-                if (original->before_application_handler)
-                    original->before_application_handler ();
+                runtime::application_dispatch_terminal_owner_t terminal (
+                  {}, {}, {},
+                  original->application_permit ? std::move (*original->application_permit)
+                                               : runtime::application_job_queue_t::permit_t{});
+                terminal.enter_handler ();
                 original->transferred ();
             }
         });
@@ -360,6 +363,7 @@ void measure_permit_ownership_cost ()
     std::cout << "permit-ownership records=" << count << " baseline-count=" << baseline.count
               << " admitted-count=" << admitted.count << " extra-per-record="
               << (admitted.count - baseline.count) / static_cast<double> (count) << std::endl;
+    require (admitted.count == baseline.count, "admission permit allocated per-record storage");
 }
 
 void verify_inline_permit (bool bulk_release, bool enter_handler = true)
@@ -379,8 +383,8 @@ void verify_inline_permit (bool bulk_release, bool enter_handler = true)
     auto claim =
       mailbox.try_claim_owner (domain, owner, 1, runtime::dispatch_limits::receive_batch_bytes);
     auto original = mailbox.take ({claim, 0});
-    require (original && original->before_application_handler,
-             "claim did not bind inline permit handler entry");
+    require (original && original->application_permit && *original->application_permit,
+             "claim did not preserve inline permit ownership");
     std::size_t delivered = 0;
     auto waiter = jobs.wait_for_supply (
       [&] (auto supplied) {
@@ -394,7 +398,8 @@ void verify_inline_permit (bool bulk_release, bool enter_handler = true)
         require (mailbox.release (*claim), "bulk terminal did not settle claim");
     else
         require (original->transferred (), "individual terminal did not settle claim");
-    auto before = std::move (original->before_application_handler);
+    runtime::application_dispatch_terminal_owner_t terminal (
+      {}, {}, {}, std::move (*original->application_permit));
     original->transferred = {};
     original.reset ();
     std::weak_ptr<mesh::service_mailbox_claim_t> lifetime = claim;
@@ -407,15 +412,64 @@ void verify_inline_permit (bool bulk_release, bool enter_handler = true)
     require (delivered == 0 && jobs.snapshot ().permits_in_use == 1,
              "claim credit settlement released admission before handler entry");
     if (enter_handler) {
-        before ();
+        terminal.enter_handler ();
         require (delivered == 1 && jobs.snapshot ().permits_in_use == 0,
                  "late handler entry did not return admission exactly once");
-        before ();
+        terminal.enter_handler ();
     }
-    before = {};
+    terminal.settle ();
     require (delivered == 1 && jobs.snapshot ().permits_in_use == 0,
              "handler or no-handler terminal returned admission incorrectly");
     std::cout << "permit-lifetime returns=" << delivered << std::endl;
+}
+
+void verify_failure_permit ()
+{
+    using queue_t = runtime::application_job_queue_t;
+    auto jobs = std::make_shared<queue_t> (runtime::application_job_queue_configuration_t{
+      application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1});
+    auto target = make_host (jobs);
+    auto &mailbox = target->transport ().mailbox ();
+    enqueue (mailbox, true);
+    mesh::service_mailbox_record_t malformed;
+    malformed.owner = owner;
+    malformed.domain = domain;
+    malformed.parts.push_back (zlink::message_t::from ("invalid"));
+    malformed.application_permit = jobs->try_reserve_supply ();
+    require (malformed.application_permit.has_value (), "failure permit unavailable");
+    malformed.application_permit->mark_queued ();
+    require (mailbox.try_enqueue (std::move (malformed)), "failure publication failed");
+    auto claim =
+      mailbox.try_claim_owner (domain, owner, 2, runtime::dispatch_limits::receive_batch_bytes);
+    require (claim && claim->claimed_messages == 2, "failure claim failed");
+    std::weak_ptr<mesh::service_mailbox_claim_t> lifetime = claim;
+    host::reply_token_t retained_reply;
+    std::size_t calls = 0;
+    auto dispatched = host::public_host_runtime_test_access_t::dispatch_claim (
+      *target, std::move (claim), [&] (const auto &, const auto &record, auto, auto) {
+          retained_reply = record.reply_token;
+          ++calls;
+      });
+    require (dispatched.result ().value () == 1 && calls == 1,
+             "malformed original reached its application handler");
+    require (lifetime.expired () && mailbox.pending_messages (domain) == 0,
+             "failure fixture retained claim credit");
+    require (retained_reply.request && retained_reply.request->correlation == request_correlation
+               && retained_reply.request->source_routing_id == request_source,
+             "failure fixture lost retained reply routing metadata");
+    std::cout << "permit-failure claim-destroyed=" << lifetime.expired ()
+              << " retained-routing=" << static_cast<bool> (retained_reply.request)
+              << " permits-after-terminal=" << jobs->snapshot ().permits_in_use << std::endl;
+    require (jobs->snapshot ().permits_in_use == 0,
+             "rejected original retained admission with reply routing metadata");
+    auto next = jobs->try_reserve_supply ();
+    require (next.has_value (), "rejection terminal did not return admission capacity");
+    retained_reply = {};
+    require (jobs->snapshot ().permits_in_use == 1,
+             "routing metadata destruction returned another record's admission");
+    next.reset ();
+    require (jobs->snapshot ().permits_in_use == 0, "failure fixture retained new admission");
+    target->close ();
 }
 
 void verify_cut_permit ()
@@ -434,11 +488,12 @@ void verify_cut_permit ()
     auto cut = mailbox.cut_owners ({owner}, [] (const auto &) { return true; }, [] {});
     require (cut && cut->front ().size () == 1, "unclaimed cut lost original");
     auto &original = cut->front ().front ();
-    require (!original.application_permit && original.before_application_handler,
-             "unclaimed cut did not preserve admission callback ownership");
+    require (original.application_permit && *original.application_permit
+               && !original.before_application_handler,
+             "unclaimed cut did not preserve admission value ownership");
     require (jobs.snapshot ().queued_application_jobs == 1,
              "unclaimed cut released admission before handler entry");
-    original.before_application_handler ();
+    original.application_permit->release_for_handler_entry ();
     require (jobs.snapshot ().permits_in_use == 0, "unclaimed cut did not return admission");
 }
 
@@ -510,8 +565,10 @@ void verify_multicast_admission (bool has_target)
     bool source_destroyed = false;
     std::uint64_t queued = 0;
     try {
-        auto pending =
-          host::public_host_runtime_test_access_t::dispatch_claim (*target, std::move (claim));
+        auto pending = host::public_host_runtime_test_access_t::dispatch_claim (
+          *target, std::move (claim), [] (const auto &, const auto &, auto, auto) {
+              throw std::runtime_error ("multicast source reached application callback");
+          });
         require (pending.await_ready () && pending.result ().value () == 1,
                  "multicast source did not finish while target snapshot was suspended");
         source_destroyed = source_claim.expired ();
@@ -528,13 +585,13 @@ void verify_multicast_admission (bool has_target)
              "multicast source settlement released admission before first target entry");
     if (has_target) {
         std::size_t calls = 0;
-        const dispatch_t handler = [&] (const auto &, const auto &record, auto parts) {
+        const dispatch_t handler = [&] (const auto &, const auto &record, auto parts, auto permit) {
             require (record.kind == host::record_kind_t::spot_multicast && parts.size () == 1,
                      "forwarded multicast record changed");
             require (jobs->snapshot ().queued_application_jobs == 1,
                      "multicast admission was released before handler entry");
-            record.before_application_handler ();
-            record.before_application_handler ();
+            permit.release_for_handler_entry ();
+            permit.release_for_handler_entry ();
             require (jobs->snapshot ().permits_in_use == 0,
                      "multicast first handler did not return admission exactly once");
             ++calls;
@@ -571,11 +628,10 @@ void verify_multicast_failure_admission ()
     auto permit = jobs->try_reserve_supply ();
     require (permit.has_value (), "failed multicast fixture admission failed");
     permit->mark_queued ();
-    auto before = permit->defer_handler_entry ();
     task_completion_source_t<std::vector<runtime::stateful::object_ref_t>> snapshot;
     std::optional<task_t<void>> pending;
     pending.emplace (host::public_host_runtime_test_access_t::forward_multicast (
-      *target, snapshot.task (), std::move (before)));
+      *target, snapshot.task (), std::move (*permit)));
     require (!pending->await_ready () && jobs->snapshot ().queued_application_jobs == 1,
              "failed multicast did not retain suspended admission");
     snapshot.complete (result_t<std::vector<runtime::stateful::object_ref_t>>::failure (
@@ -640,7 +696,7 @@ void verify_exception ()
     bool caught = false;
     auto pending = target.dispatch_application_owner (
       owner,
-      [&] (const auto &, const auto &, auto) {
+      [&] (const auto &, const auto &, auto, auto permit) {
           if (++calls == 2)
               throw std::runtime_error ("handler fixture");
       },
@@ -658,7 +714,7 @@ void verify_exception ()
     require (starts == 3 && rejects == 1 && calls == 3,
              "exception did not settle started and rejected exactly once");
     enqueue (mailbox);
-    require (dispatch (target, [] (const auto &, const auto &, auto) {}),
+    require (dispatch (target, [] (const auto &, const auto &, auto, auto permit) {}),
              "exception left the owner claim active");
     owned->close ();
 }
@@ -668,9 +724,10 @@ void verify_standalone (host::public_host_runtime_t &target)
     auto &mailbox = target.transport ().mailbox ();
     enqueue (mailbox);
     std::size_t calls = 0;
-    const auto count = target.dispatch_ready ([&] (const auto &, const auto &, auto) { ++calls; })
-                         .result ()
-                         .value ();
+    const auto count =
+      target.dispatch_ready ([&] (const auto &, const auto &, auto, auto permit) { ++calls; })
+        .result ()
+        .value ();
     require (count == 1 && calls == 1 && mailbox.pending_messages (domain) == 0,
              "standalone collect did not consume and return ordinary claim");
 }
@@ -685,7 +742,7 @@ void verify_prestart_terminal (host::public_host_runtime_t &target)
     require (mailbox.try_enqueue (std::move (record)), "malformed fixture enqueue failed");
     std::size_t started = 0;
     std::size_t rejected = 0;
-    const dispatch_t callback = [] (const auto &, const auto &, auto) {
+    const dispatch_t callback = [] (const auto &, const auto &, auto, auto permit) {
         throw std::runtime_error ("malformed request reached handler");
     };
     require (zlink::framework::test::application_owner_result (
@@ -696,7 +753,7 @@ void verify_prestart_terminal (host::public_host_runtime_t &target)
     require (started == 1 && rejected == 1 && mailbox.pending_messages (domain) == 0,
              "decode rejection did not terminalize the unstarted record");
     enqueue (mailbox);
-    require (dispatch (target, [] (const auto &, const auto &, auto) {}),
+    require (dispatch (target, [] (const auto &, const auto &, auto, auto permit) {}),
              "pre-start rejection left the owner claim active");
 }
 
@@ -709,7 +766,7 @@ void verify_reply_alias (bool channel)
     enqueue (mailbox, true, channel, [sentinel] {});
     sentinel.reset ();
     host::reply_token_t reply;
-    const dispatch_t callback = [&] (const auto &, const auto &record, auto parts) {
+    const dispatch_t callback = [&] (const auto &, const auto &record, auto parts, auto permit) {
         require (record.kind
                      == (channel ? host::record_kind_t::channel_request
                                  : host::record_kind_t::node_request)
@@ -723,7 +780,7 @@ void verify_reply_alias (bool channel)
                && reply.request->source_routing_id == request_source,
              "reply alias lost routing storage after dispatch");
     enqueue (mailbox);
-    require (dispatch (*target, [] (const auto &, const auto &, auto) {}),
+    require (dispatch (*target, [] (const auto &, const auto &, auto, auto permit) {}),
              "reply alias retained the owner claim");
     target->close ();
     target.reset ();
@@ -749,7 +806,7 @@ void verify_late_release ()
              "late release fixture enqueue failed");
     host::mailbox_callback_t retained;
     host::mailbox_callback_t release;
-    dispatch (*target, [&] (const auto &, const auto &record, auto) {
+    dispatch (*target, [&] (const auto &, const auto &record, auto, auto permit) {
         retained = record.retain_mailbox_reservation;
         retained ();
         release = record.release_mailbox_reservation;
@@ -824,7 +881,7 @@ void verify_suspended_actor (bool local)
     std::size_t starts = 0, rejects = 0, calls = 0;
     auto pending = target->dispatch_application_owner (
       actor_owner,
-      [&] (const auto &, const auto &record, auto parts) {
+      [&] (const auto &, const auto &record, auto parts, auto permit) {
           ++calls;
           require (calls == 1 ? record.kind == host::record_kind_t::actor_send
                               : record.kind == host::record_kind_t::node_send,
@@ -859,6 +916,10 @@ void verify_suspended_actor (bool local)
 int main (int argc, char **argv)
 {
     try {
+        if (argc == 2 && std::string_view (argv[1]) == "--permit-failure-only") {
+            verify_failure_permit ();
+            return 0;
+        }
         if (argc == 2 && std::string_view (argv[1]) == "--permit-cost-only") {
             measure_permit_ownership_cost ();
             return 0;
@@ -879,6 +940,7 @@ int main (int argc, char **argv)
         verify_inline_permit (true);
         verify_inline_permit (false, false);
         verify_inline_permit (true, false);
+        verify_failure_permit ();
         verify_cut_permit ();
         verify_reply_source_snapshot ();
         verify_retained_local_original ();

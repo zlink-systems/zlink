@@ -41,7 +41,8 @@ real_dispatch (fw::detail::mesh_node_runtime_t *self,
                std::function<bool ()>
                  next) __asm__ ("__real__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
                                 "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
-                                "16receive_record_tESt6vectorINS_9message_tESaISD_EEEEbS3_IFbvEE");
+                                "16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_"
+                                "23application_job_queue_t8permit_tEEEbS3_IFbvEE");
 extern "C" fw::task_t<std::size_t>
 wrap_dispatch (fw::detail::mesh_node_runtime_t *self,
                dispatch_t callback,
@@ -49,7 +50,8 @@ wrap_dispatch (fw::detail::mesh_node_runtime_t *self,
                std::function<bool ()>
                  next) __asm__ ("__wrap__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
                                 "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
-                                "16receive_record_tESt6vectorINS_9message_tESaISD_EEEEbS3_IFbvEE");
+                                "16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_"
+                                "23application_job_queue_t8permit_tEEEbS3_IFbvEE");
 extern "C" bool real_wait (
   fw::runtime::host::public_host_runtime_t *self,
   std::chrono::milliseconds timeout,

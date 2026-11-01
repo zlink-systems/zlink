@@ -56,7 +56,7 @@ TEST (OwnerInventory, IdleOwnersDoNotAddDrainAllocations)
         return fw::task_t<bool> (fw::result_t<bool>::success (false));
     });
     const auto drain = [&] {
-        auto pending = runtime->dispatch_ready ([] (const auto &, const auto &, auto) {});
+        auto pending = runtime->dispatch_ready ([] (const auto &, const auto &, auto, auto) {});
         ASSERT_TRUE (pending.await_ready ());
         EXPECT_EQ (pending.result ().value (), 0u);
     };
@@ -166,7 +166,7 @@ void check_standalone_drain (bool exhaust_time_budget)
     enqueue_native_spot (objects, z);
     enqueue_native_spot (objects, a);
     std::vector<std::string> seen;
-    const auto dispatch = [&] (const auto &owner, const auto &record, auto) {
+    const auto dispatch = [&] (const auto &owner, const auto &record, auto, auto) {
         seen.push_back (owner.spot_id);
         ASSERT_NE (record.application_record, nullptr);
         record.application_record->release_native_claim ();
@@ -233,7 +233,7 @@ TEST (OwnerInventory, DefaultDrainStopsAfterOneApplicationOwner)
     enqueue_native_spot (runtime->objects (), z);
     enqueue_native_spot (runtime->objects (), a);
     std::vector<std::string> seen;
-    const auto dispatch = [&] (const auto &owner, const auto &record, auto) {
+    const auto dispatch = [&] (const auto &owner, const auto &record, auto, auto) {
         seen.push_back (owner.spot_id);
         ASSERT_NE (record.application_record, nullptr);
         record.application_record->release_native_claim ();

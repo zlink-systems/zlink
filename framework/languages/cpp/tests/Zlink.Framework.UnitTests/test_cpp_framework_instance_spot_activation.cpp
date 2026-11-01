@@ -318,7 +318,7 @@ static void verify_same_target_activation_order (
                    .result ());
     auto pump = [&] {
         ASSERT_TRUE (
-          target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
+          target->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false).result ());
     };
     const auto until = std::chrono::steady_clock::now () + 3s;
     while ((store->reserves == 0 || (ready_request && store->commits == 0))
@@ -1274,7 +1274,7 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
                     : reply_future.wait_for (0ms) != std::future_status::ready)
            && std::chrono::steady_clock::now () < pump_deadline) {
         ASSERT_TRUE (
-          target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
+          target->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false).result ());
         std::this_thread::yield ();
     }
     fw::test::acknowledge_delivery (pump_deadline);
@@ -2503,7 +2503,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                 while (result.wait_for (0ms) != std::future_status::ready
                        && std::chrono::steady_clock::now () < until) {
                     ASSERT_TRUE (
-                      target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false)
+                      target->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false)
                         .result ());
                     std::this_thread::yield ();
                 }
@@ -2827,7 +2827,7 @@ static void verify_ready_recovery_root_deletion (bool local_available)
     const auto until = std::chrono::steady_clock::now () + 3s;
     auto pump = [&] {
         ASSERT_TRUE (
-          target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
+          target->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false).result ());
     };
     while (entered.load () == 0 && std::chrono::steady_clock::now () < until)
         pump ();
@@ -3183,7 +3183,8 @@ static void verify_activation_failure_terminal (bool local,
         while (diagnostics->snapshot ().empty ()
                && std::chrono::steady_clock::now () < observation_deadline) {
             ASSERT_TRUE (
-              target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
+              target->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false)
+                .result ());
             std::this_thread::yield ();
         }
     }

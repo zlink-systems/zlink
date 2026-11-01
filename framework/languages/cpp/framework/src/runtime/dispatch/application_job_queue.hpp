@@ -18,9 +18,12 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include <type_traits>
 
 namespace zlink::framework::runtime
 {
+
+class handler_entry_t;
 
 struct application_job_queue_configuration_t
 {
@@ -178,16 +181,6 @@ class application_job_queue_t
                 _phase = permit_phase_t::queued;
             }
         }
-        // The handler-entry callback owns admission until entry or destruction.
-        // Allocate its storage before transferring the permit.
-        std::function<void ()> defer_handler_entry ()
-        {
-            auto permit = std::make_shared<permit_t> ();
-            std::function<void ()> before = [permit] { permit->release_for_handler_entry (); };
-            *permit = std::move (*this);
-            return before;
-        }
-
         void release_for_handler_entry () noexcept { release (); }
         void release_without_handler () noexcept { release (); }
 
@@ -1257,6 +1250,42 @@ class application_supply_slot_t final
   private:
     std::shared_ptr<application_job_queue_t> _queue;
     std::shared_ptr<state_t> _state;
+};
+
+class handler_entry_t
+{
+  public:
+    handler_entry_t () = default;
+    handler_entry_t (std::function<void ()> callback,
+                     application_job_queue_t::permit_t permit = {}) :
+        _callback (std::move (callback)), _permit (std::move (permit))
+    {
+    }
+    handler_entry_t (application_job_queue_t::permit_t permit) : _permit (std::move (permit)) {}
+    template <typename Callback>
+        requires std::is_invocable_r_v<void, Callback &>
+    handler_entry_t (Callback callback) :
+        handler_entry_t (std::function<void ()> (std::move (callback)))
+    {
+    }
+    handler_entry_t (handler_entry_t &&) = default;
+    handler_entry_t &operator= (handler_entry_t &&) = default;
+    handler_entry_t (const handler_entry_t &) = delete;
+    handler_entry_t &operator= (const handler_entry_t &) = delete;
+    explicit operator bool () const noexcept
+    {
+        return static_cast<bool> (_callback) || static_cast<bool> (_permit);
+    }
+    void operator() ()
+    {
+        _permit.release_for_handler_entry ();
+        if (auto callback = std::exchange (_callback, {}))
+            callback ();
+    }
+
+  private:
+    std::function<void ()> _callback;
+    application_job_queue_t::permit_t _permit;
 };
 
 } // namespace zlink::framework::runtime

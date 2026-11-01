@@ -425,9 +425,7 @@ class mesh_node_runtime_t
 
     // The coroutine owns both callbacks; a caller may discard the task.
     task_t<std::size_t>
-    dispatch_ready (std::function<void (const host::ready_record_t &,
-                                        const host::receive_record_t &,
-                                        std::vector<zlink::message_t>)> dispatch,
+    dispatch_ready (runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
                     bool accept_application_receive = true,
                     std::function<bool ()> next_application_receive = {});
     host::node_status_t status () const;

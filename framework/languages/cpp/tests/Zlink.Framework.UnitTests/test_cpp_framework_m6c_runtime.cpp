@@ -3475,7 +3475,7 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
     std::thread target_dispatch ([&] {
         while (!stop.load (std::memory_order_acquire)) {
             (void) target
-              .dispatch_ready ([&] (const auto &, const auto &record, auto) {
+              .dispatch_ready ([&] (const auto &, const auto &record, auto, auto) {
                   {
                       std::lock_guard lock (delivered_mutex);
                       delivered.push_back (record.operation_id.low);
@@ -3714,7 +3714,7 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
         while (!stop.load (std::memory_order_acquire)) {
             // Await so the suspended coroutine cannot outlive the callback and its captures.
             (void) target
-              .dispatch_ready ([&] (const auto &, const auto &record, auto) {
+              .dispatch_ready ([&] (const auto &, const auto &record, auto, auto) {
                   {
                       std::lock_guard lock (delivered_mutex);
                       delivered.push_back (record.operation_id.low);
@@ -4825,12 +4825,13 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
     std::thread target_dispatch ([&] {
         while (!stop.load (std::memory_order_acquire)) {
             bool saw_marker = false;
-            await_task (target->dispatch_ready ([&] (const auto &, const auto &, auto parts) {
+            await_task (target->dispatch_ready ([&] (const auto &, const auto &, auto parts, auto) {
                 if (parts.size () == 1 && parts.front ().to_string () == early_control_marker)
                     saw_marker = true;
             }));
             if (saw_marker) {
-                await_task (target->dispatch_ready ([] (const auto &, const auto &, auto) {}));
+                await_task (
+                  target->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}));
                 early_control_observed.store (true, std::memory_order_release);
                 early_control_drained->complete (f::result_t<void>::success ());
             }
@@ -6169,9 +6170,10 @@ void test_application_relocation_remote_production_path (test_context_t &test,
                     || !session_owner.has_admitted_peer (
                       target.status ().routing_id (), target.status ().lifecycle_generation ()))))
            && std::chrono::steady_clock::now () < admission_deadline) {
-        (void) await_task (source.dispatch_ready ([] (const auto &, const auto &, auto) {}));
-        (void) await_task (target.dispatch_ready ([] (const auto &, const auto &, auto) {}));
-        (void) await_task (session_owner.dispatch_ready ([] (const auto &, const auto &, auto) {}));
+        (void) await_task (source.dispatch_ready ([] (const auto &, const auto &, auto, auto) {}));
+        (void) await_task (target.dispatch_ready ([] (const auto &, const auto &, auto, auto) {}));
+        (void) await_task (
+          session_owner.dispatch_ready ([] (const auto &, const auto &, auto, auto) {}));
         std::this_thread::yield ();
     }
     test.require (
@@ -6264,15 +6266,17 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     const auto dispatch = [&] (detail::mesh_node_runtime_t &node) {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
             bool saw_marker = false;
-            (void) await_task (node.dispatch_ready ([&] (const auto &, const auto &, auto parts) {
-                if ((command44_order || missing_target_session_peer) && &node == &session_owner
-                    && !parts.empty () && parts.front ().to_string () == "command44-order-marker")
-                    saw_marker = true;
-            }));
+            (void) await_task (
+              node.dispatch_ready ([&] (const auto &, const auto &, auto parts, auto) {
+                  if ((command44_order || missing_target_session_peer) && &node == &session_owner
+                      && !parts.empty () && parts.front ().to_string () == "command44-order-marker")
+                      saw_marker = true;
+              }));
             if (saw_marker) {
                 // The preceding turn can pump command 44 before the marker
                 // while leaving its infrastructure dispatch to this turn.
-                (void) await_task (node.dispatch_ready ([] (const auto &, const auto &, auto) {}));
+                (void) await_task (
+                  node.dispatch_ready ([] (const auto &, const auto &, auto, auto) {}));
                 order_marker_received.set_value ();
             }
             std::this_thread::yield ();
@@ -6877,8 +6881,8 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
             || !target.has_admitted_peer (source.status ().routing_id (),
                                           source.status ().lifecycle_generation ()))
            && std::chrono::steady_clock::now () < admission_deadline) {
-        (void) source.dispatch_ready ([] (const auto &, const auto &, auto) {});
-        (void) target.dispatch_ready ([] (const auto &, const auto &, auto) {});
+        (void) source.dispatch_ready ([] (const auto &, const auto &, auto, auto) {});
+        (void) target.dispatch_ready ([] (const auto &, const auto &, auto, auto) {});
         std::this_thread::sleep_for (1ms);
     }
     const auto source_admitted = source.has_admitted_peer (
@@ -7094,7 +7098,7 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     std::atomic<bool> stop_dispatch{false};
     const auto dispatch = [&] (detail::mesh_node_runtime_t &node) {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
-            (void) node.dispatch_ready ([] (const auto &, const auto &, auto) {});
+            (void) node.dispatch_ready ([] (const auto &, const auto &, auto, auto) {});
             std::this_thread::sleep_for (1ms);
         }
     };

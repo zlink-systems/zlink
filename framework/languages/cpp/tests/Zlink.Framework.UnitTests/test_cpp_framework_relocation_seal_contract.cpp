@@ -365,7 +365,7 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
           }
           const auto noop_dispatch = [] (const host::ready_record_t &,
                                          const host::receive_record_t &,
-                                         std::vector<zlink::message_t>) {};
+                                         std::vector<zlink::message_t>, auto) {};
           const auto dispatched = session_owner->dispatch_ready (noop_dispatch).result ();
           if (!dispatched || dispatched.value () != 1) {
               co_return result_t<void>::failure (framework_error_kind_t::unavailable,
@@ -1726,7 +1726,7 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
     unsigned started = 0, rejected = 0, calls = 0;
     auto failed = host->dispatch_application_owner (
       "node",
-      [&] (const auto &, const auto &, auto) {
+      [&] (const auto &, const auto &, auto, auto) {
           ++calls;
           std::rethrow_exception (injected);
       },
@@ -1740,7 +1740,7 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
     enqueue ();
     unsigned dispatched = 0;
     auto next = host->dispatch_application_owner (
-      "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [] {}, [] {});
+      "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; }, [] {}, [] {});
     EXPECT_TRUE (zlink::framework::test::application_owner_result (next).value ());
     EXPECT_EQ (dispatched, 1u);
     host->close ();
@@ -2130,10 +2130,13 @@ void verify_native_spot_seal (bool fail_second,
         return native_spot_record (*host, spot, operation, correlation);
     };
     const mesh::service_mailbox_t::application_dispatch_t publish =
-      [&] (const auto &, const host::receive_record_t &record,
-           std::vector<zlink::message_t> parts) {
+      [&] (const auto &, const host::receive_record_t &record, std::vector<zlink::message_t> parts,
+           auto permit) {
           ASSERT_TRUE (record.application_record);
           auto owner = record.application_record;
+          if (record.before_application_handler || permit)
+              owner->admission.retain_initial (
+                runtime::handler_entry_t (record.before_application_handler, std::move (permit)));
           if (fail_second && record.operation_id.low == 2) {
               auto invalid = protocol::decode_spot_message_header (
                 protocol::message_bytes (native_wire (2, 77).parts.front ()),
@@ -2148,6 +2151,7 @@ void verify_native_spot_seal (bool fail_second,
           ASSERT_TRUE (gate->try_post (
             "typed-native",
             [&, owner, operation = record.operation_id.low] {
+                owner->admission.enter_handler ();
                 ++handlers;
                 executed.push_back (operation);
                 (void) owner->complete_native (std::nullopt);
@@ -2377,7 +2381,7 @@ TEST (FrameworkRelocationSealContract, native_spot_fallback_rereads_remote_and_l
             EXPECT_EQ (host::public_host_runtime_test_access_t::dispatch_claim (
                          *host, slot.claim,
                          [&] (const auto &, const host::receive_record_t &record,
-                              std::vector<zlink::message_t> parts) {
+                              std::vector<zlink::message_t> parts, auto) {
                              ++dispatched;
                              EXPECT_EQ (record.operation_id.low, 91u);
                              ASSERT_EQ (parts.size (), 2u);
@@ -2435,7 +2439,8 @@ TEST (FrameworkRelocationSealContract, native_spot_target_wait_keeps_original_an
     int dispatched = 0;
     auto pending = host::public_host_runtime_test_access_t::dispatch_claim (
       *host, slot.claim,
-      [&] (const auto &, const host::receive_record_t &record, std::vector<zlink::message_t>) {
+      [&] (const auto &, const host::receive_record_t &record, std::vector<zlink::message_t>,
+           auto) {
           ++dispatched;
           record.release_mailbox_reservation ();
       });
@@ -2505,7 +2510,7 @@ TEST (FrameworkRelocationSealContract, native_preparation_outcomes_preserve_cont
                         : native_spot_record (*host, spot, 1, std::nullopt));
                 unsigned dispatched = 0;
                 auto pending = host::public_host_runtime_test_access_t::dispatch_claim (
-                  *host, slot.claim, [&] (const auto &, const auto &record, auto) {
+                  *host, slot.claim, [&] (const auto &, const auto &record, auto, auto) {
                       ++dispatched;
                       ASSERT_TRUE (record.application_record);
                       const auto target = record.application_record->target;
@@ -2617,7 +2622,7 @@ TEST (FrameworkRelocationSealContract, native_claim_target_failure_settles_only_
                     std::vector<std::uint64_t> dispatched;
                     unsigned rejected = 0;
                     auto pending = host::public_host_runtime_test_access_t::dispatch_claim (
-                      *host, claim, [&] (const auto &, const auto &record, auto) {
+                      *host, claim, [&] (const auto &, const auto &record, auto, auto) {
                           ASSERT_TRUE (record.application_record);
                           const auto *failure = std::get_if<framework_exception_t> (
                             &record.application_record->target->context);
@@ -2692,8 +2697,11 @@ TEST (FrameworkRelocationSealContract, per_actor_native_publication_and_cut_shar
         return host::public_host_runtime_test_access_t::dispatch_claim (
                  *host, slot.claim,
                  [&] (const auto &, const host::receive_record_t &record,
-                      std::vector<zlink::message_t> parts) {
+                      std::vector<zlink::message_t> parts, auto permit) {
                      auto original = record.application_record;
+                     if (record.before_application_handler || permit)
+                         original->admission.retain_initial (runtime::handler_entry_t (
+                           record.before_application_handler, std::move (permit)));
                      original->set_invocation (parts.back ().copy (), {});
                      entered.set_value ();
                      held.wait ();
@@ -3295,19 +3303,23 @@ TEST (FrameworkRelocationSealContract, native_public_requester_terminal_uses_reg
     ASSERT_TRUE (claim);
     ASSERT_TRUE (claim->records.front ()->application);
     const auto *original_parts = claim->records.front ()->application->parts.data ();
-    ASSERT_EQ (host::public_host_runtime_test_access_t::dispatch_claim (
-                 *host, claim,
-                 [gate, original_parts] (const auto &, const host::receive_record_t &record,
-                                         std::vector<zlink::message_t> application) {
-                     EXPECT_EQ (application.data (), original_parts);
-                     record.application_record->set_invocation (application.back ().copy (), {});
-                     serial_work_options_t options;
-                     options.application_record = record.application_record;
-                     EXPECT_TRUE (gate->try_post ("native-local", [] {}, std::move (options)));
-                 })
-                 .result ()
-                 .value (),
-               1u);
+    ASSERT_EQ (
+      host::public_host_runtime_test_access_t::dispatch_claim (
+        *host, claim,
+        [gate, original_parts] (const auto &, const host::receive_record_t &record,
+                                std::vector<zlink::message_t> application, auto permit) {
+            EXPECT_EQ (application.data (), original_parts);
+            if (record.before_application_handler || permit)
+                record.application_record->admission.retain_initial (
+                  runtime::handler_entry_t (record.before_application_handler, std::move (permit)));
+            record.application_record->set_invocation (application.back ().copy (), {});
+            serial_work_options_t options;
+            options.application_record = record.application_record;
+            EXPECT_TRUE (gate->try_post ("native-local", [] {}, std::move (options)));
+        })
+        .result ()
+        .value (),
+      1u);
     const auto sealed = host->objects ().try_seal_relocation_aggregate ({spot}).result ().value ();
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
     const auto &saved = sealed.seal.participants.front ().pending_application;
@@ -3332,13 +3344,13 @@ TEST (FrameworkRelocationSealContract, native_public_requester_terminal_uses_reg
         .result ()
         .value ();
     EXPECT_TRUE (completed);
-    const bool ready =
-      completed && eventually ([&] {
-          (void) host
-            ->dispatch_ready ([] (const auto &, const auto &, std::vector<zlink::message_t>) {})
-            .result ();
-          return pending.completion->task ().await_ready ();
-      });
+    const bool ready = completed && eventually ([&] {
+                           (void) host
+                             ->dispatch_ready ([] (const auto &, const auto &,
+                                                   std::vector<zlink::message_t>, auto) {})
+                             .result ();
+                           return pending.completion->task ().await_ready ();
+                       });
     EXPECT_TRUE (ready);
     if (ready) {
         const auto result = pending.completion->task ().result ();
@@ -3469,7 +3481,7 @@ TEST (FrameworkRelocationSealContract,
                                                                        },
                                                                        [] { return true; }}));
     // Only A and C run: B cannot proxy the reply or acknowledge on A's behalf.
-    const auto dispatch = [] (const auto &, const auto &, std::vector<zlink::message_t>) {};
+    const auto dispatch = [] (const auto &, const auto &, std::vector<zlink::message_t>, auto) {};
     const bool received = eventually ([&] {
         (void) target->dispatch_ready (dispatch).result ();
         (void) requester->dispatch_ready (dispatch).result ();
@@ -3536,7 +3548,7 @@ TEST (FrameworkRelocationSealContract, bound_session_close_compares_the_current_
             zlink::routing_id_t::from ("close-actor-owner").to_bytes (), std::nullopt, std::nullopt,
             1}));
         const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
-                                       std::vector<zlink::message_t>) {};
+                                       std::vector<zlink::message_t>, auto) {};
         (void) session_owner->dispatch_ready (noop_dispatch).result ();
     };
 
@@ -3570,7 +3582,7 @@ TEST (FrameworkRelocationSealContract, malformed_command_42_records_invalid_fram
       source_rid.to_bytes (), std::nullopt, std::nullopt, 1}));
 
     const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
-                                   std::vector<zlink::message_t>) {};
+                                   std::vector<zlink::message_t>, auto) {};
     try {
         (void) owner->dispatch_ready (noop_dispatch).result ();
     }
@@ -3683,7 +3695,7 @@ TEST (FrameworkRelocationSealContract, native_protocol_rejection_preserves_follo
                                                                         std::move (originals));
     unsigned dispatched = 0;
     auto pending = host::public_host_runtime_test_access_t::dispatch_claim (
-      *host, claim, [&] (const auto &, const auto &record, auto) {
+      *host, claim, [&] (const auto &, const auto &record, auto, auto) {
           ++dispatched;
           EXPECT_EQ (record.operation_id.low, 2u);
           ASSERT_TRUE (record.application_record);
@@ -3745,7 +3757,7 @@ TEST (FrameworkRelocationSealContract, native_pending_locator_retains_prepared_t
         // The initiating callback object and its stack have returned before locate completes.
         auto pending = [&] {
             mesh::service_mailbox_t::application_dispatch_t dispatch =
-              [&] (const auto &owner, const auto &record, auto parts) {
+              [&] (const auto &owner, const auto &record, auto parts, auto) {
                   ++dispatched;
                   EXPECT_EQ (owner.spot_id, spot.key);
                   EXPECT_EQ (record.operation_id.low, 91u);

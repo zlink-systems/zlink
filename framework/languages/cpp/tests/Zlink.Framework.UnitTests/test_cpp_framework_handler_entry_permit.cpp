@@ -73,8 +73,25 @@ class HandlerEntryPermit : public ::testing::Test
             return std::make_unique<permit_handler_t> (permit_handler_t{invocation});
         });
         provider.emplace (services.build_provider ());
-        handlers.on_send<permit_handler_t, int> ("permit-mesh", "packet",
-                                                 &permit_handler_t::handle);
+        detail::route_handler_registry_t typed_handlers;
+        typed_handlers.on_send<permit_handler_t, int> ("permit-mesh", "packet",
+                                                       &permit_handler_t::handle);
+        const auto typed = *typed_handlers.resolve (
+          "permit-mesh", runtime::messaging::message_kind_t::command, "packet");
+        handlers.add_handler (
+          typed.descriptor,
+          [this, invoke = typed.invoker] (
+            service_provider_t &services, serializer_registry_t &serializers,
+            const zlink::message_t &message, const route_message_context_t &context,
+            detail::handler_start_callback_ref_t before) -> task_t<zlink::message_t> {
+              const auto duplicate_entry = [&] {
+                  before ();
+                  check_duplicate_entry (before);
+                  ++duplicate_entries;
+              };
+              co_return co_await invoke (services, serializers, message, context,
+                                         detail::handler_start_callback_ref_t (duplicate_entry));
+          });
         filters.add_filter ([this] (service_provider_t &, serializer_registry_t &,
                                     const handler_filter_context_t &,
                                     handler_next_t next) -> task_t<void> {
@@ -96,13 +113,12 @@ class HandlerEntryPermit : public ::testing::Test
         return record;
     }
 
-    void check_duplicate_entry (std::function<void ()> &before)
+    void check_duplicate_entry (detail::handler_start_callback_ref_t before)
     {
         auto next = jobs->try_reserve_supply ();
         ASSERT_TRUE (next);
         before ();
         EXPECT_EQ (1u, jobs->snapshot ().permits_in_use);
-        before = {};
         next.reset ();
         EXPECT_EQ (0u, jobs->snapshot ().permits_in_use);
         EXPECT_EQ (1, invocation.permit_returns);
@@ -153,18 +169,19 @@ class HandlerEntryPermit : public ::testing::Test
         ASSERT_TRUE (claim);
         std::weak_ptr<mesh::service_mailbox_claim_t> claim_lifetime = claim;
         std::optional<task_t<std::optional<detail::route_dispatch_reply_t>>> pending;
-        std::function<void ()> duplicate;
         auto dispatched = host::public_host_runtime_test_access_t::dispatch_claim (
-          target, std::move (claim), [&] (const auto &, const auto &received, auto payload) {
+          target, std::move (claim),
+          [&] (const auto &, const auto &received, auto payload, auto permit) {
               EXPECT_EQ (host::record_kind_t::node_send, received.kind);
               EXPECT_EQ ("peer", received.source_node_rid.to_string ());
               // This is the hosted Node pipeline handoff. Its ordinary prefix
               // credit settles when this callback returns, before filter resume.
               detail::mesh_record_dispatcher_t dispatcher (
                 *provider, serializers, handlers, filters, {}, received.before_application_handler);
-              if (call_next)
-                  duplicate = received.before_application_handler;
-              pending.emplace (dispatcher.dispatch (received, std::move (payload), header));
+              runtime::application_dispatch_terminal_owner_t terminal ({}, {}, {},
+                                                                       std::move (permit));
+              pending.emplace (
+                dispatcher.dispatch (received, std::move (payload), header, std::move (terminal)));
           });
         ASSERT_TRUE (dispatched.await_ready ());
         ASSERT_EQ (1u, dispatched.result ().value ());
@@ -184,12 +201,12 @@ class HandlerEntryPermit : public ::testing::Test
         EXPECT_EQ (0u, jobs->snapshot ().permits_in_use);
         EXPECT_EQ (1, invocation.permit_returns);
         RecordProperty ("permit_returns", invocation.permit_returns);
-        if (call_next)
-            check_duplicate_entry (duplicate);
+        EXPECT_EQ (call_next ? 1 : 0, duplicate_entries);
     }
 
     std::shared_ptr<queue_t> jobs;
     invocation_t invocation;
+    int duplicate_entries = 0;
     service_collection_t services;
     std::optional<service_provider_t> provider;
     serializer_registry_t serializers;
@@ -268,8 +285,11 @@ TEST_F (HandlerEntryPermit, StatefulAcceptedRecordAsyncFilterOutlivesClaim)
     RecordProperty ("claim_destroyed_before_resume", claim_lifetime.expired ());
     auto delivery = dispatch.try_claim_async (*actor).result ().value ();
     ASSERT_EQ (stateful::stateful_error_t::none, delivery.error);
-    ASSERT_TRUE (delivery.delivery && delivery.before_application_handler);
-    auto duplicate = delivery.before_application_handler;
+    ASSERT_TRUE (delivery.delivery && delivery.delivery->application_record);
+    const auto accepted_owner = delivery.delivery->application_record;
+    ASSERT_TRUE (std::get<runtime::serial_application_admission_t::initial_t> (
+      accepted_owner->admission.reservation));
+    const auto before = [accepted_owner] { accepted_owner->admission.enter_handler (); };
     const auto *handler =
       handlers.resolve ("permit-mesh", runtime::messaging::message_kind_t::command, "packet");
     ASSERT_NE (nullptr, handler);
@@ -277,8 +297,7 @@ TEST_F (HandlerEntryPermit, StatefulAcceptedRecordAsyncFilterOutlivesClaim)
     context.content_type = "application/json";
     auto pending = detail::route_handler_invoker_t::invoke (
       *handler, filters, handler_dispatch_kind_t::node_direct_send, *provider, serializers,
-      zlink::message_t::from ("17"), std::move (context),
-      std::move (delivery.before_application_handler));
+      zlink::message_t::from ("17"), std::move (context), before);
     ASSERT_TRUE (invocation.filter_entered);
     ASSERT_FALSE (pending.await_ready ());
     RecordProperty ("permits_before_handler", jobs->snapshot ().permits_in_use);
@@ -291,7 +310,7 @@ TEST_F (HandlerEntryPermit, StatefulAcceptedRecordAsyncFilterOutlivesClaim)
     EXPECT_EQ (0u, jobs->snapshot ().permits_in_use);
     EXPECT_EQ (1, invocation.permit_returns);
     RecordProperty ("permit_returns", invocation.permit_returns);
-    check_duplicate_entry (duplicate);
+    EXPECT_EQ (1, duplicate_entries);
     EXPECT_EQ (stateful::stateful_error_t::none,
                dispatch.complete_async (*delivery.delivery).result ().value ());
 }

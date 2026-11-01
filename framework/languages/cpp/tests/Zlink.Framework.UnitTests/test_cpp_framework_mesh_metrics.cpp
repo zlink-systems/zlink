@@ -853,7 +853,7 @@ void verify_public_host_local_spot_and_actor_requests ()
     bool spot_replied = false;
     (void) await_task (
       node.dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
-                                std::vector<zlink::message_t>) {
+                                std::vector<zlink::message_t>, auto) {
           if (record.kind == host::record_kind_t::spot_request) {
               spot_replied =
                 host::reply (record.reply_token, reply_parts) == zlink::submit_result_t::ok;
@@ -884,7 +884,7 @@ void verify_public_host_local_spot_and_actor_requests ()
     bool actor_replied = false;
     (void) await_task (
       node.dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
-                                std::vector<zlink::message_t>) {
+                                std::vector<zlink::message_t>, auto) {
           if (record.kind == host::record_kind_t::actor_request) {
               actor_replied =
                 host::reply (record.reply_token, reply_parts) == zlink::submit_result_t::ok;

@@ -47,6 +47,7 @@ namespace runtime
 {
 class serial_execution_queue_t;
 struct serial_application_record_t;
+class handler_entry_t;
 }
 
 namespace runtime::protocol
@@ -1645,7 +1646,19 @@ class spot_handler_registry_t
                                              std::type_index actor_type,
                                              std::string_view channel_name) const;
 
+    task_t<zlink::message_t> invoke_erased (spot_handler_kind_t kind,
+                                            std::string_view packet_name,
+                                            std::string_view topic,
+                                            std::type_index actor_type,
+                                            void *spot,
+                                            void *actor,
+                                            service_provider_t &services,
+                                            serializer_registry_t &serializers,
+                                            zlink::message_t message,
+                                            spot_inbound_message_t metadata = {}) const;
+
     task_t<zlink::message_t> invoke_erased (
+      runtime::handler_entry_t before_application_handler,
       spot_handler_kind_t kind,
       std::string_view packet_name,
       std::string_view topic,
@@ -1662,7 +1675,6 @@ class spot_handler_registry_t
       std::function<std::optional<result_t<zlink::message_t>> (
         const zlink::message_t &, const spot_inbound_message_t &)> before_invoke = {},
       actor_queue_dispatch_t actor_queue_dispatch = actor_queue_dispatch_t::acquire,
-      std::function<void ()> before_application_handler = {},
       std::function<void ()> after_application_admission = {},
       std::function<void ()> transfer_owner_reservation = {},
       std::size_t transferred_owner_byte_cost = 0,
