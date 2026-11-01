@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include "completion_turn.hpp"
@@ -55,7 +57,8 @@ class completion_dispatcher_t : public std::enable_shared_from_this<completion_d
     {
         // A blocked callback must leave another worker available for independent turns.
         constexpr unsigned minimum_worker_count = 2;
-        const auto count = std::max (minimum_worker_count, std::thread::hardware_concurrency ());
+        const auto count = std::max (minimum_worker_count,
+                                     ::zlink::framework::runtime::available_processor_count ());
         _workers.reserve (count);
         for (unsigned index = 0; index < count; ++index)
             _workers.emplace_back ([this] { _context.run (); });

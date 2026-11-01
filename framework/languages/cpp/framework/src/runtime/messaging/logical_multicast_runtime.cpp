@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include <zlink/framework/contracts/channels/call.hpp>
 
 #include <algorithm>
@@ -36,7 +38,8 @@ class logical_multicast_executor_t
   public:
     logical_multicast_executor_t ()
     {
-        const auto count = std::max<std::size_t> (2, std::thread::hardware_concurrency ());
+        const auto count =
+          std::max<std::size_t> (2, ::zlink::framework::runtime::available_processor_count ());
         _available = count;
         _workers.reserve (count);
         for (std::size_t index = 0; index < count; ++index)

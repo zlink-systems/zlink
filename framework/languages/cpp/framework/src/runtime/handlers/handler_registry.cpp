@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -284,7 +286,8 @@ std::shared_ptr<runtime::offload_executor_t> handler_invocation_executor ()
             std::shared_ptr<runtime::offload_executor_t> infrastructure =
               runtime::infrastructure_executor ();
             runtime::offload_executor_t application{
-              0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
+              0,
+              std::max<std::size_t> (1, ::zlink::framework::runtime::available_processor_count ()),
               std::chrono::milliseconds (100), "zlink-handler"};
         };
         auto resources = std::make_shared<execution_resources_t> ();

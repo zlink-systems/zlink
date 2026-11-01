@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+
+#include "runtime/utils/available_processor_count.hpp"
 #include <zlink/json.hpp>
 
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -938,7 +940,8 @@ int main ()
         /* Logical Multicast uses one direct handoff after its worker slots.
          * Test-owned work latches prove that every slot is occupied before the
          * overflow assertion, without exposing executor state from runtime. */
-        const auto worker_count = std::max<std::size_t> (2, std::thread::hardware_concurrency ());
+        const auto worker_count =
+          std::max<std::size_t> (2, zlink::framework::runtime::available_processor_count ());
         std::mutex multicast_gate_mutex;
         std::condition_variable multicast_gate_changed;
         bool release_multicast_workers = false;
