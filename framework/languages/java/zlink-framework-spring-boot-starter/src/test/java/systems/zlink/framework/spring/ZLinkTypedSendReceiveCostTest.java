@@ -28,11 +28,14 @@ import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkTypeAwareHandlerActivator;
 
 import java.net.URLClassLoader;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Exact allocations on the public typed send path, with TLAB and escape analysis disabled. */
@@ -92,6 +95,9 @@ public final class ZLinkTypedSendReceiveCostTest {
             var client = source.getBean(ZLinkRouteClient.class);
             send(client, sink, 200);
             bindingRoundTrip(200);
+            sink.created = 0;
+            sink.closed = 0;
+            sink.activationScopes.reset();
             try (var recording = new Recording()) {
                 recording.enable("jdk.ObjectAllocationOutsideTLAB").withStackTrace();
                 recording.enable("jdk.DataLoss");
@@ -101,13 +107,11 @@ public final class ZLinkTypedSendReceiveCostTest {
                 recording.stop();
                 recording.dump(path);
             }
-            long headers = 0,
-                    views = 0,
+            long headerDecodes = 0,
                     constructorIterators = 0,
                     encoders = 0,
                     messages = 0,
-                    payloadDecodes = 0,
-                    activations = 0;
+                    payloadDecodes = 0;
             long baselineSendBytes = 0,
                     baselineSendObjects = 0,
                     baselineReceiveBytes = 0,
@@ -157,7 +161,8 @@ public final class ZLinkTypedSendReceiveCostTest {
                                 owner.endsWith(".ZLinkSpringHandlerFactory")
                                         && method.equals("handlerPlan");
                         activation |=
-                                owner.endsWith(".ZLinkSpringHandlerFactory$SpringActivation")
+                                owner.startsWith(ZLinkSpringHandlerFactory.class.getName() + "$")
+                                        && owner.endsWith("SpringActivation")
                                         && method.equals("create");
                         serialize |=
                                 owner.endsWith(".ZLinkProtobufMessageSerializer")
@@ -184,8 +189,6 @@ public final class ZLinkTypedSendReceiveCostTest {
                     if (baselineSend && type.equals("systems.zlink.contracts.messaging.Message"))
                         baselineMessages++;
                     if (targetPath && type.equals(BytesValue.class.getName())) payloadDecodes++;
-                    if (targetPath && type.endsWith(".ZLinkSpringHandlerFactory$SpringActivation"))
-                        activations++;
                     if (targetPath && type.endsWith(".ZLinkHandlerInstanceOwner")) instanceOwners++;
                     if (planLookup
                             && type.startsWith(
@@ -200,9 +203,10 @@ public final class ZLinkTypedSendReceiveCostTest {
                         callerObjects++;
                         callerBytes += e.getLong("allocationSize");
                     }
-                    if (decode && type.endsWith("ZLinkChannelEnvelope$Header")) headers++;
+                    // Header records are cached across identical sends. Count the fresh borrowed
+                    // input view created by decodeDispatchHeader instead of parser-result objects.
                     if (decode && type.startsWith("java.nio.") && type.contains("ByteBuffer"))
-                        views++;
+                        headerDecodes++;
                     if (activation && type.equals(List.of(0).iterator().getClass().getName()))
                         constructorIterators++;
                     if (serialize && type.startsWith("com.google.protobuf.CodedOutputStream$"))
@@ -212,10 +216,9 @@ public final class ZLinkTypedSendReceiveCostTest {
                 }
             }
             System.out.printf(
-                    "sends=%d headerDecodes=%d headerViews=%d constructorIterators=%d protobufEncoders=%d codecMessages=%d targetObjects=%d targetBytes=%d callerCodecObjects=%d callerCodecBytes=%d%n",
+                    "sends=%d headerDecodes=%d constructorIterators=%d protobufEncoders=%d codecMessages=%d targetObjects=%d targetBytes=%d callerCodecObjects=%d callerCodecBytes=%d%n",
                     SENDS,
-                    headers,
-                    views,
+                    headerDecodes,
                     constructorIterators,
                     encoders,
                     messages,
@@ -244,10 +247,24 @@ public final class ZLinkTypedSendReceiveCostTest {
                     "codec adds no native payload address read");
             classes.forEach(
                     (type, count) -> System.out.printf("targetAllocation %s %d%n", type, count));
-            System.out.printf(
-                    "payloadDecodes=%d springActivations=%d%n", payloadDecodes, activations);
+            System.out.printf("payloadDecodes=%d%n", payloadDecodes);
             assertEquals(SENDS, payloadDecodes, "one typed payload decode per accepted send");
-            assertEquals(SENDS, activations, "one Spring dependency scope per dispatch");
+            System.out.printf(
+                    "handlerCreates=%d handlerCloses=%d activationOpens=%d activationCloses=%d%n",
+                    sink.created,
+                    sink.closed,
+                    sink.activationScopes.opened.get(),
+                    sink.activationScopes.closed.get());
+            assertEquals(SENDS, sink.created, "one fresh handler per accepted send");
+            assertEquals(SENDS, sink.closed, "one handler cleanup per accepted send");
+            assertEquals(
+                    SENDS,
+                    sink.activationScopes.opened.get(),
+                    "one activation scope open per accepted send");
+            assertEquals(
+                    SENDS,
+                    sink.activationScopes.closed.get(),
+                    "one activation scope cleanup per accepted send");
             System.out.printf("unfilteredInstanceOwners=%d%n", instanceOwners);
             assertEquals(
                     0,
@@ -256,12 +273,9 @@ public final class ZLinkTypedSendReceiveCostTest {
             System.out.printf("springPlanCallbacks=%d%n", planCallbacks);
             assertEquals(
                     0, planCallbacks, "registration-time factory is already the plan callback");
-            assertEquals(SENDS, headers, "one header decode per accepted send");
+            assertEquals(SENDS, headerDecodes, "one header decode input per accepted send");
             assertEquals(SENDS, encoders, "one codec writer per payload");
             assertEquals(SENDS, messages, "one owned codec Message per payload");
-            assertEquals(SENDS + 200, sink.created, "dispatch owns a fresh handler");
-            assertEquals(sink.created, sink.closed, "dispatch releases each handler once");
-            assertEquals(SENDS, views, "probe and decode share one borrowed header view");
             assertEquals(
                     0,
                     constructorIterators,
@@ -316,7 +330,17 @@ public final class ZLinkTypedSendReceiveCostTest {
 
     private static AnnotationConfigApplicationContext host(Sink sink, String endpoint) {
         var context = new AnnotationConfigApplicationContext();
-        if (sink != null) context.registerBean(Sink.class, () -> sink);
+        if (sink != null) {
+            context.registerBean(Sink.class, () -> sink);
+            context.registerBean(
+                    "zlinkHandlerFactory",
+                    ZLinkHandlerActivator.class,
+                    () ->
+                            new CountingHandlerActivator(
+                                    new ZLinkSpringHandlerFactory(
+                                            context.getAutowireCapableBeanFactory()),
+                                    sink.activationScopes));
+        }
         context.registerBean(
                 ZLinkFrameworkConfigurer.class,
                 () ->
@@ -344,8 +368,148 @@ public final class ZLinkTypedSendReceiveCostTest {
 
     public static final class Sink {
         final BlockingQueue<Boolean> completed = new LinkedBlockingQueue<>();
+        final ActivationScopes activationScopes = new ActivationScopes();
         int created;
         int closed;
+    }
+
+    private static final class ActivationScopes {
+        final AtomicInteger opened = new AtomicInteger();
+        final AtomicInteger closed = new AtomicInteger();
+
+        void reset() {
+            opened.set(0);
+            closed.set(0);
+        }
+    }
+
+    private static final class CountingHandlerActivator
+            implements ZLinkHandlerActivator, ZLinkTypeAwareHandlerActivator {
+        private final ZLinkHandlerActivator delegate;
+        private final ZLinkTypeAwareHandlerActivator typeAwareDelegate;
+        private final ActivationScopes scopes;
+        private final Map<Activation, Activation> reusableActivations = new IdentityHashMap<>();
+
+        CountingHandlerActivator(ZLinkHandlerActivator delegate, ActivationScopes scopes) {
+            this.delegate = delegate;
+            this.typeAwareDelegate = (ZLinkTypeAwareHandlerActivator) delegate;
+            this.scopes = scopes;
+        }
+
+        @Override
+        public Object create(Class<?> handlerType) {
+            return delegate.create(handlerType);
+        }
+
+        @Override
+        public systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.Host
+                messageFlowHost() {
+            return delegate.messageFlowHost();
+        }
+
+        @Override
+        public Object findService(Class<?> serviceType) {
+            return delegate.findService(serviceType);
+        }
+
+        @Override
+        public Object findService(
+                java.lang.reflect.Constructor<?> constructor, int parameterIndex) {
+            return delegate.findService(constructor, parameterIndex);
+        }
+
+        @Override
+        public void prepare(Class<?> handlerType) {
+            delegate.prepare(handlerType);
+        }
+
+        @Override
+        public PreparedConstruction prepareConstruction(
+                Class<?> handlerType, Set<Class<?>> runtimeServices) {
+            return delegate.prepareConstruction(handlerType, runtimeServices);
+        }
+
+        @Override
+        public boolean isServiceAvailable(
+                java.lang.reflect.Constructor<?> constructor, int parameterIndex) {
+            return delegate.isServiceAvailable(constructor, parameterIndex);
+        }
+
+        @Override
+        public Activation openActivation() {
+            return observe(delegate.openActivation());
+        }
+
+        @Override
+        public Activation reusableActivation(
+                Class<?> handlerType, RuntimeServiceLookup runtimeServices) {
+            Activation activation =
+                    typeAwareDelegate.reusableActivation(handlerType, runtimeServices);
+            if (activation == null) return null;
+            synchronized (reusableActivations) {
+                Activation observed = reusableActivations.get(activation);
+                if (observed == null) {
+                    observed = new ObservedActivation(activation, scopes);
+                    reusableActivations.put(activation, observed);
+                }
+                scopes.opened.incrementAndGet();
+                return observed;
+            }
+        }
+
+        @Override
+        public void destroy(Object instance) {
+            delegate.destroy(instance);
+        }
+
+        private Activation observe(Activation activation) {
+            scopes.opened.incrementAndGet();
+            return new ObservedActivation(activation, scopes);
+        }
+    }
+
+    private static final class ObservedActivation implements ZLinkHandlerActivator.Activation {
+        private final ZLinkHandlerActivator.Activation delegate;
+        private final ActivationScopes scopes;
+
+        ObservedActivation(ZLinkHandlerActivator.Activation delegate, ActivationScopes scopes) {
+            this.delegate = delegate;
+            this.scopes = scopes;
+        }
+
+        @Override
+        public Object create(Class<?> handlerType) {
+            return delegate.create(handlerType);
+        }
+
+        @Override
+        public Object create(
+                Class<?> handlerType, ZLinkHandlerActivator.DependencyResolver dependencyResolver) {
+            return delegate.create(handlerType, dependencyResolver);
+        }
+
+        @Override
+        public Object findService(
+                java.lang.reflect.Constructor<?> constructor, int parameterIndex) {
+            return delegate.findService(constructor, parameterIndex);
+        }
+
+        @Override
+        public Object createPrepared(
+                Object construction, ZLinkHandlerActivator.DependencyResolver resolver) {
+            return delegate.createPrepared(construction, resolver);
+        }
+
+        @Override
+        public void destroy(Object instance) {
+            delegate.destroy(instance);
+        }
+
+        @Override
+        public void close() {
+            delegate.close();
+            scopes.closed.incrementAndGet();
+        }
     }
 
     public static final class Handler implements ZLinkRouteSendHandler<BytesValue>, AutoCloseable {

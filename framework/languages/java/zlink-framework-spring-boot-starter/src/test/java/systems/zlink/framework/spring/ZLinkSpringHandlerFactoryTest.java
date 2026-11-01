@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -183,6 +184,142 @@ final class ZLinkSpringHandlerFactoryTest {
 
             assertEquals(2, LifecycleRequestHandler.created.get());
             assertEquals(2, LifecycleRequestHandler.destroyed.get());
+        }
+    }
+
+    @Test
+    void prototypeHandlerReusesPreparedConstructionAndRunsLifecyclePerDispatch() {
+        PrototypeLifecycleRequestHandler.reset();
+        ActivationDependency.destroyed.set(0);
+        var beans = new DefaultListableBeanFactory();
+        beans.registerBeanDefinition(
+                "activationDependency", new RootBeanDefinition(ActivationDependency.class));
+        var postProcessed = new AtomicInteger();
+        beans.addBeanPostProcessor(
+                new BeanPostProcessor() {
+                    @Override
+                    public Object postProcessAfterInitialization(Object bean, String beanName) {
+                        if (bean instanceof PrototypeLifecycleRequestHandler) {
+                            postProcessed.incrementAndGet();
+                        }
+                        return bean;
+                    }
+                });
+        var definition = new RootBeanDefinition(PrototypeLifecycleRequestHandler.class);
+        definition.setScope(BeanDefinition.SCOPE_PROTOTYPE);
+        definition.setAutowireMode(AbstractBeanDefinition.AUTOWIRE_CONSTRUCTOR);
+        beans.registerBeanDefinition("prototypeLifecycleHandler", definition);
+        try (var context = new AnnotationConfigApplicationContext(beans)) {
+            context.refresh();
+            var dependency = context.getBean(ActivationDependency.class);
+            var services =
+                    ZLinkHandlerActivator.services(
+                            new ZLinkSpringHandlerFactory(context.getBeanFactory()));
+            services.prepare(PrototypeLifecycleRequestHandler.class);
+
+            ZLinkHandlerActivator.Activation previousActivation = null;
+            PrototypeLifecycleRequestHandler previousHandler = null;
+            for (int index = 0; index < 2; index++) {
+                var activation =
+                        ZLinkHandlerInstanceOwner.openActivation(
+                                services, PrototypeLifecycleRequestHandler.class);
+                if (previousActivation != null) {
+                    assertSame(previousActivation, activation);
+                }
+                var handler =
+                        (PrototypeLifecycleRequestHandler)
+                                ZLinkHandlerInstanceOwner.createSingle(
+                                        activation, PrototypeLifecycleRequestHandler.class);
+                if (previousHandler != null) {
+                    assertNotSame(previousHandler, handler);
+                }
+                assertSame(dependency, handler.dependency);
+                assertEquals(index + 1, PrototypeLifecycleRequestHandler.created.get());
+                assertEquals(index + 1, PrototypeLifecycleRequestHandler.initialized.get());
+                assertEquals(index + 1, postProcessed.get());
+                ZLinkHandlerInstanceOwner.closeSingle(activation, handler);
+                assertEquals(index + 1, PrototypeLifecycleRequestHandler.destroyed.get());
+                previousActivation = activation;
+                previousHandler = handler;
+            }
+
+            assertEquals(0, ActivationDependency.destroyed.get());
+        }
+        assertEquals(1, ActivationDependency.destroyed.get());
+    }
+
+    @Test
+    void scopedConstructorDependencyKeepsThePerDispatchSpringActivation() {
+        ScopedDependency.instances.set(0);
+        var beans = new DefaultListableBeanFactory();
+        var dependencyDefinition =
+                new RootBeanDefinition(
+                        ScopedDependency.class, () -> new ScopedDependency("selected"));
+        dependencyDefinition.setScope(BeanDefinition.SCOPE_PROTOTYPE);
+        beans.registerBeanDefinition("selected", dependencyDefinition);
+        var handlerDefinition = new RootBeanDefinition(ScopedPrototypeHandler.class);
+        handlerDefinition.setScope(BeanDefinition.SCOPE_PROTOTYPE);
+        beans.registerBeanDefinition("scopedPrototypeHandler", handlerDefinition);
+        try (var context = new AnnotationConfigApplicationContext(beans)) {
+            context.refresh();
+            var services =
+                    ZLinkHandlerActivator.services(
+                            new ZLinkSpringHandlerFactory(context.getBeanFactory()));
+            services.prepare(ScopedPrototypeHandler.class);
+
+            ZLinkHandlerActivator.Activation previousActivation = null;
+            ScopedPrototypeHandler previousHandler = null;
+            ScopedDependency previousDependency = null;
+            for (int index = 0; index < 2; index++) {
+                var activation =
+                        ZLinkHandlerInstanceOwner.openActivation(
+                                services, ScopedPrototypeHandler.class);
+                if (previousActivation != null) {
+                    assertNotSame(previousActivation, activation);
+                }
+                var handler =
+                        (ScopedPrototypeHandler)
+                                ZLinkHandlerInstanceOwner.createSingle(
+                                        activation, ScopedPrototypeHandler.class);
+                if (previousHandler != null) {
+                    assertNotSame(previousHandler, handler);
+                    assertNotSame(previousDependency, handler.dependency);
+                }
+                assertEquals("selected", handler.dependency.value);
+                ZLinkHandlerInstanceOwner.closeSingle(activation, handler);
+                previousActivation = activation;
+                previousHandler = handler;
+                previousDependency = handler.dependency;
+            }
+            assertEquals(2, ScopedDependency.instances.get());
+        }
+    }
+
+    @Test
+    void failedPrototypeHandlerConstructionDestroysItsScopedDependencyOnce() {
+        ThrowingScopedDependency.destroyed.set(0);
+        var beans = new DefaultListableBeanFactory();
+        var dependencyDefinition = new RootBeanDefinition(ThrowingScopedDependency.class);
+        dependencyDefinition.setScope(BeanDefinition.SCOPE_PROTOTYPE);
+        beans.registerBeanDefinition("throwingScopedDependency", dependencyDefinition);
+        var handlerDefinition = new RootBeanDefinition(ThrowingScopedHandler.class);
+        handlerDefinition.setScope(BeanDefinition.SCOPE_PROTOTYPE);
+        beans.registerBeanDefinition("throwingScopedHandler", handlerDefinition);
+        try (var context = new AnnotationConfigApplicationContext(beans)) {
+            context.refresh();
+            var services =
+                    ZLinkHandlerActivator.services(
+                            new ZLinkSpringHandlerFactory(context.getBeanFactory()));
+            services.prepare(ThrowingScopedHandler.class);
+            var activation =
+                    ZLinkHandlerInstanceOwner.openActivation(services, ThrowingScopedHandler.class);
+
+            Assertions.assertThrows(
+                    IllegalStateException.class,
+                    () ->
+                            ZLinkHandlerInstanceOwner.createSingle(
+                                    activation, ThrowingScopedHandler.class));
+            assertEquals(1, ThrowingScopedDependency.destroyed.get());
         }
     }
 
@@ -446,6 +583,74 @@ final class ZLinkSpringHandlerFactoryTest {
     }
 
     public static final class ActivationDependency implements DisposableBean {
+        static final AtomicInteger destroyed = new AtomicInteger();
+
+        @Override
+        public void destroy() {
+            destroyed.incrementAndGet();
+        }
+    }
+
+    public static final class PrototypeLifecycleRequestHandler
+            implements ZLinkRequestHandler<String, String>, InitializingBean, DisposableBean {
+        static final AtomicInteger created = new AtomicInteger();
+        static final AtomicInteger initialized = new AtomicInteger();
+        static final AtomicInteger destroyed = new AtomicInteger();
+        final ActivationDependency dependency;
+
+        public PrototypeLifecycleRequestHandler(ActivationDependency dependency) {
+            this.dependency = dependency;
+            created.incrementAndGet();
+        }
+
+        static void reset() {
+            created.set(0);
+            initialized.set(0);
+            destroyed.set(0);
+        }
+
+        @Override
+        public void afterPropertiesSet() {
+            initialized.incrementAndGet();
+        }
+
+        @Override
+        public void destroy() {
+            destroyed.incrementAndGet();
+        }
+
+        @Override
+        public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture(request);
+        }
+    }
+
+    public static final class ScopedPrototypeHandler
+            implements ZLinkRequestHandler<String, String> {
+        final ScopedDependency dependency;
+
+        public ScopedPrototypeHandler(@Qualifier("selected") ScopedDependency dependency) {
+            this.dependency = dependency;
+        }
+
+        @Override
+        public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture(request);
+        }
+    }
+
+    public static final class ThrowingScopedHandler implements ZLinkRequestHandler<String, String> {
+        public ThrowingScopedHandler(ThrowingScopedDependency dependency) {
+            throw new IllegalStateException("handler constructor failed");
+        }
+
+        @Override
+        public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
+            return CompletableFuture.completedFuture(request);
+        }
+    }
+
+    public static final class ThrowingScopedDependency implements DisposableBean {
         static final AtomicInteger destroyed = new AtomicInteger();
 
         @Override

@@ -66,6 +66,21 @@ final class ZLinkChannelHandlerUnfilteredLifecycleTest {
         assertEquals(1, probe.dependenciesClosed);
     }
 
+    @Test
+    void cancellationDestroysTheHandlerAndClosesItsScopeOnce() {
+        var probe = new Probe();
+        var completed = dispatch(probe, null);
+
+        probe.completion.cancel(false);
+        probe.completion.cancel(false);
+
+        assertEquals(
+                java.util.concurrent.CancellationException.class, failureOf(completed).getClass());
+        assertEquals(1, probe.destroyCalls);
+        assertEquals(1, probe.closeCalls);
+        assertEquals(1, probe.dependenciesClosed);
+    }
+
     @ParameterizedTest
     @EnumSource(FailurePoint.class)
     void synchronousFailureStillDestroysTheHandlerAndClosesItsScope(FailurePoint point) {
