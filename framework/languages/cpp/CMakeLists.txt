@@ -2919,6 +2919,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-contract;framework-regression;messaging"
     "unit")
   target_use_zlink_gtest_main(test_cpp_framework_request_call_allocations)
+  if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_definitions(test_cpp_framework_request_call_allocations PRIVATE
+      ZLINK_TEST_COUNT_REPLY_NOTIFICATIONS)
+    target_link_options(test_cpp_framework_request_call_allocations PRIVATE
+      "-Wl,--wrap=_ZNSt18condition_variable10notify_allEv")
+  endif()
   target_sources(test_cpp_framework_request_call_allocations PRIVATE
     tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport_projection.cpp
