@@ -753,6 +753,13 @@ application 작업을 받지 않도록 바꾸는 동작을 [admission seal](../0
 6. Deadline 안에 끝나면 `Stopped/None`, 끝나지 않으면 bounded teardown 뒤
    `ForceStopped/DeadlineExceeded` 또는 `ForceStopped/TeardownFailed`로 끝난다.
 
+Store 정리는 Shutdown의 단일 절대 deadline 안에서 수행한다. 만료 뒤에는 새 Store 작업을
+시작하지 않는다. 진행 중인 Store 작업의 취소 또는 완료와 로컬 resource 정리를 관찰한 뒤
+`ForceStopped`를 한 번만 반환한다. 반환 뒤에는 runtime callback이 남지 않는다. 별도 Store
+정리 예산을 만들지 않는다. 삭제를 확인하지 못한 record는 남을 수 있으며, owner lease 만료와
+[Location runtime §11](01-location-runtime.ko.md#11-host가-종료될-때-store-record를-정리한다)의
+기존 조건부 해제 규칙을 따른다.
+
 Listener와 transport를 정리할 때는 이미 수락한 transport callback과 진행 중인 read·write
 operation을 먼저 완료하거나 취소한다. 특히 TLS·WebSocket resource와 per-connection write
 queue를 파괴하기 전에 소유한 transport 실행 문맥에서 cancellation completion을 관찰해야

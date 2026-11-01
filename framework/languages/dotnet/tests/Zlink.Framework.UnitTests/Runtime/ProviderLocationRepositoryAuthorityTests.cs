@@ -17,6 +17,83 @@ namespace Zlink.Framework.UnitTests;
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ForceStop2646_Sweep_Deletes_Exact_Authority_And_Preserves_Descriptors(
+        bool inMemory,
+        bool active
+    )
+    {
+        var time = new ManualTimeProvider();
+        IZLinkLocationRepository repository = inMemory
+            ? new ZLinkInMemoryLocationStore(time)
+            : new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time));
+        var owner = await ClaimAsync(repository, "cleanup-owner");
+        var other = await ClaimAsync(repository, "other-owner");
+        foreach (var token in new[] { owner, other })
+        {
+            var descriptor = Descriptor(token == owner ? "source" : "target", token);
+            Assert.Equal(
+                ZLinkLocationWriteStatus.Stored,
+                (
+                    await repository.UpdateMeshNodeAsync(
+                        descriptor,
+                        ZLinkLocationWriteIntent.NewClaim
+                    )
+                ).Status
+            );
+            var reserved = Assert
+                .IsType<ZLinkObjectReserveResult.Reserved>(
+                    await repository.ReserveAsync(Reservation(token.OwnerId, descriptor, token))
+                )
+                .Reservation;
+            if (active)
+                Assert.IsType<ZLinkObjectCommitResult.Committed>(
+                    await repository.CommitAsync(reserved, new byte[] { 1 })
+                );
+        }
+        Assert.Equal(
+            0,
+            await repository.RemoveAllByOwnerAsync(owner with { LeaseGeneration = 999 })
+        );
+        Assert.Equal(1, await repository.RemoveAllByOwnerAsync(owner));
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
+            await repository.ReadAuthorityAsync(ZLinkAuthorityKeyCodec.EncodeActor(owner.OwnerId))
+        );
+        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await repository.ReadAuthorityAsync(ZLinkAuthorityKeyCodec.EncodeActor(other.OwnerId))
+        );
+        Assert.Equal(2, (await repository.ListMeshNodesAsync("play", default)).Items.Count);
+        Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
+            await repository.ReadOwnerLeaseAsync(owner.OwnerId)
+        );
+        Assert.Equal(
+            ZLinkOwnerLeaseReleaseResult.Released,
+            await repository.ReleaseOwnerLeaseAsync(other)
+        );
+        var replacement = await ClaimAsync(repository, other.OwnerId);
+        Assert.NotEqual(other.LeaseGeneration, replacement.LeaseGeneration);
+        Assert.Equal(0, await repository.RemoveAllByOwnerAsync(other));
+        Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await repository.ReadAuthorityAsync(ZLinkAuthorityKeyCodec.EncodeActor(other.OwnerId))
+        );
+        Assert.Equal(
+            ZLinkOwnerLeaseReleaseResult.Stale,
+            await repository.ReleaseOwnerLeaseAsync(other)
+        );
+        Assert.Equal(
+            replacement,
+            Assert
+                .IsType<ZLinkOwnerLeaseReadResult.Found>(
+                    await repository.ReadOwnerLeaseAsync(other.OwnerId)
+                )
+                .Token
+        );
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Creation_authority_release_reuses_ended_owner_rules_and_requalifies_conflict(

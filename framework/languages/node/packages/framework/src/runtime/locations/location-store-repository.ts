@@ -206,12 +206,6 @@ interface OwnerCleanupCandidate {
   readonly scanVersion: ZLinkStoreVersion;
 }
 
-interface OwnerCleanupRecord {
-  readonly descriptor: OwnedStoreRecord;
-}
-
-const MAX_OWNER_CLEANUP_BATCH_ROWS = 2_047;
-
 /**
  * Maps framework domain records to the minimal provider SPI.
  *
@@ -2852,50 +2846,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const leaseKey = ownerKey(owner.ownerId);
     const lease = await this.provider.read(leaseKey, signal);
     if (liveOwnerLeaseGeneration(lease) !== owner.leaseGeneration) return 0n;
-    let removed = await this.removeOwnedAuthorities(owner, signal);
-    const candidates: OwnerCleanupCandidate[] = [];
-    for (const prefix of [
-      'mesh-node\0',
-      'client-server\0',
-      'fanout-publisher\0',
-      `${PREFIX}spot:`,
-      `${PREFIX}actor:`,
-      `${PREFIX}route:`
-    ]) {
-      for (;;) {
-        const prefixCandidates: OwnerCleanupCandidate[] = [];
-        let cursor: ZLinkStoreScanCursor | undefined;
-        let expired = false;
-        do {
-          const result = await this.provider.scan({ prefix, cursor, limit: 1_000 }, signal);
-          if (result.kind === 'expired') {
-            expired = true;
-            break;
-          }
-          for (const item of result.value.items) {
-            prefixCandidates.push({ key: item.key, scanVersion: item.value.version });
-          }
-          cursor = result.value.nextCursor;
-        } while (cursor !== undefined);
-        if (expired) {
-          // Snapshot scan expiry invalidates every page from this prefix.
-          // Restart from its first page instead of silently leaving rows
-          // behind after a partial scan.
-          continue;
-        }
-        candidates.push(...prefixCandidates);
-        break;
-      }
-    }
-    for (let offset = 0; offset < candidates.length; offset += MAX_OWNER_CLEANUP_BATCH_ROWS) {
-      removed += await this.removeOwnerCleanupBatch(
-        owner,
-        leaseKey,
-        candidates.slice(offset, offset + MAX_OWNER_CLEANUP_BATCH_ROWS),
-        signal
-      );
-    }
-    return removed + (await super.removeAllByOwner(owner));
+    return this.removeOwnedAuthorities(owner, signal);
   }
 
   private async removeOwnedAuthorities(
@@ -2980,89 +2931,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (aborted.kind === 'aborted') removed += 1n;
     }
     return removed;
-  }
-
-  private async removeOwnerCleanupBatch(
-    owner: ZLinkLocationOwnerToken,
-    leaseKey: ZLinkStoreKey,
-    candidates: readonly OwnerCleanupCandidate[],
-    signal?: AbortSignal
-  ): Promise<bigint> {
-    if (candidates.length === 0) return 0n;
-
-    const currentRows = await Promise.all(
-      candidates.map((candidate) => this.provider.read(candidate.key, signal))
-    );
-    const unchangedOwnedRows: OwnerCleanupCandidate[] = [];
-    for (let index = 0; index < candidates.length; index += 1) {
-      const candidate = candidates[index]!;
-      const current = currentRows[index]!;
-      if (
-        current.kind === 'missing' ||
-        current.value.version.value !== candidate.scanVersion.value
-      ) {
-        continue;
-      }
-      const record = decodeJson<OwnerCleanupRecord>(current.value.bytes);
-      const descriptor = record.descriptor;
-      if (
-        descriptor.ownerId !== owner.ownerId ||
-        descriptorOwnerLeaseGeneration(descriptor) !== owner.leaseGeneration
-      ) {
-        continue;
-      }
-      unchangedOwnedRows.push({
-        key: candidate.key,
-        scanVersion: current.value.version
-      });
-    }
-    if (unchangedOwnedRows.length === 0) return 0n;
-
-    const currentLease = await this.provider.read(leaseKey, signal);
-    if (
-      currentLease.kind === 'missing' ||
-      liveOwnerLeaseGeneration(currentLease) !== owner.leaseGeneration
-    ) {
-      return 0n;
-    }
-    const result = await this.provider.write(
-      {
-        conditions: [
-          { kind: 'version', key: leaseKey, expected: currentLease.value.version },
-          ...unchangedOwnedRows.map((row) => ({
-            kind: 'version' as const,
-            key: row.key,
-            expected: row.scanVersion
-          }))
-        ],
-        mutations: unchangedOwnedRows.map((row) => ({
-          kind: 'delete' as const,
-          key: row.key
-        }))
-      },
-      signal
-    );
-    if (result.kind === 'applied') return BigInt(unchangedOwnedRows.length);
-
-    // A row may have changed while the page was being prepared. Split the
-    // bounded batch so unaffected rows can still be removed atomically, while
-    // the changed row is discarded by the next version re-read. A changed
-    // owner lease causes every recursive branch to stop at the fence above.
-    if (unchangedOwnedRows.length === 1) return 0n;
-    const midpoint = Math.ceil(unchangedOwnedRows.length / 2);
-    const left = await this.removeOwnerCleanupBatch(
-      owner,
-      leaseKey,
-      unchangedOwnedRows.slice(0, midpoint),
-      signal
-    );
-    const right = await this.removeOwnerCleanupBatch(
-      owner,
-      leaseKey,
-      unchangedOwnedRows.slice(midpoint),
-      signal
-    );
-    return left + right;
   }
 
   private async updateDescriptor<T extends OwnedDescriptor>(
@@ -3769,7 +3637,6 @@ type OwnedDescriptor =
 
 type LeaseOwnedLocation = ZLinkSpotLocation | ZLinkActorLocation;
 type StoredLocation = LeaseOwnedLocation | ZLinkRouteLocation;
-type OwnedStoreRecord = OwnedDescriptor | StoredLocation;
 
 function validateProviderAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
   requireText(request.aggregateId.value, 'aggregate ID');
@@ -5060,21 +4927,6 @@ function locationOwnerGeneration(value: LeaseOwnedLocation): bigint {
   return value.leaseGeneration;
 }
 
-function descriptorOwnerLeaseGeneration(value: OwnedStoreRecord): bigint | undefined {
-  if ('leaseGeneration' in value) {
-    return typeof value.leaseGeneration === 'bigint'
-      ? value.leaseGeneration
-      : BigInt(value.leaseGeneration);
-  }
-  if ('generation' in value) {
-    return typeof value.generation === 'bigint' ? value.generation : BigInt(value.generation);
-  }
-  return undefined;
-}
-
-// Location runtime §10: a write whose result was lost is confirmed by reading
-// the same key. The stored row already is this write when it differs only in
-// the time the Store stamped, as for every other descriptor kind.
 function sameMeshDescriptor(
   left: ZLinkMeshNodeDescriptor,
   right: ZLinkMeshNodeDescriptor

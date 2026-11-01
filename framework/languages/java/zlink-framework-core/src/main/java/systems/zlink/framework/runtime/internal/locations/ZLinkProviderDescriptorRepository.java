@@ -150,11 +150,19 @@ final class ZLinkProviderDescriptorRepository {
 
     CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
             ZLinkMeshNodeDescriptorKey key, ZLinkLocationOwnerToken owner) {
+        return removeMeshNode(key, owner, active());
+    }
+
+    CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
+            ZLinkMeshNodeDescriptorKey key,
+            ZLinkLocationOwnerToken owner,
+            ZLinkStoreCancellation cancellation) {
         return remove(
                 meshKey(key.meshName(), key.rid()),
                 owner,
                 bytes -> decodeMesh(bytes).descriptor().ownerId(),
-                bytes -> decodeMesh(bytes).descriptor().leaseGeneration());
+                bytes -> decodeMesh(bytes).descriptor().leaseGeneration(),
+                cancellation);
     }
 
     CompletionStage<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> listMeshNodes(
@@ -210,7 +218,8 @@ final class ZLinkProviderDescriptorRepository {
                 clientServerKey(key.channelName(), key.serverRid()),
                 owner,
                 bytes -> decodeClientServer(bytes).descriptor().ownerId(),
-                bytes -> decodeClientServer(bytes).descriptor().leaseGeneration());
+                bytes -> decodeClientServer(bytes).descriptor().leaseGeneration(),
+                active());
     }
 
     CompletionStage<ZLinkLocationPage<ZLinkClientServerServerDescriptor>> listClientServers(
@@ -246,7 +255,8 @@ final class ZLinkProviderDescriptorRepository {
                 fanoutKey(key.channelName(), key.publisherRid()),
                 owner,
                 bytes -> decodeFanout(bytes).descriptor().ownerId(),
-                bytes -> decodeFanout(bytes).descriptor().leaseGeneration());
+                bytes -> decodeFanout(bytes).descriptor().leaseGeneration(),
+                active());
     }
 
     CompletionStage<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> listFanoutPublishers(
@@ -454,9 +464,10 @@ final class ZLinkProviderDescriptorRepository {
             ZLinkStoreKey rowKey,
             ZLinkLocationOwnerToken owner,
             Function<byte[], String> ownerId,
-            Function<byte[], Long> leaseGeneration) {
+            Function<byte[], Long> leaseGeneration,
+            ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(owner, "owner");
-        return provider.read(rowKey, active())
+        return provider.read(rowKey, cancellation)
                 .thenCompose(
                         current -> {
                             if (!(current instanceof ZLinkStoreReadFound found)
@@ -472,7 +483,7 @@ final class ZLinkProviderDescriptorRepository {
                                                                     rowKey,
                                                                     found.value().version())),
                                                     List.of(new ZLinkStoreDelete(rowKey))),
-                                            active())
+                                            cancellation)
                                     .thenApply(
                                             result ->
                                                     result instanceof ZLinkStoreWriteApplied

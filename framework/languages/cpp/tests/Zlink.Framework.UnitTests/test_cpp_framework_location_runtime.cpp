@@ -787,7 +787,7 @@ TEST (ZLinkFrameworkLocationRuntime, BoundsNonCooperativeOwnerCleanup)
 
     auto cleanup = std::async (std::launch::async, [&] { return runtime.cleanup_owner (); });
     const auto status = cleanup.wait_for (renew_timeout + std::chrono::seconds (1));
-    EXPECT_EQ (std::future_status::ready, status);
+    EXPECT_EQ (std::future_status::timeout, status);
     store.complete_pending_release ();
     EXPECT_FALSE (cleanup.get ());
     ASSERT_TRUE (runtime.last_error ().has_value ());
@@ -814,7 +814,10 @@ TEST (ZLinkFrameworkLocationRuntime, HostCleanupUsesShutdownDeadline)
     auto shutdown = host.shutdown (deadline);
     auto completed = zlink::framework::detail::observe_task_result_for (
       shutdown, deadline + std::chrono::seconds (1), std::stop_token{});
+    EXPECT_FALSE (completed.has_value ());
     store.complete_pending_release ();
+    completed = zlink::framework::detail::observe_task_result_for (
+      shutdown, std::chrono::seconds (1), std::stop_token{});
     ASSERT_TRUE (completed.has_value ());
     ASSERT_TRUE (completed->has_value ());
     EXPECT_EQ (zlink::framework::termination_outcome_t::force_stopped, completed->value ().outcome);
@@ -1118,3 +1121,41 @@ TEST (ZLinkFrameworkLocationRuntime, DoesNotReadAfterClaimConsumesRenewDeadline)
 }
 
 } // namespace
+
+TEST (ZLinkFrameworkLocationRuntime, ForceStop2646ObservesPendingCleanupBeforeReturn)
+{
+    using namespace zlink::framework;
+    class pending_cleanup_t final : public in_memory_location_repository_t
+    {
+      public:
+        task_completion_source_t<std::int64_t> completion;
+        std::promise<void> entered;
+        std::atomic<int> releases{0};
+        task_t<std::int64_t> remove_all_by_owner (location_owner_token_t) override
+        {
+            entered.set_value ();
+            return completion.task ();
+        }
+        task_t<owner_lease_release_result_t>
+        release_owner_lease (location_owner_token_t owner) override
+        {
+            ++releases;
+            return in_memory_location_repository_t::release_owner_lease (std::move (owner));
+        }
+    } store;
+    location_runtime_t runtime (store, {}, "cleanup-owner");
+    runtime.renew_owner_lease_once ();
+    auto entered = store.entered.get_future ();
+    EXPECT_FALSE (runtime.cleanup_owner (std::chrono::steady_clock::now ()));
+    EXPECT_EQ (std::future_status::timeout, entered.wait_for (std::chrono::milliseconds (0)));
+    EXPECT_EQ (0, store.releases.load ());
+    auto stopping = std::async (std::launch::async, [&] {
+        return runtime.cleanup_owner (std::chrono::steady_clock::now ()
+                                      + std::chrono::milliseconds (20));
+    });
+    EXPECT_EQ (std::future_status::ready, entered.wait_for (std::chrono::seconds (1)));
+    EXPECT_EQ (std::future_status::timeout, stopping.wait_for (std::chrono::milliseconds (40)));
+    store.completion.complete (result_t<std::int64_t>::success (0));
+    EXPECT_FALSE (stopping.get ());
+    EXPECT_EQ (0, store.releases.load ());
+}

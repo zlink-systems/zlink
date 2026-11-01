@@ -2725,17 +2725,27 @@ final class ZLinkProviderAuthorityRepository {
 
     CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner) {
         Objects.requireNonNull(owner, "owner");
-        return removeAllByOwner(owner, null, 0L, 0);
+        return removeAllByOwner(owner, () -> false);
+    }
+
+    CompletionStage<Long> removeAllByOwner(
+            ZLinkLocationOwnerToken owner,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        return removeAllByOwner(owner, null, 0L, 0, cancellation);
     }
 
     private CompletionStage<Long> removeAllByOwner(
             ZLinkLocationOwnerToken owner,
             ZLinkStoreScanCursor cursor,
             long removed,
-            int restartCount) {
+            int restartCount,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        if (cancellation.isCancellationRequested())
+            return failed(
+                    new java.util.concurrent.TimeoutException("host shutdown deadline expired"));
         return provider.scan(
                         new ZLinkStoreScanRequest(AUTHORITY_PREIMAGE_PREFIX, cursor, 1000),
-                        () -> false)
+                        cancellation)
                 .thenCompose(
                         result -> {
                             if (result instanceof ZLinkStoreScanExpired) {
@@ -2744,50 +2754,83 @@ final class ZLinkProviderAuthorityRepository {
                                             new IllegalStateException(
                                                     "authority cleanup scan repeatedly expired"));
                                 }
-                                return removeAllByOwner(owner, null, removed, restartCount + 1);
+                                return removeAllByOwner(
+                                        owner, null, removed, restartCount + 1, cancellation);
                             }
                             ZLinkStoreScanPage page = ((ZLinkStoreScanPageResult) result).value();
-                            List<ZLinkStoreCondition> conditions = new ArrayList<>();
-                            List<ZLinkStoreMutation> mutations = new ArrayList<>();
+                            CompletionStage<Long> cleanup = completed(removed);
                             for (ZLinkStoreScanItem item : page.items()) {
                                 AuthorityRecord record = decode(item.value().bytes());
-                                if (record.aggregate() == null
-                                        && record.ownerId().equals(owner.ownerId())
-                                        && record.ownerLeaseGeneration()
-                                                == owner.leaseGeneration()) {
-                                    conditions.add(
-                                            new ZLinkStoreVersionCondition(
-                                                    item.key(), item.value().version()));
-                                    mutations.add(new ZLinkStoreDelete(item.key()));
+                                if (record.aggregate() != null
+                                        || !record.ownerId().equals(owner.ownerId())
+                                        || record.ownerLeaseGeneration()
+                                                != owner.leaseGeneration()) {
+                                    continue;
+                                }
+                                String key = decodeAuthorityKey(item.key());
+                                if (record.allocation().state()
+                                        == ZLinkPlacementAllocationState.ACTIVE) {
+                                    cleanup =
+                                            cleanup.thenCompose(
+                                                    count ->
+                                                            compareExchange(
+                                                                            key,
+                                                                            new ZLinkAuthorityExpectFound(
+                                                                                    item.value()
+                                                                                            .version()
+                                                                                            .value()),
+                                                                            new ZLinkAuthorityDelete(),
+                                                                            cancellation
+                                                                                    ::isCancellationRequested)
+                                                                    .thenApply(
+                                                                            write ->
+                                                                                    write
+                                                                                                    instanceof
+                                                                                                    ZLinkAuthorityDeleted
+                                                                                            ? Math
+                                                                                                    .addExact(
+                                                                                                            count,
+                                                                                                            1L)
+                                                                                            : count));
+                                } else if (record.pendingCreation().isPresent()) {
+                                    var reservation =
+                                            new ZLinkObjectReservation(
+                                                    key,
+                                                    item.value().version().value(),
+                                                    record.objectGeneration(),
+                                                    record.authorityOwnerGeneration(),
+                                                    record.pendingCreation().get().reservationId(),
+                                                    record.allocation().descriptor(),
+                                                    record.allocation()
+                                                            .descriptorLifecycleGeneration(),
+                                                    owner);
+                                    cleanup =
+                                            cleanup.thenCompose(
+                                                    count ->
+                                                            abort(
+                                                                            reservation,
+                                                                            cancellation
+                                                                                    ::isCancellationRequested)
+                                                                    .thenApply(
+                                                                            write ->
+                                                                                    write
+                                                                                                    == ZLinkObjectAbortResult
+                                                                                                            .ABORTED
+                                                                                            ? Math
+                                                                                                    .addExact(
+                                                                                                            count,
+                                                                                                            1L)
+                                                                                            : count));
                                 }
                             }
-                            if (!mutations.isEmpty()) {
-                                return provider.write(
-                                                new ZLinkStoreWriteRequest(conditions, mutations),
-                                                () -> false)
-                                        .thenCompose(
-                                                write -> {
-                                                    if (write instanceof ZLinkStoreWriteApplied) {
-                                                        return continueOwnerCleanupScan(
-                                                                owner,
-                                                                page.nextCursor(),
-                                                                Math.addExact(
-                                                                        removed, mutations.size()),
-                                                                restartCount);
-                                                    }
-                                                    if (restartCount >= 8) {
-                                                        return failed(
-                                                                new IllegalStateException(
-                                                                        "authority cleanup write"
-                                                                                + " repeatedly"
-                                                                                + " conflicted"));
-                                                    }
-                                                    return removeAllByOwner(
-                                                            owner, null, removed, restartCount + 1);
-                                                });
-                            }
-                            return continueOwnerCleanupScan(
-                                    owner, page.nextCursor(), removed, restartCount);
+                            return cleanup.thenCompose(
+                                    count ->
+                                            continueOwnerCleanupScan(
+                                                    owner,
+                                                    page.nextCursor(),
+                                                    count,
+                                                    restartCount,
+                                                    cancellation));
                         });
     }
 
@@ -2795,10 +2838,11 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkLocationOwnerToken owner,
             ZLinkStoreScanCursor cursor,
             long removed,
-            int restartCount) {
+            int restartCount,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         return cursor == null
                 ? completed(removed)
-                : removeAllByOwner(owner, cursor, removed, restartCount);
+                : removeAllByOwner(owner, cursor, removed, restartCount, cancellation);
     }
 
     private CompletionStage<List<LoadedParticipant>> loadParticipants(

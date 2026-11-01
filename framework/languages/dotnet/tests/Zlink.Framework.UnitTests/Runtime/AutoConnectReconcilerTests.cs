@@ -49,6 +49,36 @@ public sealed class AutoConnectReconcilerTests
         Assert.Equal(expected, ZLinkAutoConnectPlanner.CountDiscoveredPeers(local, peers));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Shutdown_disconnects_peers_even_when_descriptor_cleanup_is_cancelled(
+        bool expired
+    )
+    {
+        var fixture = await FixtureAsync();
+        await using var runtime = fixture.Runtime;
+        await fixture.PublishPeerAsync("r1", "tcp://r:1");
+        await fixture.Reconciler.TickAsync();
+        Assert.Single(fixture.Reconciler.ActiveTargets);
+        using var deadline = new CancellationTokenSource();
+        if (expired)
+            deadline.Cancel();
+
+        if (expired)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                fixture.Reconciler.ShutdownAsync(deadline.Token).AsTask()
+            );
+        else
+            await fixture.Reconciler.ShutdownAsync(deadline.Token);
+
+        Assert.Empty(fixture.Reconciler.ActiveTargets);
+        Assert.Equal("r1", Assert.Single(fixture.Executor.Disconnected).NodeRid.ToString());
+        var remaining = (await fixture.Store.ListMeshNodesAsync("play", default)).Items;
+        Assert.Equal(expired, remaining.Any(row => row.Rid == RoutingId.From("local")));
+        Assert.Contains(remaining, row => row.Rid == RoutingId.From("r1"));
+    }
+
     [Fact]
     public async Task Immediate_peer_reconcile_refreshes_only_the_requested_connection()
     {
@@ -925,7 +955,7 @@ public sealed class AutoConnectReconcilerTests
     }
 
     [Fact]
-    public async Task Shutdown_After_Drain_Owner_Cleanup_Does_Not_Require_Released_Lease()
+    public async Task Shutdown_After_Drain_Owner_Cleanup_Preserves_Publisher_Descriptor_Without_Lease()
     {
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryLocationStore(time);
@@ -961,9 +991,13 @@ public sealed class AutoConnectReconcilerTests
         );
 
         await runtime.CleanupOwnerForDrainAsync(CancellationToken.None);
+        Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
+            await store.ReadOwnerLeaseAsync(runtime.OwnerId)
+        );
         await reconciler.ShutdownAsync();
 
-        Assert.Empty((await store.ListMeshNodesAsync("play", default)).Items);
+        var remaining = Assert.Single((await store.ListMeshNodesAsync("play", default)).Items);
+        Assert.Equal(RoutingId.From("local"), remaining.Rid);
         await runtime.StopAsync();
     }
 

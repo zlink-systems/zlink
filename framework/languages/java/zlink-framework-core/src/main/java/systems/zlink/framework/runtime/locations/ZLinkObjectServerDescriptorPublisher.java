@@ -123,6 +123,10 @@ public final class ZLinkObjectServerDescriptorPublisher {
     }
 
     public CompletionStage<Void> remove() {
+        return remove(Instant.MAX);
+    }
+
+    public CompletionStage<Void> remove(Instant deadline) {
         var admitted = runtime.admittedOwnerToken();
         if (admitted.isEmpty()) {
             return CompletableFuture.completedFuture(null);
@@ -136,7 +140,8 @@ public final class ZLinkObjectServerDescriptorPublisher {
                         store.removeMeshNode(
                                 new ZLinkMeshNodeDescriptorKey(
                                         configured.meshName(), node.status().routingId()),
-                                owner));
+                                owner,
+                                () -> !Instant.now().isBefore(deadline)));
             }
         }
         return all(removals);

@@ -51,6 +51,53 @@ public sealed class AutoConnectLoopTests
     }
 
     [Fact]
+    public async Task Cancelled_disposal_remains_terminal_for_later_callers()
+    {
+        var time = new ManualTimeProvider();
+        var store = new ZLinkInMemoryLocationStore(time);
+        var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
+        await using var runtime = new ZLinkLocationRuntime(options, store, time);
+        await runtime.RenewOwnerLeaseOnceAsync();
+        var resolvers = new ZLinkStoreLocationResolvers(
+            store,
+            new ZLinkOwnerLeaseTracker(store, options, time)
+        );
+        var local = new ZLinkAutoConnectLocal(
+            ZLinkLocationAutoConnectType.ClientServer,
+            Mesh("play"),
+            ZLinkLocationRole.Dealer,
+            RoutingId.From("local"),
+            "tcp://l:1"
+        );
+        var reconciler = new ZLinkAutoConnectReconciler(
+            local,
+            InMemoryLocationStoreTests.MeshNode("ignored", "tcp://l:1", "local"),
+            runtime,
+            resolvers,
+            new NullExecutor(),
+            options,
+            time
+        );
+        var loop = new ZLinkAutoConnectLoop(
+            new ZLinkRuntimeErrorSink(),
+            reconciler,
+            local,
+            options,
+            store,
+            timeProvider: time
+        );
+        await loop.TickAsync();
+        using var deadline = new CancellationTokenSource();
+        deadline.Cancel();
+        var first = loop.DisposeAsync(deadline.Token).AsTask();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+        var second = loop.DisposeAsync().AsTask();
+        Assert.Same(first, second);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second);
+        Assert.Single((await store.ListMeshNodesAsync("play", default)).Items);
+    }
+
+    [Fact]
     public async Task Unchanged_Change_Stamp_Skips_The_List_Query()
     {
         var time = new ManualTimeProvider();

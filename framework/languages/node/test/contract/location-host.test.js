@@ -331,6 +331,7 @@ test('direct host stop uses one existing default deadline for a pending provider
   const inner = new framework.ZLinkInMemoryProviderLocationStore();
   let blockScan = false;
   let cleanupSignal;
+  let finishScan;
   let resolveScanning;
   const scanning = new Promise(resolve => { resolveScanning = resolve; });
   const provider = {
@@ -340,7 +341,7 @@ test('direct host stop uses one existing default deadline for a pending provider
       if (!blockScan) return await inner.scan(request, signal);
       cleanupSignal = signal;
       resolveScanning();
-      return await new Promise(() => {});
+      return await new Promise((_resolve, reject) => { finishScan = () => reject(signal.reason); });
     }
   };
   const host = new framework.ZLinkFrameworkRuntimeHost({
@@ -361,6 +362,11 @@ test('direct host stop uses one existing default deadline for a pending provider
   t.mock.timers.tick(29_999);
   assert.equal(cleanupSignal.aborted, false);
   t.mock.timers.tick(1);
+  let settled = false;
+  observedStop.then(() => { settled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  finishScan();
   const error = await observedStop;
   assert(error instanceof framework.ZLinkOwnerCleanupError);
   assert.equal(error.cause?.name, 'DeadlineExceededError');
@@ -523,6 +529,7 @@ test('framework runtime host starts location runtime and injects lifecycle into 
 
   await actorOptions.locationLifecycle.claimActor('player', 'actor-1', nodeRid);
   assert.notEqual(await store.resolveActor({ meshName: 'play', actorId: 'actor-1' }), undefined);
+  await actorOptions.locationLifecycle.releaseActor('player', 'actor-1');
 
   await runtime.stop();
 

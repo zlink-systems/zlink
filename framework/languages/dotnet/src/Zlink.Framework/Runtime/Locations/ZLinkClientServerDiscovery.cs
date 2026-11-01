@@ -139,7 +139,9 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => DisposeAsync(CancellationToken.None);
+
+    internal async ValueTask DisposeAsync(CancellationToken cancellationToken)
     {
         var failures = new List<Exception>();
         foreach (var client in _clients)
@@ -163,7 +165,7 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                             server.Identity.ServerRid
                         ),
                         _locationRuntime.OwnerToken,
-                        CancellationToken.None
+                        cancellationToken
                     )
                     .ConfigureAwait(false);
             }

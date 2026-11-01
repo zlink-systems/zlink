@@ -822,36 +822,25 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
         {
             if (!MatchesLiveOwnerLease(owner, _time.GetUtcNow()))
                 return 0L;
-            var removed = 0L;
-            var ownedDescriptors = _meshNodes
-                .Rows.Where(pair => pair.Value.OwnerId == owner.OwnerId)
+            var owned = _authorities
+                .Where(pair =>
+                    pair.Value.OwnerId == owner.OwnerId
+                    && pair.Value.OwnerLeaseGeneration == owner.LeaseGeneration
+                )
                 .ToArray();
-            foreach (var descriptor in ownedDescriptors)
+            foreach (var pair in owned)
             {
-                _meshNodes.Rows.Remove(descriptor.Key);
-                BumpMeshNodeStamp(descriptor.Value.MeshName);
-                removed++;
+                var row = pair.Value;
+                AdjustAllocationCapacity(
+                    row.Allocation.State == ZLinkPlacementAllocationState.Active
+                        ? _activePlacementCapacity
+                        : _pendingPlacementCapacity,
+                    row.Allocation,
+                    -1
+                );
+                _authorities.Remove(pair.Key);
             }
-            foreach (var descriptor in ownedDescriptors)
-                RemoveEntrySpotIdClaimNoLock(descriptor.Value, descriptor.Key);
-            var clientServerKeys = _clientServers
-                .Rows.Where(pair => pair.Value.OwnerId == owner.OwnerId)
-                .Select(static pair => pair.Key)
-                .ToArray();
-            foreach (var key in clientServerKeys)
-            {
-                _clientServers.Rows.Remove(key);
-                removed++;
-            }
-            var fanoutKeys = _fanoutPublishers
-                .Rows.Where(pair => pair.Value.OwnerId == owner.OwnerId)
-                .Select(static pair => pair.Key)
-                .ToArray();
-            foreach (var key in fanoutKeys)
-            {
-                _fanoutPublishers.Rows.Remove(key);
-                removed++;
-            }
+            var removed = (long)owned.Length;
             return removed;
         });
     }

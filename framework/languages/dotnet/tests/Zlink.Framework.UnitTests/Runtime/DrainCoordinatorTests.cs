@@ -19,6 +19,47 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 {
+    [Fact]
+    public async Task ForceStop2646_Fallback_Uses_The_Expired_Drain_Token()
+    {
+        var entered = new TaskCompletionSource<CancellationToken>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var executor = new FakeDrainExecutor { WaitForDeadline = true, ForceEntered = entered };
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        var stopping = coordinator.DrainAsync(TimeSpan.FromMilliseconds(20)).AsTask();
+        var token = await entered.Task;
+        Assert.True(token.IsCancellationRequested);
+        Assert.IsType<ForceStopped>(await stopping);
+        Assert.Equal(1, executor.ForceCount);
+    }
+
+    [Fact]
+    public async Task ForceStop2646_Uses_Expired_Shutdown_Token_And_Observes_Teardown()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource<CancellationToken>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var executor = new FakeDrainExecutor
+        {
+            ShutdownToken = cancellation.Token,
+            ForceCompletion = pending.Task,
+            ForceEntered = entered,
+        };
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        var stopping = coordinator
+            .ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, TimeSpan.FromSeconds(1))
+            .AsTask();
+        Assert.Equal(cancellation.Token, await entered.Task);
+        Assert.False(stopping.IsCompleted);
+        pending.SetResult();
+        Assert.IsType<ForceStopped>(await stopping);
+        Assert.Equal(1, executor.ForceCount);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -1882,24 +1923,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     }
 
     [Fact]
-    public async Task Deadline_Expiry_Gives_Force_Teardown_An_Independent_Bounded_Budget()
-    {
-        var executor = new FakeDrainExecutor
-        {
-            WaitForDeadline = true,
-            RequireForceStopBudget = true,
-        };
-        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
-
-        var forced = Assert.IsType<ForceStopped>(
-            await coordinator.DrainAsync(TimeSpan.FromMilliseconds(20))
-        );
-
-        Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, forced.Reason);
-        Assert.Equal(ZLinkDrainForceReason.DeadlineExceeded, executor.ForceReason);
-    }
-
-    [Fact]
     public async Task Force_Stop_Reports_Owner_Cleanup_Failure_As_The_Terminal_Reason()
     {
         var executor = new FakeDrainExecutor
@@ -2435,11 +2458,14 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 
         public int ForceCount { get; private set; }
 
+        public CancellationToken ShutdownToken { get; init; }
+        public CancellationToken ShutdownCancellationToken => ShutdownToken;
+        public Task? ForceCompletion { get; init; }
+        public TaskCompletionSource<CancellationToken>? ForceEntered { get; init; }
+
         public bool WaitForDeadline { get; init; }
 
         public ZLinkDrainForceReason? ForceFailureReason { get; init; }
-
-        public bool RequireForceStopBudget { get; init; }
 
         public async ValueTask<ZLinkDrainForceReason?> ExecuteAsync(
             TimeSpan deadline,
@@ -2461,27 +2487,12 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             CancellationToken cancellationToken
         )
         {
+            ForceEntered?.TrySetResult(cancellationToken);
+            if (ForceCompletion is not null)
+                await ForceCompletion;
             ForceCount++;
             ForceReason = reason;
-            if (RequireForceStopBudget)
-            {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw new ZLinkDrainForceException(
-                        ZLinkDrainForceReason.OwnerCleanupFailed,
-                        [new InvalidOperationException("force teardown budget expired")]
-                    );
-                }
-            }
-            else
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-            }
+            cancellationToken.ThrowIfCancellationRequested();
             if (ForceFailureReason is { } failureReason)
                 throw new ZLinkDrainForceException(
                     failureReason,
