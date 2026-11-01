@@ -1332,12 +1332,14 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         return true;
     }
 
-    public ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
+    public ValueTask<TReply> RequestToNodeAsync<TReply>(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
+        Func<ZLinkBackendRouteReceived, TReply> decodeReply,
+        Func<Exception?, Exception?> receive,
         ReadOnlyMemory<byte> metadata = default,
         ZLinkRequestAdmission? requestAdmission = null
     ) =>
@@ -1348,6 +1350,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             metadata,
             timeout,
             cancellationToken,
+            decodeReply,
+            receive,
             requestAdmission: requestAdmission
         );
 

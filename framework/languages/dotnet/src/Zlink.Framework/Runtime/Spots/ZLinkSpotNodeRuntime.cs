@@ -797,41 +797,75 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         );
     }
 
-    internal async ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
+    internal ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default,
         ZLinkRequestAdmission? requestAdmission = null
+    ) =>
+        RequestToNodeAsync(
+            targetNodeRid,
+            parts,
+            timeout,
+            cancellationToken,
+            static reply => reply,
+            static failure => failure,
+            metadata,
+            requestAdmission
+        );
+
+    internal ValueTask<TReply> RequestToNodeAsync<TReply>(
+        RoutingId targetNodeRid,
+        IReadOnlyList<Message> parts,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        Func<ZLinkBackendRouteReceived, TReply> decodeReply,
+        Func<Exception?, Exception?> receive,
+        ReadOnlyMemory<byte> metadata = default,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
         try
         {
-            return await Node.RequestToNodeAsync(
-                    targetNodeRid,
-                    parts,
-                    SendFlags.None,
-                    timeout,
-                    cancellationToken,
-                    metadata,
-                    requestAdmission: requestAdmission
-                )
-                .ConfigureAwait(false);
+            return Node.RequestToNodeAsync(
+                targetNodeRid,
+                parts,
+                SendFlags.None,
+                timeout,
+                cancellationToken,
+                decodeReply,
+                Complete,
+                metadata,
+                requestAdmission
+            );
         }
         catch (Exception failure)
         {
-            var mapped = ZLinkRequestFailureMapper.CreateSubmitException(
-                failure,
-                $"Node request to '{targetNodeRid}'"
-            );
-            if (ReferenceEquals(mapped, failure))
-                throw;
-            throw mapped;
+            var completion =
+                System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder<TReply>.Create();
+            completion.SetException(Complete(failure)!);
+            return completion.Task;
         }
-        finally
+
+        Exception? Complete(Exception? failure)
         {
-            ZLinkMessageParts.DisposeAll(parts);
+            try
+            {
+                return receive(
+                    failure is null
+                        ? null
+                        : ZLinkRequestFailureMapper.CreateSubmitException(
+                            failure,
+                            $"Node request to '{targetNodeRid}'"
+                        )
+                );
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+            }
         }
     }
 

@@ -4949,10 +4949,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ArgumentNullException.ThrowIfNull(parts);
         if (parts.Count == 0)
             throw new ArgumentException("Application payload is required.", nameof(parts));
-        var wire = new List<ReadOnlyMemory<byte>>(metadata.IsEmpty ? 2 : 3) { head };
+        var wire = new ReadOnlyMemory<byte>[metadata.IsEmpty ? 2 : 3];
+        wire[0] = head;
+        var payloadIndex = 1;
         if (!metadata.IsEmpty)
-            wire.Add(metadata);
-        wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
+            wire[payloadIndex++] = metadata;
+        wire[payloadIndex] = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts);
         return wire;
     }
 
@@ -10631,7 +10633,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
     }
 
-    internal async ValueTask<ZLinkBackendRouteReceived> RequestToNodeDirectAsync(
+    internal ValueTask<ZLinkBackendRouteReceived> RequestToNodeDirectAsync(
         RoutingId targetRid,
         IReadOnlyList<Message> parts,
         SendFlags flags,
@@ -10639,34 +10641,69 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ZLinkRequestAdmission? requestAdmission = null
+    ) =>
+        RequestToNodeDirectAsync(
+            targetRid,
+            parts,
+            flags,
+            metadata,
+            timeout,
+            cancellationToken,
+            static reply => reply,
+            static failure => failure,
+            requestAdmission
+        );
+
+    internal ValueTask<TReply> RequestToNodeDirectAsync<TReply>(
+        RoutingId targetRid,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        ReadOnlyMemory<byte> metadata,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        Func<ZLinkBackendRouteReceived, TReply> decodeReply,
+        Func<Exception?, Exception?> receive,
+        ZLinkRequestAdmission? requestAdmission = null
     )
     {
-        var requestDeadline = _deadlineClock.Elapsed + timeout;
-        var started = _deadlineTimeProvider.GetTimestamp();
-        var operationId = NextStandaloneOperationId();
-        var wire = CreateStatefulWire(
-            ZLinkServiceWireCodec.EncodeApplication(
-                ServiceWireConstants.Command.NodeRequest,
-                operationId.Low,
-                null,
-                !metadata.IsEmpty
-            ),
-            parts,
-            metadata
-        );
-        var reply = await RequestNativeDurableWireAsync(
+        try
+        {
+            var requestDeadline = _deadlineClock.Elapsed + timeout;
+            var started = _deadlineTimeProvider.GetTimestamp();
+            var operationId = NextStandaloneOperationId();
+            var wire = CreateStatefulWire(
+                ZLinkServiceWireCodec.EncodeApplication(
+                    ServiceWireConstants.Command.NodeRequest,
+                    operationId.Low,
+                    null,
+                    !metadata.IsEmpty
+                ),
+                parts,
+                metadata
+            );
+            return RequestNativeDurableWireAsync(
                 targetRid,
                 0,
                 wire,
                 started,
                 timeout,
                 cancellationToken,
+                reply =>
+                {
+                    Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
+                    return decodeReply(DecodeDirectApplicationReply(operationId.Low, reply));
+                },
+                receive,
                 requestAdmission: requestAdmission,
                 absoluteDeadline: requestDeadline
-            )
-            .ConfigureAwait(false);
-        Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
-        return DecodeDirectApplicationReply(operationId.Low, reply);
+            );
+        }
+        catch (Exception failure)
+        {
+            var completion = AsyncValueTaskMethodBuilder<TReply>.Create();
+            completion.SetException(receive(failure)!);
+            return completion.Task;
+        }
     }
 
     internal async ValueTask SendToChannelDirectAsync(
@@ -10874,19 +10911,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken
     )
     {
-        var messages = new Message[wire.Count];
-        var created = 0;
-        try
-        {
-            for (; created < messages.Length; created++)
-                messages[created] = Message.From(wire[created]);
-        }
-        catch
-        {
-            for (var index = 0; index < created; index++)
-                messages[index].Dispose();
-            throw;
-        }
+        var messages = ZLinkRawRouterServicePort.CreateMessages(wire);
         return SendDirectWireAsync(target, messages, cancellationToken);
     }
 
@@ -10901,19 +10926,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MeshOperationId operationId = default
     )
     {
-        var messages = new Message[wire.Count];
-        var created = 0;
-        try
-        {
-            for (; created < messages.Length; created++)
-                messages[created] = Message.From(wire[created]);
-        }
-        catch
-        {
-            for (var index = 0; index < created; index++)
-                messages[index].Dispose();
-            throw;
-        }
+        var messages = ZLinkRawRouterServicePort.CreateMessages(wire);
         return RequestDirectWireAsync(
             target,
             messages,
@@ -11078,13 +11091,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         TReply reply = default!;
+        IReadOnlyList<Message> replyParts = Array.Empty<Message>();
         Exception? physicalFailure = null;
         try
         {
             // The physical receiver owns its codec independently of the retired C1 entry.
-            reply = decode(
-                new ManagedRequestCompletion(RequestResult.Ok, await physical.ConfigureAwait(false))
-            );
+            replyParts = await physical.ConfigureAwait(false);
+            reply = decode(new ManagedRequestCompletion(RequestResult.Ok, replyParts));
         }
         catch (Exception error)
         {
@@ -11099,19 +11112,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             else
             {
                 publish?.Invoke(reply);
-                if (!CompleteManagedOperation(operation, reply))
-                {
-                    if (reply is IReadOnlyList<Message> parts)
-                        DisposeParts(parts);
-                    else if (reply is ManagedRequestCompletion raw)
-                        DisposeParts(raw.Parts);
-                }
+                if (CompleteManagedOperation(operation, reply))
+                    return;
             }
         }
         catch (Exception error)
         {
             FailNativeDeadline(operation, error);
         }
+        DisposeParts(replyParts);
     }
 
     private static IReadOnlyList<Message> DecodeDeadlineReply(ManagedRequestCompletion result)
@@ -11235,7 +11244,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     ) =>
         SubmitNativeWireAsync(
             target,
-            wire.Select(Message.From).ToArray(),
+            ZLinkRawRouterServicePort.CreateMessages(wire),
             timeout,
             out _,
             token,
@@ -11466,7 +11475,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private async ValueTask<IReadOnlyList<Message>> RequestNativeDurableWireAsync(
+    private ValueTask<IReadOnlyList<Message>> RequestNativeDurableWireAsync(
         RoutingId target,
         ulong targetNodeGeneration,
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
@@ -11478,77 +11487,133 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PendingOperation? ownerOperation = null,
         TimeSpan? absoluteDeadline = null,
         NativeDurableRequestLifetime? suppliedLifetime = null
+    ) =>
+        RequestNativeDurableWireAsync(
+            target,
+            targetNodeGeneration,
+            wire,
+            started,
+            timeout,
+            cancellationToken,
+            static reply => reply,
+            static failure => failure,
+            pendingToken,
+            requestAdmission,
+            ownerOperation,
+            absoluteDeadline,
+            suppliedLifetime
+        );
+
+    private async ValueTask<TReply> RequestNativeDurableWireAsync<TReply>(
+        RoutingId target,
+        ulong targetNodeGeneration,
+        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        long started,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        Func<IReadOnlyList<Message>, TReply> decodeReply,
+        Func<Exception?, Exception?> receive,
+        CancellationToken pendingToken = default,
+        ZLinkRequestAdmission? requestAdmission = null,
+        PendingOperation? ownerOperation = null,
+        TimeSpan? absoluteDeadline = null,
+        NativeDurableRequestLifetime? suppliedLifetime = null
     )
     {
-        using var ownedLifetime =
-            suppliedLifetime is null && timeout > _deadlineTimeProvider.GetElapsedTime(started)
-                ? await _lane
-                    .RunAsync(() => new NativeDurableRequestLifetime(this, target))
-                    .ConfigureAwait(false)
-                : null;
-        var lifetime = suppliedLifetime ?? ownedLifetime;
-        requestAdmission ??= new ZLinkRequestAdmission();
-        if (ownerOperation is not null)
-            return await ProduceAsync(ownerOperation, null, pendingToken).ConfigureAwait(false);
-        return await RunDeadlineRequestAsync(
-                timeout - _deadlineTimeProvider.GetElapsedTime(started),
-                cancellationToken,
-                (pending, terminal) => ProduceAsync(pending, terminal, cancellationToken),
-                absoluteDeadline,
-                requestAdmission: requestAdmission
-            )
-            .ConfigureAwait(false);
-
-        async Task<IReadOnlyList<Message>> ProduceAsync(
-            PendingOperation pending,
-            Task? terminal,
-            CancellationToken token
-        )
+        TReply reply = default!;
+        Exception? failure = null;
+        try
         {
-            lifetime?.Bind(() =>
-                ownerOperation is null
-                    ? TakeEndedNativeRequest(pending, default, lifetime.CreateEndedFailure())
-                    : TakeEndedNativeRequest(
-                        pending,
-                        new ManagedRequestCompletion(
-                            RequestResult.NotConnected,
-                            Array.Empty<Message>(),
-                            0
-                        )
+            using var ownedLifetime =
+                suppliedLifetime is null && timeout > _deadlineTimeProvider.GetElapsedTime(started)
+                    ? await _lane
+                        .RunAsync(() => new NativeDurableRequestLifetime(this, target))
+                        .ConfigureAwait(false)
+                    : null;
+            var lifetime = suppliedLifetime ?? ownedLifetime;
+            requestAdmission ??= new ZLinkRequestAdmission();
+            if (ownerOperation is not null)
+                reply = decodeReply(
+                    await ProduceAsync(ownerOperation, null, pendingToken).ConfigureAwait(false)
+                );
+            else
+                reply = await RunDeadlineRequestAsync(
+                        timeout - _deadlineTimeProvider.GetElapsedTime(started),
+                        cancellationToken,
+                        Decode,
+                        (pending, terminal) =>
+                            ObserveNativeDeadlineReplyAsync(
+                                pending,
+                                ProduceAsync(pending, terminal, cancellationToken),
+                                Decode
+                            ),
+                        absoluteDeadline,
+                        requestAdmission: requestAdmission
                     )
-            );
-            using var shutdown = (_stop?.Token ?? default).Register(() =>
-                CompleteManagedOperation(
-                    pending,
-                    RequestResult.Terminated,
-                    0,
-                    Array.Empty<Message>()
-                )
-            );
-            return await ZLinkDurableRequest
-                .RequestAsync(
-                    wire,
-                    pending.DeadlineStartTimestamp,
-                    pending.DeadlineTimeout,
-                    (frames, remaining, attemptToken) =>
-                    {
-                        var peer = RequireDirectPeer(target, targetNodeGeneration);
-                        return SubmitNativeWireAsync(
-                            peer.PhysicalRoutingId,
-                            frames,
-                            pending.Deadline - _deadlineClock.Elapsed,
-                            attemptToken,
-                            peer.Liveness,
-                            requestAdmission
-                        );
-                    },
-                    token,
-                    () => ObservePeerRoute(target, targetNodeGeneration),
-                    _deadlineTimeProvider,
-                    terminal
-                )
-                .ConfigureAwait(false);
+                    .ConfigureAwait(false);
+
+            async Task<IReadOnlyList<Message>> ProduceAsync(
+                PendingOperation pending,
+                Task? terminal,
+                CancellationToken token
+            )
+            {
+                lifetime?.Bind(() =>
+                    ownerOperation is null
+                        ? TakeEndedNativeRequest(pending, default, lifetime.CreateEndedFailure())
+                        : TakeEndedNativeRequest(
+                            pending,
+                            new ManagedRequestCompletion(
+                                RequestResult.NotConnected,
+                                Array.Empty<Message>(),
+                                0
+                            )
+                        )
+                );
+                using var shutdown = (_stop?.Token ?? default).Register(() =>
+                    CompleteManagedOperation(
+                        pending,
+                        RequestResult.Terminated,
+                        0,
+                        Array.Empty<Message>()
+                    )
+                );
+                return await ZLinkDurableRequest
+                    .RequestAsync(
+                        wire,
+                        pending.DeadlineStartTimestamp,
+                        pending.DeadlineTimeout,
+                        (frames, remaining, attemptToken) =>
+                        {
+                            var peer = RequireDirectPeer(target, targetNodeGeneration);
+                            return SubmitNativeWireAsync(
+                                peer.PhysicalRoutingId,
+                                frames,
+                                pending.Deadline - _deadlineClock.Elapsed,
+                                attemptToken,
+                                peer.Liveness,
+                                requestAdmission
+                            );
+                        },
+                        token,
+                        () => ObservePeerRoute(target, targetNodeGeneration),
+                        _deadlineTimeProvider,
+                        terminal
+                    )
+                    .ConfigureAwait(false);
+            }
         }
+        catch (Exception error)
+        {
+            failure = error;
+        }
+        failure = receive(failure);
+        if (failure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        return reply;
+
+        TReply Decode(ManagedRequestCompletion completion) =>
+            decodeReply(DecodeDeadlineReply(completion));
     }
 
     private async Task CompleteNativeDurableRequestAsync(
