@@ -116,7 +116,7 @@ final class ZLinkSpringHandlerFactory
             Class<?> handlerType,
             ZLinkTypeAwareHandlerActivator.RuntimeServiceLookup runtimeServices) {
         HandlerPlan plan = handlerPlans.get(handlerType);
-        if (plan == null || plan.singletonBeanName == null) {
+        if (plan == null) {
             return null;
         }
         for (Class<?> dependencyType : plan.constructorDependencies) {
@@ -525,58 +525,12 @@ final class ZLinkSpringHandlerFactory
 
     private HandlerPlan createHandlerPlan(Class<?> handlerType) {
         HandlerMetadata metadata = HANDLER_METADATA.get(handlerType);
-        SingletonHandlerRegistration singleton = singletonHandlerRegistration(handlerType);
-        return new HandlerPlan(
-                handlerType, metadata, singleton.beanName(), singleton.constructorDependencies());
-    }
-
-    private SingletonHandlerRegistration singletonHandlerRegistration(Class<?> handlerType) {
-        if (!isZLinkManagedType(handlerType)
-                || handlerType.isInterface()
-                || java.lang.reflect.Modifier.isAbstract(handlerType.getModifiers())
-                || !(beanFactory instanceof ConfigurableListableBeanFactory configurable)) {
-            return SingletonHandlerRegistration.NOT_REUSABLE;
-        }
-        String[] candidates =
-                BeanFactoryUtils.beanNamesForTypeIncludingAncestors(
-                        configurable, handlerType, true, false);
-        if (candidates.length != 1) {
-            return SingletonHandlerRegistration.NOT_REUSABLE;
-        }
-        String beanName = candidates[0];
-        if (!configurable.containsBeanDefinition(beanName) || !configurable.isSingleton(beanName)) {
-            return SingletonHandlerRegistration.NOT_REUSABLE;
-        }
-        var definition = configurable.getBeanDefinition(beanName);
-        if (!(definition instanceof AbstractBeanDefinition abstractDefinition)) {
-            return SingletonHandlerRegistration.NOT_REUSABLE;
-        }
-        boolean factoryMethod = definition.getFactoryMethodName() != null;
-        boolean supplier = abstractDefinition.getInstanceSupplier() != null;
-        boolean directHandler =
-                abstractDefinition.hasBeanClass()
-                        && abstractDefinition.getBeanClass() == handlerType;
-        if (!factoryMethod && !supplier && !directHandler) {
-            return SingletonHandlerRegistration.NOT_REUSABLE;
-        }
-        Class<?> candidateType = configurable.getType(beanName, false);
-        if (candidateType == null || !handlerType.isAssignableFrom(candidateType)) {
-            return SingletonHandlerRegistration.NOT_REUSABLE;
-        }
-        if (configurable.containsSingleton(beanName)
-                && !handlerType.isInstance(configurable.getBean(beanName))) {
-            return SingletonHandlerRegistration.NOT_REUSABLE;
-        }
-        List<Constructor<?>> constructors = HANDLER_METADATA.get(handlerType).constructors();
-        if (constructors.isEmpty()) {
-            return SingletonHandlerRegistration.NOT_REUSABLE;
-        }
         List<Class<?>> constructorDependencies =
-                constructors.stream()
+                metadata.constructors().stream()
                         .flatMap(constructor -> Arrays.stream(constructor.getParameterTypes()))
                         .distinct()
                         .toList();
-        return new SingletonHandlerRegistration(beanName, constructorDependencies);
+        return new HandlerPlan(handlerType, metadata, constructorDependencies);
     }
 
     private HandlerConstruction createHandlerConstruction(
@@ -607,7 +561,7 @@ final class ZLinkSpringHandlerFactory
                 }
                 var constructorPlan = new ConstructorPlan(constructor, plans);
                 var construction = new HandlerConstruction(constructorPlan, registration);
-                if (registration.singletonBeanName != null
+                if (isZLinkManagedType(registration.handlerType)
                         && hasOnlySingletonConstructorDependencies(constructorPlan)
                         && registration.reusableActivation == null) {
                     registration.reusableActivation = new SharedSpringActivation(construction);
@@ -673,7 +627,6 @@ final class ZLinkSpringHandlerFactory
     private static final class HandlerPlan {
         private final Class<?> handlerType;
         private final HandlerMetadata metadata;
-        private final String singletonBeanName;
         private final List<Class<?>> constructorDependencies;
         private volatile HandlerConstruction defaultConstruction;
         private volatile Activation reusableActivation;
@@ -681,19 +634,11 @@ final class ZLinkSpringHandlerFactory
         private HandlerPlan(
                 Class<?> handlerType,
                 HandlerMetadata metadata,
-                String singletonBeanName,
                 List<Class<?>> constructorDependencies) {
             this.handlerType = handlerType;
             this.metadata = metadata;
-            this.singletonBeanName = singletonBeanName;
             this.constructorDependencies = constructorDependencies;
         }
-    }
-
-    private record SingletonHandlerRegistration(
-            String beanName, List<Class<?>> constructorDependencies) {
-        private static final SingletonHandlerRegistration NOT_REUSABLE =
-                new SingletonHandlerRegistration(null, List.of());
     }
 
     private record HandlerConstruction(ConstructorPlan constructor, HandlerPlan registration) {}
