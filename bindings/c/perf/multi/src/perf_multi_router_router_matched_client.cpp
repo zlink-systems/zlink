@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,7 @@ struct child_command_t
     uint32_t run_id;
     uint64_t msg_size;
     uint32_t duration_seconds;
+    perf_multi_metric::phase_t phase;
 };
 
 struct child_result_t
@@ -146,12 +148,14 @@ bool configure_client_socket (void *ctx,
     return connected;
 }
 
-bool run_reqrep_case (
-  perf_multi_socket_reqrep::client_state_t *state,
-  const multi_bench_settings_t &settings,
-  bool websocket_transport,
-  const child_command_t &command,
-  child_result_t *result)
+bool run_reqrep_case (perf_multi_socket_reqrep::client_state_t *state,
+                      const multi_bench_settings_t &settings,
+                      bool websocket_transport,
+                      const child_command_t &command,
+                      double window_seconds,
+                      perf_multi_measurement::schedule_t *schedule,
+                      uint64_t *active_accepted,
+                      child_result_t *result)
 {
     unsigned long long received = 0;
     bench_latency_stats_t latency;
@@ -162,66 +166,67 @@ bool run_reqrep_case (
     config.client_router_request = true;
     config.server_has_routing_id = true;
     config.server_routing_id = k_server_routing_id;
-    if (!perf_multi_socket_reqrep::run_active_window (
-          config, state, settings, websocket_transport, command.run_id,
-          static_cast<size_t> (command.msg_size), &received, &latency)) {
+    const bool ran = perf_multi_socket_reqrep::run_measurement_window (
+      config, state, settings, websocket_transport, command.run_id,
+      static_cast<size_t> (command.msg_size), window_seconds, &received, &latency, schedule);
+    state->schedule = NULL;
+    if (!ran)
         return false;
+    if (!schedule) {
+        *active_accepted = state->accepted_count;
+        result->received = received;
+        return received > 0 && *active_accepted > 0;
     }
+
     std::vector<double> samples;
     state->latency.append_samples (&samples);
-    result->received = received;
     result->latency_count = state->latency.count ();
     result->latency_sum_ns = state->latency.sum_ns ();
-    if (samples.size () > k_child_sample_cap) {
+    if (samples.size () > k_child_sample_cap)
         return false;
-    }
     result->sample_count = static_cast<uint32_t> (samples.size ());
     for (size_t i = 0; i < result->sample_count; ++i)
         result->samples[i] = samples[i];
-    return received > 0 && result->latency_count > 0;
+    return result->latency_count > 0;
 }
 
-bool run_sendsend_case (
-  void *socket,
-  const std::string &transport,
-  const multi_bench_settings_t &settings,
-  const child_command_t &command,
-  child_result_t *result)
+bool run_sendsend_case (void *socket,
+                        const std::string &transport,
+                        const multi_bench_settings_t &settings,
+                        const child_command_t &command,
+                        double window_seconds,
+                        perf_multi_measurement::schedule_t *schedule,
+                        uint64_t *active_accepted,
+                        child_result_t *result)
 {
     const size_t msg_size = static_cast<size_t> (command.msg_size);
-    const size_t payload_size =
-      std::max<size_t> (msg_size, perf_multi_metric::header_size ());
+    const size_t payload_size = std::max<size_t> (msg_size, perf_multi_metric::header_size ());
     std::vector<char> payload (payload_size, 'c');
     std::vector<void *> sockets (1, socket);
-    long active_received = 0;
+    long received = 0;
     double latency_sum = 0.0;
     long latency_count = 0;
     bench_latency_stats_t latency;
     std::vector<double> samples;
     if (!perf_multi_client::run_echo_window_round_robin (
-          sockets, settings, payload, payload_size, msg_size,
-          k_server_routing_id, true, command.run_id,
-          perf_multi_metric::phase_active,
-          perf_multi_client::metric_capture_bytes (),
-          static_cast<double> (
-            std::max<uint32_t> (1, command.duration_seconds)),
-          true, true, transport == "tcp", &active_received,
-          &latency_sum, &latency_count, &latency, &samples,
-          k_child_sample_cap)) {
+          sockets, settings, payload, payload_size, msg_size, k_server_routing_id, true,
+          command.run_id, command.phase, perf_multi_client::metric_capture_bytes (), window_seconds,
+          true, schedule != NULL, transport == "tcp", &received, &latency_sum, &latency_count,
+          &latency, &samples, k_child_sample_cap, active_accepted, schedule))
         return false;
+    if (!schedule) {
+        result->received = static_cast<uint64_t> (std::max<long> (0, received));
+        return received > 0 && *active_accepted > 0;
     }
-    result->received =
-      static_cast<uint64_t> (std::max<long> (0, active_received));
-    result->latency_count =
-      static_cast<uint64_t> (std::max<long> (0, latency_count));
+
+    result->latency_count = static_cast<uint64_t> (std::max<long> (0, latency_count));
     result->latency_sum_ns = latency_sum;
-    if (samples.size () > k_child_sample_cap) {
+    if (samples.size () > k_child_sample_cap)
         return false;
-    }
     result->sample_count = static_cast<uint32_t> (samples.size ());
     for (size_t i = 0; i < result->sample_count; ++i)
         result->samples[i] = samples[i];
-    return active_received > 0 && latency_count > 0;
+    return latency_count > 0;
 }
 
 int child_main (int index,
@@ -275,26 +280,58 @@ int child_main (int index,
     if (!write_full (result_fd, &ready_status, sizeof (ready_status)))
         return 13;
 
+    uint64_t active_accepted = 0;
     for (;;) {
         child_command_t command;
-        if (!read_full (command_fd, &command, sizeof (command))
-            || command.stop) {
+        if (!read_full (command_fd, &command, sizeof (command)) || command.stop) {
             break;
         }
         child_result_t result;
         std::memset (&result, 0, sizeof (result));
-        const size_t msg_size = static_cast<size_t> (command.msg_size);
-        apply_benchmark_hwm (socket, settings.hwm);
-        const bool recalculated =
-          zlink_ctx_auto_hwm_recalculate (ctx.get ()) == ZLINK_CONFIG_OK;
+        bool prepared = true;
+        if (command.phase == perf_multi_metric::phase_active) {
+            active_accepted = 0;
+            apply_benchmark_hwm (socket, settings.hwm);
+            prepared = zlink_ctx_auto_hwm_recalculate (ctx.get ()) == ZLINK_CONFIG_OK;
+        } else if (command.phase != perf_multi_metric::phase_latency || active_accepted == 0) {
+            prepared = false;
+        }
+        perf_multi_measurement::schedule_t schedule (
+          perf_multi_measurement::target_rate (active_accepted, command.duration_seconds),
+          perf_multi_metric::now_ns ());
+        const bool paced = command.phase == perf_multi_metric::phase_latency;
+        const double window_seconds = paced ? 0.5 + settings.latency_duration_seconds
+                                            : std::max<uint32_t> (1, command.duration_seconds);
+        perf_multi_measurement::schedule_t *phase_schedule = paced ? &schedule : NULL;
+        uint64_t *accepted_out = paced ? NULL : &active_accepted;
         const bool ran =
-          recalculated
+          prepared
           && (is_reqrep ()
-                ? run_reqrep_case (
-                    &reqrep_state, settings,
-                    transport == "ws" || transport == "wss", command, &result)
-                : run_sendsend_case (
-                    socket, transport, settings, command, &result));
+                ? run_reqrep_case (&reqrep_state, settings, transport == "ws" || transport == "wss",
+                                   command, window_seconds, phase_schedule, accepted_out, &result)
+                : run_sendsend_case (socket, transport, settings, command, window_seconds,
+                                     phase_schedule, accepted_out, &result));
+        if (!ran) {
+            const int failure_errno = errno;
+            std::ostringstream failure;
+            failure << "[perf-multi-matched] child failure child=" << index
+                    << " phase=" << static_cast<unsigned int> (command.phase)
+                    << " run_id=" << command.run_id << " size=" << command.msg_size
+                    << " prepared=" << prepared << " active_accepted=" << active_accepted
+                    << " received=" << result.received << " latency_count=" << result.latency_count
+                    << " sample_count=" << result.sample_count << " successful_completions="
+                    << (is_reqrep () ? reqrep_state.successful_completion_count : 0)
+                    << " failed_completions="
+                    << (is_reqrep () ? reqrep_state.failed_completion_count : 0)
+                    << " first_failed_result="
+                    << (is_reqrep () ? reqrep_state.first_failed_result : 0)
+                    << " errno=" << failure_errno;
+            std::cerr << failure.str () << std::endl;
+        }
+        if (ran && paced)
+            perf_multi_measurement::print_diagnostic (
+              k_pattern, static_cast<size_t> (command.msg_size), active_accepted,
+              command.duration_seconds, schedule);
         result.status = ran ? 0 : 1;
         if (!write_full (result_fd, &result, sizeof (result)))
             break;
@@ -367,47 +404,78 @@ int run_client (const std::string &lib_name,
         std::memset (&command, 0, sizeof (command));
         command.run_id = static_cast<uint32_t> (si + 1);
         command.msg_size = msg_size;
-        command.duration_seconds =
-          static_cast<uint32_t> (std::max (1, settings.duration_seconds));
-        for (size_t i = 0; i < children.size (); ++i) {
-            if (!write_full (
-                  children[i].command_fd, &command, sizeof (command))) {
-                ok = false;
-                break;
-            }
-        }
-
+        command.duration_seconds = static_cast<uint32_t> (std::max (1, settings.duration_seconds));
         uint64_t total_received = 0;
         uint64_t total_latency_count = 0;
         double total_latency = 0.0;
         std::vector<perf_multi_latency::weighted_sample_t> samples;
         samples.reserve (children.size () * k_child_sample_cap);
-        for (size_t i = 0; i < children.size () && ok; ++i) {
-            child_result_t result;
-            std::memset (&result, 0, sizeof (result));
-            if (!read_full (
-                  children[i].result_fd, &result, sizeof (result))
-                || result.status != 0) {
-                ok = false;
-                break;
+        const perf_multi_metric::phase_t phases[] = {perf_multi_metric::phase_active,
+                                                     perf_multi_metric::phase_latency};
+        // All ACTIVE replies and retained sends must drain before any child
+        // starts paced traffic. The parent owns this cross-process barrier.
+        for (size_t phase_index = 0; phase_index < 2 && ok; ++phase_index) {
+            command.phase = phases[phase_index];
+            for (size_t i = 0; i < children.size (); ++i) {
+                if (!write_full (children[i].command_fd, &command, sizeof (command))) {
+                    ok = false;
+                    break;
+                }
             }
-            total_received += result.received;
-            total_latency_count += result.latency_count;
-            total_latency += result.latency_sum_ns;
-            if (result.sample_count > k_child_sample_cap
-                || !perf_multi_latency::append_weighted_samples (
-                  result.latency_count, result.samples,
-                  result.sample_count, &samples)) {
-                ok = false;
-                break;
+            for (size_t i = 0; i < children.size () && ok; ++i) {
+                child_result_t result;
+                std::memset (&result, 0, sizeof (result));
+                const bool result_read =
+                  read_full (children[i].result_fd, &result, sizeof (result));
+                if (!result_read || result.status != 0) {
+                    std::cerr << "[perf-multi-matched] rejected child=" << i
+                              << " phase=" << static_cast<unsigned int> (command.phase)
+                              << " result_read=" << result_read << " status=" << result.status
+                              << " received=" << result.received
+                              << " latency_count=" << result.latency_count
+                              << " latency_sum_ns=" << result.latency_sum_ns
+                              << " sample_count=" << result.sample_count << std::endl;
+                    ok = false;
+                    break;
+                }
+                if (command.phase == perf_multi_metric::phase_active) {
+                    if (result.received == 0 || result.latency_count != 0
+                        || result.sample_count != 0) {
+                        std::cerr << "[perf-multi-matched] invalid ACTIVE result child=" << i
+                                  << " reason=expected_positive_received_and_zero_latency"
+                                  << " status=" << result.status << " received=" << result.received
+                                  << " latency_count=" << result.latency_count
+                                  << " sample_count=" << result.sample_count << std::endl;
+                        ok = false;
+                        break;
+                    }
+                    total_received += result.received;
+                } else {
+                    if (result.received != 0 || result.latency_count == 0
+                        || result.sample_count > k_child_sample_cap
+                        || !perf_multi_latency::append_weighted_samples (
+                          result.latency_count, result.samples, result.sample_count, &samples)) {
+                        std::cerr
+                          << "[perf-multi-matched] invalid LATENCY result child=" << i
+                          << " reason=expected_zero_received_positive_latency_and_valid_samples"
+                          << " status=" << result.status << " received=" << result.received
+                          << " latency_count=" << result.latency_count
+                          << " sample_count=" << result.sample_count << std::endl;
+                        ok = false;
+                        break;
+                    }
+                    total_latency_count += result.latency_count;
+                    total_latency += result.latency_sum_ns;
+                }
             }
         }
-        if (!ok || total_received == 0 || total_latency_count == 0)
+        if (!ok || total_received == 0 || total_latency_count == 0) {
+            ok = false;
             break;
+        }
 
         const bench_latency_stats_t latency =
-          perf_multi_latency::aggregate (
-            total_latency_count, total_latency, &samples);
+          perf_multi_latency::aggregate (total_latency_count, total_latency, &samples);
         print_result (
           lib_name, k_pattern, transport, msg_size,
           throughput_per_second (
@@ -436,8 +504,11 @@ int run_client (const std::string &lib_name,
     for (size_t i = 0; i < children.size (); ++i) {
         int status = 0;
         waitpid (children[i].pid, &status, 0);
-        if (!WIFEXITED (status) || WEXITSTATUS (status) != 0)
+        if (!WIFEXITED (status) || WEXITSTATUS (status) != 0) {
+            std::cerr << "[perf-multi-matched] child exit child=" << i << " pid=" << children[i].pid
+                      << " wait_status=" << status << std::endl;
             ok = false;
+        }
     }
     return ok ? 0 : 1;
 }

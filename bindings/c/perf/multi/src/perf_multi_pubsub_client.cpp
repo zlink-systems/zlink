@@ -2,6 +2,9 @@
 #include "../common/perf_common_multi.hpp"
 #include "../common/perf_multi_client_helpers.hpp"
 #include "../common/perf_multi_handshake.hpp"
+#include <set>
+#include <memory>
+#include <thread>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -23,8 +26,7 @@ enum pubsub_recv_result_t
 {
     pubsub_recv_error = -1,
     pubsub_recv_empty = 0,
-    pubsub_recv_payload = 1,
-    pubsub_recv_stop = 2
+    pubsub_recv_payload = 1
 };
 
 using perf_multi_client::close_client_monitors;
@@ -66,15 +68,6 @@ pubsub_recv_result_t recv_one_pubsub_message (void *socket,
         }
         zlink_multipart_close (parts, part_count);
         return pubsub_recv_payload;
-    }
-
-    if (is_stop_token_message (part)) {
-        if (part_count != 1u) {
-            zlink_multipart_close (parts, part_count);
-            return pubsub_recv_error;
-        }
-        zlink_multipart_close (parts, part_count);
-        return pubsub_recv_stop;
     }
 
     if (!perf_zlink_measurement_parts_valid (parts, part_count)) {
@@ -145,7 +138,8 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                         size_t msg_size,
                         uint32_t run_id,
                         double *throughput_out,
-                        bench_latency_stats_t *latency_out)
+                        bench_latency_stats_t *latency_out,
+                        perf_multi_handshake::start_signal_state_t *phase_gate)
 {
     if (!throughput_out || !latency_out || sockets.empty () || !poller)
         return false;
@@ -155,109 +149,83 @@ bool run_recv_duration (const std::vector<void *> &sockets,
     double lat_sum = 0.0;
     long lat_count = 0;
     bench_latency_sampler_t lat_samples;
-    const auto active_deadline = std::chrono::steady_clock::now ()
-                                 + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-                                   std::chrono::duration<double> (active_seconds));
     std::vector<zlink_poller_event_t> events (sockets.size ());
-
-    bool phase_done = false;
-    while (!phase_done) {
-        const auto now_before_poll = std::chrono::steady_clock::now ();
-        if (now_before_poll >= active_deadline)
-            break;
-        const long long remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
-                                         active_deadline - now_before_poll)
-                                         .count ();
-        const int poll_timeout_ms = static_cast<int> (
-          std::max<long long> (1, std::min<long long> (100, remaining_ms)));
-        const int poll_rc = zlink_poller_wait (poller, events.empty () ? NULL : &events[0],
-                                               static_cast<int> (events.size ()), poll_timeout_ms,
-                                               NULL);
-        if (poll_rc == 0)
-            continue;
-        if (poll_rc < 0) {
-            const int err = zlink_errno ();
-            if (err == EINTR || err == EAGAIN)
-                continue;
-            if (bench_debug_enabled ()) {
-                std::cerr << "[multi-pubsub-client] poller wait failed err=" << err << std::endl;
-            }
-            return false;
-        }
-
-        for (int i = 0; i < poll_rc; ++i) {
-            if (phase_done)
-                break;
-            if ((events[i].events & ZLINK_POLLIN) == 0)
-                continue;
-
-            void *socket = events[i].socket;
-            while (socket) {
-                // PUB/SUB does not guarantee delivery of a token accepted by
-                // the publisher, so the active deadline also bounds shutdown.
-                if (std::chrono::steady_clock::now () >= active_deadline) {
-                    phase_done = true;
-                    break;
-                }
-                perf_multi_metric::header_t header;
-                std::memset (&header, 0, sizeof (header));
-                double sample_ns = 0.0;
-                bool have_sample = false;
-                const pubsub_recv_result_t recv_rc = recv_one_pubsub_message (
-                  socket, msg_size, run_id, &header, &sample_ns, &have_sample);
-                if (recv_rc == pubsub_recv_error) {
-                    if (bench_debug_enabled ()) {
-                        std::cerr << "[multi-pubsub-client] recv error err=" << zlink_errno ()
-                                  << std::endl;
-                    }
-                    return false;
-                }
-                if (recv_rc == pubsub_recv_empty)
-                    break;
-                if (recv_rc == pubsub_recv_stop) {
-                    phase_done = true;
-                    break;
-                }
-
-                if (header.phase == static_cast<uint8_t> (perf_multi_metric::phase_cooldown)) {
-                    phase_done = true;
-                    break;
-                }
-                if (header.phase != static_cast<uint8_t> (perf_multi_metric::phase_active)
-                    || std::chrono::steady_clock::now () >= active_deadline) {
+    // The publisher waits for PHASE_DRAINED before pacing. Drain every
+    // subscriber, with a bounded quiet interval because PUB may drop markers.
+    const auto receive_phase = [&] (perf_multi_metric::phase_t phase, double seconds) -> bool {
+        const auto deadline = std::chrono::steady_clock::now ()
+                              + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+                                std::chrono::duration<double> (seconds));
+        const auto drain_deadline = deadline + std::chrono::seconds (10);
+        auto last_payload = std::chrono::steady_clock::now ();
+        std::set<void *> stopped;
+        while (!perf_stop_requested ().load (std::memory_order_acquire)
+               && std::chrono::steady_clock::now () < drain_deadline) {
+            const auto now = std::chrono::steady_clock::now ();
+            std::chrono::steady_clock::time_point done_receipt;
+            const bool producer_done =
+              perf_multi_handshake::query_start (phase_gate, msg_size, phase, &done_receipt);
+            if (producer_done
+                && (stopped.size () == sockets.size ()
+                    || (now >= deadline
+                        && now - std::max (last_payload, done_receipt)
+                             >= std::chrono::milliseconds (50))))
+                return perf_multi_handshake::wait_for_start (phase_gate, msg_size, 1, phase);
+            const int poll_rc = zlink_poller_wait (poller, events.empty () ? NULL : &events[0],
+                                                   static_cast<int> (events.size ()), 10, NULL);
+            if (poll_rc < 0) {
+                if (zlink_errno () == EINTR || zlink_errno () == EAGAIN)
                     continue;
-                }
-
-                ++recv_count;
-                if (have_sample) {
-                    lat_sum += sample_ns;
-                    ++lat_count;
-                    lat_samples.add (sample_ns);
+                return false;
+            }
+            for (int i = 0; i < poll_rc; ++i) {
+                if ((events[i].events & ZLINK_POLLIN) == 0)
+                    continue;
+                void *socket = events[i].socket;
+                for (;;) {
+                    perf_multi_metric::header_t header = {};
+                    double sample_ns = 0.0;
+                    bool have_sample = false;
+                    const pubsub_recv_result_t status = recv_one_pubsub_message (
+                      socket, msg_size, run_id, &header, &sample_ns, &have_sample);
+                    if (status == pubsub_recv_error)
+                        return false;
+                    if (status == pubsub_recv_empty)
+                        break;
+                    last_payload = std::chrono::steady_clock::now ();
+                    if (last_payload >= drain_deadline) {
+                        errno = ETIMEDOUT;
+                        return false;
+                    }
+                    if (header.phase != static_cast<uint8_t> (phase))
+                        continue;
+                    if (perf_multi_handshake::is_phase_end_marker (header, run_id, phase,
+                                                                   msg_size)) {
+                        stopped.insert (socket);
+                        continue;
+                    }
+                    if (phase == perf_multi_metric::phase_active) {
+                        if (std::chrono::steady_clock::now () < deadline)
+                            ++recv_count;
+                    } else if (have_sample) {
+                        lat_sum += sample_ns;
+                        ++lat_count;
+                        lat_samples.add (sample_ns);
+                    }
                 }
             }
         }
-    }
-
-    if (recv_count < 0 || lat_count < 0) {
-        if (bench_debug_enabled ()) {
-            int events = 0;
-            size_t events_size = sizeof (events);
-            if (zlink_get_option (sockets[0], ZLINK_OPT_EVENTS, &events, &events_size) != 0) {
-                events = -1;
-            }
-            std::cerr << "[multi-pubsub-client] recv metrics invalid recv=" << recv_count
-                      << " lat=" << lat_count << " events=" << events << std::endl;
-        }
+        errno = ETIMEDOUT;
         return false;
-    }
-
-    *throughput_out = throughput_per_second (
-      static_cast<uint64_t> (recv_count),
-      static_cast<double> (std::max (1, settings.duration_seconds)));
-    if (bench_debug_enabled ()) {
-        std::cerr << "[multi-pubsub-client] active recv_count=" << recv_count
-                  << " lat_count=" << lat_count << std::endl;
-    }
+    };
+    if (!receive_phase (perf_multi_metric::phase_active, active_seconds))
+        return false;
+    std::cout << "PHASE_DRAINED," << msg_size << std::endl;
+    if (!receive_phase (perf_multi_metric::phase_latency, settings.latency_duration_seconds + 0.5))
+        return false;
+    if (recv_count <= 0 || lat_count <= 0)
+        return false;
+    *throughput_out = throughput_per_second (static_cast<uint64_t> (recv_count), active_seconds);
     perf_multi_client::normalize_latency_stats (lat_sum, lat_count, &lat_samples, latency_out);
     return true;
 }
@@ -269,16 +237,18 @@ inline bool run_single_size_case (const std::vector<void *> &sockets,
                                   const std::string &lib_name,
                                   const std::string &transport,
                                   size_t msg_size,
-                                  uint32_t run_id)
+                                  uint32_t run_id,
+                                  perf_multi_handshake::start_signal_state_t *phase_gate)
 {
     (void) scratch_capacity;
-    if (!perf_multi_handshake::wait_for_start_from_stdin (msg_size))
+    if (!perf_multi_handshake::wait_for_start (phase_gate, msg_size,
+                                               base_settings.connect_ready_timeout_ms))
         return false;
 
     double throughput = 0.0;
     bench_latency_stats_t latency;
-    const bool ok =
-      run_recv_duration (sockets, poller, base_settings, msg_size, run_id, &throughput, &latency);
+    const bool ok = run_recv_duration (sockets, poller, base_settings, msg_size, run_id,
+                                       &throughput, &latency, phase_gate);
     if (!ok) {
         return false;
     }
@@ -343,7 +313,25 @@ inline int run_client_benchmark (const std::string &lib_name,
     }
 
     const size_t scratch_capacity = static_cast<size_t> (64);
-
+    const std::shared_ptr<perf_multi_handshake::start_signal_state_t> phase_gate (
+      new perf_multi_handshake::start_signal_state_t ());
+    perf_stop_requested ().store (false, std::memory_order_release);
+    std::thread stdin_watcher ([phase_gate] () {
+        std::string line;
+        while (std::getline (std::cin, line)) {
+            size_t msg_size = 0;
+            perf_multi_metric::phase_t phase = perf_multi_metric::phase_unknown;
+            if (perf_multi_handshake::parse_size_command_line (line, "START,", &msg_size))
+                perf_multi_handshake::signal_start (phase_gate.get (), msg_size);
+            else if (perf_multi_handshake::parse_phase_done_line (line, &msg_size, &phase))
+                perf_multi_handshake::signal_start (phase_gate.get (), msg_size, phase);
+            else if (line == "STOP" || line == "QUIT")
+                break;
+        }
+        perf_stop_requested ().store (true, std::memory_order_release);
+        perf_multi_handshake::signal_stop (phase_gate.get ());
+    });
+    bool ok = true;
     for (size_t si = 0; si < msg_sizes.size (); ++si) {
         const size_t msg_size = msg_sizes[si];
         const uint32_t run_id = static_cast<uint32_t> (si + 1);
@@ -351,20 +339,30 @@ inline int run_client_benchmark (const std::string &lib_name,
                                            base_settings.hwm, transport, msg_size);
         std::cout << "CLIENT_READY," << msg_size << std::endl;
         if (!run_single_size_case (sockets, poller, base_settings, scratch_capacity, lib_name,
-                                   transport, msg_size, run_id)) {
+                                   transport, msg_size, run_id, phase_gate.get ())) {
             if (bench_debug_enabled ()) {
                 std::cerr << "[multi-pubsub-client] size case failed size=" << msg_size
                           << " run_id=" << run_id << std::endl;
             }
-            zlink_poller_destroy (&poller);
-            close_client_sockets (&sockets);
-            return 1;
+            ok = false;
+            break;
         }
         std::cout << "CLIENT_DONE," << msg_size << std::endl;
     }
     zlink_poller_destroy (&poller);
     close_client_sockets (&sockets);
-    return 0;
+    bool reader_done = false;
+    if (ok) {
+        const int wait_ms = perf_stop_send_timeout_ms () * perf_stop_send_max_attempts ();
+        std::unique_lock<std::mutex> lock (phase_gate->mutex);
+        reader_done = phase_gate->cv.wait_for (lock, std::chrono::milliseconds (wait_ms),
+                                               [phase_gate] () { return phase_gate->stopped; });
+    }
+    if (reader_done)
+        stdin_watcher.join ();
+    else
+        stdin_watcher.detach ();
+    return ok ? 0 : 1;
 }
 
 } // namespace

@@ -15,6 +15,7 @@ struct bench_settings_t
     size_t clients;
     uint64_t hwm;
     int duration_seconds;
+    int latency_duration_seconds;
     int connect_ready_timeout_ms;
 };
 
@@ -137,6 +138,8 @@ inline bench_settings_t resolve_bench_settings ()
       "PERF_MULTI_HWM", "PERF_HWM", resolve_default_hwm (pattern, resolved_clients));
     settings.duration_seconds = resolve_multi_int_env_with_fallback ("PERF_MULTI_DURATION_SECONDS",
                                                                      "PERF_DURATION_SECONDS", 5, 1);
+    settings.latency_duration_seconds = resolve_multi_int_env_with_fallback (
+      "PERF_MULTI_LATENCY_DURATION_SECONDS", NULL, settings.duration_seconds, 1);
     settings.connect_ready_timeout_ms = resolve_multi_int_env_with_fallback (
       "PERF_MULTI_CONNECT_READY_TIMEOUT_MS", "PERF_CONNECT_READY_TIMEOUT_MS", 10000, 0);
     return settings;

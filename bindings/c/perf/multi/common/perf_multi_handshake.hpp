@@ -8,7 +8,8 @@
 #include <cstring>
 #include <iostream>
 #include <mutex>
-#include <set>
+#include <map>
+#include "perf_multi_metric_header.hpp"
 #include <string>
 
 namespace perf_multi_handshake
@@ -18,7 +19,9 @@ struct start_signal_state_t
 {
     start_signal_state_t () : pending_sizes (), stopped (false), mutex (), cv () {}
 
-    std::set<size_t> pending_sizes;
+    typedef std::pair<size_t, perf_multi_metric::phase_t> key_t;
+    typedef std::map<key_t, std::chrono::steady_clock::time_point> signals_t;
+    signals_t pending_sizes;
     bool stopped;
     std::mutex mutex;
     std::condition_variable cv;
@@ -107,14 +110,17 @@ inline void reset_start_signal_state (start_signal_state_t *state)
     state->stopped = false;
 }
 
-inline void signal_start (start_signal_state_t *state, size_t msg_size)
+inline void signal_start (start_signal_state_t *state,
+                          size_t msg_size,
+                          perf_multi_metric::phase_t phase = perf_multi_metric::phase_unknown)
 {
     if (!state || msg_size == 0)
         return;
 
     {
         std::lock_guard<std::mutex> lock (state->mutex);
-        state->pending_sizes.insert (msg_size);
+        state->pending_sizes.insert (std::make_pair (start_signal_state_t::key_t (msg_size, phase),
+                                                     std::chrono::steady_clock::now ()));
     }
     state->cv.notify_all ();
 }
@@ -131,7 +137,10 @@ inline void signal_stop (start_signal_state_t *state)
     state->cv.notify_all ();
 }
 
-inline bool wait_for_start (start_signal_state_t *state, size_t msg_size, int timeout_ms)
+inline bool wait_for_start (start_signal_state_t *state,
+                            size_t msg_size,
+                            int timeout_ms,
+                            perf_multi_metric::phase_t phase = perf_multi_metric::phase_unknown)
 {
     if (!state || msg_size == 0) {
         errno = EINVAL;
@@ -139,7 +148,8 @@ inline bool wait_for_start (start_signal_state_t *state, size_t msg_size, int ti
     }
 
     std::unique_lock<std::mutex> lock (state->mutex);
-    std::set<size_t>::iterator ready = state->pending_sizes.find (msg_size);
+    const start_signal_state_t::key_t key (msg_size, phase);
+    start_signal_state_t::signals_t::iterator ready = state->pending_sizes.find (key);
     if (ready != state->pending_sizes.end ()) {
         state->pending_sizes.erase (ready);
         return true;
@@ -150,11 +160,10 @@ inline bool wait_for_start (start_signal_state_t *state, size_t msg_size, int ti
     }
 
     const bool signaled = state->cv.wait_for (
-      lock, std::chrono::milliseconds (timeout_ms > 0 ? timeout_ms : 1), [state, msg_size] () {
-          return state->stopped
-                 || state->pending_sizes.find (msg_size) != state->pending_sizes.end ();
+      lock, std::chrono::milliseconds (timeout_ms > 0 ? timeout_ms : 1), [state, key] () {
+          return state->stopped || state->pending_sizes.find (key) != state->pending_sizes.end ();
       });
-    ready = state->pending_sizes.find (msg_size);
+    ready = state->pending_sizes.find (key);
     if (!signaled || ready == state->pending_sizes.end ()) {
         errno = state->stopped ? ECANCELED : ETIMEDOUT;
         return false;
@@ -164,7 +173,45 @@ inline bool wait_for_start (start_signal_state_t *state, size_t msg_size, int ti
     return true;
 }
 
-inline bool wait_for_start_from_stdin (size_t msg_size)
+inline bool query_start (start_signal_state_t *state,
+                         size_t msg_size,
+                         perf_multi_metric::phase_t phase,
+                         std::chrono::steady_clock::time_point *received_at)
+{
+    if (!state || !received_at)
+        return false;
+    std::lock_guard<std::mutex> lock (state->mutex);
+    const start_signal_state_t::signals_t::const_iterator found =
+      state->pending_sizes.find (start_signal_state_t::key_t (msg_size, phase));
+    if (found == state->pending_sizes.end ())
+        return false;
+    *received_at = found->second;
+    return true;
+}
+
+inline bool is_phase_end_marker (const perf_multi_metric::header_t &header,
+                                 uint32_t run_id,
+                                 perf_multi_metric::phase_t phase,
+                                 size_t msg_size)
+{
+    return (phase == perf_multi_metric::phase_active || phase == perf_multi_metric::phase_latency)
+           && perf_multi_metric::is_expected (header, run_id, phase, msg_size) && header.seq == 0
+           && header.sent_ts_ns == 0;
+}
+
+inline bool
+parse_phase_done_line (const std::string &line, size_t *msg_size, perf_multi_metric::phase_t *phase)
+{
+    size_t phase_value = 0;
+    if (!phase || !parse_size_count_command_line (line, "PHASE_DONE,", msg_size, &phase_value)
+        || (phase_value != perf_multi_metric::phase_active
+            && phase_value != perf_multi_metric::phase_latency))
+        return false;
+    *phase = static_cast<perf_multi_metric::phase_t> (phase_value);
+    return true;
+}
+
+inline bool wait_for_start_from_stdin (size_t msg_size, const char *prefix = "START,")
 {
     std::string line;
     while (std::getline (std::cin, line)) {
@@ -174,7 +221,7 @@ inline bool wait_for_start_from_stdin (size_t msg_size)
         }
 
         size_t start_size = 0;
-        if (!parse_size_command_line (line, "START,", &start_size))
+        if (!parse_size_command_line (line, prefix, &start_size))
             continue;
         if (start_size == msg_size)
             return true;

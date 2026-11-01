@@ -147,11 +147,33 @@ Profile guidance for byte-budget Auto HWM:
 If calculated HWM values are too small for the target traffic shape, first
 select a larger profile or configure the context-wide Auto HWM byte budget.
 
-## Multi Measurement Phase
+## Multi Measurement Phases
 
-Every multi pattern measures throughput and latency together during one
-saturated active phase. Throughput counts records received inside that active
-window, and latency uses the timestamps carried by those same received records.
+Every multi pattern and message size first runs the existing saturated active
+window for `--duration` seconds. Only records received in this window contribute
+to throughput and bandwidth. The sender separately counts its successful sends
+inside the window; sends admitted during drain do not enter this count.
+
+The benchmark then drains the messages already sent, using reply counts or
+per-socket stop markers and the runner's phase acknowledgement. Drain has a
+bounded timeout. PUBSUB retains its lossy contract, so a dropped message cannot
+require an unbounded wait.
+
+Latency comes from a second phase on the same sockets and clients. Its target
+send rate is 80% of the sender's own saturated successful-send count divided by
+the active duration. Send number `k` is due at `start + k / target_rate`, using
+an absolute schedule so timing errors do not accumulate. Each pattern keeps its
+existing socket traversal and backpressure policy while waiting for scheduled
+sends. The first 0.5 seconds
+are discarded, followed by `--latency-duration N` seconds of latency samples.
+The default latency duration equals `--duration`. Saturated messages never enter
+the latency sampler, and paced messages never enter throughput counters.
+One-way patterns use the send-to-receive elapsed time; echo patterns retain
+round-trip time divided by two. Message timestamps record the send attempt.
+
+A diagnostic line outside `RESULT,` reports the saturated sender rate, the
+80% target rate, and the number of successful paced sends more than 1 ms behind
+their absolute schedule. `RESULT,` keys, units, and formatting are unchanged.
 
 An ordinary `DONTWAIT` socket send makes one admission attempt. Immediate
 admission returns completion ID zero and produces no completion. On

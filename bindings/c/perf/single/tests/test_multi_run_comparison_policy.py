@@ -6,6 +6,7 @@ import pathlib
 import sys
 import threading
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = pathlib.Path(__file__).resolve().parents[2] / "run_comparison.py"
@@ -100,6 +101,152 @@ def auto_hwm_detail_line(pattern, transport, component, msg_size, **fields):
 
 
 class MultiRunComparisonPolicyTests(unittest.TestCase):
+    def test_one_way_phase_gates_follow_sender_and_receiver_roles(self):
+        for pattern, receiver, sender in (
+            ("DEALER_DEALER", "server", "client"),
+            ("PUBSUB", "client", "server"),
+        ):
+            with self.subTest(pattern=pattern):
+                processes = {
+                    "server": mock.Mock(stdin=io.StringIO()),
+                    "client": mock.Mock(stdin=io.StringIO()),
+                }
+                for token, source, destination, expected in (
+                    ("PHASE_DRAINED", receiver, sender, "PHASE_PACED"),
+                ):
+                    self.assertTrue(RC.forward_multi_phase(
+                        f"{token},64\n", source, pattern,
+                        processes["server"], processes["client"], {64},
+                    ))
+                    self.assertEqual(
+                        processes[destination].stdin.getvalue(), f"{expected},64\n"
+                    )
+
+    def test_dealer_completion_gate_forwards_server_receipt_to_client(self):
+        server = mock.Mock(stdin=io.StringIO())
+        client = mock.Mock(stdin=io.StringIO())
+        self.assertTrue(RC.forward_multi_phase(
+            "PHASE_COMPLETE,64\n", "server", "DEALER_DEALER", server, client, {64},
+        ))
+        self.assertEqual(client.stdin.getvalue(), "PHASE_COMPLETE,64\n")
+        self.assertEqual(server.stdin.getvalue(), "")
+
+    def test_pub_phase_done_forwards_publisher_phase_to_subscriber(self):
+        server = mock.Mock(stdin=io.StringIO())
+        client = mock.Mock(stdin=io.StringIO())
+        for phase in (1, 3):
+            self.assertTrue(RC.forward_multi_phase(
+                f"PHASE_DONE,64,{phase}\n", "server", "PUBSUB", server, client, {64},
+            ))
+        self.assertEqual(client.stdin.getvalue(), "PHASE_DONE,64,1\nPHASE_DONE,64,3\n")
+        self.assertEqual(server.stdin.getvalue(), "")
+
+    def test_one_way_phase_gates_reject_invalid_source_size_and_pattern(self):
+        for line, source, pattern in (
+            ("PHASE_DRAINED,64", "client", "DEALER_DEALER"),
+            ("PHASE_LATENCY_DONE,64", "server", "DEALER_DEALER"),
+            ("PHASE_COMPLETE,64", "client", "DEALER_DEALER"),
+            ("PHASE_COMPLETE,64", "server", "PUBSUB"),
+            ("PHASE_COMPLETE,64", "client", "PUBSUB"),
+            ("PHASE_COMPLETE,0", "server", "DEALER_DEALER"),
+            ("PHASE_COMPLETE,128", "server", "DEALER_DEALER"),
+            ("PHASE_COMPLETE,invalid", "server", "DEALER_DEALER"),
+            ("PHASE_COMPLETE,64,extra", "server", "DEALER_DEALER"),
+            ("PHASE_DRAINED,0", "server", "DEALER_DEALER"),
+            ("PHASE_DRAINED,128", "server", "DEALER_DEALER"),
+            ("PHASE_DRAINED,invalid", "server", "DEALER_DEALER"),
+            ("PHASE_DRAINED,64,extra", "server", "DEALER_DEALER"),
+            ("PHASE_DRAINED,64", "server", "STREAM"),
+            ("PHASE_ACTIVE,64", "server", "DEALER_DEALER"),
+            ("PHASE_DONE,64,1", "client", "PUBSUB"),
+            ("PHASE_DONE,64,1", "server", "DEALER_DEALER"),
+            ("PHASE_DONE,64,3", "server", "STREAM"),
+            ("PHASE_DONE,0,1", "server", "PUBSUB"),
+            ("PHASE_DONE,128,1", "server", "PUBSUB"),
+            ("PHASE_DONE,invalid,1", "server", "PUBSUB"),
+            ("PHASE_DONE,64", "server", "PUBSUB"),
+            ("PHASE_DONE,64,0", "server", "PUBSUB"),
+            ("PHASE_DONE,64,2", "server", "PUBSUB"),
+            ("PHASE_DONE,64,4", "server", "PUBSUB"),
+            ("PHASE_DONE,64,invalid", "server", "PUBSUB"),
+            ("PHASE_DONE,64,1,extra", "server", "PUBSUB"),
+        ):
+            with self.subTest(line=line, source=source, pattern=pattern):
+                server = mock.Mock(stdin=io.StringIO())
+                client = mock.Mock(stdin=io.StringIO())
+                self.assertFalse(RC.forward_multi_phase(
+                    line, source, pattern, server, client, {64},
+                ))
+                self.assertEqual(server.stdin.getvalue(), "")
+                self.assertEqual(client.stdin.getvalue(), "")
+        self.assertFalse(RC.forward_multi_phase(
+            "PHASE_DRAINED,64", "server", "DEALER_DEALER", None, None, {64},
+        ))
+
+    def test_latency_duration_option_and_environment_reject_invalid_values(self):
+        for value in ("0", "-1", "1.5", "invalid", "", "１"):
+            for argv, env in (
+                (["runner", "--latency-duration", value], {}),
+                (["runner", f"--latency-duration={value}"], {}),
+                (["runner"], {"PERF_MULTI_LATENCY_DURATION_SECONDS": value}),
+            ):
+                with self.subTest(argv=argv, env=env):
+                    with mock.patch.object(sys, "argv", argv), mock.patch.dict(
+                        os.environ, env, clear=True
+                    ), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(
+                        SystemExit
+                    ) as failure:
+                        RC.parse_args()
+                    self.assertEqual(failure.exception.code, 1)
+        with mock.patch.object(sys, "argv", ["runner", "--latency-duration"]), (
+            contextlib.redirect_stderr(io.StringIO())
+        ), self.assertRaises(SystemExit) as failure:
+            RC.parse_args()
+        self.assertEqual(failure.exception.code, 1)
+
+    def test_latency_duration_defaults_to_throughput_and_accepts_override(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(RC.multi_latency_phase_seconds(7), 7.5)
+        with mock.patch.dict(os.environ, {"PERF_MULTI_LATENCY_DURATION_SECONDS": "3"}):
+            self.assertEqual(RC.multi_latency_phase_seconds(7), 3.5)
+        for option in (["--latency-duration", "3"], ["--latency-duration=3"]):
+            with mock.patch.object(sys, "argv", ["runner"] + option):
+                self.assertEqual(RC.parse_args()["latency_duration_seconds"], 3)
+
+    def test_paced_diagnostics_are_forwarded_and_results_are_excluded(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            for line in (
+                "PACED_DIAG,pattern=STREAM,target_sender_rate=80\n",
+                "BENCH_DIAG,DEALER_DEALER,64,active_sender_rate,100\n",
+                "RESULT,current,STREAM,tcp,64,throughput,100\n",
+                "unrelated diagnostic\n",
+            ):
+                RC.emit_benchmark_diag_line(line)
+        self.assertEqual(output.getvalue(), (
+            "PACED_DIAG,pattern=STREAM,target_sender_rate=80\n"
+            "BENCH_DIAG,DEALER_DEALER,64,active_sender_rate,100\n"
+        ))
+
+    def test_paced_diagnostics_from_client_stdout_and_stderr_are_visible(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = RC.run_command_with_metrics(
+                [sys.executable, "-c", (
+                    "import sys; "
+                    "print('PACED_DIAG,source=stdout', flush=True); "
+                    "print('BENCH_DIAG,source=stderr', file=sys.stderr, flush=True)"
+                )],
+                os.environ.copy(),
+                10,
+                on_stdout_line=RC.emit_benchmark_diag_line,
+            )
+        self.assertEqual(result["returncode"], 0)
+        self.assertFalse(result["timed_out"])
+        self.assertCountEqual(output.getvalue().splitlines(), [
+            "PACED_DIAG,source=stdout", "BENCH_DIAG,source=stderr",
+        ])
+
     def test_stream_server_start_ready_token_parser(self):
         self.assertEqual(RC.parse_server_start_ready_size("SERVER_START_READY,1024\n"), 1024)
         self.assertIsNone(RC.parse_server_start_ready_size("SERVER_START_READY,0\n"))
@@ -897,6 +1044,57 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         finally:
             RC.subprocess.Popen = old_popen
             RC.run_command_with_metrics = old_run_command
+
+    def test_pubsub_final_done_stops_client_stdin_reader(self):
+        server = mock.Mock(
+            stdin=io.StringIO(),
+            stdout=io.StringIO("READY,tcp://127.0.0.1:5555\n"),
+            stderr=io.StringIO(),
+            returncode=None,
+        )
+        server.poll.side_effect = lambda: server.returncode
+        server.wait.side_effect = lambda **kwargs: setattr(server, "returncode", 0) or 0
+        client = mock.Mock(stdin=io.StringIO(), returncode=None)
+        client.poll.side_effect = lambda: client.returncode
+        result_lines = "".join(
+            f"RESULT,current,PUBSUB,tcp,{size},{metric},1.0\n"
+            for size in (64, 128)
+            for metric, _ in tier1_metrics(1.0)
+        )
+
+        def fake_run_command(cmd, env, timeout_sec, on_stdout_line=None,
+                             on_stderr_line=None, on_sample=None,
+                             on_process_start=None):
+            on_process_start(client)
+            for line in result_lines.splitlines(True):
+                on_stdout_line(line)
+            on_stdout_line("CLIENT_DONE,64\n")
+            self.assertEqual(server.stdin.getvalue(), "STOP\n")
+            self.assertEqual(client.stdin.getvalue(), "")
+            on_stdout_line("CLIENT_DONE,999\n")
+            self.assertEqual(client.stdin.getvalue(), "")
+            on_stdout_line("CLIENT_DONE,128\n")
+            self.assertEqual(server.stdin.getvalue(), "STOP\nSTOP\n")
+            self.assertEqual(client.stdin.getvalue(), "STOP\n")
+            on_stdout_line("CLIENT_DONE,128\n")
+            self.assertEqual(client.stdin.getvalue(), "STOP\n")
+            client.returncode = 0
+            return {
+                "returncode": 0,
+                "stdout": result_lines,
+                "stderr": "",
+                "timed_out": False,
+            }
+
+        with mock.patch.object(RC.subprocess, "Popen", return_value=server), (
+            mock.patch.object(RC, "run_command_with_metrics", side_effect=fake_run_command)
+        ):
+            outcome = RC.run_sizes_test_split(
+                "server", "client", "current", "tcp", [64, 128], "PUBSUB",
+            )
+        self.assertEqual(outcome["status"], "success")
+        server.terminate.assert_not_called()
+        server.kill.assert_not_called()
 
     def test_split_runner_does_not_wait_for_dealer_done_callback(self):
         old_popen = RC.subprocess.Popen

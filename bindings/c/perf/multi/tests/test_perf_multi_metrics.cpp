@@ -3,6 +3,8 @@
 #include "perf_multi_socket_reqrep.hpp"
 #include "perf_multi_stream_session.hpp"
 #include "perf_multi_weighted_latency.hpp"
+#include "perf_multi_measurement.hpp"
+#include "perf_multi_handshake.hpp"
 #include "../../common/streamclient/perf_stream_common.hpp"
 
 #ifdef NDEBUG
@@ -21,6 +23,189 @@
 
 namespace
 {
+
+void test_phase_gate_isolates_receipts ()
+{
+    perf_multi_handshake::start_signal_state_t gate;
+    std::chrono::steady_clock::time_point receipt;
+    assert (
+      !perf_multi_handshake::query_start (&gate, 64, perf_multi_metric::phase_active, &receipt));
+    const auto before = std::chrono::steady_clock::now ();
+    perf_multi_handshake::signal_start (&gate, 64, perf_multi_metric::phase_active);
+    const auto after = std::chrono::steady_clock::now ();
+    assert (
+      perf_multi_handshake::query_start (&gate, 64, perf_multi_metric::phase_active, &receipt));
+    assert (receipt >= before && receipt <= after);
+    const auto first_receipt = receipt;
+    // A duplicate signal cannot move the quiet interval's completion evidence.
+    perf_multi_handshake::signal_start (&gate, 64, perf_multi_metric::phase_active);
+    assert (
+      perf_multi_handshake::query_start (&gate, 64, perf_multi_metric::phase_active, &receipt));
+    assert (receipt == first_receipt);
+    assert (
+      !perf_multi_handshake::query_start (&gate, 64, perf_multi_metric::phase_latency, &receipt));
+    assert (
+      !perf_multi_handshake::query_start (&gate, 256, perf_multi_metric::phase_active, &receipt));
+    perf_multi_handshake::signal_start (&gate, 64);
+    perf_multi_handshake::signal_start (&gate, 64, perf_multi_metric::phase_latency);
+    assert (perf_multi_handshake::wait_for_start (&gate, 64, 1));
+    assert (perf_multi_handshake::wait_for_start (&gate, 64, 1, perf_multi_metric::phase_active));
+    assert (
+      !perf_multi_handshake::query_start (&gate, 64, perf_multi_metric::phase_active, &receipt));
+    assert (
+      perf_multi_handshake::query_start (&gate, 64, perf_multi_metric::phase_latency, &receipt));
+    assert (perf_multi_handshake::wait_for_start (&gate, 64, 1, perf_multi_metric::phase_latency));
+    perf_multi_handshake::signal_stop (&gate);
+    assert (!perf_multi_handshake::wait_for_start (&gate, 64, 1));
+    assert (errno == ECANCELED);
+}
+
+void test_phase_end_marker_and_done_parser ()
+{
+    perf_multi_metric::header_t header;
+    perf_multi_metric::init_header (&header, 7, perf_multi_metric::phase_active, 64, 0, 0);
+    assert (
+      perf_multi_handshake::is_phase_end_marker (header, 7, perf_multi_metric::phase_active, 64));
+    assert (
+      !perf_multi_handshake::is_phase_end_marker (header, 7, perf_multi_metric::phase_latency, 64));
+    assert (
+      !perf_multi_handshake::is_phase_end_marker (header, 8, perf_multi_metric::phase_active, 64));
+    assert (
+      !perf_multi_handshake::is_phase_end_marker (header, 7, perf_multi_metric::phase_active, 256));
+    header.seq = 1;
+    assert (
+      !perf_multi_handshake::is_phase_end_marker (header, 7, perf_multi_metric::phase_active, 64));
+    header.seq = 0;
+    header.sent_ts_ns = 1;
+    assert (
+      !perf_multi_handshake::is_phase_end_marker (header, 7, perf_multi_metric::phase_active, 64));
+    perf_multi_metric::init_header (&header, 7, perf_multi_metric::phase_latency, 64, 0, 0);
+    assert (
+      perf_multi_handshake::is_phase_end_marker (header, 7, perf_multi_metric::phase_latency, 64));
+    perf_multi_metric::init_header (&header, 7, perf_multi_metric::phase_warmup, 64, 0, 0);
+    assert (
+      !perf_multi_handshake::is_phase_end_marker (header, 7, perf_multi_metric::phase_warmup, 64));
+    size_t size = 0;
+    perf_multi_metric::phase_t phase = perf_multi_metric::phase_unknown;
+    assert (perf_multi_handshake::parse_phase_done_line ("PHASE_DONE,64,1", &size, &phase));
+    assert (size == 64 && phase == perf_multi_metric::phase_active);
+    assert (perf_multi_handshake::parse_phase_done_line ("PHASE_DONE,64,3", &size, &phase));
+    assert (phase == perf_multi_metric::phase_latency);
+    assert (!perf_multi_handshake::parse_phase_done_line ("PHASE_DONE,64,2", &size, &phase));
+    assert (!perf_multi_handshake::parse_phase_done_line ("PHASE_DONE,0,1", &size, &phase));
+    assert (!perf_multi_handshake::parse_phase_done_line ("PHASE_DONE,64,3,1", &size, &phase));
+}
+
+void test_absolute_latency_schedule ()
+{
+    const uint64_t epoch = 1000000000ULL;
+    perf_multi_measurement::schedule_t schedule (3.0, epoch);
+    assert (!schedule.due (epoch - 1));
+    assert (schedule.due (epoch));
+    assert (schedule.accepted_count == 0);
+    // Readiness checks and rejected attempts leave the scheduled slot intact.
+    assert (schedule.due (epoch + 100));
+    assert (schedule.next_ns () == epoch);
+    schedule.accepted (epoch + 1000000ULL);
+    assert (schedule.accepted_count == 1 && schedule.late_count == 0);
+    assert (schedule.next_ns () == epoch + 333333333ULL);
+    schedule.accepted (schedule.next_ns () + 1000001ULL);
+    assert (schedule.late_count == 1);
+    schedule.accepted (schedule.next_ns ());
+    assert (schedule.next_ns () == epoch + 1000000000ULL);
+    assert (perf_multi_measurement::target_rate (100, 2.0) == 40.0);
+    assert (perf_multi_measurement::target_rate (100, 0.0) == 0.0);
+    perf_multi_measurement::schedule_t idle (0.0, epoch);
+    assert (!idle.due (epoch + 1000000000ULL));
+}
+
+void test_latency_send_timestamp_window ()
+{
+    const uint64_t epoch = 1000000000ULL;
+    assert (!perf_multi_measurement::latency_sample (epoch - 1, epoch, 2.0));
+    assert (!perf_multi_measurement::latency_sample (epoch + 499999999ULL, epoch, 2.0));
+    assert (perf_multi_measurement::latency_sample (epoch + 500000000ULL, epoch, 2.0));
+    assert (perf_multi_measurement::latency_sample (epoch + 2499999999ULL, epoch, 2.0));
+    assert (!perf_multi_measurement::latency_sample (epoch + 2500000000ULL, epoch, 2.0));
+    perf_multi_metric::header_t header;
+    perf_multi_metric::init_header (&header, 1, perf_multi_metric::phase_latency, 64, 1, epoch);
+    assert (perf_multi_metric::is_expected (header, 1, perf_multi_metric::phase_latency, 64));
+    assert (!perf_multi_metric::is_expected (header, 1, perf_multi_metric::phase_active, 64));
+}
+
+void test_request_metrics_separate_active_and_latency ()
+{
+    using namespace perf_multi_socket_reqrep;
+    client_state_t state;
+    client_slot_t slot;
+    slot.owner = &state;
+    const uint64_t now = perf_multi_metric::now_ns ();
+    state.active_run_id = 7;
+    state.active_msg_size = 64;
+    state.active_deadline_ns = now + 1000000000ULL;
+    zlink_msg_t parts[2];
+    assert (zlink_msg_init_size (&parts[0], 64) == 0);
+    assert (zlink_msg_init (&parts[1]) == 0);
+    const auto complete = [&] (perf_multi_metric::phase_t phase, uint64_t sent_ns) {
+        assert (perf_multi_metric::stamp_payload (zlink_msg_data (&parts[0]), 64, 7, phase, 64, 1,
+                                                  sent_ns));
+        record_request_completion (&slot, ZLINK_REQUEST_OK, parts, perf_measurement_part_count ());
+    };
+    complete (perf_multi_metric::phase_active, now);
+    assert (state.active_reply_count == 1);
+    assert (state.latency.count () == 0);
+
+    perf_multi_measurement::schedule_t schedule (80.0,
+                                                 now - perf_multi_measurement::settle_ns - 1000);
+    state.schedule = &schedule;
+    state.latency_duration_seconds = 1;
+    state.active_reply_count = 0;
+    complete (perf_multi_metric::phase_active, now);
+    complete (perf_multi_metric::phase_warmup, now);
+    complete (perf_multi_metric::phase_latency,
+              schedule.epoch_ns + perf_multi_measurement::settle_ns - 1);
+    assert (state.active_reply_count == 0);
+    assert (state.latency.count () == 0);
+    complete (perf_multi_metric::phase_latency, now);
+    assert (state.active_reply_count == 1);
+    assert (state.latency.count () == 1);
+    zlink_multipart_close (parts, 2u);
+}
+
+void test_latency_duration_settings ()
+{
+    const char *names[] = {"PERF_MULTI_DURATION_SECONDS", "PERF_MULTI_LATENCY_DURATION_SECONDS"};
+    std::string saved[2];
+    bool present[2];
+    for (int i = 0; i < 2; ++i) {
+        const char *value = std::getenv (names[i]);
+        present[i] = value != NULL;
+        if (value)
+            saved[i] = value;
+    }
+    const auto put = [] (const char *name, const char *value) {
+#if defined(_WIN32)
+        _putenv_s (name, value ? value : "");
+#else
+        if (value)
+            setenv (name, value, 1);
+        else
+            unsetenv (name);
+#endif
+    };
+    put (names[0], "7");
+    put (names[1], NULL);
+    assert (resolve_bench_settings ().latency_duration_seconds == 7);
+    put (names[1], "2");
+    assert (resolve_bench_settings ().duration_seconds == 7);
+    assert (resolve_bench_settings ().latency_duration_seconds == 2);
+    put (names[1], "invalid");
+    assert (resolve_bench_settings ().latency_duration_seconds == 7);
+    put (names[1], "0");
+    assert (resolve_bench_settings ().latency_duration_seconds == 1);
+    for (int i = 0; i < 2; ++i)
+        put (names[i], present[i] ? saved[i].c_str () : NULL);
+}
 
 bool close_to (double actual, double expected)
 {
@@ -244,6 +429,75 @@ void test_one_way_writable_retry_state ()
     assert (!slot.retained);
     assert (slot.wait_token == 0);
     assert (errno == ENOENT);
+}
+
+void test_paced_retained_retries_share_one_schedule ()
+{
+    using namespace perf_multi_client;
+    ctx_guard_t context;
+    assert (context.valid ());
+    socket_guard_t server (context.get (), ZLINK_SOCKET_ROUTER);
+    socket_guard_t first (context.get (), ZLINK_SOCKET_DEALER);
+    socket_guard_t second (context.get (), ZLINK_SOCKET_DEALER);
+    assert (server.valid () && first.valid () && second.valid ());
+    const int zero_linger = 0;
+    void *all[] = {server.get (), first.get (), second.get ()};
+    for (size_t i = 0; i < 3; ++i)
+        assert (zlink_set_option (all[i], ZLINK_OPT_LINGER, &zero_linger, sizeof (zero_linger))
+                == ZLINK_CONFIG_OK);
+    const char *endpoint = "inproc://perf-paced-retained-retries";
+    assert (zlink_bind (server.get (), endpoint) == ZLINK_BIND_OK);
+    assert (zlink_connect (first.get (), endpoint) == ZLINK_CONNECT_OK);
+    assert (zlink_connect (second.get (), endpoint) == ZLINK_CONNECT_OK);
+    std::vector<void *> sockets;
+    sockets.push_back (first.get ());
+    sockets.push_back (second.get ());
+    send_wait_tracker_t tracker;
+    assert (create_send_wait_tracker (sockets, ZLINK_POLLIN, &tracker));
+    for (size_t i = 0; i < tracker.slots.size (); ++i) {
+        send_wait_slot_t &slot = tracker.slots[i];
+        slot.retained = true;
+        slot.retry_ready = true;
+        slot.retained_payload.assign (64, 'c');
+        slot.retained_payload_size = slot.retained_payload.size ();
+    }
+    // Both WRITABLE events have already been consumed. A future deadline
+    // defers both records without clearing readiness or admitting either one.
+    perf_multi_measurement::schedule_t schedule (1.0,
+                                                 perf_multi_metric::now_ns () + 3600000000000ULL);
+    uint64_t accepted = 0;
+    for (size_t i = 0; i < tracker.slots.size (); ++i) {
+        assert (retry_retained_send (&tracker, &tracker.slots[i], &accepted, 0, &schedule));
+        assert (tracker.slots[i].retained && tracker.slots[i].retry_ready);
+        assert (tracker.slots[i].replies == 0);
+    }
+    assert (accepted == 0 && schedule.accepted_count == 0);
+
+    // One admitted retry advances the shared deadline before the other slot
+    // is considered. Moving the epoch models the next timer tick without sleep.
+    schedule.epoch_ns = perf_multi_metric::now_ns ();
+    assert (retry_retained_send (&tracker, &tracker.slots[0], &accepted, 0, &schedule));
+    assert (!tracker.slots[0].retained && tracker.slots[0].replies == 1);
+    assert (accepted == 1 && schedule.accepted_count == 1);
+    assert (retry_retained_send (&tracker, &tracker.slots[1], &accepted, 0, &schedule));
+    assert (tracker.slots[1].retained && tracker.slots[1].retry_ready);
+    assert (accepted == 1 && schedule.accepted_count == 1);
+    schedule.epoch_ns -= 2000000000ULL;
+    assert (retry_retained_send (&tracker, &tracker.slots[1], &accepted, 0, &schedule));
+    assert (!tracker.slots[1].retained && tracker.slots[1].replies == 1);
+    assert (accepted == 2 && schedule.accepted_count == 2);
+
+    // Tail drain keeps the existing ungated policy for retained records, while
+    // counting paced admissions and excluding them from ACTIVE calibration.
+    send_wait_slot_t &tail = tracker.slots[0];
+    tail.retained = true;
+    tail.retry_ready = true;
+    tail.retained_payload.assign (64, 'c');
+    tail.retained_payload_size = tail.retained_payload.size ();
+    schedule.epoch_ns = perf_multi_metric::now_ns () + 3600000000000ULL;
+    assert (retry_retained_send (&tracker, &tail, &accepted, 1, &schedule, false));
+    assert (!tail.retained && tail.replies == 2);
+    assert (accepted == 2 && schedule.accepted_count == 3);
 }
 
 void test_reqrep_submit_progress_quantum_is_byte_bounded ()
@@ -525,6 +779,12 @@ void test_stream_async_send_uses_writable_retry_loop ()
 
 int main ()
 {
+    test_phase_gate_isolates_receipts ();
+    test_phase_end_marker_and_done_parser ();
+    test_latency_duration_settings ();
+    test_absolute_latency_schedule ();
+    test_latency_send_timestamp_window ();
+    test_request_metrics_separate_active_and_latency ();
     connect_monitor_state_t ready_state;
     zlink_monitor_event_t ready_event = {};
     ready_event.event = ZLINK_EVENT_CONNECTION_READY;
@@ -543,6 +803,7 @@ int main ()
     test_zero_sample_cap_preserves_exact_mean ();
     test_relay_submit_error_classification ();
     test_one_way_writable_retry_state ();
+    test_paced_retained_retries_share_one_schedule ();
     test_reqrep_submit_progress_quantum_is_byte_bounded ();
     test_weighted_child_aggregation ();
     test_weighted_sample_population_uses_latency_count ();
