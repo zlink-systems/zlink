@@ -12,6 +12,23 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.22.0]
+
+### Fixed
+
+- Exclude internal socket progress from public API admission so closing a socket
+  immediately after detaching its monitor no longer returns `EBUSY` and leaves
+  context termination waiting (#3444, #3448).
+
+### Changed
+
+- Schedule socket monitor delivery explicitly when an event is enqueued instead
+  of polling every 10 ms while idle (#2277, #3245).
+
+Public API and ABI are unchanged; linker SOVERSION remains 0. The binding tree
+has no code changes since Core 1.21.0; its only change updates the C++ Conan
+recipe checksum for the 1.21.0 release asset (#3220).
+
 ## [1.21.0]
 
 ### Added
