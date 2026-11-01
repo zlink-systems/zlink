@@ -49,6 +49,36 @@ public sealed class AutoConnectReconcilerTests
         Assert.Equal(expected, ZLinkAutoConnectPlanner.CountDiscoveredPeers(local, peers));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Shutdown_disconnects_peers_even_when_descriptor_cleanup_is_cancelled(
+        bool expired
+    )
+    {
+        var fixture = await FixtureAsync();
+        await using var runtime = fixture.Runtime;
+        await fixture.PublishPeerAsync("r1", "tcp://r:1");
+        await fixture.Reconciler.TickAsync();
+        Assert.Single(fixture.Reconciler.ActiveTargets);
+        using var deadline = new CancellationTokenSource();
+        if (expired)
+            deadline.Cancel();
+
+        if (expired)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                fixture.Reconciler.ShutdownAsync(deadline.Token).AsTask()
+            );
+        else
+            await fixture.Reconciler.ShutdownAsync(deadline.Token);
+
+        Assert.Empty(fixture.Reconciler.ActiveTargets);
+        Assert.Equal("r1", Assert.Single(fixture.Executor.Disconnected).NodeRid.ToString());
+        var remaining = (await fixture.Store.ListMeshNodesAsync("play", default)).Items;
+        Assert.Equal(expired, remaining.Any(row => row.Rid == RoutingId.From("local")));
+        Assert.Contains(remaining, row => row.Rid == RoutingId.From("r1"));
+    }
+
     [Fact]
     public async Task Immediate_peer_reconcile_refreshes_only_the_requested_connection()
     {

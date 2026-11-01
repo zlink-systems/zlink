@@ -845,27 +845,32 @@ internal sealed class ZLinkAutoConnectReconciler
                 _localRow is not null && _localGeneration > 0 ? LocalKey() : null
             )
             .ConfigureAwait(false);
-        if (localKey is { } key)
+        try
         {
-            await _runtime
-                .RemoveDescriptorForShutdownAsync(key, cancellationToken)
-                .ConfigureAwait(false);
-            await _lane
-                .RunAsync(() =>
-                {
-                    _localWriteStatus = null;
-                    _localGeneration = 0;
-                })
-                .ConfigureAwait(false);
+            if (localKey is { } key)
+            {
+                await _runtime
+                    .RemoveDescriptorForShutdownAsync(key, cancellationToken)
+                    .ConfigureAwait(false);
+                await _lane
+                    .RunAsync(() =>
+                    {
+                        _localWriteStatus = null;
+                        _localGeneration = 0;
+                    })
+                    .ConfigureAwait(false);
+            }
         }
-
-        var active = await _lane.RunAsync(() => _active.Values.ToArray()).ConfigureAwait(false);
-        foreach (var target in active)
+        finally
         {
-            _ = _executor.Disconnect(target);
-        }
+            var active = await _lane.RunAsync(() => _active.Values.ToArray()).ConfigureAwait(false);
+            foreach (var target in active)
+            {
+                _ = _executor.Disconnect(target);
+            }
 
-        await _lane.RunAsync(() => _active.Clear()).ConfigureAwait(false);
+            await _lane.RunAsync(() => _active.Clear()).ConfigureAwait(false);
+        }
     }
 
     private async ValueTask PublishLocalAsync(CancellationToken cancellationToken)
