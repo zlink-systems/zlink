@@ -1775,6 +1775,7 @@ public sealed partial class RelocationBehaviorConformanceTests
     public async Task ActorJoin_force_stop_cancels_held_target_rollback_without_losing_terminal_owner()
     {
         var trace = new RelocationBehaviorTrace();
+        AutoConnectLifecycleCoordinatorTests.CancellationObservingResolver? targetDiscovery = null;
         var transport = new CanonicalRelocationTransportProbe(
             trace,
             holdTargetReady: true,
@@ -1817,7 +1818,10 @@ public sealed partial class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: true,
-            canonicalTransportProbe: transport
+            canonicalTransportProbe: transport,
+            meshResolverWrapper: inner =>
+                targetDiscovery =
+                    new AutoConnectLifecycleCoordinatorTests.CancellationObservingResolver(inner)
         );
         await WaitUntilAsync(() =>
             source
@@ -1871,6 +1875,10 @@ public sealed partial class RelocationBehaviorConformanceTests
             await transport.AbortRetriedTargetPrepareAsync();
             await transport.TargetRollbackDestroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
 
+            // Host relocation §14 requires discovery callbacks to terminate before
+            // transport teardown completes, including after the drain deadline.
+            targetDiscovery!.HoldReads = true;
+            await targetDiscovery.ReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
             var forceStop = target
                 .Services.GetRequiredService<IZLinkFrameworkRuntime>()
                 .ShutdownAsync(TimeSpan.FromMilliseconds(100))
@@ -1879,10 +1887,12 @@ public sealed partial class RelocationBehaviorConformanceTests
 
             Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, result.Outcome);
             Assert.False(target.Runtime.IsStarted);
+            Assert.True(targetDiscovery.ReadExited.Task.IsCompleted);
             Assert.False(transport.TargetRollbackDestroyCompleted.Task.IsCompleted);
         }
         finally
         {
+            targetDiscovery?.ReleaseRead.TrySetResult();
             transport.ReleasePrepareCall.TrySetResult();
             transport.ReleaseTargetAbortRegistration.TrySetResult();
             transport.ReleaseTargetRollbackDestroy.TrySetResult();

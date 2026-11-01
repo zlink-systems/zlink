@@ -23,7 +23,7 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
     private readonly ZLinkOwnerLeaseTracker? _leaseTracker;
     private readonly TimeProvider _time;
     private readonly SemaphoreSlim _wake = new(0, 1);
-    private readonly Lazy<Task> _disposeTask;
+    private Lazy<Task>? _disposeTask;
     private CancellationTokenSource? _cts;
     private Task? _loop;
     private Task? _watch;
@@ -56,10 +56,6 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
         _watchStore = watchStore;
         _leaseTracker = leaseTracker;
         _time = timeProvider ?? TimeProvider.System;
-        _disposeTask = new Lazy<Task>(
-            DisposeCoreAsync,
-            LazyThreadSafetyMode.ExecutionAndPublication
-        );
     }
 
     internal async ValueTask StartAsync(CancellationToken cancellationToken = default)
@@ -132,14 +128,24 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
         }
     }
 
-    public ValueTask DisposeAsync() => new(_disposeTask.Value);
+    public ValueTask DisposeAsync() => DisposeAsync(CancellationToken.None);
 
-    private async Task DisposeCoreAsync()
+    internal ValueTask DisposeAsync(CancellationToken cancellationToken) =>
+        new(
+            LazyInitializer
+                .EnsureInitialized(
+                    ref _disposeTask,
+                    () => new Lazy<Task>(() => DisposeCoreAsync(cancellationToken))
+                )
+                .Value
+        );
+
+    private async Task DisposeCoreAsync(CancellationToken cancellationToken)
     {
         Exception? failure = null;
         try
         {
-            await StopAsync().ConfigureAwait(false);
+            await StopAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {

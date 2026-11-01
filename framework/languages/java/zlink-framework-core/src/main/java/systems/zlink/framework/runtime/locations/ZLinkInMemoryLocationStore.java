@@ -651,49 +651,7 @@ public final class ZLinkInMemoryLocationStore
                         return CompletableFuture.failedFuture(
                                 new IllegalStateException("Owner cleanup token is stale."));
                     }
-                    String ownerId = owner.ownerId();
-                    long removed = 0;
-                    List<Map.Entry<String, ZLinkMeshNodeDescriptor>> descriptorEntries =
-                            meshNodes.rows.entrySet().stream()
-                                    .filter(
-                                            entry ->
-                                                    entry.getValue().ownerId().equals(ownerId)
-                                                            && entry.getValue().leaseGeneration()
-                                                                    == owner.leaseGeneration())
-                                    .toList();
-                    descriptorEntries.forEach(
-                            entry -> {
-                                entry.getValue()
-                                        .entrySpotId()
-                                        .ifPresent(
-                                                spotId -> {
-                                                    String authorityKey =
-                                                            ZLinkAuthorityKeyCodec.spot(spotId);
-                                                    EntrySpotClaim claim =
-                                                            entrySpotClaims.get(authorityKey);
-                                                    if (claim != null
-                                                            && claim.matches(
-                                                                    entry.getKey(),
-                                                                    entry.getValue())) {
-                                                        entrySpotClaims.remove(authorityKey);
-                                                    }
-                                                });
-                                meshNodes.rows.remove(entry.getKey());
-                                bumpMeshNodeStamp(entry.getValue().meshName());
-                            });
-                    removed += descriptorEntries.size();
-                    List<String> fanoutKeys =
-                            fanoutPublishers.rows.entrySet().stream()
-                                    .filter(
-                                            entry ->
-                                                    entry.getValue().ownerId().equals(ownerId)
-                                                            && entry.getValue().leaseGeneration()
-                                                                    == owner.leaseGeneration())
-                                    .map(Map.Entry::getKey)
-                                    .toList();
-                    fanoutKeys.forEach(fanoutPublishers.rows::remove);
-                    removed += fanoutKeys.size();
-                    return completed(removed);
+                    return authority.removeAllByOwner(owner);
                 });
     }
 

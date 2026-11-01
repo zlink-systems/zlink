@@ -231,10 +231,10 @@ internal sealed class ZLinkLocationAutoConnectHost
     {
         if (Volatile.Read(ref _disposed) != 0)
             return;
-        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _lifecycleGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await DisposeGenerationAsync().ConfigureAwait(false);
+            await DisposeGenerationAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -425,7 +425,7 @@ internal sealed class ZLinkLocationAutoConnectHost
         }
     }
 
-    private async ValueTask DisposeGenerationAsync()
+    private async ValueTask DisposeGenerationAsync(CancellationToken cancellationToken = default)
     {
         Interlocked.Exchange(ref _deferredStart, null);
         var clientServerDiscovery = _clientServerDiscovery;
@@ -433,7 +433,6 @@ internal sealed class ZLinkLocationAutoConnectHost
         var fanoutDiscovery = _fanoutDiscovery;
         _fanoutDiscovery = null;
         var loops = _loops.ToArray();
-        var reconcilers = _reconcilers.ToArray();
         _loops.Clear();
         _reconcilers.Clear();
         _routeMeshReconcilers.Clear();
@@ -443,7 +442,7 @@ internal sealed class ZLinkLocationAutoConnectHost
         {
             try
             {
-                await clientServerDiscovery.DisposeAsync().ConfigureAwait(false);
+                await clientServerDiscovery.DisposeAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -454,7 +453,7 @@ internal sealed class ZLinkLocationAutoConnectHost
         {
             try
             {
-                await fanoutDiscovery.DisposeAsync().ConfigureAwait(false);
+                await fanoutDiscovery.DisposeAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -465,7 +464,7 @@ internal sealed class ZLinkLocationAutoConnectHost
         {
             try
             {
-                await loop.DisposeAsync().ConfigureAwait(false);
+                await loop.DisposeAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception)
             {

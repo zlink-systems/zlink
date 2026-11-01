@@ -3,9 +3,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
+using Zlink.Framework.Contracts.Locations;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.UnitTests.Runtime;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -28,6 +31,74 @@ public sealed class AutoConnectLifecycleCoordinatorTests
 
         Assert.Equal(1, starts);
         Assert.Equal(1, stops);
+    }
+
+    [Fact]
+    public async Task Expired_stop_observes_active_discovery_before_returning()
+    {
+        CancellationObservingResolver? resolver = null;
+        await using var host = await RelocationBehaviorHost.StartAsync(
+            "expired-discovery-stop",
+            new RelocationBehaviorTrace(),
+            new ZLinkInMemoryProviderLocationStore(),
+            new SynchronizedRelocationStore(),
+            registerTargetSpot: false,
+            meshResolverWrapper: inner => resolver = new CancellationObservingResolver(inner)
+        );
+        resolver!.HoldReads = true;
+        try
+        {
+            await resolver.ReadEntered.Task.WaitAsync(TestTimeout);
+            using var deadline = new CancellationTokenSource();
+            deadline.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                host
+                    .Services.GetRequiredService<ZLinkLocationAutoConnectHost>()
+                    .StopAsync(deadline.Token)
+                    .AsTask()
+            );
+            Assert.True(resolver.ReadExited.Task.IsCompleted);
+            var remaining = await host
+                .Services.GetRequiredService<ZLinkStoreLocationResolvers>()
+                .ListLiveMeshNodesAsync(RelocationBehaviorHost.MeshName);
+            Assert.Contains(remaining, row => row.Rid == host.LocalNodeRid);
+        }
+        finally
+        {
+            resolver.ReleaseRead.TrySetResult();
+        }
+    }
+
+    internal sealed class CancellationObservingResolver(IZLinkMeshNodeLocationResolver inner)
+        : IZLinkMeshNodeLocationResolver
+    {
+        internal volatile bool HoldReads;
+        internal TaskCompletionSource ReadEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReadExited { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseRead { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
+            string meshName,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (HoldReads)
+            {
+                ReadEntered.TrySetResult();
+                try
+                {
+                    await ReleaseRead.Task.WaitAsync(cancellationToken);
+                }
+                finally
+                {
+                    ReadExited.TrySetResult();
+                }
+            }
+            return await inner.ListLiveMeshNodesAsync(meshName, cancellationToken);
+        }
     }
 
     [Theory]

@@ -118,7 +118,9 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
         return published;
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => DisposeAsync(CancellationToken.None);
+
+    internal async ValueTask DisposeAsync(CancellationToken cancellationToken)
     {
         var failures = new List<Exception>();
         foreach (var subscriber in _subscribers)
@@ -142,7 +144,7 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
                             publisher.Identity.PublisherRid
                         ),
                         _locationRuntime.OwnerToken,
-                        CancellationToken.None
+                        cancellationToken
                     )
                     .ConfigureAwait(false);
             }

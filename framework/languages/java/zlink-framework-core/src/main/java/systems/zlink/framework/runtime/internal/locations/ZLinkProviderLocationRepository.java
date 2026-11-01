@@ -53,11 +53,19 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     @Override
     public CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
             ZLinkMeshNodeDescriptorKey key, ZLinkLocationOwnerToken owner) {
+        return removeMeshNode(key, owner, () -> false);
+    }
+
+    @Override
+    public CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
+            ZLinkMeshNodeDescriptorKey key,
+            ZLinkLocationOwnerToken owner,
+            ZLinkStoreCancellation cancellation) {
         return observeStore(
                 LocationOperation.RELEASE,
                 () ->
                         descriptors
-                                .removeMeshNode(key, owner)
+                                .removeMeshNode(key, owner, cancellation::isCancellationRequested)
                                 .thenApply(
                                         result -> {
                                             if (result == ZLinkLocationWriteStatus.STORED)
@@ -181,7 +189,15 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     @Override
     public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
             ZLinkLocationOwnerToken token) {
-        return observeStore(LocationOperation.RELEASE, () -> owners.release(token));
+        return releaseOwnerLease(token, () -> false);
+    }
+
+    @Override
+    public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+            ZLinkLocationOwnerToken token, ZLinkStoreCancellation cancellation) {
+        return observeStore(
+                LocationOperation.RELEASE,
+                () -> owners.release(token, cancellation::isCancellationRequested));
     }
 
     @Override
@@ -368,7 +384,15 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
 
     @Override
     public CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner) {
-        return observeStore(LocationOperation.RELEASE, () -> authority.removeAllByOwner(owner));
+        return removeAllByOwner(owner, () -> false);
+    }
+
+    @Override
+    public CompletionStage<Long> removeAllByOwner(
+            ZLinkLocationOwnerToken owner, ZLinkStoreCancellation cancellation) {
+        return observeStore(
+                LocationOperation.RELEASE,
+                () -> authority.removeAllByOwner(owner, cancellation::isCancellationRequested));
     }
 
     @Override
@@ -419,43 +443,42 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
         public CompletionStage<ZLinkStoreReadResult> read(
                 ZLinkStoreKey key,
                 systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-            try {
-                return observe(delegate.read(key, cancellation), cancellation);
-            } catch (RuntimeException error) {
-                throw failure(error, cancellation);
-            }
+            return observe(() -> delegate.read(key, cancellation), cancellation);
         }
 
         @Override
         public CompletionStage<ZLinkStoreWriteResult> write(
                 ZLinkStoreWriteRequest request,
                 systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-            try {
-                return observe(delegate.write(request, cancellation), cancellation);
-            } catch (RuntimeException error) {
-                throw failure(error, cancellation);
+            if (cancellation.isCancellationRequested()) {
+                return CompletableFuture.failedFuture(
+                        new java.util.concurrent.CancellationException(
+                                "Location Store operation cancelled"));
             }
+            return observe(() -> delegate.write(request, cancellation), cancellation);
         }
 
         @Override
         public CompletionStage<ZLinkStoreScanResult> scan(
                 ZLinkStoreScanRequest request,
                 systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-            try {
-                return observe(delegate.scan(request, cancellation), cancellation);
-            } catch (RuntimeException error) {
-                throw failure(error, cancellation);
-            }
+            return observe(() -> delegate.scan(request, cancellation), cancellation);
         }
 
         private static <T> CompletionStage<T> observe(
-                CompletionStage<T> operation,
+                java.util.function.Supplier<CompletionStage<T>> operation,
                 systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-            return operation.handle(
-                    (value, error) -> {
-                        if (error != null) throw failure(error, cancellation);
-                        return value;
-                    });
+            try {
+                return operation
+                        .get()
+                        .handle(
+                                (value, error) -> {
+                                    if (error != null) throw failure(error, cancellation);
+                                    return value;
+                                });
+            } catch (RuntimeException error) {
+                throw failure(error, cancellation);
+            }
         }
 
         private static RuntimeException failure(
