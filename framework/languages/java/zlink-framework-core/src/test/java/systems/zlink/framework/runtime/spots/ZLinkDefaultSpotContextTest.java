@@ -32,6 +32,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -380,7 +381,7 @@ final class ZLinkDefaultSpotContextTest {
                             RoutingId.from("target"),
                             "target-spot",
                             1,
-                            sendPayload,
+                            ZLinkFrameworkMultipartView.owned(sendPayload),
                             Optional.of("packet"));
             ZLinkRequestCall request =
                     new ZLinkSpotDirectRequestCall(

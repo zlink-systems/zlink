@@ -20,6 +20,7 @@ import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.spots.SpotRef;
 
 import java.io.IOException;
@@ -50,21 +51,24 @@ public final class ZLinkJsonMessageSerializer
         if (value instanceof Message message) {
             return ZLinkEncodedPayloadAccess.fromOwned(message.toByteArray());
         }
-        if (value instanceof byte[] bytes) {
-            return ZLinkEncodedPayload.from(bytes);
+        byte[] rawBytes = rawBytes(value);
+        if (rawBytes != null) {
+            return ZLinkEncodedPayload.from(rawBytes);
         }
         return ZLinkEncodedPayloadAccess.fromOwned(encodeJson(value));
     }
 
+    ZLinkFrameworkMultipartView serializeRetained(Object value) {
+        byte[] rawBytes = rawBytes(value);
+        if (rawBytes != null) {
+            return ZLinkFrameworkMultipartView.snapshot(rawBytes);
+        }
+        return ZLinkFrameworkMultipartView.encoded(serialize(value));
+    }
+
     @Override
     public Message serializeOwned(Object value) {
-        if (value instanceof Message message) {
-            return Message.from(message);
-        }
-        if (value instanceof byte[] bytes) {
-            return Message.from(bytes);
-        }
-        return Message.from(encodeJson(value));
+        return ZLinkMessagePayloads.message(serialize(value));
     }
 
     private byte[] encodeJson(Object value) {
@@ -74,6 +78,10 @@ public final class ZLinkJsonMessageSerializer
             throw new IllegalArgumentException(
                     "failed to serialize message as JSON: " + valueTypeName(value), ex);
         }
+    }
+
+    private static byte[] rawBytes(Object value) {
+        return value instanceof byte[] bytes ? bytes : null;
     }
 
     @Override

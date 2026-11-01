@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
@@ -423,7 +424,7 @@ final class ZLinkChannelCallRuntime {
             int kind,
             String channelName,
             Optional<String> packetName,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             String contentType,
             Map<String, String> metadata) {
         return envelopeParts(
@@ -434,7 +435,7 @@ final class ZLinkChannelCallRuntime {
             int kind,
             String channelName,
             Optional<String> packetName,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             String contentType,
             Map<String, String> metadata,
             UUID operationId) {
@@ -452,7 +453,7 @@ final class ZLinkChannelCallRuntime {
             int kind,
             String channelName,
             String packetName,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             String contentType,
             java.util.Map<String, String> metadata) {
         return envelopeParts(
@@ -471,12 +472,12 @@ final class ZLinkChannelCallRuntime {
             int kind,
             String channelName,
             String packetName,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             String contentType,
             Map<String, String> metadata,
             UUID operationId) {
         if (packetName == null) {
-            return List.of(payload);
+            return payload;
         }
         return systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encode(
                 systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.create(
@@ -489,46 +490,5 @@ final class ZLinkChannelCallRuntime {
                         ZLinkFlowContext.current(),
                         operationId),
                 payload);
-    }
-
-    static List<Message> copyEnvelopeParts(
-            int kind,
-            String channelName,
-            Optional<String> packetName,
-            Message payload,
-            String contentType,
-            java.util.Map<String, String> metadata) {
-        return copyEnvelopeParts(
-                kind,
-                channelName,
-                packetName,
-                payload,
-                contentType,
-                metadata,
-                kind == systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST
-                        ? ZLinkServiceOperationIds.next()
-                        : null);
-    }
-
-    static List<Message> copyEnvelopeParts(
-            int kind,
-            String channelName,
-            Optional<String> packetName,
-            Message payload,
-            String contentType,
-            Map<String, String> metadata,
-            UUID operationId) {
-        List<Message> source =
-                envelopeParts(
-                        kind, channelName, packetName, payload, contentType, metadata, operationId);
-        try {
-            return ZLinkChannelRuntime.copyMessages(source);
-        } finally {
-            for (Message part : source) {
-                if (part != payload) {
-                    part.close();
-                }
-            }
-        }
     }
 }

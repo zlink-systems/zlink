@@ -14,6 +14,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
@@ -35,7 +36,7 @@ final class ZLinkSpotRouteMessagesTest {
                     messages.encodeSend(
                             "route-channel",
                             Optional.of("packet"),
-                            payload,
+                            ZLinkFrameworkMultipartView.owned(payload),
                             ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
                             Map.of(),
                             null);
@@ -85,7 +86,7 @@ final class ZLinkSpotRouteMessagesTest {
                     messages.encodeSend(
                             "route-channel",
                             Optional.empty(),
-                            payload,
+                            ZLinkFrameworkMultipartView.owned(payload),
                             ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
                             Map.of(),
                             null);
@@ -188,7 +189,7 @@ final class ZLinkSpotRouteMessagesTest {
                     messages.encodeSend(
                             "route-channel",
                             Optional.of("packet"),
-                            payload,
+                            ZLinkFrameworkMultipartView.owned(payload),
                             ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
                             Map.of(),
                             state);
@@ -201,19 +202,21 @@ final class ZLinkSpotRouteMessagesTest {
                 withFlow.get(0).close();
             }
 
-            List<Message> withoutFlow =
-                    messages.encodeSend(
-                            "route-channel",
-                            Optional.of("packet"),
-                            payload,
-                            ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
-                            Map.of(),
-                            null);
-            try {
-                assertEquals(2, withoutFlow.size());
-                assertNull(ZLinkSpotFlowFrame.decode(withoutFlow));
-            } finally {
-                withoutFlow.get(0).close();
+            try (Message withoutFlowPayload = message("payload")) {
+                List<Message> withoutFlow =
+                        messages.encodeSend(
+                                "route-channel",
+                                Optional.of("packet"),
+                                ZLinkFrameworkMultipartView.owned(withoutFlowPayload),
+                                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                                Map.of(),
+                                null);
+                try {
+                    assertEquals(2, withoutFlow.size());
+                    assertNull(ZLinkSpotFlowFrame.decode(withoutFlow));
+                } finally {
+                    withoutFlow.get(0).close();
+                }
             }
         }
     }
@@ -225,7 +228,7 @@ final class ZLinkSpotRouteMessagesTest {
                     messages.encodeSend(
                             "route-channel",
                             Optional.of("packet"),
-                            payload,
+                            ZLinkFrameworkMultipartView.owned(payload),
                             "application/example",
                             Map.of("tenant", "a"),
                             null);

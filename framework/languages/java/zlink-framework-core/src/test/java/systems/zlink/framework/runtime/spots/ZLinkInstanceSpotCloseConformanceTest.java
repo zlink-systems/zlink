@@ -19,6 +19,7 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.host.*;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.locations.*;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
@@ -392,7 +393,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                                         MESH,
                                                         Optional.of(
                                                                 PendingProbe.class.getSimpleName()),
-                                                        payload,
+                                                        ZLinkFrameworkMultipartView.owned(payload),
                                                         null,
                                                         Map.of(),
                                                         null);

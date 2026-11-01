@@ -45,8 +45,8 @@ final class ZLinkStreamSessionDeclaredTypeCodecTest {
             assertEquals(ZLinkStreamCodec.PROTOBUF, reply.codec());
             assertEquals("BaseMessage", send.packetName());
             assertEquals("BaseMessage", reply.packetName());
-            assertEquals("BASE", send.payload().toUtf8String());
-            assertEquals("BASE", reply.payload().toUtf8String());
+            assertEquals("BASE", send.payload().getFirst().toUtf8String());
+            assertEquals("BASE", reply.payload().getFirst().toUtf8String());
         } finally {
             send.payload().close();
             reply.payload().close();

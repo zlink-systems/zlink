@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
@@ -126,7 +127,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                     publisherChannelName,
                     channelName,
                     topic,
-                    encoded.payload(),
+                    encoded.payload().getFirst(),
                     Optional.of(encoded.packetName()),
                     encoded.contentType());
         }
@@ -134,7 +135,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                 backendSpot,
                 channelName,
                 topic,
-                encoded.payload(),
+                encoded.payload().getFirst(),
                 Optional.of(encoded.packetName()),
                 encoded.contentType());
     }
@@ -173,7 +174,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
     private final class DeferredSpotSendCall implements ZLinkSpotSendCall {
         private final AtomicBoolean submitGate;
         private final String target;
-        private final Message payload;
+        private final ZLinkFrameworkMultipartView payload;
         private final Optional<String> packetName;
         private final String contentType;
         private final ZLinkApplicationMetadata metadata;
@@ -181,7 +182,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         private final String stableType;
         private final String selectedMesh;
 
-        private DeferredSpotSendCall(String target, Message payload, Optional<String> packetName) {
+        private DeferredSpotSendCall(
+                String target, ZLinkFrameworkMultipartView payload, Optional<String> packetName) {
             this(
                     target,
                     payload,
@@ -194,7 +196,10 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         }
 
         private DeferredSpotSendCall(
-                String target, Message payload, Optional<String> packetName, String contentType) {
+                String target,
+                ZLinkFrameworkMultipartView payload,
+                Optional<String> packetName,
+                String contentType) {
             this(
                     target,
                     payload,
@@ -208,7 +213,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         private DeferredSpotSendCall(
                 String target,
-                Message payload,
+                ZLinkFrameworkMultipartView payload,
                 Optional<String> packetName,
                 String contentType,
                 ZLinkApplicationMetadata metadata,
@@ -229,7 +234,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         private DeferredSpotSendCall(
                 String target,
-                Message payload,
+                ZLinkFrameworkMultipartView payload,
                 Optional<String> packetName,
                 String contentType,
                 ZLinkApplicationMetadata metadata,
@@ -349,7 +354,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                                                         target,
                                                                         stableType,
                                                                         selectedMesh,
-                                                                        copyPayload(),
+                                                                        payload,
                                                                         packetName,
                                                                         contentType,
                                                                         metadata.values(),
@@ -372,7 +377,6 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                     address.spotGeneration(),
                     address.authorityOwnerGeneration(),
                     address.ownerLeaseGeneration());
-            Message transportPayload = copyPayload();
             ZLinkSendCall call =
                     routeMeshEnabled
                             ? routed.send(
@@ -380,7 +384,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                     address.targetNodeRid(),
                                     address.spotId(),
                                     address.spotGeneration(),
-                                    transportPayload,
+                                    payload,
                                     packetName,
                                     contentType)
                             : direct.send(
@@ -388,20 +392,16 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                                     address.targetNodeRid(),
                                     address.spotId(),
                                     address.spotGeneration(),
-                                    transportPayload,
+                                    payload,
                                     packetName,
                                     contentType);
             call = call.metadata(metadata.values());
             try {
                 return call.submit();
             } catch (RuntimeException failure) {
-                transportPayload.close();
+                payload.close();
                 throw failure;
             }
-        }
-
-        private Message copyPayload() {
-            return Message.from(payload.dataBuffer());
         }
     }
 
@@ -410,7 +410,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         private final AtomicBoolean submitGate;
         private final String target;
-        private final Message payload;
+        private final ZLinkFrameworkMultipartView payload;
         private final Optional<String> packetName;
         private final String contentType;
         private final Duration timeout;
@@ -420,7 +420,10 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         private final String selectedMesh;
 
         private DeferredSpotRequestCall(
-                String target, Message payload, Optional<String> packetName, Duration timeout) {
+                String target,
+                ZLinkFrameworkMultipartView payload,
+                Optional<String> packetName,
+                Duration timeout) {
             this(
                     target,
                     payload,
@@ -435,7 +438,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         private DeferredSpotRequestCall(
                 String target,
-                Message payload,
+                ZLinkFrameworkMultipartView payload,
                 Optional<String> packetName,
                 Duration timeout,
                 String contentType) {
@@ -453,7 +456,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         private DeferredSpotRequestCall(
                 String target,
-                Message payload,
+                ZLinkFrameworkMultipartView payload,
                 Optional<String> packetName,
                 Duration timeout,
                 String contentType,
@@ -476,7 +479,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         private DeferredSpotRequestCall(
                 String target,
-                Message payload,
+                ZLinkFrameworkMultipartView payload,
                 Optional<String> packetName,
                 Duration timeout,
                 String contentType,
@@ -734,7 +737,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         }
 
         private Message copyPayload() {
-            return Message.from(payload.dataBuffer());
+            return payload.detachFirst();
         }
 
         @Override

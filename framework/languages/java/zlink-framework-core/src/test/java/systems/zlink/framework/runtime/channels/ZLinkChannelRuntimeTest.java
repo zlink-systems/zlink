@@ -46,6 +46,7 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopolog
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetricProbe;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
@@ -289,20 +290,21 @@ final class ZLinkChannelRuntimeTest {
 
     @Test
     void copiedTransportPartsPreserveTheCallerPayloadForFallback() {
-        try (Message payload = Message.from("payload")) {
+        try (Message payload = Message.from("payload");
+                var retained = ZLinkFrameworkMultipartView.owned(payload)) {
             List<Message> copied =
-                    ZLinkChannelCallRuntime.copyEnvelopeParts(
+                    ZLinkChannelCallRuntime.envelopeParts(
                             ZLinkChannelEnvelope.KIND_COMMAND,
                             "work",
                             Optional.of("Packet"),
-                            payload,
+                            retained,
                             ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
                             Map.of());
             try {
                 assertEquals("payload", payload.toUtf8String());
                 assertEquals("payload", copied.get(1).toUtf8String());
             } finally {
-                copied.forEach(Message::close);
+                ZLinkFrameworkMultipartView.closeAll(copied);
             }
         }
     }
@@ -1042,7 +1044,7 @@ final class ZLinkChannelRuntimeTest {
                                 String spotId,
                                 String stableType,
                                 String meshName,
-                                Message payload,
+                                ZLinkFrameworkMultipartView payload,
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata,
@@ -1529,7 +1531,7 @@ final class ZLinkChannelRuntimeTest {
                                 String spotId,
                                 String stableType,
                                 String meshName,
-                                Message payload,
+                                ZLinkFrameworkMultipartView payload,
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata,
@@ -1645,7 +1647,7 @@ final class ZLinkChannelRuntimeTest {
                                 String spotId,
                                 String stableType,
                                 String meshName,
-                                Message payload,
+                                ZLinkFrameworkMultipartView payload,
                                 Optional<String> packetName,
                                 String contentType,
                                 Map<String, String> metadata,
@@ -1660,7 +1662,7 @@ final class ZLinkChannelRuntimeTest {
                                                         route.targetNodeRid(),
                                                         route.spotId(),
                                                         route.spotGeneration(),
-                                                        java.util.List.of(payload));
+                                                        payload);
                                             });
                         }
 

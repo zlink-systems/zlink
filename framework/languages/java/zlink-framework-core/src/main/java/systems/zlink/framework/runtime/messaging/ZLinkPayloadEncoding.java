@@ -1,11 +1,11 @@
 package systems.zlink.framework.runtime.messaging;
 
-import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.util.Objects;
@@ -25,38 +25,41 @@ public final class ZLinkPayloadEncoding {
 
     public static EncodedPayload encode(
             ZLinkMessageSerializer serializer, Object payload, String contentType) {
-        Message message = encodeMessage(serializer, payload, contentType);
+        var encoded = encodeMessage(serializer, payload, contentType);
         try {
-            return encodedPayload(message, payload, contentType);
+            return new EncodedPayload(
+                    encoded,
+                    ZLinkPacketNames.resolve(payload),
+                    Objects.requireNonNull(contentType, "contentType"));
         } catch (RuntimeException | Error failure) {
-            message.close();
+            encoded.close();
             throw failure;
         }
     }
 
-    public static Message encodeMessage(
+    public static ZLinkFrameworkMultipartView encodeMessage(
             ZLinkMessageSerializer serializer, Object payload, String contentType) {
         Objects.requireNonNull(serializer, "serializer");
-        Message message;
         if (payload instanceof ZLinkMessage declared) {
-            message = ZLinkMessagePayloads.message(declared.toEncodedPayload(serializer));
-        } else {
-            var selected =
-                    ZLinkCodecRegistration.serializerForSendingContentType(serializer, contentType);
-            message =
-                    selected instanceof ZLinkOwnedMessageSerializer owned
-                            ? owned.serializeOwned(payload)
-                            : ZLinkMessagePayloads.message(selected.serialize(payload));
+            return ZLinkFrameworkMultipartView.encoded(declared.toEncodedPayload(serializer));
         }
-        return message;
+        var selected =
+                ZLinkCodecRegistration.serializerForSendingContentType(serializer, contentType);
+        return encodeSelected(selected, payload, null);
     }
 
-    private static EncodedPayload encodedPayload(
-            Message message, Object payload, String contentType) {
-        return new EncodedPayload(
-                message,
-                ZLinkPacketNames.resolve(payload),
-                Objects.requireNonNull(contentType, "contentType"));
+    private static ZLinkFrameworkMultipartView encodeSelected(
+            ZLinkMessageSerializer selected, Object payload, Class<?> declaredType) {
+        if (selected instanceof ZLinkJsonMessageSerializer json) {
+            return json.serializeRetained(payload);
+        }
+        if (selected instanceof ZLinkOwnedMessageSerializer owned) {
+            return ZLinkFrameworkMultipartView.owned(owned.serializeOwned(payload));
+        }
+        return ZLinkFrameworkMultipartView.encoded(
+                declaredType == null
+                        ? selected.serialize(payload)
+                        : selected.serialize(payload, declaredType));
     }
 
     public static String resolvePacketName(Object payload) {
@@ -76,7 +79,8 @@ public final class ZLinkPayloadEncoding {
                 serializer, declaredType(payload), fallback);
     }
 
-    public record EncodedPayload(Message payload, String packetName, String contentType) {
+    public record EncodedPayload(
+            ZLinkFrameworkMultipartView payload, String packetName, String contentType) {
         public EncodedPayload {
             Objects.requireNonNull(payload, "payload");
             Objects.requireNonNull(packetName, "packetName");

@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.lang.reflect.Proxy;
@@ -46,7 +47,7 @@ final class ZLinkSpotOutboundApplicationFlowTest {
                             RoutingId.from("target"),
                             "spot-1",
                             1L,
-                            payload,
+                            ZLinkFrameworkMultipartView.owned(payload),
                             Optional.of("Move"))
                     .submit()
                     .toCompletableFuture()
@@ -73,7 +74,7 @@ final class ZLinkSpotOutboundApplicationFlowTest {
                             RoutingId.from("target"),
                             "spot-1",
                             1L,
-                            payload,
+                            ZLinkFrameworkMultipartView.owned(payload),
                             Optional.of("Move"))
                     .submit()
                     .toCompletableFuture()
@@ -98,7 +99,7 @@ final class ZLinkSpotOutboundApplicationFlowTest {
                             RoutingId.from("target"),
                             "spot-1",
                             1L,
-                            payload,
+                            ZLinkFrameworkMultipartView.owned(payload),
                             Optional.of("Move"))
                     .submit()
                     .toCompletableFuture()

@@ -46,6 +46,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
@@ -1028,7 +1029,8 @@ public final class ZLinkChannelRuntime
         rejectAfterRelocationReady("Channel send");
         String contentType = codecs.contentTypeFor(ZLinkPayloadEncoding.declaredType(message));
         String packetName = ZLinkPayloadEncoding.resolvePacketName(message);
-        Message payload = ZLinkPayloadEncoding.encodeMessage(serializer, message, contentType);
+        ZLinkFrameworkMultipartView payload =
+                ZLinkPayloadEncoding.encodeMessage(serializer, message, contentType);
         return new ChannelSendCall(
                 callRuntime, channelName, sockets, payload, packetName, contentType, null);
     }
@@ -1063,7 +1065,7 @@ public final class ZLinkChannelRuntime
                 callRuntime,
                 requirePublisher(channelName),
                 encoded.packetName(),
-                encoded.payload(),
+                encoded.payload().getFirst(),
                 Optional.of(encoded.packetName()),
                 encoded.contentType());
     }
@@ -1077,7 +1079,7 @@ public final class ZLinkChannelRuntime
                 callRuntime,
                 requirePublisher(channelName),
                 topic,
-                encoded.payload(),
+                encoded.payload().getFirst(),
                 Optional.of(encoded.packetName()),
                 encoded.contentType());
     }
@@ -1118,7 +1120,8 @@ public final class ZLinkChannelRuntime
     public ZLinkSendCall sendToNode(String meshName, RoutingId target, Object message) {
         String contentType = codecs.contentTypeFor(ZLinkPayloadEncoding.declaredType(message));
         String packetName = ZLinkPayloadEncoding.resolvePacketName(message);
-        Message payload = ZLinkPayloadEncoding.encodeMessage(serializer, message, contentType);
+        ZLinkFrameworkMultipartView payload =
+                ZLinkPayloadEncoding.encodeMessage(serializer, message, contentType);
         return new RouteSendCall(
                 callRuntime, meshName, sockets, target, payload, packetName, contentType, null);
     }

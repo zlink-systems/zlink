@@ -11,6 +11,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAc
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
 import java.util.List;
@@ -315,7 +316,7 @@ final class ZLinkChannelDispatchReporter {
             ZLinkBackendRouterSocket router,
             ZLinkBackendReceived received,
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
-            Message reply) {
+            ZLinkFrameworkMultipartView reply) {
         if (received.hasDirectReplyPath()) {
             replyPayloadAndClose(received, requestHeader, reply);
         } else {
@@ -331,20 +332,12 @@ final class ZLinkChannelDispatchReporter {
     static void replyPayloadAndClose(
             ZLinkBackendReceived received,
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
-            Message reply) {
-        if (requestHeader == null) {
-            replyAndClose(received, reply);
-            return;
-        }
-        Message replyHeader =
-                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(
-                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(
-                                requestHeader));
+            ZLinkFrameworkMultipartView reply) {
+        List<Message> parts = replyParts(requestHeader, reply);
         try {
-            received.reply(List.of(replyHeader, reply));
+            received.reply(parts);
         } finally {
-            replyHeader.close();
-            reply.close();
+            ZLinkFrameworkMultipartView.closeAll(parts);
         }
     }
 
@@ -353,21 +346,67 @@ final class ZLinkChannelDispatchReporter {
             RoutingId routingId,
             long requestSeq,
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
-            Message reply) {
-        if (requestHeader == null) {
-            replyAndClose(router, routingId, requestSeq, reply);
-            return;
-        }
-        Message replyHeader =
-                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(
-                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(
-                                requestHeader));
+            ZLinkFrameworkMultipartView reply) {
+        List<Message> parts = replyParts(requestHeader, reply);
         try {
-            router.reply(routingId, requestSeq, List.of(replyHeader, reply));
+            router.reply(routingId, requestSeq, parts);
         } finally {
-            replyHeader.close();
-            reply.close();
+            ZLinkFrameworkMultipartView.closeAll(parts);
         }
+    }
+
+    private static List<Message> replyParts(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+            ZLinkFrameworkMultipartView reply) {
+        if (requestHeader == null) return reply;
+        try {
+            return systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encode(
+                    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(
+                            requestHeader),
+                    reply);
+        } catch (RuntimeException | Error failure) {
+            reply.close();
+            throw failure;
+        }
+    }
+
+    static void replyPayloadAndClose(
+            ZLinkBackendRouterSocket router,
+            ZLinkBackendReceived received,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+            Message reply) {
+        ZLinkFrameworkMultipartView retained = ZLinkFrameworkMultipartView.owned(reply);
+        if (received.hasDirectReplyPath()) {
+            replyPayloadAndClose(received, requestHeader, retained);
+        } else {
+            replyPayloadAndClose(
+                    router,
+                    received.routingId().orElseThrow(),
+                    received.requestSeq().orElseThrow(),
+                    requestHeader,
+                    retained);
+        }
+    }
+
+    static void replyPayloadAndClose(
+            ZLinkBackendReceived received,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+            Message reply) {
+        replyPayloadAndClose(received, requestHeader, ZLinkFrameworkMultipartView.owned(reply));
+    }
+
+    static void replyPayloadAndClose(
+            ZLinkBackendRouterSocket router,
+            RoutingId routingId,
+            long requestSeq,
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+            Message reply) {
+        replyPayloadAndClose(
+                router,
+                routingId,
+                requestSeq,
+                requestHeader,
+                ZLinkFrameworkMultipartView.owned(reply));
     }
 
     static void replyRawAndClose(ZLinkBackendReceived received, List<Message> reply) {

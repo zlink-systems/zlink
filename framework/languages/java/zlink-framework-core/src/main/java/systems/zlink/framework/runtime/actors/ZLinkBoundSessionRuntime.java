@@ -138,7 +138,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 sessionRid,
                 actorId,
                 actorRuntime,
-                encoded.payload(),
+                encoded.payload().getFirst(),
                 options,
                 actorSlot,
                 metadataPolicy);
