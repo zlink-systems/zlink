@@ -38,6 +38,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <iostream>
@@ -3674,7 +3675,8 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     state->routing_id = zlink::routing_id_t::from ("settlement-target");
     state->spot_state->dispatch.message_flow (framework::message_flow_log_mode_t::detailed);
     framework::logging_builder_t logging;
-    logging.use_file ("target-cutover.flow").set_min_level (framework::log_level_t::debug);
+    logging.use_file ((std::filesystem::temp_directory_path () / "target-cutover.flow").string ())
+      .set_min_level (framework::log_level_t::debug);
     detail::dispatch_options_access_t::set_logger (state->spot_state->dispatch,
                                                    logging.create_logger ("target-cutover"));
     state->spot_state->snapshot.actor_types.push_back ("production.actor");

@@ -353,9 +353,11 @@ int main ()
                 == std::stoull (vector.at ("expiresAtMs").get<std::string> ()));
         assert (production_decoded.tombstone == vector.at ("tombstone").get<bool> ());
         assert (production_decoded.raw_bytes.size () == decoded.raw_bytes.size ());
-        assert (std::memcmp (production_decoded.raw_bytes.data (), decoded.raw_bytes.data (),
-                             decoded.raw_bytes.size ())
-                == 0);
+        // An empty value may have null data, which memcmp does not accept.
+        assert (decoded.raw_bytes.empty ()
+                || std::memcmp (production_decoded.raw_bytes.data (), decoded.raw_bytes.data (),
+                                decoded.raw_bytes.size ())
+                     == 0);
     }
 
     // Checklist C-4: the authority record's `payload` field converts from
