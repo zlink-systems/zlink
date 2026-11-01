@@ -372,16 +372,17 @@ TEST (CppFrameworkRouteClientChannelRouting, OneWayPublishDoesNotCreateCorrelati
     subscriber.options ().recv_timeout (5s);
     auto monitor = subscriber.monitor_open (zlink::monitor_event::connection_ready);
     subscriber.set_subscription (topic);
-    subscriber.bind (endpoint);
 
     zlink::framework::serializer_registry_t serializers;
     add_int_serializer<route_event_t> (serializers, "application/x-route-event");
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
-    builder.channel ("one-way-publisher").enable_publisher ().connect (endpoint);
+    builder.channel ("one-way-publisher").enable_publisher (false).bind (endpoint);
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_core_context (context);
     runtime.bind_serializers (serializers);
     runtime.initialize_manual_channel_publishers ();
+    // Inproc SUB connect flushes its cached subscription before returning; READY alone does not.
+    subscriber.connect (endpoint);
     zlink::poller_t poller;
     poller.add (monitor, zlink::poll_event_flag_t::pollin, 1);
     zlink::poll_event_t ready;
