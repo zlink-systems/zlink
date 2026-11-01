@@ -333,7 +333,7 @@ class location_runtime_t
                     const auto completed = detail::observe_task_result_for (
                       pending, remaining_until (deadline_at), std::stop_token{});
                     if (!completed) {
-                        pending.result ().value ();
+                        detail::task_result_access_t::read (pending).value ();
                         throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
                                                                "owner lease cleanup timed out");
                     }
@@ -545,7 +545,7 @@ class location_runtime_t
             }
             if (expire)
                 expire ();
-            completed = pending.result ();
+            completed = detail::task_result_access_t::read (pending);
         }
         auto outcome = completed->value ();
         if (outcome.rejection)
@@ -934,7 +934,7 @@ class location_runtime_t
             if (expire)
                 expire ();
             if (attempt->task)
-                static_cast<void> (attempt->task->result ());
+                static_cast<void> (detail::task_result_access_t::read (*attempt->task));
         }
         std::atomic_store_explicit (&_heartbeat_state, std::shared_ptr<heartbeat_owner_t>{},
                                     std::memory_order_release);

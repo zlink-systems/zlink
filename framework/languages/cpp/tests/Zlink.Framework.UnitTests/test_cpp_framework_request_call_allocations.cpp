@@ -629,9 +629,9 @@ TEST (RequestCallAllocations, SpotRequestProjectsTheSelectedMeshRequestOnce)
     const auto operation_admission = fw::detail::request_task_access_t::admission_source (*pending);
     ASSERT_NE (operation_admission, admitted);
     EXPECT_TRUE (allocation_containing (actual, operation_admission.get ()).has_value ());
-    EXPECT_TRUE (
-      allocation_containing (actual, std::addressof (operation_admission->task ().result ()))
-        .has_value ());
+    auto operation_admission_task = operation_admission->task ();
+    EXPECT_TRUE (allocation_containing (actual, std::addressof (operation_admission_task.result ()))
+                   .has_value ());
     EXPECT_TRUE (pending->admitted ().result ());
     EXPECT_FALSE (pending->await_ready ());
     EXPECT_TRUE (physical.complete (
@@ -1063,8 +1063,9 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
         expect_public_and_physical_reply_allocations (sample, *pending);
         const auto admission = fw::detail::request_task_access_t::admission_source (*pending);
         EXPECT_TRUE (allocation_containing (sample, admission.get ()).has_value ());
-        EXPECT_TRUE (allocation_containing (sample, std::addressof (admission->task ().result ()))
-                       .has_value ());
+        auto admission_task = admission->task ();
+        EXPECT_TRUE (
+          allocation_containing (sample, std::addressof (admission_task.result ())).has_value ());
         return sample;
     };
     (void) measure (reference);

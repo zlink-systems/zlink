@@ -850,7 +850,7 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
                                          }))
                 return result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
                                                             "SPOT route request decode failed");
-            return result.result ();
+            return detail::task_result_access_t::read (result);
         }
         if (header.message_name == spot_actor_commit_route_request_t::packet_name) {
             auto request = _serializers->get<spot_actor_commit_route_request_t> ().deserialize (
@@ -861,7 +861,7 @@ result_t<zlink::message_t> spot_route_internal_dispatcher_t::dispatch_request (
                                            [completion] (result_t<zlink::message_t> value) mutable {
                                                completion->complete (std::move (value));
                                            });
-            return result.result ();
+            return detail::task_result_access_t::read (result);
         }
         if (header.message_name == actor_bound_session_route_request_t::packet_name) {
             auto request = _serializers->get<actor_bound_session_route_request_t> ().deserialize (

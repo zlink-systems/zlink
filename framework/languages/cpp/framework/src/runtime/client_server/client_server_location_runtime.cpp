@@ -229,7 +229,7 @@ struct client_server_location_runtime_t::pump_task_state_t
     {
         if (!task || !task->await_ready ())
             return false;
-        const auto &result = task->result ();
+        const auto &result = detail::task_result_access_t::read (*task);
         return !result || result.value ();
     }
 };
@@ -828,7 +828,8 @@ bool client_server_location_runtime_t::request_publication (location_write_inten
           runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
         return false;
     }
-    return result.result () && result.result ().value ();
+    return detail::task_result_access_t::read (result)
+           && detail::task_result_access_t::read (result).value ();
 }
 
 task_t<void> client_server_location_runtime_t::request_transport_turn (std::function<void ()> work)
@@ -889,7 +890,7 @@ void client_server_location_runtime_t::run ()
         run_transport_turns ();
         if (pending_maintenance && pending_maintenance->await_ready ()) {
             auto completed = std::move (pending_maintenance);
-            const auto &result = completed->result ();
+            const auto &result = detail::task_result_access_t::read (*completed);
             const bool published = result && result.value ();
             const bool reconcile_after_publish = serving.empty ();
             if (!result)
@@ -918,14 +919,15 @@ void client_server_location_runtime_t::run ()
         }
         if (pending_reconcile && pending_reconcile->await_ready ()) {
             auto completed = std::move (pending_reconcile);
-            if (!completed->result ())
-                _channel_runtime.runtime_failures ()->report (completed->result ().exception ());
+            if (!detail::task_result_access_t::read (*completed))
+                _channel_runtime.runtime_failures ()->report (
+                  detail::task_result_access_t::read (*completed).exception ());
             next_reconcile =
               std::chrono::steady_clock::now () + _locations->options ().polling_interval;
         }
         if (pending_worker_snapshot && pending_worker_snapshot->await_ready ()) {
             auto completed = std::move (pending_worker_snapshot);
-            const auto &result = completed->result ();
+            const auto &result = detail::task_result_access_t::read (*completed);
             if (result) {
                 next_worker_deadline = result.value ().next_deadline ();
             } else {
@@ -1226,7 +1228,7 @@ task_t<void> client_server_location_runtime_t::pump ()
       [] (const std::shared_ptr<pump_task_state_t> &state) -> std::optional<result_t<bool>> {
         if (!state || !state->task || !state->task->await_ready ())
             return std::nullopt;
-        return state->task->result ();
+        return detail::task_result_access_t::read (*state->task);
     };
     const auto observe_pump = [wake =
                                  _wake_timer] (const std::shared_ptr<pump_task_state_t> &state) {

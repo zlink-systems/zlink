@@ -4231,7 +4231,7 @@ auto mesh_node_runtime_t::dispatch_node_request (const zlink::routing_id_t &targ
         auto classification = classify_unknown_node_target (target);
         if (!classification.await_ready ())
             return unknown (std::move (classification));
-        if (const auto result = classification.result ().value ())
+        if (const auto result = detail::task_result_access_t::read (classification).value ())
             return classified (*result);
     }
     return known ();
@@ -4257,7 +4257,8 @@ void mesh_node_runtime_t::compose_node_request_reply (host::pending_operation_t 
                                                       task_t<zlink::submit_result_t> submission,
                                                       request_receiver_t<node_reply_t> receiver)
 {
-    const auto *immediate = submission.await_ready () ? &submission.result () : nullptr;
+    const auto *immediate =
+      submission.await_ready () ? &detail::task_result_access_t::read (submission) : nullptr;
     if (immediate && (!*immediate || immediate->value () != zlink::submit_result_t::ok)) {
         auto failure = *immediate ? node_submission_failure (immediate->value ())
                                   : result_access_t::failure<runtime::messaging::message_parts_t> (

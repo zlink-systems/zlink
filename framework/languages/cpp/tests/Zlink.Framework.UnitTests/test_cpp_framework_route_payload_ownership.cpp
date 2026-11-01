@@ -923,9 +923,9 @@ struct route_send_fixture_t
     zlink::routing_id_t rid = zlink::routing_id_t::from ("n");
 };
 
-// Submit/completion §4/§7 and hot path E4/E5: a route send owns one public task.
-// The transport boundary is the only coroutine between the call and the transport task.
-TEST (RoutePayloadOwnership, NodeSendCreatesOneTaskAboveTheTransport)
+// Hot path E4 and Submit/completion §11: ready send results remain inline.
+// Encoding owns the only allocation above this ready transport.
+TEST (RoutePayloadOwnership, NodeSendKeepsReadyResultsInline)
 {
     int delivered = 0;
     std::size_t before_transport = 0;
@@ -958,23 +958,19 @@ TEST (RoutePayloadOwnership, NodeSendCreatesOneTaskAboveTheTransport)
     const auto total = tests::count_allocations ([&] { call.async ().result ().value (); });
     tests::allocation_event_log = nullptr;
     ASSERT_FALSE (log.overflow);
-    // A coroutine allocates its frame before constructing its promise. Before
-    // transport entry, the remaining allocations are the public state and the
-    // codec vector, identified by its buffer address rather than allocation size.
+    // Identify the codec vector by its address; no task storage is needed before submit.
     ASSERT_EQ (1u, codec_buffers);
-    ASSERT_GE (before_transport, 1u + codec_buffers);
-    const auto public_states = before_transport - 1 - codec_buffers;
+    ASSERT_EQ (before_transport, codec_buffers);
+    const auto public_states = before_transport - codec_buffers;
     std::ostringstream sizes;
     for (std::size_t index = 0; index < log.count; ++index)
         sizes << events[index].size << ' ';
     std::cout << "route-send allocations=" << total << " public-task-states=" << public_states
               << " result-task-states=" << transport_states << " sizes=" << sizes.str () << '\n';
     EXPECT_EQ (5, delivered);
-    // One public task<void> and the transport's own ready task. A wrapper coroutine
-    // between them adds a task state and a frame for every message.
-    EXPECT_EQ (1u, public_states);
-    EXPECT_EQ (1u, transport_states);
-    EXPECT_EQ (4u, total);
+    EXPECT_EQ (0u, public_states);
+    EXPECT_EQ (0u, transport_states);
+    EXPECT_EQ (1u, total);
 }
 
 // Hot path E4: a deferred transport exception becomes internal_failure at the transport

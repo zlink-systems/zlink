@@ -460,7 +460,7 @@ handler_registry_t::invoke (std::string_view channel_name,
         completion->complete (result_t<zlink::message_t>::failure (
           framework_error_kind_t::internal_failure, "handler executor rejected invocation"));
     }
-    return task.result ();
+    return detail::task_result_access_t::read (task);
 }
 
 task_t<zlink::message_t>

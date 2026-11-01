@@ -3211,7 +3211,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                                "STREAM error reply connection is closing");
               return task_t<void> (result_t<void>::success ());
           });
-        send.result ();
+        detail::task_result_access_t::read (send);
     }
 
     template <typename TStream>

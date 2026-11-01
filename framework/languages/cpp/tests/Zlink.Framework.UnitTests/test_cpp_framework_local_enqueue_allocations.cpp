@@ -52,6 +52,24 @@ namespace
 namespace fw = zlink::framework;
 namespace host = fw::runtime::host;
 
+bool within_allocation_budget (const fw::tests::allocation_measurement_t &cost,
+                               const fw::tests::allocation_measurement_t &budget)
+{
+    return cost.count <= budget.count && cost.bytes <= budget.bytes
+           && cost.largest <= budget.largest;
+}
+
+template <typename TAction>
+fw::tests::allocation_measurement_t measure_with_extra_allocation (TAction &&action)
+{
+    return fw::tests::measure_allocations ([&] {
+        std::forward<TAction> (action) ();
+        void *(*volatile allocate) (std::size_t) = &::operator new;
+        auto *memory = allocate (1);
+        ::operator delete (memory);
+    });
+}
+
 std::shared_ptr<host::public_host_runtime_t> make_host ()
 {
     auto runtime = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
@@ -409,23 +427,37 @@ TEST (LocalEnqueueAllocations, StatefulOwnerClaimWithoutQueuedTurnNeedsNoContinu
     stateful_spot_fixture_t fixture (serial_lane_policy_t::spot_wide ());
     auto &objects = fixture.runtime->objects ();
     auto &dispatch = host::public_host_runtime_test_access_t::stateful_dispatch (*fixture.runtime);
-    // A ready claim stores at most its delivery result; a continuation frame holds that
-    // result and every local live across its awaits, so it is larger on any ABI.
+    // An empty claim needs only its ready result and the by-value owner arguments;
+    // it must not allocate a continuation frame.
     const auto result_storage = fw::tests::measure_allocations ([] {
         const fw::task_t<delivery_result_t> ready (fw::result_t<delivery_result_t>::success ({}));
         EXPECT_TRUE (ready.await_ready ());
     });
+    const auto input = fw::tests::measure_allocations ([&] {
+        const auto copy = fixture.object;
+        EXPECT_EQ (copy, fixture.object);
+    });
+    // The registry takes one owner by value. Dispatch takes one owner by value
+    // and passes it as an lvalue to the registry before moving its own copy.
+    const fw::tests::allocation_measurement_t object_budget{
+      result_storage.count + input.count, result_storage.bytes + input.bytes,
+      std::max (result_storage.largest, input.largest)};
+    const fw::tests::allocation_measurement_t dispatch_budget{
+      result_storage.count + 2 * input.count, result_storage.bytes + 2 * input.bytes,
+      std::max (result_storage.largest, input.largest)};
     const auto claim_object = [&] {
         auto claim = objects.try_claim_async (fixture.object, stateful::turn_domain_t::application);
         ASSERT_TRUE (claim.await_ready ());
-        EXPECT_EQ (claim.result ().value ().error, stateful::stateful_error_t::none);
-        EXPECT_FALSE (claim.result ().value ().turn.has_value ());
+        const auto terminal = std::move (claim).result ();
+        EXPECT_EQ (terminal.value ().error, stateful::stateful_error_t::none);
+        EXPECT_FALSE (terminal.value ().turn.has_value ());
     };
     const auto claim_dispatch = [&] {
         auto claim = dispatch.try_claim_async (fixture.object);
         ASSERT_TRUE (claim.await_ready ());
-        EXPECT_EQ (claim.result ().value ().error, stateful::stateful_error_t::none);
-        EXPECT_FALSE (claim.result ().value ().delivery.has_value ());
+        const auto terminal = std::move (claim).result ();
+        EXPECT_EQ (terminal.value ().error, stateful::stateful_error_t::none);
+        EXPECT_FALSE (terminal.value ().delivery.has_value ());
     };
     claim_object ();
     claim_dispatch ();
@@ -435,8 +467,24 @@ TEST (LocalEnqueueAllocations, StatefulOwnerClaimWithoutQueuedTurnNeedsNoContinu
                  "dispatch allocations=%zu bytes=%zu largest=%zu; result_storage=%zu\n",
                  object_cost.count, object_cost.bytes, object_cost.largest, dispatch_cost.count,
                  dispatch_cost.bytes, dispatch_cost.largest, result_storage.largest);
-    EXPECT_LE (object_cost.largest, result_storage.largest);
-    EXPECT_LE (dispatch_cost.largest, result_storage.largest);
+    EXPECT_LE (object_cost.largest, object_budget.largest);
+    EXPECT_LE (object_cost.count, object_budget.count);
+    EXPECT_LE (object_cost.bytes, object_budget.bytes);
+    EXPECT_LE (dispatch_cost.largest, dispatch_budget.largest);
+    EXPECT_LE (dispatch_cost.count, dispatch_budget.count);
+    EXPECT_LE (dispatch_cost.bytes, dispatch_budget.bytes);
+    const auto injected_object = measure_with_extra_allocation (claim_object);
+    const auto injected_dispatch = measure_with_extra_allocation (claim_dispatch);
+    EXPECT_FALSE (within_allocation_budget (injected_object, object_budget));
+    EXPECT_FALSE (within_allocation_budget (injected_dispatch, dispatch_budget));
+    std::printf ("owner claim budget: object=%zu/%zu dispatch=%zu/%zu; accepted=%d/%d; "
+                 "injected object=%zu/%zu dispatch=%zu/%zu accepted=%d/%d\n",
+                 object_budget.count, object_budget.bytes, dispatch_budget.count,
+                 dispatch_budget.bytes, within_allocation_budget (object_cost, object_budget),
+                 within_allocation_budget (dispatch_cost, dispatch_budget), injected_object.count,
+                 injected_object.bytes, injected_dispatch.count, injected_dispatch.bytes,
+                 within_allocation_budget (injected_object, object_budget),
+                 within_allocation_budget (injected_dispatch, dispatch_budget));
 }
 
 TEST (LocalEnqueueAllocations, RecordedAuthorityUsesOnlyReadyResultStorage)
@@ -467,7 +515,8 @@ TEST (LocalEnqueueAllocations, RecordedAuthorityUsesOnlyReadyResultStorage)
     const auto resolve = [&] {
         auto result = runtime->accepted_record_authority (query, lease);
         ASSERT_TRUE (result.await_ready ());
-        const auto &authority = result.result ().value ();
+        const auto terminal = std::move (result).result ();
+        const auto &authority = terminal.value ();
         ASSERT_TRUE (authority.has_value ());
         EXPECT_EQ (authority->source.owner_id, lease->owner_id);
         EXPECT_EQ (authority->source.node_routing_id, query.source_node_routing_id);
@@ -477,9 +526,19 @@ TEST (LocalEnqueueAllocations, RecordedAuthorityUsesOnlyReadyResultStorage)
     const auto measured = tests::measure_allocations (resolve);
     std::printf ("recorded authority: allocations=%zu bytes=%zu largest=%zu; ready storage=%zu\n",
                  measured.count, measured.bytes, measured.largest, storage.largest);
-    EXPECT_LE (measured.largest, storage.largest);
+    EXPECT_LE (measured.largest, std::max (storage.largest, input.largest));
     EXPECT_LE (measured.count, storage.count + input.count);
     EXPECT_LE (measured.bytes, storage.bytes + input.bytes);
+    const tests::allocation_measurement_t budget{storage.count + input.count,
+                                                 storage.bytes + input.bytes,
+                                                 std::max (storage.largest, input.largest)};
+    const auto injected = measure_with_extra_allocation (resolve);
+    EXPECT_FALSE (within_allocation_budget (injected, budget));
+    std::printf ("recorded authority budget=%zu/%zu largest=%zu accepted=%d; "
+                 "injected=%zu/%zu largest=%zu accepted=%d\n",
+                 budget.count, budget.bytes, budget.largest,
+                 within_allocation_budget (measured, budget), injected.count, injected.bytes,
+                 injected.largest, within_allocation_budget (injected, budget));
 }
 
 TEST (LocalEnqueueAllocations, ReadyAuthorityResolverAddsOnlyItsLaneResult)

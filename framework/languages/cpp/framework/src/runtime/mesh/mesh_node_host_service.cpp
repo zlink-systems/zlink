@@ -2203,7 +2203,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                 pending_management->armed->store (false, std::memory_order_release);
             pending_management->stale = true;
             if (pending_management->activity.await_ready ()) {
-                (void) pending_management->activity.result ().value ();
+                (void) detail::task_result_access_t::read (pending_management->activity).value ();
                 pending_management.reset ();
             }
         }
@@ -2213,7 +2213,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
         std::optional<std::chrono::steady_clock::time_point> next_activity;
         if (count == 0) {
             if (pending_management->stale && pending_management->activity.await_ready ()) {
-                (void) pending_management->activity.result ().value ();
+                (void) detail::task_result_access_t::read (pending_management->activity).value ();
                 pending_management.reset ();
                 start_management (true);
             }
@@ -2224,7 +2224,8 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
             }
             if (pending_management->activity.await_ready ()) {
                 pending_management->armed->store (false, std::memory_order_release);
-                const auto activity = pending_management->activity.result ().value ();
+                const auto activity =
+                  detail::task_result_access_t::read (pending_management->activity).value ();
                 pending_management.reset ();
                 local_pending = activity.first && accept_application_receive;
                 next_activity = activity.second;
