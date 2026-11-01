@@ -25,20 +25,24 @@ public sealed class RemoteSpotFirstRequestTests
     [Fact]
     public async Task Actual_connection_refusal_ends_request_before_its_deadline()
     {
-        // Release the port before connecting: a bound, non-listening TCP socket
-        // drops incoming SYNs on macOS instead of refusing the connection.
-        string endpoint;
-        using (
-            var reservation = new Socket(
-                AddressFamily.InterNetwork,
-                System.Net.Sockets.SocketType.Stream,
-                ProtocolType.Tcp
-            )
-        )
-        {
-            reservation.Bind(new IPEndPoint(IPAddress.Loopback, 0));
-            endpoint = $"tcp://127.0.0.1:{((IPEndPoint)reservation.LocalEndPoint!).Port}";
-        }
+        // A connected socket retains its local port without listening for new
+        // connections. Releasing a reserved port lets another test listen on it;
+        // a bound-only socket instead drops incoming SYNs on macOS.
+        using var listener = new Socket(
+            AddressFamily.InterNetwork,
+            System.Net.Sockets.SocketType.Stream,
+            ProtocolType.Tcp
+        );
+        listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        listener.Listen(1);
+        using var reservation = new Socket(
+            AddressFamily.InterNetwork,
+            System.Net.Sockets.SocketType.Stream,
+            ProtocolType.Tcp
+        );
+        await reservation.ConnectAsync(listener.LocalEndPoint!);
+        using var accepted = await listener.AcceptAsync();
+        var endpoint = $"tcp://127.0.0.1:{((IPEndPoint)reservation.LocalEndPoint!).Port}";
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var requester = new ZLinkManagedMeshNode(context, "connection-refusal");
         var target = RoutingId.From("unreachable-owner");
