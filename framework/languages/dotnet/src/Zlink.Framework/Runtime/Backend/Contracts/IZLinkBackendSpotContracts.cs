@@ -181,19 +181,23 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         throw new NotSupportedException("This MeshNode backend does not support node requests.");
     }
 
-    ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
+    ValueTask<TReply> RequestToNodeAsync<TReply>(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
+        Func<ZLinkBackendRouteReceived, TReply> decodeReply,
+        Func<Exception?, Exception?> receive,
         ReadOnlyMemory<byte> metadata = default,
         ZLinkRequestAdmission? requestAdmission = null
     ) =>
-        ValueTask.FromException<ZLinkBackendRouteReceived>(
-            new NotSupportedException(
-                "This MeshNode backend does not support direct node requests."
-            )
+        ValueTask.FromException<TReply>(
+            receive(
+                new NotSupportedException(
+                    "This MeshNode backend does not support direct node requests."
+                )
+            )!
         );
 
     ZLinkBackendActorRef CreateActor(string actorId, Message createRequest);
