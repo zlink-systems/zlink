@@ -301,4 +301,148 @@ TEST (CppFrameworkSubmissionValidation, MissingConfigurationRemainsSynchronous)
                       "required configuration value missing: submission.required-value");
     }
 }
+// Decode failures must retain the exact local callback exception through both
+// the handler result and the typed request reply projection.
+struct decode_payload_t
+{
+};
+
+struct decode_handler_t
+{
+    std::string request (const decode_payload_t &)
+    {
+        ADD_FAILURE () << "decode failure must precede the request handler";
+        return {};
+    }
+    void send (const decode_payload_t &)
+    {
+        ADD_FAILURE () << "decode failure must precede the send handler";
+    }
+};
+
+class CppFrameworkDecodeFailure : public ::testing::TestWithParam<int>
+{
+  protected:
+    void SetUp () override
+    {
+        if (GetParam () == 0)
+            original = std::make_exception_ptr (std::runtime_error ("decoder cause"));
+        else if (GetParam () == 1)
+            original = std::make_exception_ptr (nonstandard_submission_failure_t{
+              std::make_shared<const int> (3472), "non-standard decoder cause"});
+        else {
+            try {
+                throw std::runtime_error ("nested decoder cause");
+            }
+            catch (...) {
+                try {
+                    std::throw_with_nested (fw::framework_exception_t (
+                      fw::framework_error_kind_t::protocol_error, "typed decoder cause"));
+                }
+                catch (...) {
+                    original = std::current_exception ();
+                }
+            }
+        }
+        serializers.add<decode_payload_t> (
+          [] (const decode_payload_t &) { return fw::encoded_payload_t::from_string ("payload"); },
+          [this] (const fw::encoded_payload_t &) -> decode_payload_t {
+              std::rethrow_exception (original);
+          },
+          "application/x-decode-cause");
+    }
+
+    template <typename T> void expect_cause (const fw::result_t<T> &result)
+    {
+        ASSERT_FALSE (result);
+        ASSERT_NE (result.error (), nullptr);
+        EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::protocol_error);
+        if (GetParam () == 2) {
+            EXPECT_EQ (result.exception (), original);
+            return;
+        }
+        try {
+            result.value ();
+            FAIL () << "decode must fail";
+        }
+        catch (const fw::framework_exception_t &error) {
+            EXPECT_EQ (fw::detail::failure_origin (error),
+                       fw::detail::failure_origin_t::payload_decode);
+            const auto *nested = dynamic_cast<const std::nested_exception *> (&error);
+            ASSERT_NE (nested, nullptr);
+            EXPECT_EQ (nested->nested_ptr (), original);
+        }
+    }
+
+    fw::serializer_registry_t serializers;
+    std::exception_ptr original;
+};
+
+TEST_P (CppFrameworkDecodeFailure, RequestRetainsOriginalCause)
+{
+    fw::service_collection_t services;
+    services.add_singleton<decode_handler_t> ();
+    auto provider = services.build_provider ();
+    fw::handler_registry_t handlers;
+    handlers.on_request<decode_handler_t, decode_payload_t, std::string> (
+      "decode", "request", &decode_handler_t::request, {.packet_name = "payload"});
+    expect_cause (handlers.invoke ("decode", "request", "payload", provider, serializers,
+                                   zlink::message_t::from (std::string ("payload"))));
+}
+
+TEST_P (CppFrameworkDecodeFailure, SendRetainsOriginalCause)
+{
+    fw::service_collection_t services;
+    services.add_singleton<decode_handler_t> ();
+    auto provider = services.build_provider ();
+    fw::handler_registry_t handlers;
+    handlers.on_send<decode_handler_t, decode_payload_t> ("decode", "send", &decode_handler_t::send,
+                                                          {.packet_name = "payload"});
+    // Exercise downstream result retention in addition to terminal dispatch.
+    handlers.add_filter (
+      [] (auto &, auto &, const auto &, fw::handler_next_t next) -> fw::task_t<void> {
+          const auto completed = next ();
+          EXPECT_TRUE (completed.await_ready ());
+          EXPECT_FALSE (completed.result ());
+          co_return;
+      });
+    expect_cause (handlers.invoke ("decode", "send", "payload", provider, serializers,
+                                   zlink::message_t::from (std::string ("payload"))));
+}
+
+TEST_P (CppFrameworkDecodeFailure, ReplyRetainsOriginalCause)
+{
+    fw::channel_request_call_t call ("payload", &serializers,
+                                     [] (const std::string &, std::chrono::milliseconds,
+                                         const std::map<std::string, std::string> &) {
+                                         return fw::request_task_t<zlink::message_t> (
+                                           fw::result_t<zlink::message_t>::success (
+                                             zlink::message_t::from (std::string ("payload"))));
+                                     });
+    expect_cause (call.async<decode_payload_t> ().result ());
+}
+
+TEST_P (CppFrameworkDecodeFailure, ReceiverReplyRetainsOriginalCause)
+{
+    auto builder = fw::test::runtime_failure_builder ();
+    builder.channel ("decode-reply").enable_client ().connect ("tcp://127.0.0.1:1");
+    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    runtime.bind_client_server_transport (
+      "decode-reply", {},
+      [] (std::string, std::string, zlink::message_t, std::chrono::milliseconds,
+          std::map<std::string, std::string>) {
+          return fw::request_task_t<zlink::message_t> (fw::result_t<zlink::message_t>::success (
+            zlink::message_t::from (std::string ("payload"))));
+      });
+    expect_cause (builder.message_bus ()
+                    .request ("decode-reply", std::string ("request"))
+                    .async<decode_payload_t> ()
+                    .result ());
+}
+
+INSTANTIATE_TEST_SUITE_P (LocalDecoderCauses,
+                          CppFrameworkDecodeFailure,
+                          ::testing::Values (0, 1, 2));
+
 } // namespace
