@@ -20,6 +20,7 @@
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
+#include "runtime/execution/serial_handler_participant.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
@@ -2491,6 +2492,7 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
     }
     node->worker_executor->drain ();
     node->worker_executor.reset ();
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
     return 0;
 }
 
@@ -2939,6 +2941,7 @@ int session_disconnect_callback_owns_spot_lifecycle_gate ()
             || !entered_actor || ran_while_held || !owns_gate || !owns_actor_context
             || callbacks != 1)
             return 1;
+        spot_node_runtime_t (node).release_native_handles ();
     }
     return 0;
 }
@@ -2962,6 +2965,7 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
     spot->spot_id = spot_id_t ("disconnect-context-spot");
     spot->spot_name = "disconnect-context";
     spot->serial_executor = node->worker_executor;
+    spot->serial_queue = spot->ensure_spot_serial_executor ()->spot_queue ();
     spot->channel_runtime = test::runtime_failure_fixture<channel_runtime_state_t> ();
     spot->channel_runtime->serializers = &serializers;
     auto release = std::make_shared<task_completion_source_t<void>> ();
@@ -3018,11 +3022,14 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
           rt::protocol::session_disconnected_packet_name, *typed_spot, unregistered, provider,
           serializers, body);
         node->worker_executor->drain ();
-        return delivered && delivered.value ().is_empty () && mismatched
-                   && mismatched.value ().is_empty () && callbacks->load () == 1 && !missing
-                   && missing.error_kind () == framework_error_kind_t::not_found
-                 ? 0
-                 : 2;
+        const auto passed = delivered && delivered.value ().is_empty () && mismatched
+                                && mismatched.value ().is_empty () && callbacks->load () == 1
+                                && !missing
+                                && missing.error_kind () == framework_error_kind_t::not_found
+                              ? 0
+                              : 2;
+        spots.release_native_handles ();
+        return passed;
     }
 
     auto terminal_source = std::make_shared<task_completion_source_t<zlink::message_t>> ();
@@ -3099,8 +3106,8 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
     const auto activated = barrier->activate_async (
       [spots, actor] (deferred_barrier_t::async_completion_t complete) mutable {
           auto opened = spots.open_local_actor_handoff (actor);
-          observe_task_completion (opened, [complete = std::move (complete)] (
-                                             const result_t<result_t<void>> &outcome) mutable {
+          observe_task_terminal (opened, [complete = std::move (complete)] (
+                                           const result_t<result_t<void>> &outcome) mutable {
               complete (outcome ? outcome.value ()
                                 : result_t<void>::failure (outcome.error_kind (),
                                                            outcome.error ()->what ()));
@@ -3114,17 +3121,23 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
     }
     const bool began = callback_started.get ();
     const bool acknowledged_early = terminal.await_ready ();
+    // A reply can precede the replay turn's final continuation. Shutdown must
+    // wait for that handler terminal rather than cancel an accepted turn.
+    const auto replay_handler = spot->serial_queue->observe_handler_terminal ().value ();
     release->complete (result_t<void>::success ());
     const auto completed = terminal.result ();
-    if (spot->serial_queue)
-        spot->serial_queue->drain ();
-    node->worker_executor->drain ();
-    return began && !acknowledged_early && completed && completed.value ().is_empty ()
-               && callbacks->load () == 1 && terminals->load () == 1
-               && preserved_route->load (std::memory_order_acquire)
-               && node->actor_transfer_coordinator->pending_count () == 0
-             ? 0
-             : 7;
+    barrier->terminal ().result ().value ();
+    replay_handler->run ().result ().value ();
+    replay_handler->cancel ();
+    drain_spot_node_executors (*node);
+    const auto passed = began && !acknowledged_early && completed && completed.value ().is_empty ()
+                            && callbacks->load () == 1 && terminals->load () == 1
+                            && preserved_route->load (std::memory_order_acquire)
+                            && node->actor_transfer_coordinator->pending_count () == 0
+                          ? 0
+                          : 7;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 int physical_disconnect_submits_all_before_waiting_for_terminal ()
@@ -3561,6 +3574,7 @@ int common_session_disconnect_uses_actor_packet_route ()
         || failed_callback.error_kind () != framework_error_kind_t::invalid_operation)
         return 13;
     node->worker_executor->drain ();
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
     return 0;
 }
 
@@ -3697,7 +3711,10 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
     const auto dedup = node->dispatched_request_replies.claim ("23:player:reconnect-player83:91");
     if (dedup.state != runtime::exactly_once_claim_state::completed || !dedup.value)
         return 4;
-    return disconnected_result && disconnected_started.load (std::memory_order_acquire) ? 0 : 6;
+    const auto passed =
+      disconnected_result && disconnected_started.load (std::memory_order_acquire) ? 0 : 6;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 int old_owner_forwards_cold_probe_via_active_message_follow_route (bool disconnect = false)
@@ -3934,7 +3951,9 @@ int returned_owner_serves_locally_past_retained_message_follow_route ()
         return 1;
     if (local_calls.load (std::memory_order_acquire) != 1)
         return 2;
-    return relay_calls.load (std::memory_order_acquire) == 0 ? 0 : 3;
+    const auto passed = relay_calls.load (std::memory_order_acquire) == 0 ? 0 : 3;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 int source_cleanup_waits_for_leave_completion_before_erasing_actor ()
@@ -4394,6 +4413,7 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
         scheduler->run_all ();
         node->worker_executor->drain ();
         node->worker_executor.reset ();
+        spots.release_native_handles ();
     };
 
     if (!commit_before_post && barrier_reserved.load (std::memory_order_acquire)) {
@@ -4489,7 +4509,8 @@ int relocation_barrier_fences_late_actor_fifo_admission (bool commit_before_post
              != std::vector<const runtime::serial_application_record_t *>{late_record.get (),
                                                                           resumed_record.get ()})
         return 8;
-    return 0;
+    const auto passed = 0;
+    return passed;
 }
 
 // A request caught in the same window must park too, and must not deadlock
@@ -4651,7 +4672,9 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
                               && body.value ().to_string () == "ask";
       });
     cleanup ();
-    return payload_preserved ? 0 : 6;
+    const auto passed = payload_preserved ? 0 : 6;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 int reconcile_deadline_fast_fails_without_target_commit (
@@ -4884,6 +4907,7 @@ int reconcile_deadline_fast_fails_without_target_commit (
         || !node->actor_transfer_coordinator->blocks_dispatch (key)
         || node->actor_routes.contains (key))
         return 12;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
     return 0;
 }
 
@@ -5177,7 +5201,9 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
     std::this_thread::sleep_for (std::chrono::milliseconds (50));
     if (leave_calls.load (std::memory_order_acquire) != 1)
         return 6;
-    return 0;
+    const auto passed = 0;
+    zlink::framework::detail::spot_node_runtime_t (source_node).release_native_handles ();
+    return passed;
 }
 
 int known_generation_source_leave_claims_transfer ()
@@ -5298,11 +5324,13 @@ int known_generation_source_leave_claims_transfer ()
            .get ())
         return 9;
     const auto follow = node->actor_transfer_coordinator->message_follow_target (key, source_fence);
-    return follow && follow->route.node_rid.value () == "actor-b"
-               && follow->route.spot_id == spot_id_t ("spot-b-target")
-               && follow->target_fence.authority_owner_generation == 28
-             ? 0
-             : 10;
+    const auto passed = follow && follow->route.node_rid.value () == "actor-b"
+                            && follow->route.spot_id == spot_id_t ("spot-b-target")
+                            && follow->target_fence.authority_owner_generation == 28
+                          ? 0
+                          : 10;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_follow = false)
@@ -5738,7 +5766,9 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
     const auto late_duplicate = dispatch_leave (leave_command);
     const auto pending_after_late_duplicate =
       node->lane.run ([&] { return node->pending_remote_actor_leaves.size (); }).get ();
-    return finish (late_duplicate && pending_after_late_duplicate == 0 ? 0 : 7);
+    const auto passed = finish (late_duplicate && pending_after_late_duplicate == 0 ? 0 : 7);
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    return passed;
 }
 
 int rebound_session_keeps_prior_ingress_exact_fence ()
@@ -6344,11 +6374,14 @@ int remote_actor_join_resolves_store_type_and_reports_typed_terminals ()
                 return result_t<spot_actor_join_result_t>::failure (
                   framework_error_kind_t::internal_failure, "source transfer setup failed");
         }
-        return spots
-          .admit_remote_actor_to_spot (
-            "store-resolution-" + std::to_string (static_cast<int> (scenario)), wire_actor,
-            spot_id_t ("source-spot"), spot->spot_id, zlink::message_t{}, 1, 2, 23, 19, 29)
-          .result ();
+        const auto result =
+          spots
+            .admit_remote_actor_to_spot (
+              "store-resolution-" + std::to_string (static_cast<int> (scenario)), wire_actor,
+              spot_id_t ("source-spot"), spot->spot_id, zlink::message_t{}, 1, 2, 23, 19, 29)
+            .result ();
+        spots.release_native_handles ();
+        return result;
     };
 
     std::atomic_int admission_calls{0};
@@ -7265,6 +7298,7 @@ int parked_request_reply_case (const std::string &requester_rid,
         .get ();
     if (!pending_settled || reply_state->calls.load (std::memory_order_acquire) != 1)
         return 8;
+    zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
     return 0;
 }
 
