@@ -130,6 +130,31 @@ void test_add_fd_and_start_and_receive_data ()
     wait_in_events (events);
 }
 
+void test_stop_drains_queued_handlers ()
+{
+    zlink::thread_ctx_t thread_ctx;
+    bool before_stop = false;
+    bool after_stop = false;
+    bool nested = false;
+    {
+        zlink::poller_t poller (thread_ctx);
+        boost::asio::io_context &io = poller.get_io_context ();
+        boost::asio::post (io, [&] () {
+            boost::asio::post (io, [&] () { before_stop = true; });
+            poller.stop ();
+            boost::asio::post (io, [&] () {
+                after_stop = true;
+                boost::asio::post (io, [&] () { nested = true; });
+            });
+        });
+        poller.start ();
+        // The destructor joins the worker before the results are read.
+    }
+    TEST_ASSERT_TRUE (before_stop);
+    TEST_ASSERT_TRUE (after_stop);
+    TEST_ASSERT_TRUE (nested);
+}
+
 int main (void)
 {
     UNITY_BEGIN ();
@@ -138,6 +163,7 @@ int main (void)
     setup_test_environment ();
 
     RUN_TEST (test_create);
+    RUN_TEST (test_stop_drains_queued_handlers);
     RUN_TEST (test_add_fd_and_start_and_receive_data);
 
     zlink::shutdown_network ();
