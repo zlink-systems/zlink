@@ -6,14 +6,14 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
-#include <filesystem>
 #include <future>
-#include <iterator>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #ifdef __linux__
 #include <unistd.h>
+#include "../support/linux_thread_counts.hpp"
 TEST (ZLinkStateLane, OneWorkerTopologyAdmissionSharesLivenessOwner)
 {
     ASSERT_EXIT (([] {
@@ -74,11 +74,7 @@ TEST (ZLinkStateLane, OneWorkerTopologyAdmissionSharesLivenessOwner)
 
 TEST (ZLinkStateLane, LastRuntimeOwnerReleasesInfrastructureThreads)
 {
-    const auto thread_count = [] {
-        return std::distance (std::filesystem::directory_iterator ("/proc/self/task"),
-                              std::filesystem::directory_iterator ());
-    };
-    const auto before = thread_count ();
+    const auto before = zlink::framework::test::thread_counts ().threads;
     {
         zlink::framework::runtime::state_lane_t owner_lane;
         zlink::framework::runtime::mesh::service_liveness_registry_t owner (owner_lane);
@@ -89,7 +85,7 @@ TEST (ZLinkStateLane, LastRuntimeOwnerReleasesInfrastructureThreads)
         EXPECT_EQ (0u, owner.size ());
     }
     // All accepted work and its execution resources belong to the runtime scope.
-    const auto after = thread_count ();
+    const auto after = zlink::framework::test::thread_counts ().threads;
     RecordProperty ("threads_before", static_cast<int> (before));
     RecordProperty ("threads_after", static_cast<int> (after));
     EXPECT_EQ (before, after);
@@ -98,13 +94,9 @@ TEST (ZLinkStateLane, LastRuntimeOwnerReleasesInfrastructureThreads)
 TEST (ZLinkStateLane, ComponentCountDoesNotIncreaseInfrastructureThreads)
 {
     using zlink::framework::runtime::mesh::service_liveness_registry_t;
-    const auto thread_count = [] {
-        return std::distance (std::filesystem::directory_iterator ("/proc/self/task"),
-                              std::filesystem::directory_iterator ());
-    };
     zlink::framework::runtime::state_lane_t first_lane;
     service_liveness_registry_t first (first_lane);
-    const auto before = thread_count ();
+    const auto before = zlink::framework::test::thread_counts ().threads;
     std::vector<std::unique_ptr<zlink::framework::runtime::state_lane_t>> lanes;
     std::vector<std::unique_ptr<service_liveness_registry_t>> components;
     for (int index = 0; index < 16; ++index) {
@@ -113,13 +105,38 @@ TEST (ZLinkStateLane, ComponentCountDoesNotIncreaseInfrastructureThreads)
         EXPECT_EQ (0u, component->size ());
         components.push_back (std::move (component));
     }
-    const auto after = thread_count ();
+    const auto after = zlink::framework::test::thread_counts ().threads;
     RecordProperty ("threads_before", static_cast<int> (before));
     RecordProperty ("threads_after", static_cast<int> (after));
     EXPECT_EQ (before, after);
     components.clear ();
     // Releasing one owner must not stop resources used by another owner.
     EXPECT_EQ (0u, first.size ());
+}
+
+TEST (ZLinkThreadCounts, CountsLiveWorkerUntilJoined)
+{
+    const auto before = zlink::framework::test::thread_counts ().threads;
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    std::thread worker ([&] {
+        entered.set_value ();
+        released.get ();
+    });
+    zlink::framework::test::scope_exit_t join ([&] {
+        release.set_value ();
+        worker.join ();
+    });
+    entered.get_future ().get ();
+    const auto during = zlink::framework::test::thread_counts ().threads;
+    RecordProperty ("threads_before", before);
+    RecordProperty ("threads_with_live_worker", during);
+    EXPECT_EQ (before + 1, during);
+    join.run ();
+    const auto after = zlink::framework::test::thread_counts ().threads;
+    RecordProperty ("threads_after", after);
+    EXPECT_EQ (before, after);
 }
 #endif
 
