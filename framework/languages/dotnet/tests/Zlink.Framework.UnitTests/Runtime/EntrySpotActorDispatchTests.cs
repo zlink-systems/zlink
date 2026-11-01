@@ -15886,31 +15886,45 @@ public sealed partial class EntrySpotActorDispatchTests
                 );
         }
 
-        public ValueTask<ZLinkBackendRouteReceived> RequestToNodeAsync(
+        public async ValueTask<TReply> RequestToNodeAsync<TReply>(
             RoutingId targetNodeRid,
             IReadOnlyList<Message> parts,
             SendFlags flags,
             TimeSpan timeout,
             CancellationToken cancellationToken,
+            Func<ZLinkBackendRouteReceived, TReply> decodeReply,
+            Func<Exception?, Exception?> receive,
             ReadOnlyMemory<byte> metadata = default,
             Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null
         )
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            NodeRequestAttempts++;
-            LastNodeRequestTarget = targetNodeRid;
-            _ = parts;
-            LastNodeRequestFlags = flags;
-            _ = timeout;
-            LastNodeRequestMetadata = metadata.ToArray();
-            if (NodeRequestHandler is { } handler)
-                return handler(parts, timeout);
-            return ValueTask.FromException<ZLinkBackendRouteReceived>(
-                NodeRequestFailure
-                    ?? new NotSupportedException(
-                        "No node request result was configured for this test."
-                    )
-            );
+            TReply reply = default!;
+            Exception? failure = null;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                NodeRequestAttempts++;
+                LastNodeRequestTarget = targetNodeRid;
+                _ = parts;
+                LastNodeRequestFlags = flags;
+                _ = timeout;
+                LastNodeRequestMetadata = metadata.ToArray();
+                var received = NodeRequestHandler is { } handler
+                    ? await handler(parts, timeout).ConfigureAwait(false)
+                    : throw NodeRequestFailure
+                        ?? new NotSupportedException(
+                            "No node request result was configured for this test."
+                        );
+                reply = decodeReply(received);
+            }
+            catch (Exception error)
+            {
+                failure = error;
+            }
+            failure = receive(failure);
+            if (failure is not null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+            return reply;
         }
 
         public bool SendActorBoundSession(ZLinkBackendActorRef actor, IReadOnlyList<Message> parts)

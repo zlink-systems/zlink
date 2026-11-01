@@ -400,7 +400,7 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
         );
     }
 
-    private async ValueTask<TReply> ExecuteAsync<TReply>(
+    private ValueTask<TReply> ExecuteAsync<TReply>(
         CancellationToken cancellationToken,
         ZLinkRequestAdmission? requestAdmission = null
     )
@@ -453,35 +453,48 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
                         TargetRid: targetNodeRid.ToString()
                     )
                 );
-            var reply = await nodeRuntime
-                .RequestToNodeAsync(
-                    targetNodeRid,
-                    parts,
-                    timeout,
-                    cancellationToken,
-                    ZLinkCallMetadata.Encode(_metadata),
-                    requestAdmission: requestAdmission
-                )
-                .ConfigureAwait(false);
-            var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
-                reply,
-                "Node request reply is empty.",
-                "Node request failed for '{0}'.",
-                runtime.Registration.Codecs,
-                runtime.Flow.CaptureEnabled,
-                packetName
+            return nodeRuntime.RequestToNodeAsync(
+                targetNodeRid,
+                parts,
+                timeout,
+                cancellationToken,
+                reply =>
+                    ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
+                        reply,
+                        "Node request reply is empty.",
+                        "Node request failed for '{0}'.",
+                        runtime.Registration.Codecs,
+                        runtime.Flow.CaptureEnabled,
+                        packetName
+                    ),
+                Complete,
+                ZLinkCallMetadata.Encode(_metadata),
+                requestAdmission: requestAdmission
             );
-            terminal?.Succeeded();
-            return decoded;
         }
         catch (Exception failure)
         {
-            terminal?.Failed(failure);
-            throw;
+            Complete(failure);
+            var completion =
+                System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder<TReply>.Create();
+            completion.SetException(failure);
+            return completion.Task;
         }
-        finally
+
+        Exception? Complete(Exception? failure)
         {
-            terminal?.Dispose();
+            try
+            {
+                if (failure is null)
+                    terminal?.Succeeded();
+                else
+                    terminal?.Failed(failure);
+                return failure;
+            }
+            finally
+            {
+                terminal?.Dispose();
+            }
         }
     }
 }
