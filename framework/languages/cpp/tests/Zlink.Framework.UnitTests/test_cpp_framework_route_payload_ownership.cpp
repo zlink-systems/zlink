@@ -2046,6 +2046,7 @@ TEST (RoutePayloadOwnership, MissingActorHandlerRepliesWithStreamError)
     EXPECT_EQ (framework_error_kind_t::not_found, error.error_kind ());
     EXPECT_NE (std::string::npos,
                std::string (error.error ()->what ()).find ("spot handler is not registered"));
+    detail::spot_node_runtime_t (state).release_native_handles ();
 }
 
 class ActorSendRelayAdmission : public ::testing::TestWithParam<std::tuple<bool, bool>>

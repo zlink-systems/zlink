@@ -628,6 +628,7 @@ class exercise_t final : public zf::hosted_service_t
     {
         if (_worker.joinable ())
             _worker.join ();
+        _evidence->activation.reset ();
     }
     std::string failure;
     std::optional<reply_t> original_reply;

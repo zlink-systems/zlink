@@ -3090,11 +3090,13 @@ result_t<void> actor_gateway_runtime_t::bind_session_route (
                                       actor_ref.object_generation ()};
     return bind_session_components (
       _state, std::move (actor_ref),
-      [state = _state, actor_id, node = std::move (node), serializers = &serializers,
-       route_channel_name = std::move (route_channel_name),
+      [weak_state = std::weak_ptr (_state), actor_id, weak_node = std::weak_ptr (node),
+       serializers = &serializers, route_channel_name = std::move (route_channel_name),
        target_node_rid =
          std::move (target_node_rid)] (std::string packet_name, stream_codec_t payload_codec,
                                        const zlink::message_t &payload) -> task_t<void> {
+          // Both dispatch paths retain the registry until this sink reaches its terminal.
+          const auto state = weak_state.lock ();
           const auto current_actor_ref = state->sync ([&] () -> std::optional<actor_ref_t> {
               const auto found = state->actors_by_id.find (actor_id);
               if (found == state->actors_by_id.end () || !found->second.bound) {
@@ -3106,6 +3108,7 @@ result_t<void> actor_gateway_runtime_t::bind_session_route (
               throw framework_exception_t (framework_error_kind_t::not_configured,
                                            "actor session is not bound");
           }
+          const auto node = weak_node.lock ();
           if (!node)
               throw framework_exception_t (framework_error_kind_t::not_configured,
                                            "actor session transport is not configured");

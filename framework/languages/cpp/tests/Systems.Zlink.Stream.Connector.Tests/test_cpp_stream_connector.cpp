@@ -1648,6 +1648,8 @@ int main (int argc, char **argv)
               *decode_state, unknown_packet, std::vector<std::uint8_t>{'x'})) {
             return fail (276);
         }
+        zlink::stream_connector::detail::close_bound_actors (decode_state);
+        (void) zlink::stream_connector::detail::dispatch_pending (decode_state);
     }
 
     /* stream-connector §5.5: outbound flow is absent; inbound flow bytes are
@@ -1827,11 +1829,14 @@ int main (int argc, char **argv)
         }
         request_codec->release ();
         slow_request_thread.join ();
-        std::static_pointer_cast<held_async_write_connection_t> (request_state->connection)
-          ->shutdown_and_close ();
+        (void) zlink::stream_connector::detail::connection_ended (
+          request_state,
+          {zlink::stream_connector::error_code_t::disconnected, "request fixture ended"},
+          std::shared_ptr (request_state->connection));
         if (!accepted_before_encode) {
             return fail (327);
         }
+        (void) zlink::stream_connector::detail::dispatch_pending (request_state);
 
         stream_header_t inbound;
         inbound.kind = message_kind_t::send;
@@ -3673,6 +3678,10 @@ int main (int argc, char **argv)
             })) {
             return fail (179);
         }
+        (void) zlink::stream_connector::detail::connection_ended (
+          mismatched_reply_state,
+          {zlink::stream_connector::error_code_t::disconnected, "reply fixture ended"},
+          mismatched_reply_connection);
 
         /* A terminal for an already completed request never becomes a push.
      * An unmatched Error reports the stream error independently. */
