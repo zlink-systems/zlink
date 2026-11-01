@@ -6706,6 +6706,9 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         return false;
     }
 
+    const auto admission_deadline =
+      node->actor_transfer_coordinator->admission (transfer_id)->deadline;
+    const auto actor_queue = target->spot_serial_executor->actor_executor (key)->queue ();
     spot_actor_commit_route_request_t cutover{
       .transfer_id = transfer_id,
       .actor_node_rid = "source-node",
@@ -6798,10 +6801,14 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     if (!first_replay_entered.load (std::memory_order_acquire))
         return false;
+    // The commit record expires at the admission deadline even while the
+    // accepted Actor turn still owns replay. Completion is the FIFO terminal,
+    // independent of that replay cache's retention.
+    (void) node->actor_transfer_coordinator->cleanup_expired_async (admission_deadline, {})
+      .result ();
     first_replay->complete (result_t<void>::success ());
     const auto finalized_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
-    while ((!owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)
-            || replayed.load (std::memory_order_acquire) != 3)
+    while ((actor_queue->pending_count () != 0 || replayed.load (std::memory_order_acquire) != 3)
            && std::chrono::steady_clock::now () < finalized_deadline) {
         std::this_thread::yield ();
     }
@@ -6810,7 +6817,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         std::lock_guard lock (delivery_order_mutex);
         observed_delivery_order = delivery_order;
     }
-    if (node->actor_transfer_coordinator->blocks_dispatch (key) || replayed.load () != 3
+    if (actor_queue->pending_count () != 0
+        || node->actor_transfer_coordinator->blocks_dispatch (key) || replayed.load () != 3
         || replay_before_joined.load (std::memory_order_acquire)
         || !join_completion_entered.load (std::memory_order_acquire)
         || join_completion_calls.load () != 1
@@ -6829,9 +6837,6 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         for (const auto &item : observed_delivery_order)
             std::cerr << item << ',';
         std::cerr << '\n';
-        return false;
-    }
-    if (!owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
         return false;
     }
     const auto leave_submit_observation_deadline =
@@ -6872,8 +6877,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
                                                              provider, nullptr, std::nullopt)
                              .result ();
     if (duplicate || node->actor_transfer_coordinator->blocks_dispatch (key)
-        || replayed.load () != 3
-        || !owner.completed_remote_actor_commit (transfer_id, actor, target->spot_id)) {
+        || replayed.load () != 3 || join_completion_calls.load (std::memory_order_acquire) != 1
+        || actor_joined_calls.load (std::memory_order_acquire) != 1) {
         return false;
     }
 
