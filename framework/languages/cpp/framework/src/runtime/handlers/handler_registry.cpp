@@ -108,11 +108,9 @@ task_t<void> continue_filter_chain (std::shared_ptr<filter_next_state_t> state,
             [&] { state->downstream = result_t<zlink::message_t>::success (std::move (message)); })
           .get ();
     }
-    catch (const framework_exception_t &error) {
-        state->lane
-          .run (
-            [&] { state->downstream = detail::result_access_t::failure<zlink::message_t> (error); })
-          .get ();
+    catch (const framework_exception_t &) {
+        const auto failure = detail::current_exception_result<zlink::message_t> ();
+        state->lane.run ([&] { state->downstream = failure; }).get ();
         throw;
     }
     co_return;
@@ -155,9 +153,6 @@ task_t<zlink::message_t> invoke_filter_level (std::shared_ptr<const filter_list_
             throw framework_exception_t (
               framework_error_kind_t::internal_failure,
               "handler filter returned before its continuation completed");
-        }
-        if (!*next_state->downstream) {
-            throw *next_state->downstream->error ();
         }
         return *next_state->downstream;
     });
@@ -428,8 +423,8 @@ handler_registry_t::invoke (std::string_view channel_name,
             if (!result)
                 result.value ();
         }
-        catch (const framework_exception_t &error) {
-            result = detail::result_access_t::failure<zlink::message_t> (error);
+        catch (const framework_exception_t &) {
+            result = detail::current_exception_result<zlink::message_t> ();
         }
         catch (const std::exception &error) {
             result = result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
@@ -526,8 +521,8 @@ handler_registry_t::invoke_on_handler_executor (std::string channel_name,
               return entry->invoker (services, serializers, message, owned_inbound);
           }));
     }
-    catch (const framework_exception_t &error) {
-        result = detail::result_access_t::failure<zlink::message_t> (error);
+    catch (const framework_exception_t &) {
+        result = detail::current_exception_result<zlink::message_t> ();
     }
     catch (...) {
         result = result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
