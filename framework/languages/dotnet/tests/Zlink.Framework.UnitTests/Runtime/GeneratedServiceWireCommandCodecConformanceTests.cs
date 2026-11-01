@@ -240,24 +240,23 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             action();
 
         // Background GC can charge unused allocation-context space to this thread's counter
-        // (dotnet/runtime#134724). Reserve heap space after warmup to exclude that accounting.
-        // This reservation exceeds the fixture's 1,000-call windows; assertions keep every byte.
-        Assert.True(GC.TryStartNoGCRegion(16 * 1024 * 1024));
-        try
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            T last = default!;
-            for (var index = 0; index < iterations; index++)
-                last = action();
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            GC.KeepAlive(last);
-            return bytes;
-        }
-        finally
-        {
-            // A collection or exhausted reservation invalidates the measurement and fails the test.
-            GC.EndNoGCRegion();
-        }
+        // (dotnet/runtime#134724). Only a complete no-GC window gives a valid measurement.
+        return PerCallAllocation
+            .MeasureWindowAsync(
+                () =>
+                {
+                    var before = GC.GetAllocatedBytesForCurrentThread();
+                    T last = default!;
+                    for (var index = 0; index < iterations; index++)
+                        last = action();
+                    var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+                    GC.KeepAlive(last);
+                    return new ValueTask<long>(bytes);
+                },
+                budgetBytes: 16 * 1024 * 1024
+            )
+            .GetAwaiter()
+            .GetResult();
     }
 
     [Fact]
