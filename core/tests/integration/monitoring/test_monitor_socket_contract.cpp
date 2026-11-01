@@ -44,10 +44,7 @@ namespace
 #if !defined(ZLINK_HAVE_WINDOWS)
 struct subscriber_fd_budget_t
 {
-    subscriber_fd_budget_t () : changed (false)
-    {
-        memset (&original, 0, sizeof (original));
-    }
+    subscriber_fd_budget_t () : changed (false) { memset (&original, 0, sizeof (original)); }
 
     bool restore ()
     {
@@ -59,8 +56,7 @@ struct subscriber_fd_budget_t
         return true;
     }
 
-    int raise_for_pubsub_subscribers (size_t subscriber_count_,
-                                      rlim_t *required_out_)
+    int raise_for_pubsub_subscribers (size_t subscriber_count_, rlim_t *required_out_)
     {
         if (getrlimit (RLIMIT_NOFILE, &original) != 0)
             return -1;
@@ -69,8 +65,7 @@ struct subscriber_fd_budget_t
         // owns one accepted TCP fd per subscriber; 64 more slots cover the
         // context, PUB, monitor, listener, and test process.
         const rlim_t fixed_reserve = 64;
-        const rlim_t subscriber_fds =
-          static_cast<rlim_t> (subscriber_count_) * 3;
+        const rlim_t subscriber_fds = static_cast<rlim_t> (subscriber_count_) * 3;
         const rlim_t required_fds = subscriber_fds + fixed_reserve;
         rlim_t required_soft = required_fds;
         for (;;) {
@@ -177,7 +172,8 @@ bool wait_for_pub_delivery_ready_value_at_least (delivery_ready_value_probe_t *p
            && probe_->last_value >= expected_min_value_;
 }
 
-bool wait_for_monitor_ready_recv (void *monitor_, int timeout_ms_,
+bool wait_for_monitor_ready_recv (void *monitor_,
+                                  int timeout_ms_,
                                   zlink_monitor_event_t *event_out_ = NULL)
 {
     const auto deadline =
@@ -238,10 +234,9 @@ bool wait_for_monitor_ready_recv_with_activity (void *monitor_,
     });
 }
 
-bool wait_for_pubsub_delivery_ready_recv (void *pub_monitor_, void *sub_monitor_, int timeout_ms_)
+bool wait_for_pubsub_connection_ready_recv (void *pub_monitor_, void *sub_monitor_, int timeout_ms_)
 {
-    bool pub_ready = false;
-    bool sub_ready = false;
+    bool ready[2] = {};
     const auto deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms_);
 
@@ -261,28 +256,17 @@ bool wait_for_pubsub_delivery_ready_recv (void *pub_monitor_, void *sub_monitor_
                     != 0) {
                     break;
                 }
-                if (event.event == ZLINK_EVENT_CONNECTION_READY) {
-                    pub_ready = true;
-                }
-                if (event.event == ZLINK_EVENT_CONNECTION_READY) {
-                    sub_ready = true;
-                }
+                if (event.event == ZLINK_EVENT_CONNECTION_READY)
+                    ready[i] = true;
             }
         }
 
-        if (pub_ready && sub_ready)
+        if (ready[0] && ready[1])
             return true;
     }
 
     return false;
 }
-
-
-
-
-
-
-
 
 
 void configure_pair_socket (void *socket_)
@@ -456,8 +440,6 @@ bool recv_stream_routing_id_and_payload (void *socket_,
 }
 
 
-
-
 void run_pair_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t socket_mode_)
 {
     void *server = test_context_socket (ZLINK_SOCKET_PAIR);
@@ -530,16 +512,13 @@ void run_dealer_router_ready_matrix (monitor_mode_t monitor_mode_)
     size_t routing_id_size = 0;
     zlink_monitor_event_t server_ready;
     memset (&server_ready, 0, sizeof (server_ready));
-    const bool ready = wait_for_monitor_ready_recv_with_activity (
-      monitor, server, 3000, routing_id, &routing_id_size, &server_ready);
+    const bool ready = wait_for_monitor_ready_recv_with_activity (monitor, server, 3000, routing_id,
+                                                                  &routing_id_size, &server_ready);
     TEST_ASSERT_TRUE (ready);
     TEST_ASSERT_TRUE (routing_id_size > 0);
     TEST_ASSERT_EQUAL_UINT64 (1, server_ready.value);
-    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
-                            server_ready.transport_lane);
-    TEST_ASSERT_TRUE (
-      (server_ready.flags & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE)
-      != 0);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION, server_ready.transport_lane);
+    TEST_ASSERT_TRUE ((server_ready.flags & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE) != 0);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_send (client, "ping", 4, 0));
 
@@ -547,8 +526,8 @@ void run_dealer_router_ready_matrix (monitor_mode_t monitor_mode_)
     uint64_t request_seq = 0;
     zlink_msg_t *parts = NULL;
     size_t part_count = 0;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_router_recv (server, &source_node_rid,
-                                                  &request_seq, &parts, &part_count, 0));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_router_recv (server, &source_node_rid, &request_seq, &parts, &part_count, 0));
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
     TEST_ASSERT_EQUAL_UINT64 (static_cast<uint64_t> (routing_id_size), source_node_rid->size);
     TEST_ASSERT_EQUAL_MEMORY (routing_id, source_node_rid->data, routing_id_size);
@@ -557,8 +536,7 @@ void run_dealer_router_ready_matrix (monitor_mode_t monitor_mode_)
     TEST_ASSERT_EQUAL_MEMORY ("ping", zlink_msg_data (&parts[0]), 4);
     zlink_multipart_close (parts, part_count);
 
-    TEST_ASSERT_EQUAL_INT (4, test_stream_send_bytes (
-      server, source_node_rid, "pong", 4, 0));
+    TEST_ASSERT_EQUAL_INT (4, test_stream_send_bytes (server, source_node_rid, "pong", 4, 0));
 
     char reply_buf[16] = {0};
     TEST_ASSERT_EQUAL_INT (4, zlink_recv (client, reply_buf, sizeof (reply_buf), 0));
@@ -602,28 +580,26 @@ void run_router_router_ready_matrix (monitor_mode_t monitor_mode_)
     size_t routing_id_size = 0;
     zlink_monitor_event_t server_ready;
     memset (&server_ready, 0, sizeof (server_ready));
-    const bool ready = wait_for_monitor_ready_recv_with_activity (
-      monitor, server, 3000, routing_id, &routing_id_size, &server_ready);
+    const bool ready = wait_for_monitor_ready_recv_with_activity (monitor, server, 3000, routing_id,
+                                                                  &routing_id_size, &server_ready);
     TEST_ASSERT_TRUE (ready);
     TEST_ASSERT_TRUE (routing_id_size > 0);
     TEST_ASSERT_EQUAL_INT (sizeof (client_id) - 1, static_cast<int> (routing_id_size));
     TEST_ASSERT_EQUAL_MEMORY (client_id, routing_id, routing_id_size);
     TEST_ASSERT_EQUAL_UINT64 (1, server_ready.value);
-    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
-                            server_ready.transport_lane);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION, server_ready.transport_lane);
 
     zlink_routing_id_t server_rid = {};
     server_rid.size = static_cast<uint8_t> (sizeof (server_id) - 1);
     memcpy (server_rid.data, server_id, server_rid.size);
-    TEST_ASSERT_EQUAL_INT (4, test_stream_send_bytes (
-      client, &server_rid, "ping", 4, 0));
+    TEST_ASSERT_EQUAL_INT (4, test_stream_send_bytes (client, &server_rid, "ping", 4, 0));
 
     const zlink_routing_id_t *source_node_rid = NULL;
     uint64_t request_seq = 0;
     zlink_msg_t *parts = NULL;
     size_t part_count = 0;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_router_recv (server, &source_node_rid,
-                                                  &request_seq, &parts, &part_count, 0));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_router_recv (server, &source_node_rid, &request_seq, &parts, &part_count, 0));
     TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (client_id) - 1, source_node_rid->size);
     TEST_ASSERT_EQUAL_MEMORY (client_id, source_node_rid->data, source_node_rid->size);
@@ -632,15 +608,14 @@ void run_router_router_ready_matrix (monitor_mode_t monitor_mode_)
     TEST_ASSERT_EQUAL_MEMORY ("ping", zlink_msg_data (&parts[0]), 4);
     zlink_multipart_close (parts, part_count);
 
-    TEST_ASSERT_EQUAL_INT (4, test_stream_send_bytes (
-      server, source_node_rid, "pong", 4, 0));
+    TEST_ASSERT_EQUAL_INT (4, test_stream_send_bytes (server, source_node_rid, "pong", 4, 0));
 
     const zlink_routing_id_t *reply_source_node_rid = NULL;
     uint64_t reply_request_seq = 0;
     zlink_msg_t *reply_parts = NULL;
     size_t reply_part_count = 0;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_router_recv (client, &reply_source_node_rid, &reply_request_seq,
-                                                  &reply_parts, &reply_part_count, 0));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_router_recv (
+      client, &reply_source_node_rid, &reply_request_seq, &reply_parts, &reply_part_count, 0));
     TEST_ASSERT_EQUAL_UINT64 (0, reply_request_seq);
     TEST_ASSERT_EQUAL_UINT64 (sizeof (server_id) - 1, reply_source_node_rid->size);
     TEST_ASSERT_EQUAL_MEMORY (server_id, reply_source_node_rid->data, reply_source_node_rid->size);
@@ -656,7 +631,7 @@ void run_router_router_ready_matrix (monitor_mode_t monitor_mode_)
 
 void run_pubsub_ready_matrix (monitor_mode_t monitor_mode_)
 {
-    void *pub = test_context_socket (ZLINK_SOCKET_PUB);
+    void *pub = test_context_socket (ZLINK_SOCKET_XPUB);
     void *sub = test_context_socket (ZLINK_SOCKET_SUB);
     TEST_ASSERT_NOT_NULL (pub);
     TEST_ASSERT_NOT_NULL (sub);
@@ -684,9 +659,22 @@ void run_pubsub_ready_matrix (monitor_mode_t monitor_mode_)
     bind_loopback_ipv4 (pub, endpoint, sizeof (endpoint));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, endpoint));
 
-    const bool ready =
-      wait_for_pubsub_delivery_ready_recv (pub_monitor, sub_monitor, 3000);
+    const bool ready = wait_for_pubsub_connection_ready_recv (pub_monitor, sub_monitor, 3000);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&pub_monitor));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&sub_monitor));
     TEST_ASSERT_TRUE (ready);
+
+    // Logical connection readiness does not guarantee subscription propagation.
+    char subscription_topic[32] = {};
+    size_t subscription_topic_len = 0;
+    int subscribed = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+                           zlink_xpub_recv (pub, NULL, &subscribed, subscription_topic,
+                                            sizeof (subscription_topic), &subscription_topic_len,
+                                            ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (1, subscribed);
+    TEST_ASSERT_EQUAL_UINT64 (5, subscription_topic_len);
+    TEST_ASSERT_EQUAL_MEMORY ("topic", subscription_topic, subscription_topic_len);
 
     send_published_string_expect_success (pub, "topic", "payload-1");
     send_published_string_expect_success (pub, "topic", "payload-2");
@@ -710,8 +698,6 @@ void run_pubsub_ready_matrix (monitor_mode_t monitor_mode_)
         zlink_multipart_close (parts, part_count);
     }
 
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&pub_monitor));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&sub_monitor));
     test_context_socket_close_zero_linger (sub);
     test_context_socket_close_zero_linger (pub);
 }
@@ -726,8 +712,7 @@ void run_stream_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t socket
     configure_pair_socket (server);
     zlink_stream_recv_mode_t recv_mode = ZLINK_STREAM_RECV_MODE_RAW;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &recv_mode,
-                               sizeof (recv_mode)));
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &recv_mode, sizeof (recv_mode)));
 
     zlink_socket_monitor_open_options_t monitor_opts;
     memset (&monitor_opts, 0, sizeof (monitor_opts));
@@ -755,8 +740,8 @@ void run_stream_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t socket
     zlink_msg_t payload;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&payload));
     TEST_ASSERT_TRUE (recv_stream_routing_id_and_payload (server, &rid, &payload));
-    const bool ready = wait_for_monitor_ready_recv_with_activity (
-      monitor, server, 3000, routing_id, &routing_id_size);
+    const bool ready = wait_for_monitor_ready_recv_with_activity (monitor, server, 3000, routing_id,
+                                                                  &routing_id_size);
     TEST_ASSERT_TRUE (ready);
     TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, routing_id_size);
     TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, rid.size);
@@ -833,17 +818,13 @@ void run_inproc_dealer_router_ready (bool connect_before_bind_, const char *endp
     memset (&server_ready, 0, sizeof (server_ready));
     memset (&client_ready, 0, sizeof (client_ready));
     TEST_ASSERT_TRUE (wait_for_monitor_ready_recv_with_activity (
-      server_monitor, server, 3000, routing_id, &routing_id_size,
-      &server_ready));
-    TEST_ASSERT_TRUE (
-      wait_for_monitor_ready_recv (client_monitor, 3000, &client_ready));
+      server_monitor, server, 3000, routing_id, &routing_id_size, &server_ready));
+    TEST_ASSERT_TRUE (wait_for_monitor_ready_recv (client_monitor, 3000, &client_ready));
 
     TEST_ASSERT_EQUAL_UINT64 (1, server_ready.value);
     TEST_ASSERT_EQUAL_UINT64 (1, client_ready.value);
-    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
-                            server_ready.transport_lane);
-    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
-                            client_ready.transport_lane);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION, server_ready.transport_lane);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION, client_ready.transport_lane);
 
     TEST_ASSERT_EQUAL_UINT64 (0, count_extra_ready_events (server_monitor));
     TEST_ASSERT_EQUAL_UINT64 (0, count_extra_ready_events (client_monitor));
@@ -940,8 +921,8 @@ void run_ws_dealer_router_ready (bool secure_)
     if (secure_) {
         files = make_tls_test_files ();
         const int trust_system = 0;
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
-          client, ZLINK_OPT_TLS_TRUST_SYSTEM, &trust_system, sizeof (trust_system)));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (client, ZLINK_OPT_TLS_TRUST_SYSTEM,
+                                                     &trust_system, sizeof (trust_system)));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
           server, ZLINK_OPT_TLS_CERT, files.server_cert.c_str (), files.server_cert.size ()));
         TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
@@ -981,16 +962,12 @@ void run_ws_dealer_router_ready (bool secure_)
     memset (&server_ready, 0, sizeof (server_ready));
     memset (&client_ready, 0, sizeof (client_ready));
     TEST_ASSERT_TRUE (wait_for_monitor_ready_recv_with_activity (
-      server_monitor, server, 5000, routing_id, &routing_id_size,
-      &server_ready));
-    TEST_ASSERT_TRUE (
-      wait_for_monitor_ready_recv (client_monitor, 5000, &client_ready));
+      server_monitor, server, 5000, routing_id, &routing_id_size, &server_ready));
+    TEST_ASSERT_TRUE (wait_for_monitor_ready_recv (client_monitor, 5000, &client_ready));
     TEST_ASSERT_EQUAL_UINT64 (sizeof (dealer_id) - 1, routing_id_size);
     TEST_ASSERT_EQUAL_MEMORY (dealer_id, routing_id, routing_id_size);
-    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
-                            server_ready.transport_lane);
-    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
-                            client_ready.transport_lane);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION, server_ready.transport_lane);
+    TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION, client_ready.transport_lane);
     TEST_ASSERT_EQUAL_UINT64 (0, count_extra_ready_events (server_monitor));
     TEST_ASSERT_EQUAL_UINT64 (0, count_extra_ready_events (client_monitor));
 
@@ -1100,11 +1077,12 @@ void test_sub_bind_ready_edge_snapshot_is_ready ()
             bool ready[2] = {};
             for (size_t i = 0; i != 2; ++i) {
                 zlink_socket_monitor_event_t event = {};
-                TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_socket_monitor_recv (
-                  monitors[i], &event, ZLINK_RECV_FLAGS_NONE));
+                TEST_ASSERT_EQUAL_INT (
+                  ZLINK_RECV_OK,
+                  zlink_socket_monitor_recv (monitors[i], &event, ZLINK_RECV_FLAGS_NONE));
                 TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_CONNECTION_READY, event.event);
-                TEST_ASSERT_TRUE (
-                  (event.flags & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE) != 0);
+                TEST_ASSERT_TRUE ((event.flags & ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE)
+                                  != 0);
                 TEST_ASSERT_EQUAL_UINT64 (1, event.value);
                 zlink_monitor_status_t status = {};
                 TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_status (monitors[i], &status));
@@ -1148,7 +1126,7 @@ void test_pubsub_delivery_ready_snapshot_and_reopen_after_ready ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, "inproc://monitor_pubsub_ready_reopen"));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, "inproc://monitor_pubsub_ready_reopen"));
     TEST_ASSERT_TRUE (
-      wait_for_pubsub_delivery_ready_recv (pub_ready_monitor, sub_ready_monitor, 3000));
+      wait_for_pubsub_connection_ready_recv (pub_ready_monitor, sub_ready_monitor, 3000));
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&pub_ready_monitor));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&sub_ready_monitor));
@@ -1195,17 +1173,14 @@ void test_pubsub_delivery_ready_reaches_1000_subscribers ()
 #if !defined(ZLINK_HAVE_WINDOWS)
     rlim_t required_soft = 0;
     const int limit_result =
-      subscriber_fd_budget.raise_for_pubsub_subscribers (
-        expected_subscribers, &required_soft);
+      subscriber_fd_budget.raise_for_pubsub_subscribers (expected_subscribers, &required_soft);
     if (limit_result == 1) {
-        const std::string skip_reason =
-          "requires RLIMIT_NOFILE soft limit " + std::to_string (required_soft)
-          + ", hard limit is "
-          + std::to_string (subscriber_fd_budget.original.rlim_max);
+        const std::string skip_reason = "requires RLIMIT_NOFILE soft limit "
+                                        + std::to_string (required_soft) + ", hard limit is "
+                                        + std::to_string (subscriber_fd_budget.original.rlim_max);
         TEST_IGNORE_MESSAGE (skip_reason.c_str ());
     }
-    TEST_ASSERT_EQUAL_INT_MESSAGE (0, limit_result,
-                                   "failed to raise RLIMIT_NOFILE");
+    TEST_ASSERT_EQUAL_INT_MESSAGE (0, limit_result, "failed to raise RLIMIT_NOFILE");
 #else
     TEST_IGNORE_MESSAGE ("1000-subscriber test requires POSIX RLIMIT_NOFILE");
 #endif
@@ -1262,8 +1237,7 @@ void test_pubsub_delivery_ready_reaches_1000_subscribers ()
         close_zero_linger (subs[i]);
     close_zero_linger (pub);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
-    TEST_ASSERT_TRUE_MESSAGE (restore_subscriber_fd_budget (),
-                              "failed to restore RLIMIT_NOFILE");
+    TEST_ASSERT_TRUE_MESSAGE (restore_subscriber_fd_budget (), "failed to restore RLIMIT_NOFILE");
 }
 
 void test_stream_ready_with_monitor_recv_and_socket_recv ()
@@ -1284,11 +1258,11 @@ void test_second_monitor_open_preserves_first_monitor ()
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (socket, endpoint, sizeof (endpoint));
     const int timeout = 1000;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
-      first, ZLINK_OPT_RCVTIMEO, &timeout, sizeof (timeout)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (first, ZLINK_OPT_RCVTIMEO, &timeout, sizeof (timeout)));
     zlink_socket_monitor_event_t event = {};
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_socket_monitor_recv (
-      first, &event, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+                           zlink_socket_monitor_recv (first, &event, ZLINK_RECV_FLAGS_NONE));
     TEST_ASSERT_EQUAL_UINT64 (ZLINK_SOCKET_MONITOR_EVENT_LISTENING, event.event);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&first));
     second = zlink_socket_monitor_open (socket, &options);
