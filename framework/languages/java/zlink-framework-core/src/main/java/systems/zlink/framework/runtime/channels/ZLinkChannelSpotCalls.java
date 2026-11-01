@@ -308,9 +308,10 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                             address.authorityOwnerGeneration(),
                             address.ownerLeaseGeneration(),
                             sendParts)
-                    .whenComplete((ignored, error) -> sendParts.forEach(Message::close));
+                    .whenComplete(
+                            (ignored, error) -> ZLinkFrameworkMultipartView.closeAll(sendParts));
         } catch (RuntimeException error) {
-            sendParts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(sendParts);
             throw error;
         }
     }
@@ -728,7 +729,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                                 }
                                 return runtime.decodeSpotReply(replyParts, replyType);
                             } finally {
-                                requestParts.forEach(Message::close);
+                                ZLinkFrameworkMultipartView.closeAll(requestParts);
                                 if (replyParts != null) {
                                     replyParts.forEach(Message::close);
                                 }

@@ -203,25 +203,36 @@ record ZLinkStreamSessionSendCall(
         try (var flowScope =
                 ZLinkFlowContext.enterCurrentOrCreate(
                         ZLinkFlowOrigin.APPLICATION, flow != null && flow.captureEnabled())) {
-            ZLinkStreamPayloadCodec.Encoded encoded =
-                    ZLinkStreamPayloadCodec.encode(
-                            payload.getFirst(), compressed, compressionCodec);
-            ZLinkStreamHeader header =
-                    new ZLinkStreamHeader(
-                            ZLinkStreamMessageKind.SEND,
-                            codec,
-                            encoded.flags(),
-                            Optional.empty(),
-                            packetName,
-                            metadata,
-                            Optional.of(ZLinkStreamCorrelation.next()));
-            List<Message> parts = List.of(Message.from(encoded.payload()));
-            CompletionStage<Void> result = stream.sendAsync(routingId, header, parts);
-            result.whenComplete(
-                    (ignored, failure) -> {
-                        parts.forEach(Message::close);
-                        payload.close();
-                    });
+            ZLinkStreamHeader header;
+            List<Message> parts;
+            try {
+                ZLinkStreamPayloadCodec.Encoded encoded =
+                        ZLinkStreamPayloadCodec.encode(
+                                payload.getFirst(), compressed, compressionCodec);
+                header =
+                        new ZLinkStreamHeader(
+                                ZLinkStreamMessageKind.SEND,
+                                codec,
+                                encoded.flags(),
+                                Optional.empty(),
+                                packetName,
+                                metadata,
+                                Optional.of(ZLinkStreamCorrelation.next()));
+                parts = List.of(Message.from(encoded.payload()));
+            } catch (RuntimeException | Error failure) {
+                payload.close();
+                throw failure;
+            }
+            CompletionStage<Void> result;
+            try {
+                result = stream.sendAsync(routingId, header, parts);
+                result.whenComplete(
+                        (ignored, failure) ->
+                                ZLinkStreamSessionCallResources.close(parts, payload));
+            } catch (RuntimeException | Error failure) {
+                ZLinkStreamSessionCallResources.close(parts, payload);
+                throw failure;
+            }
             return ZLinkOneWayCalls.adaptOneWay(result);
         }
     }
@@ -325,27 +336,51 @@ record ZLinkStreamSessionReplyCall(
                         new IllegalStateException(
                                 "The request reply token has already been used."));
             }
-            ZLinkStreamPayloadCodec.Encoded encoded =
-                    ZLinkStreamPayloadCodec.encode(
-                            payload.getFirst(), compressed, compressionCodec);
-            List<Message> parts = List.of(Message.from(encoded.payload()));
             ZLinkStreamHeader current = currentHeader.get();
-            ZLinkStreamHeader replyHeader =
-                    ZLinkStreamHeader.createResponse(
-                            current, codec, encoded.flags(), packetName, Map.of());
-            CompletionStage<Void> result = stream.replyAsync(routingId, replyHeader, parts);
-            result.whenComplete(
-                    (ignored, failure) -> {
-                        try {
-                            if (failure == null) {
-                                context.traceStreamReplied(current);
+            ZLinkStreamHeader replyHeader;
+            List<Message> parts;
+            try {
+                ZLinkStreamPayloadCodec.Encoded encoded =
+                        ZLinkStreamPayloadCodec.encode(
+                                payload.getFirst(), compressed, compressionCodec);
+                replyHeader =
+                        ZLinkStreamHeader.createResponse(
+                                current, codec, encoded.flags(), packetName, Map.of());
+                parts = List.of(Message.from(encoded.payload()));
+            } catch (RuntimeException | Error failure) {
+                payload.close();
+                throw failure;
+            }
+            CompletionStage<Void> result;
+            try {
+                result = stream.replyAsync(routingId, replyHeader, parts);
+                result.whenComplete(
+                        (ignored, failure) -> {
+                            try {
+                                if (failure == null) {
+                                    context.traceStreamReplied(current);
+                                }
+                            } finally {
+                                ZLinkStreamSessionCallResources.close(parts, payload);
                             }
-                        } finally {
-                            parts.forEach(Message::close);
-                            payload.close();
-                        }
-                    });
+                        });
+            } catch (RuntimeException | Error failure) {
+                ZLinkStreamSessionCallResources.close(parts, payload);
+                throw failure;
+            }
             return ZLinkOneWayCalls.adaptOneWay(result);
+        }
+    }
+}
+
+final class ZLinkStreamSessionCallResources {
+    private ZLinkStreamSessionCallResources() {}
+
+    static void close(List<Message> parts, ZLinkFrameworkMultipartView payload) {
+        try {
+            ZLinkFrameworkMultipartView.closeAll(parts);
+        } finally {
+            payload.close();
         }
     }
 }
