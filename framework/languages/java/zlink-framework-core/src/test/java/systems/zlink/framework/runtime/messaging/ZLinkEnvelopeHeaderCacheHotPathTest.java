@@ -44,6 +44,37 @@ final class ZLinkEnvelopeHeaderCacheHotPathTest {
     }
 
     @Test
+    void decodeAndCacheRespectReadOnlyBufferBounds() {
+        for (boolean direct : new boolean[] {false, true}) {
+            var expected =
+                    simpleHeader(ZLinkChannelEnvelope.KIND_COMMAND, "cache-bounds-" + direct, "更新");
+            byte[] bytes = ZLinkChannelEnvelope.encodeHeaderBytes(expected);
+            ByteBuffer storage =
+                    direct
+                            ? ByteBuffer.allocateDirect(bytes.length + 4)
+                            : ByteBuffer.allocate(bytes.length + 4);
+            storage.put((byte) '#').put(bytes).put((byte) '!');
+            ByteBuffer input = storage.asReadOnlyBuffer().position(1).limit(1 + bytes.length);
+            var decoded = ZLinkChannelEnvelope.decodeHeader(input, false);
+            assertEquals(expected, decoded);
+            assertEquals(input.limit(), input.position());
+            input.position(1);
+            assertSame(decoded, ZLinkChannelEnvelope.decodeHeader(input, false));
+            assertEquals(input.limit(), input.position());
+
+            // A cached prefix cannot conceal a trailing token or a truncated JSON object.
+            input.position(1).limit(2 + bytes.length);
+            assertThrows(
+                    ZLinkFrameworkException.class,
+                    () -> ZLinkChannelEnvelope.decodeHeader(input, false));
+            input.position(1).limit(bytes.length);
+            assertThrows(
+                    ZLinkFrameworkException.class,
+                    () -> ZLinkChannelEnvelope.decodeHeader(input, false));
+        }
+    }
+
+    @Test
     void dynamicHeadersDoNotEnterTheDecodedCache() {
         assertNotCached(
                 new ZLinkChannelEnvelope.Header(

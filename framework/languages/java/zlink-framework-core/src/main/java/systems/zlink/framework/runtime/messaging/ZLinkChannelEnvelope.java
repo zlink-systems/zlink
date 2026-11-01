@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.messaging;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.async.ByteBufferFeeder;
 import com.fasterxml.jackson.core.util.JsonRecyclerPools;
 
 import systems.zlink.contracts.messaging.Message;
@@ -16,7 +17,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
@@ -480,23 +480,19 @@ public final class ZLinkChannelEnvelope {
         int limit = headerPart == null ? 0 : headerPart.limit();
         int length = limit - start;
         boolean cacheableSize = headerPart != null && length <= MAX_CACHEABLE_HEADER_BYTES;
-        // Correlated request/reply headers are never cached, so their length rarely matches an
-        // entry; hash only when some cached header has the same length.
-        long hash =
-                cacheableSize && hasDecodedHeaderOfLength(length)
-                        ? hashBytes(headerPart, start, limit)
-                        : 0;
-        if (hash != 0) {
-            Header cached = findDecodedHeaderCacheEntry(headerPart, start, limit, hash);
-            if (cached != null) {
-                headerPart.position(limit);
-                return cached;
-            }
+        Header cached = findDecodedHeaderCacheEntry(headerPart);
+        if (cached != null) {
+            headerPart.position(limit);
+            return cached;
         }
 
         DecodedHeader decoded;
-        try (JsonParser json = JSON.createParser(new BufferInputStream(headerPart))) {
+        try (JsonParser json = JSON.createNonBlockingByteBufferParser()) {
+            ByteBufferFeeder input = (ByteBufferFeeder) json.getNonBlockingInputFeeder();
+            input.feedInput(headerPart);
+            input.endOfInput();
             decoded = decodeHeader(json, captureFlow);
+            headerPart.position(limit);
         } catch (Exception ex) {
             if (ex instanceof ZLinkFrameworkException frameworkError) {
                 throw frameworkError;
@@ -505,51 +501,27 @@ public final class ZLinkChannelEnvelope {
         }
 
         if (cacheableSize && decoded.repeatable()) {
-            addDecodedHeaderCacheEntry(
-                    headerPart,
-                    start,
-                    limit,
-                    hash != 0 ? hash : hashBytes(headerPart, start, limit),
-                    decoded.header());
+            addDecodedHeaderCacheEntry(headerPart, start, limit, decoded.header());
         }
         return decoded.header();
     }
 
-    private static boolean hasDecodedHeaderOfLength(int length) {
+    private static Header findDecodedHeaderCacheEntry(ByteBuffer bytes) {
         for (HeaderCacheEntry entry : decodedHeaderCache) {
-            if (entry.bytes().length == length) return true;
-        }
-        return false;
-    }
-
-    private static Header findDecodedHeaderCacheEntry(
-            ByteBuffer bytes, int start, int limit, long hash) {
-        for (HeaderCacheEntry entry : decodedHeaderCache) {
-            if (entry.hash() != hash || entry.bytes().length != limit - start) continue;
-            boolean equal = true;
-            for (int index = start, cachedIndex = 0; index < limit; index++, cachedIndex++) {
-                if (entry.bytes()[cachedIndex] != bytes.get(index)) {
-                    equal = false;
-                    break;
-                }
-            }
-            if (equal) return entry.header();
+            if (entry.bytes().equals(bytes)) return entry.header();
         }
         return null;
     }
 
     private static void addDecodedHeaderCacheEntry(
-            ByteBuffer bytes, int start, int limit, long hash, Header header) {
+            ByteBuffer bytes, int start, int limit, Header header) {
+        // Cache registration is cold; the hot lookup reads the retained buffers without a view.
+        ByteBuffer candidate = bytes.asReadOnlyBuffer().position(start).limit(limit);
         var mutation =
                 CACHE_LANE.tryRunNow(
                         () -> {
+                            if (findDecodedHeaderCacheEntry(candidate) != null) return null;
                             HeaderCacheEntry[] cache = decodedHeaderCache;
-                            for (HeaderCacheEntry entry : cache) {
-                                if (entry.hash() == hash
-                                        && bytesEqual(entry.bytes(), bytes, start, limit))
-                                    return null;
-                            }
-
                             int nextSize =
                                     Math.min(cache.length + 1, MAX_DECODED_HEADER_CACHE_ENTRIES);
                             HeaderCacheEntry[] next = new HeaderCacheEntry[nextSize];
@@ -558,37 +530,15 @@ public final class ZLinkChannelEnvelope {
                             } else {
                                 System.arraycopy(cache, 0, next, 0, cache.length);
                             }
+                            byte[] owned = new byte[candidate.remaining()];
+                            candidate.get(owned);
                             next[next.length - 1] =
                                     new HeaderCacheEntry(
-                                            copyBytes(bytes, start, limit), hash, header);
+                                            ByteBuffer.wrap(owned).asReadOnlyBuffer(), header);
                             decodedHeaderCache = next;
                             return null;
                         });
         if (mutation != null) mutation.toCompletableFuture().getNow(null);
-    }
-
-    private static boolean bytesEqual(byte[] cached, ByteBuffer bytes, int start, int limit) {
-        if (cached.length != limit - start) return false;
-        for (int index = start, cachedIndex = 0; index < limit; index++, cachedIndex++) {
-            if (cached[cachedIndex] != bytes.get(index)) return false;
-        }
-        return true;
-    }
-
-    private static long hashBytes(ByteBuffer bytes, int start, int limit) {
-        long hash = 0xcbf29ce484222325L;
-        for (int index = start; index < limit; index++) {
-            hash = (hash ^ (bytes.get(index) & 0xffL)) * 0x100000001b3L;
-        }
-        return hash;
-    }
-
-    private static byte[] copyBytes(ByteBuffer bytes, int start, int limit) {
-        byte[] copy = new byte[limit - start];
-        for (int index = start, copyIndex = 0; index < limit; index++, copyIndex++) {
-            copy[copyIndex] = bytes.get(index);
-        }
-        return copy;
     }
 
     /**
@@ -1065,34 +1015,7 @@ public final class ZLinkChannelEnvelope {
 
     private record DecodedHeader(Header header, boolean repeatable) {}
 
-    private record HeaderCacheEntry(byte[] bytes, long hash, Header header) {}
-
-    private static final class BufferInputStream extends InputStream {
-        private final ByteBuffer input;
-
-        BufferInputStream(ByteBuffer input) {
-            this.input = input;
-        }
-
-        @Override
-        public int read() {
-            return input.hasRemaining() ? input.get() & 0xff : -1;
-        }
-
-        @Override
-        public int read(byte[] target, int offset, int length) {
-            Objects.checkFromIndexSize(offset, length, target.length);
-            if (length == 0) {
-                return 0;
-            }
-            if (!input.hasRemaining()) {
-                return -1;
-            }
-            int count = Math.min(length, input.remaining());
-            input.get(target, offset, count);
-            return count;
-        }
-    }
+    private record HeaderCacheEntry(ByteBuffer bytes, Header header) {}
 
     /** Internal decode failure carrying the identifiers read before header rejection. */
     public static final class HeaderDecodeException extends ZLinkFrameworkException {
