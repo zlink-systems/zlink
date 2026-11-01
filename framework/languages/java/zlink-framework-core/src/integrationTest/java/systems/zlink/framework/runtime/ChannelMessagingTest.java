@@ -1693,6 +1693,94 @@ final class ChannelMessagingTest {
     }
 
     @Test
+    void routeMesh_localSendUsesTheStartedRoutingIdAcrossConfigurationChangeAndRestart()
+            throws InterruptedException {
+        RoutingId startedRid = RoutingId.from("route-lifecycle-started");
+        RoutingId configuredRid = RoutingId.from("route-lifecycle-configured");
+        String startedMessage = "started-lifecycle";
+        String configuredMessage = "configured-lifecycle";
+        CountDownLatch startedLatch = new CountDownLatch(1);
+        CountDownLatch restartedLatch = new CountDownLatch(1);
+
+        DefaultZLinkFrameworkOptions firstOptions = new DefaultZLinkFrameworkOptions();
+        firstOptions.addLocationStore(new ZLinkInMemoryLocationStore());
+        var firstNode = firstOptions.addRouteMesh("route");
+        firstNode
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(startedRid)
+                .addRouteSendHandler(RouteNoticeHandler.class, RouteNotice.class);
+
+        ROUTE_SEND_LATCH.set(startedLatch);
+        ROUTE_SEND_MESSAGE.set(null);
+        ROUTE_SEND_SOURCE.set(null);
+        try (ZLinkFrameworkRuntime runtime =
+                RuntimeTestSupport.startFramework(
+                        firstOptions, new ZLinkJavaBackendAdapterFactory())) {
+            firstNode.setRoutingId(configuredRid);
+
+            runtime.route()
+                    .sendToNode("route", startedRid, new RouteNotice(startedMessage))
+                    .submit()
+                    .toCompletableFuture()
+                    .join();
+            assertTrue(startedLatch.await(1, TimeUnit.SECONDS), "started RID send was not local");
+            assertEquals(startedMessage, ROUTE_SEND_MESSAGE.get());
+            assertEquals(startedRid, ROUTE_SEND_SOURCE.get());
+
+            assertThrows(
+                    CompletionException.class,
+                    () ->
+                            runtime.route()
+                                    .sendToNode("route", configuredRid, new RouteNotice("remote"))
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .join());
+        } finally {
+            ROUTE_SEND_LATCH.set(null);
+            ROUTE_SEND_MESSAGE.set(null);
+            ROUTE_SEND_SOURCE.set(null);
+        }
+
+        DefaultZLinkFrameworkOptions restartedOptions = new DefaultZLinkFrameworkOptions();
+        restartedOptions.addLocationStore(new ZLinkInMemoryLocationStore());
+        restartedOptions
+                .addRouteMesh("route")
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(configuredRid)
+                .addRouteSendHandler(RouteNoticeHandler.class, RouteNotice.class);
+
+        ROUTE_SEND_LATCH.set(restartedLatch);
+        ROUTE_SEND_MESSAGE.set(null);
+        ROUTE_SEND_SOURCE.set(null);
+        try (ZLinkFrameworkRuntime runtime =
+                RuntimeTestSupport.startFramework(
+                        restartedOptions, new ZLinkJavaBackendAdapterFactory())) {
+            runtime.route()
+                    .sendToNode("route", configuredRid, new RouteNotice(configuredMessage))
+                    .submit()
+                    .toCompletableFuture()
+                    .join();
+            assertTrue(
+                    restartedLatch.await(1, TimeUnit.SECONDS), "restarted RID send was not local");
+            assertEquals(configuredMessage, ROUTE_SEND_MESSAGE.get());
+            assertEquals(configuredRid, ROUTE_SEND_SOURCE.get());
+
+            assertThrows(
+                    CompletionException.class,
+                    () ->
+                            runtime.route()
+                                    .sendToNode("route", startedRid, new RouteNotice("retired"))
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .join());
+        } finally {
+            ROUTE_SEND_LATCH.set(null);
+            ROUTE_SEND_MESSAGE.set(null);
+            ROUTE_SEND_SOURCE.set(null);
+        }
+    }
+
+    @Test
     void routeMesh_sendByRoutingIdDispatchesToHandler() throws InterruptedException {
         ZLinkEndpointConnections sourceConnections;
         ZLinkEndpointConnections targetConnections;
