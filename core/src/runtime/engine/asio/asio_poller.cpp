@@ -481,7 +481,9 @@ void zlink::asio_poller_t::loop ()
 
     ASIO_DBG ("loop: stopping");
 
-    //  Run any remaining handlers (cancelled async ops will fire with error)
+    //  stop() leaves queued handlers pending. Restart after run/poll has
+    //  returned so deferred engine deletion and cancellation handlers drain.
+    _io_context.restart ();
     _io_context.poll ();
     ASIO_DBG ("loop: finished");
 }
