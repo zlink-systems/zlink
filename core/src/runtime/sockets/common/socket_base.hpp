@@ -624,7 +624,7 @@ class socket_base_t : public own_t,
     void release_monitor_async_command_processing ();
     void request_unowned_async_command_processing_stop (
       bool wait_for_quiescence_ = false);
-    bool stop_unowned_async_command_processing_at_idle ();
+    bool stop_unowned_async_command_processing ();
     //  Active paired handshakes need one socket-owner mailbox turn after the
     //  peer HELLO reveals its type. The lease installs an asynchronous owner
     //  only while such decisions are outstanding; monitor, completion and
@@ -1059,6 +1059,8 @@ class socket_base_t : public own_t,
                                  const std::string &address_,
                                  address_t *paddr_) const;
     int start_async_mailbox_processing (io_thread_t *io_thread_);
+    // Caller holds the transport progress gate.
+    bool has_async_command_processing_lease (bool require_unowned_) const;
     bool stop_async_mailbox_processing (bool require_unowned_ = false);
     void wait_async_quiesced (int timeout_ms_);
     static void resolve_socket_msg_source_rid (pipe_t *pipe_, zlink_routing_id_t *out_);
