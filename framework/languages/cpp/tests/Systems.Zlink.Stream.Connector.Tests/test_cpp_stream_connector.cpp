@@ -1415,6 +1415,8 @@ int main (int argc, char **argv)
         const bool did_disconnect = did_connect && disconnected.wait_for (std::chrono::seconds (5));
         release_server.signal ();
         closing_server.join ();
+        // §7: close does not wait for callbacks; end this observation before cleanup.
+        subscription.unsubscribe ();
         (void) connector.close ();
         const auto expected = valid ? zlink::stream_connector::close_reason_t::server_drain
                                     : zlink::stream_connector::close_reason_t::protocol_error;
@@ -3565,9 +3567,10 @@ int main (int argc, char **argv)
         std::atomic<bool> async_request_validation_seen{false};
         zlink::stream_connector::detail::submit_request_async (
           async_validation_state,
+          /* Validation fails at once; the request timeout must not race it. */
           zlink::stream_connector::packet_t{.name = "validation.request",
                                             .payload = as_bytes ("too-large")},
-          std::chrono::milliseconds (1),
+          std::chrono::seconds (5),
           [&] (zlink::stream_connector::result_t<zlink::stream_connector::detail::request_reply_t>
                  result) {
               async_request_validation_seen =
@@ -3600,8 +3603,14 @@ int main (int argc, char **argv)
                 && result.error_code () == zlink::stream_connector::error_code_t::send_failed;
           });
         if (!eventually ([&] {
-                return async_request_write_failure_seen.load ()
-                       && no_pending_requests (async_request_write_failure_state);
+                if (!async_request_write_failure_seen.load ()
+                    || !no_pending_requests (async_request_write_failure_state)) {
+                    return false;
+                }
+                // §6.2: the write result can precede publication of the ending reason.
+                std::lock_guard<std::mutex> lock (
+                  async_request_write_failure_state->lifecycle_mutex);
+                return async_request_write_failure_state->last_close_reason.has_value ();
             })
             || async_request_write_failure_state->last_close_reason
                  != zlink::stream_connector::close_reason_t::transport_error) {
