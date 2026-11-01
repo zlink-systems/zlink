@@ -3412,9 +3412,14 @@ int main (int argc, char **argv)
                 && result.error_code () == zlink::stream_connector::error_code_t::send_failed;
           });
         if (!eventually ([&] {
-                return async_write_failure_seen.load ()
-                       && async_write_failure_state->state
-                            == zlink::stream_connector::connection_state_t::disconnected;
+                if (!async_write_failure_seen.load ()
+                    || async_write_failure_state->state
+                         != zlink::stream_connector::connection_state_t::disconnected) {
+                    return false;
+                }
+                // §6.2: the write result can precede publication of the ending reason.
+                std::lock_guard<std::mutex> lock (async_write_failure_state->lifecycle_mutex);
+                return async_write_failure_state->last_close_reason.has_value ();
             })
             || async_write_failure_connection->written.size () != 1
             || async_write_failure_state->last_close_reason
@@ -4460,16 +4465,18 @@ int main (int argc, char **argv)
         timed_request_seen = true;
         inbound.close ();
     });
+    // §5.2: a request that times out before its write starts is never sent, so the
+    // timeout must leave room for the write to reach the server this check observes.
     zlink::stream_connector::connector_options_t timeout_options;
     timeout_options.endpoint = timeout_endpoint;
-    timeout_options.request_timeout = std::chrono::milliseconds (5);
+    timeout_options.request_timeout = std::chrono::milliseconds (200);
     auto timeout_connector = zlink::stream_connector::connector_factory_t::create (timeout_options);
     if (!timeout_connector.connect ()) {
         return fail (35);
     }
     auto timeout_reply = timeout_connector.request (login_request_t{})
                            .packet_name ("timeout.request")
-                           .timeout (std::chrono::milliseconds (5))
+                           .timeout (std::chrono::milliseconds (200))
                            .submit<login_reply_t> ();
     timeout_server_thread.join ();
     if (timeout_reply
@@ -4761,9 +4768,10 @@ int main (int argc, char **argv)
           callback_timeout_request_seen = true;
           inbound.close ();
       });
+    // Same as the timeout.request check: leave room for the write to start.
     zlink::stream_connector::connector_options_t callback_timeout_options;
     callback_timeout_options.endpoint = callback_timeout_endpoint;
-    callback_timeout_options.request_timeout = std::chrono::milliseconds (5);
+    callback_timeout_options.request_timeout = std::chrono::milliseconds (200);
     callback_timeout_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
     auto callback_timeout_connector =
       zlink::stream_connector::connector_factory_t::create (callback_timeout_options);
@@ -4782,7 +4790,7 @@ int main (int argc, char **argv)
     auto request_callback_timeout = std::make_shared<callback_outcome_t> ();
     callback_timeout_connector.request (login_request_t{})
       .packet_name ("callback.timeout.request")
-      .timeout (std::chrono::milliseconds (5))
+      .timeout (std::chrono::milliseconds (200))
       .submit<login_reply_t> (
         [request_callback_timeout] (zlink::stream_connector::result_t<login_reply_t> result) {
             request_callback_timeout->seen =
@@ -4791,7 +4799,7 @@ int main (int argc, char **argv)
             request_callback_timeout->latch.signal ();
         });
     callback_timeout_thread.join ();
-    request_callback_timeout->latch.wait_for (std::chrono::milliseconds (100));
+    request_callback_timeout->latch.wait_for (std::chrono::seconds (2));
     if (!request_callback_timeout->seen || !callback_timeout_request_seen
         || !timeout_hook_seen->seen) {
         return fail (63);
