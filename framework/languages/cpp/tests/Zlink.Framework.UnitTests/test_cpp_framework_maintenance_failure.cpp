@@ -144,8 +144,8 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
         fail_size = count * sizeof (mesh::service_mailbox_record_t);
         try {
             auto result = owner->dispatch_application_owner (
-              "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [&] { ++started; },
-              [&] { ++rejected; });
+              "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
+              [&] { ++started; }, [&] { ++rejected; });
             fail_size = 0;
             return result;
         }
@@ -166,7 +166,7 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
     EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
     enqueue ();
     auto next = owner->dispatch_application_owner (
-      "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [&] { ++started; },
+      "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; }, [&] { ++started; },
       [&] { ++rejected; });
     EXPECT_TRUE (zlink::framework::test::application_owner_result (next).value ());
     EXPECT_EQ (dispatched, 1u);

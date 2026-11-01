@@ -920,10 +920,17 @@ raw_stateful_dispatch_t::claim_turn (const object_ref_t &owner,
     // Terminal completion still reads the retained operation/source identity.
     // Claim copies that summary; commit already removed its payload bytes.
     auto frozen = pending->second.frozen;
-    if (before_application_handler)
-        *before_application_handler =
-          std::move (pending->second.transport.before_application_handler);
     auto accepted_owner = std::exchange (turn.accepted_owner, {});
+    auto &transport = pending->second.transport;
+    if (transport.application_permit && *transport.application_permit) {
+        if (!accepted_owner)
+            accepted_owner = std::make_shared<runtime::serial_application_record_t> ();
+        accepted_owner->admission.retain_initial (
+          runtime::handler_entry_t (std::move (transport.before_application_handler),
+                                    std::move (*transport.application_permit)));
+    } else if (before_application_handler) {
+        *before_application_handler = std::move (transport.before_application_handler);
+    }
     return {stateful_error_t::none,
             stateful_delivery_t{owner, std::move (turn), std::move (frozen),
                                 pending->second.request, std::move (accepted_owner)}};
@@ -965,6 +972,7 @@ task_t<stateful_error_t> raw_stateful_dispatch_t::accept_local (
         credit = std::exchange (taken->transferred, {});
         pending.transport.before_application_handler =
           std::move (taken->before_application_handler);
+        pending.transport.application_permit = std::move (taken->application_permit);
         // The accepted record owns the body now; the original keeps its reply route only.
         // A slot take is its only reader from here; a cut-taken original may still be read
         // by the claim that lost its take, so it keeps its parts.
@@ -1312,7 +1320,7 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
 void raw_stateful_dispatch_t::release_relocated_payloads (
   const object_ref_t &owner, const std::vector<turn_record_t> &committed)
 {
-    std::vector<std::pair<accepted_mailbox_reservation_t, std::function<void ()>>> reservations;
+    std::vector<std::pair<accepted_mailbox_reservation_t, runtime::handler_entry_t>> reservations;
     {
         std::lock_guard lock (_mutex);
         reservations.reserve (committed.size ());
@@ -1323,7 +1331,11 @@ void raw_stateful_dispatch_t::release_relocated_payloads (
             auto &pending = entry->second;
             reservations.emplace_back (
               std::move (pending.mailbox_claim),
-              std::exchange (pending.transport.before_application_handler, {}));
+              runtime::handler_entry_t (
+                std::exchange (pending.transport.before_application_handler, {}),
+                pending.transport.application_permit
+                  ? std::move (*pending.transport.application_permit)
+                  : application_job_queue_t::permit_t{}));
             if (!pending.request) {
                 _pending.erase (entry);
                 continue;

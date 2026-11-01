@@ -92,7 +92,8 @@ TEST (ReceiveAllocations, EmptyTurnDoesNotBuildInfrastructureDispatchStorage)
           infrastructure_record (wire::encode_message_follow (expected))));
     };
     const auto dispatch = [&] {
-        return runtime->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ();
+        return runtime->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false)
+          .result ();
     };
     enqueue ();
     ASSERT_EQ (dispatch ().value (), 1u);
@@ -180,7 +181,7 @@ void verify_infrastructure_claim_across_suspension (std::size_t bind_count)
         ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (
           infrastructure_record (wire::encode_bound_session_bind (bind))));
     }
-    auto running = runtime->dispatch_ready ([] (const auto &, const auto &, auto) {}, false);
+    auto running = runtime->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false);
     EXPECT_FALSE (running.await_ready ());
     EXPECT_EQ (owner_calls, 1u);
     EXPECT_EQ (bind_calls, 0u);
@@ -197,7 +198,7 @@ void verify_infrastructure_claim_across_suspension (std::size_t bind_count)
     // Suspension may exhaust this turn's budget. Drive the next bounded turn
     // and wait for its completion before checking the entire queued sequence.
     const auto remaining =
-      runtime->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ();
+      runtime->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false).result ();
     ASSERT_TRUE (remaining);
     EXPECT_EQ (settled.value () + remaining.value (), bind_count + 1);
     EXPECT_EQ (owner_calls, bind_count);
@@ -230,7 +231,7 @@ TEST (ReceiveAllocations, InfrastructureFrameFailureReleasesTheClaim)
               infrastructure_record (wire::encode_message_follow (notice ()))));
         };
         const auto dispatch = [&] {
-            return runtime->dispatch_ready ([] (const auto &, const auto &, auto) {}, false)
+            return runtime->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false)
               .result ();
         };
         enqueue ();

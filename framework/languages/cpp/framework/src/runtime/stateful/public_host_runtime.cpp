@@ -685,9 +685,10 @@ struct application_claim_batch_t
 
     void handoff (const ready_record_t &ready,
                   const receive_record_t &record,
-                  std::vector<zlink::message_t> parts)
+                  std::vector<zlink::message_t> parts,
+                  application_job_queue_t::permit_t permit)
     {
-        dispatch (ready, record, std::move (parts));
+        dispatch (ready, record, std::move (parts), std::move (permit));
         ++handed_off;
     }
 
@@ -7358,11 +7359,10 @@ bool public_host_runtime_t::dispatch_bound_session_send (
            && delivery (std::move (parts)) == stateful::stateful_error_t::none;
 }
 
-task_t<std::size_t> public_host_runtime_t::dispatch_ready (
-  std::function<void (
-    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
-  bool accept_application_receive,
-  std::function<bool ()> next_application_receive)
+task_t<std::size_t>
+public_host_runtime_t::dispatch_ready (mesh::service_mailbox_t::application_dispatch_t dispatch,
+                                       bool accept_application_receive,
+                                       std::function<bool ()> next_application_receive)
 {
     if (!dispatch) {
         throw std::invalid_argument ("framework public host dispatch callback is required");
@@ -7410,14 +7410,15 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
 
         if (!application_dispatch_started) {
             for (;;) {
-                std::optional<local_application_dispatch_t> pending;
+                mesh::service_mailbox_application_t pending;
                 bool skip = false;
                 _local_dispatch_completion_lane.run_sync ([&] {
                     if (_local_application_dispatches.empty ())
                         return;
                     if (!accept_application_receive
                         && !_local_application_dispatches.front ()
-                              .record.before_application_handler)
+                              ->record.before_application_handler
+                        && !_local_application_dispatches.front ()->application_permit)
                         return;
                     pending = std::move (_local_application_dispatches.front ());
                     _local_application_dispatches.pop_front ();
@@ -7441,7 +7442,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                     if (!co_await _objects.contains_async (reference))
                         continue;
                 }
-                dispatch (pending->owner, pending->record, std::move (pending->parts));
+                dispatch (pending->owner, pending->record, std::move (pending->parts),
+                          std::move (pending->application_permit));
                 ++count;
                 application_dispatch_started = true;
                 break;
@@ -7518,8 +7520,7 @@ task_t<bool> public_host_runtime_t::notify_stateful_owner (const stateful::objec
 
 task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
   const stateful::object_ref_t &object,
-  const std::function<void (
-    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
+  const mesh::service_mailbox_t::application_dispatch_t &dispatch,
   std::shared_ptr<runtime::serial_execution_queue_t> gate,
   std::shared_ptr<stateful::relocation_seal_binding_t> restoring)
 {
@@ -7655,7 +7656,8 @@ bool public_host_runtime_t::dispatch_stateful_delivery (
                 application_record = std::make_shared<runtime::serial_application_record_t> ();
                 application_record->admission = std::move (previous->admission);
                 application_record->native_reply = std::move (previous->native_reply);
-                previous->admission.reservation.emplace<std::function<void ()>> ();
+                previous->admission.reservation
+                  .emplace<serial_application_admission_t::initial_t> ();
             } else if (!application_record) {
                 application_record = std::make_shared<runtime::serial_application_record_t> ();
             }
@@ -7752,7 +7754,7 @@ bool public_host_runtime_t::dispatch_stateful_delivery (
                   return finish (std::move (reply));
               };
         }
-        dispatch (owner, record, std::move (parts));
+        dispatch (owner, record, std::move (parts), {});
         return true;
     }
     catch (...) {
@@ -7849,6 +7851,9 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         const std::unique_ptr<mesh::service_mailbox_settlement_t, decltype (release_credit)>
           credit_owner (&credit, release_credit);
         auto before = std::move (original->before_application_handler);
+        auto application_permit = original->application_permit
+                                    ? std::move (*original->application_permit)
+                                    : application_job_queue_t::permit_t{};
         ready_record_t owner;
         receive_record_t record;
         if (application) {
@@ -7911,7 +7916,7 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         accepted->transferred = std::exchange (credit, {});
         record.release_mailbox_reservation = [accepted] { accepted->release_native_claim (); };
         try {
-            dispatch (owner, record, std::move (parts));
+            dispatch (owner, record, std::move (parts), std::move (application_permit));
         }
         catch (...) {
             accepted->release_native_claim ();
@@ -8017,8 +8022,8 @@ public_host_runtime_t::dispatch_application_claim (
                     const mesh::service_mailbox_t::claim_handle_t slot{batch->claim, batch->index};
                     auto &entry = batch->entries[batch->index];
                     const dispatch_t dispatch = [batch] (const auto &ready, const auto &record,
-                                                         auto parts) {
-                        batch->handoff (ready, record, std::move (parts));
+                                                         auto parts, auto permit) {
+                        batch->handoff (ready, record, std::move (parts), std::move (permit));
                     };
                     auto query = local_application_query (*local.application);
                     const auto object = co_await self->accept_local_application (
@@ -8040,8 +8045,10 @@ public_host_runtime_t::dispatch_application_claim (
                             const mesh::service_mailbox_t::claim_handle_t slot{batch->claim,
                                                                                batch->index};
                             const dispatch_t dispatch = [batch] (const auto &ready,
-                                                                 const auto &record, auto parts) {
-                                batch->handoff (ready, record, std::move (parts));
+                                                                 const auto &record, auto parts,
+                                                                 auto permit) {
+                                batch->handoff (ready, record, std::move (parts),
+                                                std::move (permit));
                             };
                             std::optional<stateful::retained_relocation_source_t> retained;
                             const auto owner = co_await self->_objects.resolve_spot_async (
@@ -8081,8 +8088,8 @@ public_host_runtime_t::dispatch_application_claim (
                         const mesh::service_mailbox_t::claim_handle_t slot{claim, index};
                         auto &entry = batch->entries[index];
                         const dispatch_t dispatch = [batch] (const auto &ready, const auto &record,
-                                                             auto parts) {
-                            batch->handoff (ready, record, std::move (parts));
+                                                             auto parts, auto permit) {
+                            batch->handoff (ready, record, std::move (parts), std::move (permit));
                         };
                         std::optional<stateful::object_ref_t> native_owner;
                         std::optional<stateful::retained_relocation_source_t> retained;
@@ -8155,8 +8162,10 @@ public_host_runtime_t::dispatch_application_claim (
                 application.record.release_mailbox_reservation = release_mailbox_reservation;
                 application.record.retain_mailbox_reservation = retain_mailbox_reservation;
                 application.record.transferred_owner_byte_cost = claim->record_bytes[index];
-                batch->handoff (application.owner, application.record,
-                                std::move (application.parts));
+                batch->handoff (
+                  application.owner, application.record, std::move (application.parts),
+                  mailbox_record.application_permit ? std::move (*mailbox_record.application_permit)
+                                                    : std::move (application.application_permit));
                 ++batch->count;
                 if (!entry.retained.load (std::memory_order_acquire))
                     release_mailbox_reservation ();
@@ -8188,8 +8197,9 @@ public_host_runtime_t::dispatch_application_claim (
                 auto pending = std::make_shared<task_t<void>> (enqueue_local_multicast (
                   std::move (targets), std::move (multicast.channelName.value),
                   std::move (multicast.topic.value), std::move (parts), std::move (metadata),
-                  zlink::routing_id_t::from (mailbox_record.source_routing_id),
-                  std::move (before)));
+                  zlink::routing_id_t::from (mailbox_record.source_routing_id), std::move (before),
+                  mailbox_record.application_permit ? std::move (*mailbox_record.application_permit)
+                                                    : application_job_queue_t::permit_t{}));
                 detail::observe_task_completion (
                   *pending, [self = shared_from_this (), pending] (const result_t<void> &) {});
                 ++batch->count;
@@ -8202,6 +8212,7 @@ public_host_runtime_t::dispatch_application_claim (
             if (wire.kind == protocol::command::boundSessionSend) {
                 // The outbound stream delivery is a transport handoff, not an application handler.
                 mailbox_record.before_application_handler = {};
+                mailbox_record.application_permit.reset ();
                 (void) dispatch_bound_session_send (mailbox_record);
                 ++batch->count;
                 if (!entry.retained.load (std::memory_order_acquire))
@@ -8289,7 +8300,10 @@ public_host_runtime_t::dispatch_application_claim (
             record.release_mailbox_reservation = release_mailbox_reservation;
             record.retain_mailbox_reservation = retain_mailbox_reservation;
             record.transferred_owner_byte_cost = claim->record_bytes[index];
-            batch->handoff (owner, record, std::move (parts));
+            batch->handoff (owner, record, std::move (parts),
+                            mailbox_record.application_permit
+                              ? std::move (*mailbox_record.application_permit)
+                              : application_job_queue_t::permit_t{});
             ++batch->count;
             if (!entry.retained.load (std::memory_order_acquire))
                 release_mailbox_reservation ();
@@ -8344,6 +8358,10 @@ void public_host_runtime_t::fail_application_claim (
     if (!entry.original)
         return;
     auto &mailbox_record = *entry.original;
+    handler_entry_t terminal (std::exchange (mailbox_record.before_application_handler, {}),
+                              mailbox_record.application_permit
+                                ? std::move (*mailbox_record.application_permit)
+                                : application_job_queue_t::permit_t{});
     if (!release_mailbox_reservation)
         release_mailbox_reservation = std::exchange (mailbox_record.transferred, {});
     const auto failure = std::get_if<messaging::request_wire_failure_t> (&rejection);
@@ -8378,8 +8396,7 @@ public_host_runtime_t::continue_application_claim (std::shared_ptr<application_c
 public_host_runtime_t::application_owner_result_t
 public_host_runtime_t::dispatch_application_owner (
   std::string owner,
-  std::function<void (
-    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
+  mesh::service_mailbox_t::application_dispatch_t dispatch,
   std::function<void ()> started,
   std::function<void ()> rejected)
 {
@@ -8928,10 +8945,11 @@ std::function<void ()> public_host_runtime_t::local_request_wait_cleanup (
     };
 }
 
-void public_host_runtime_t::publish_local_application (local_application_dispatch_t dispatch)
+void public_host_runtime_t::publish_local_application (mesh::service_mailbox_application_t original)
 {
+    auto &dispatch = *original;
     if (!_stateful_dispatch || !is_stateful_application (dispatch.record.kind)) {
-        _local_application_dispatches.push_back (std::move (dispatch));
+        _local_application_dispatches.push_back (std::move (original));
         return;
     }
     mesh::service_mailbox_record_t record;
@@ -8948,7 +8966,8 @@ void public_host_runtime_t::publish_local_application (local_application_dispatc
       {_local_lease_observation ? _local_lease_observation () : nullptr,
        std::shared_ptr<const mesh::service_node_descriptor_t> (shared_from_this (),
                                                                &_options.mesh.descriptor)});
-    record.application.emplace (std::move (dispatch));
+    record.application_permit.emplace (std::move (dispatch.application_permit));
+    record.application = std::move (original);
     if (!_transport->mailbox ().try_enqueue (std::move (record)))
         throw protocol::service_wire_error_t ("local application mailbox is closed");
 }
@@ -9228,7 +9247,8 @@ task_t<void> public_host_runtime_t::enqueue_local_multicast (
   std::vector<zlink::message_t> parts,
   std::shared_ptr<const std::vector<std::uint8_t>> metadata,
   zlink::routing_id_t source_node,
-  std::function<void ()> before_application_handler)
+  std::function<void ()> before_application_handler,
+  application_job_queue_t::permit_t application_permit)
 {
     const auto targets = co_await target_snapshot;
     const auto local = _transport->topology ().local_descriptor ();
@@ -9253,9 +9273,9 @@ task_t<void> public_host_runtime_t::enqueue_local_multicast (
                             ? std::make_shared<task_completion_source_t<void>> ()
                             : std::shared_ptr<task_completion_source_t<void>>{};
         const auto enqueue = [&] {
-            admit_local_application (
-              local_application_dispatch_t{std::move (owner), std::move (record), parts}, {},
-              completion);
+            local_application_dispatch_t dispatch{std::move (owner), std::move (record), parts};
+            dispatch.application_permit = std::move (application_permit);
+            admit_local_application (std::move (dispatch), {}, completion);
         };
         if (_local_dispatch_completion_lane.is_on_lane ())
             enqueue ();
@@ -9272,16 +9292,19 @@ void public_host_runtime_t::admit_local_application (
   const std::shared_ptr<application_job_queue_t::waiter_t> &waiter,
   std::shared_ptr<task_completion_source_t<void>> admitted)
 {
-    if (!_options.mesh.application_jobs || dispatch.record.before_application_handler) {
+    if (!_options.mesh.application_jobs || dispatch.record.before_application_handler
+        || dispatch.application_permit) {
         publish_local_application (std::move (dispatch));
         if (admitted)
             admitted->complete (result_t<void>::success ());
         return;
     }
+    mesh::service_mailbox_application_t original (std::move (dispatch));
+    auto application = original.retain_mutable ();
     auto pending = waiter ? waiter : std::make_shared<application_job_queue_t::waiter_t> ();
     std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
     *pending = _options.mesh.application_jobs->wait_for_supply (
-      [weak, waiter = pending, dispatch = std::move (dispatch),
+      [weak, waiter = pending, application,
        admitted] (std::optional<application_job_queue_t::permit_t> reserved) mutable {
           auto waiting = std::move (waiter);
           if (!reserved) {
@@ -9299,9 +9322,8 @@ void public_host_runtime_t::admit_local_application (
                                              "application owner closed before admission"));
               return;
           }
-          auto permit = std::make_shared<application_job_queue_t::permit_t> (std::move (*reserved));
-          auto publish = [weak, waiting, permit, dispatch = std::move (dispatch),
-                          admitted] () mutable {
+          application->application_permit = std::move (*reserved);
+          auto publish = [weak, waiting, application, admitted] () mutable {
               *waiting = {};
               auto host = weak.lock ();
               if (!host || !host->_transport->started ()) {
@@ -9311,6 +9333,7 @@ void public_host_runtime_t::admit_local_application (
                                                  "application owner closed before admission"));
                   return;
               }
+              auto &dispatch = *application;
               if (uses_local_operation_registry (dispatch.record.kind)
                   && !host->_transport->operation_pending (dispatch.record.operation_id)) {
                   if (admitted)
@@ -9319,11 +9342,10 @@ void public_host_runtime_t::admit_local_application (
                                                  "application operation ended before admission"));
                   return;
               }
-              permit->mark_queued ();
-              dispatch.record.before_application_handler = [permit] {
-                  permit->release_for_handler_entry ();
-              };
-              host->publish_local_application (std::move (dispatch));
+              dispatch.application_permit.mark_queued ();
+              mesh::service_mailbox_application_t original;
+              original.emplace (std::move (application));
+              host->publish_local_application (std::move (original));
               host->_transport->signal_activity ();
               if (admitted)
                   admitted->complete (result_t<void>::success ());

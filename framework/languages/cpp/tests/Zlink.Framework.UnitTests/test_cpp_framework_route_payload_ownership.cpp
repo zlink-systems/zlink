@@ -1828,7 +1828,7 @@ TEST (RoutePayloadOwnership, BoundSessionInternalSendSkipsUserTargetClassificati
     source.connect_peer (*target_state->routing_id, target.status ().local_endpoint ());
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
     auto pump = [] (detail::mesh_node_runtime_t &node) {
-        node.dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
+        node.dispatch_ready ([] (const auto &, const auto &, auto, auto) {}).result ().value ();
     };
     while ((source.admitted_peer_count () == 0 || target.admitted_peer_count () == 0)
            && std::chrono::steady_clock::now () < deadline) {
@@ -1872,7 +1872,7 @@ TEST (RoutePayloadOwnership, BoundSessionInternalSendSkipsUserTargetClassificati
     const auto receive_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
     while (sent && !delivered && std::chrono::steady_clock::now () < receive_deadline) {
         target
-          .dispatch_ready ([&] (const auto &, const auto &, auto parts) {
+          .dispatch_ready ([&] (const auto &, const auto &, auto parts, auto) {
               auto decoded = runtime::messaging::envelope_codec_t{}.decode_header (
                 runtime::messaging::message_parts_t (std::move (parts)), false);
               delivered = decoded
@@ -2064,8 +2064,8 @@ TEST_P (ActorSendRelayAdmission, CompletesWithoutRemoteReply)
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
     while ((source.admitted_peer_count () == 0 || target.admitted_peer_count () == 0)
            && std::chrono::steady_clock::now () < deadline) {
-        source.dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
-        target.dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
+        source.dispatch_ready ([] (const auto &, const auto &, auto, auto) {}).result ().value ();
+        target.dispatch_ready ([] (const auto &, const auto &, auto, auto) {}).result ().value ();
         std::this_thread::yield ();
     }
     ASSERT_EQ (1u, source.admitted_peer_count ());

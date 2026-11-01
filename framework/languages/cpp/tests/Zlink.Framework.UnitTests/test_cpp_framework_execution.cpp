@@ -7947,7 +7947,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                             target.status ().lifecycle_generation ()}});
 
     source.connect_peer (target.status ().routing_id (), target.status ().local_endpoint ());
-    const auto discard = [] (const auto &, const auto &, auto) {};
+    const auto discard = [] (const auto &, const auto &, auto, auto) {};
     const auto admitted_deadline = std::chrono::steady_clock::now () + 5s;
     while ((!source.has_admitted_peer (target.status ().routing_id (),
                                        target.status ().lifecycle_generation ())
@@ -8106,12 +8106,14 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
             (void) source
               .dispatch_ready ([&] (const host::ready_record_t &owner,
                                     const host::receive_record_t &record,
-                                    std::vector<zlink::message_t> parts) {
+                                    std::vector<zlink::message_t> parts, auto permit) {
                   if (!cancel_source_delay) {
                       (void) source_spots.dispatch_mesh_record (
                         owner, record, parts,
                         runtime::decode_mesh_record_header (record, parts, false).value (),
-                        source_provider, serializers);
+                        source_provider, serializers, {}, nullptr,
+                        runtime::handler_entry_t (record.before_application_handler,
+                                                  std::move (permit)));
                       return;
                   }
                   // Match the hosted dispatcher admission/terminal ownership. The
@@ -8134,7 +8136,9 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                             && source.active_application_callbacks () == 0)
                             active_drained.complete (result_t<void>::success ());
                     },
-                    &deferred, record.before_application_handler);
+                    &deferred,
+                    runtime::handler_entry_t (record.before_application_handler,
+                                              std::move (permit)));
                   if (!deferred)
                       terminal->settle ();
                   const auto retained =
@@ -8174,12 +8178,14 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
             (void) target
               .dispatch_ready ([&] (const host::ready_record_t &owner,
                                     const host::receive_record_t &record,
-                                    std::vector<zlink::message_t> parts) {
+                                    std::vector<zlink::message_t> parts, auto permit) {
                   (void) target_spots.dispatch_mesh_record (
                     owner, record, parts,
                     zlink::framework::runtime::decode_mesh_record_header (record, parts, false)
                       .value (),
-                    target_provider, serializers);
+                    target_provider, serializers, {}, nullptr,
+                    runtime::handler_entry_t (record.before_application_handler,
+                                              std::move (permit)));
               })
               .result ()
               .value ();

@@ -446,11 +446,11 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
     std::promise<void> received;
     auto reception = received.get_future ();
     dispatch_loop_t source_loop (
-      source.native_node (), [] (const auto &, const auto &, auto) {}, progress);
+      source.native_node (), [] (const auto &, const auto &, auto, auto) {}, progress);
     dispatch_loop_t target_loop (
       *target,
       [&] (const host::ready_record_t &, const host::receive_record_t &record,
-           std::vector<zlink::message_t> parts) {
+           std::vector<zlink::message_t> parts, auto) {
           if (record.kind == host::record_kind_t::completion)
               return;
           messaging::message_parts_t encoded (std::move (parts));
@@ -660,7 +660,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     dispatch_loop_t source_loop (
       source.native_node (),
       [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
-           std::vector<zlink::message_t> parts) {
+           std::vector<zlink::message_t> parts, auto permit) {
           if (record.kind != host::record_kind_t::actor_request)
               return;
           ASSERT_TRUE (record.application_record);
@@ -691,7 +691,8 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
           bool deferred = false;
           const auto handled = spots.dispatch_mesh_record (
             owner, record, parts, header.value (), *node->root_services, serializers, complete,
-            &deferred, record.before_application_handler);
+            &deferred,
+            runtime::handler_entry_t (record.before_application_handler, std::move (permit)));
           EXPECT_TRUE (handled);
           if (!deferred)
               complete ();
@@ -969,7 +970,7 @@ TEST (FrameworkSessionSealRelay, bound_request_to_relocated_local_actor_keeps_bi
     dispatch_loop_t source_loop (
       source.native_node (),
       [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
-           std::vector<zlink::message_t> parts) {
+           std::vector<zlink::message_t> parts, auto permit) {
           if (record.kind != host::record_kind_t::actor_request)
               return;
           ASSERT_TRUE (record.application_record);
@@ -990,9 +991,10 @@ TEST (FrameworkSessionSealRelay, bound_request_to_relocated_local_actor_keeps_bi
                   record.complete_stateful_dispatch ();
           };
           bool deferred = false;
-          EXPECT_TRUE (spots.dispatch_mesh_record (owner, record, parts, header.value (),
-                                                   *node->root_services, serializers, complete,
-                                                   &deferred, record.before_application_handler));
+          EXPECT_TRUE (spots.dispatch_mesh_record (
+            owner, record, parts, header.value (), *node->root_services, serializers, complete,
+            &deferred,
+            runtime::handler_entry_t (record.before_application_handler, std::move (permit))));
           if (!deferred)
               complete ();
       },

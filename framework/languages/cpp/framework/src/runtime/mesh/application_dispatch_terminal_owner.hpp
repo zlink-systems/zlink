@@ -25,7 +25,8 @@ class application_dispatch_terminal_owner_t final
     application_dispatch_terminal_owner_t (
       std::shared_ptr<detail::mesh_node_runtime_t> node = {},
       std::function<void ()> complete_stateful_dispatch = {},
-      host::mailbox_callback_t release_mailbox_reservation = {});
+      host::mailbox_callback_t release_mailbox_reservation = {},
+      handler_entry_t application_entry = {});
     ~application_dispatch_terminal_owner_t () noexcept;
     application_dispatch_terminal_owner_t (application_dispatch_terminal_owner_t &&other) noexcept;
 
@@ -33,13 +34,16 @@ class application_dispatch_terminal_owner_t final
     application_dispatch_terminal_owner_t &
     operator= (const application_dispatch_terminal_owner_t &) = delete;
 
+    handler_entry_t take_application_entry () noexcept { return std::move (_application_entry); }
     void settle () noexcept;
+    void enter_handler () { _application_entry (); }
     void retain_physical_work (offload_executor_t::retained_work_t work) noexcept;
     host::mailbox_callback_t take_mailbox_reservation () noexcept;
 
   private:
     template <typename Callback> static void invoke (const Callback &callback) noexcept;
 
+    handler_entry_t _application_entry;
     std::atomic_bool _settled{false};
     std::shared_ptr<detail::mesh_node_runtime_t> _node;
     offload_executor_t::retained_work_t _physical_work;

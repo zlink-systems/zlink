@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/operations/call_id.hpp"
+#include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
@@ -256,6 +257,7 @@ struct local_application_dispatch_t
     receive_record_t record;
     std::vector<zlink::message_t> parts;
     std::string source_spot_id;
+    application_job_queue_t::permit_t application_permit;
 };
 
 } // namespace zlink::framework::runtime::host
