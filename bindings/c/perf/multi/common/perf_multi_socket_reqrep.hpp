@@ -90,6 +90,7 @@ struct client_state_t
         active_msg_size (0),
         active_deadline_ns (0),
         active_reply_count (0),
+        paced_received_count (0),
         successful_completion_count (0),
         failed_completion_count (0),
         first_failed_result (0),
@@ -113,6 +114,7 @@ struct client_state_t
     size_t active_msg_size;
     uint64_t active_deadline_ns;
     unsigned long long active_reply_count;
+    uint64_t paced_received_count;
     unsigned long long successful_completion_count;
     unsigned long long failed_completion_count;
     int first_failed_result;
@@ -214,6 +216,10 @@ inline void record_request_completion (client_slot_t *slot,
     }
 
     const uint64_t now_ns = perf_multi_metric::now_ns ();
+    if (state->schedule
+        && perf_multi_measurement::latency_sample (now_ns, state->schedule->epoch_ns,
+                                                   state->latency_duration_seconds))
+        ++state->paced_received_count;
     if ((!state->schedule && now_ns >= state->active_deadline_ns)
         || (state->schedule
             && !perf_multi_measurement::latency_sample (
@@ -594,6 +600,7 @@ inline bool run_measurement_window (const endpoint_config_t &config,
       perf_multi_metric::now_ns ()
       + static_cast<uint64_t> (std::max (1.0, duration_seconds) * 1000000000.0);
     state->active_reply_count = 0;
+    state->paced_received_count = 0;
     state->successful_completion_count = 0;
     state->failed_completion_count = 0;
     state->first_failed_result = 0;
@@ -708,15 +715,16 @@ inline bool run_active_window (const endpoint_config_t &config,
     if (accepted == 0 || active_replies == 0)
         return false;
     perf_multi_measurement::schedule_t schedule (
-      perf_multi_measurement::target_rate (accepted, settings.duration_seconds),
+      perf_multi_measurement::target_rate (active_replies, settings.duration_seconds),
       perf_multi_metric::now_ns ());
     unsigned long long paced_replies = 0;
     const bool ok = run_measurement_window (config, state, settings, websocket_transport, run_id,
                                             msg_size, 0.5 + settings.latency_duration_seconds,
                                             &paced_replies, latency_out, &schedule);
     state->schedule = NULL;
-    perf_multi_measurement::print_diagnostic (config.pattern_name, msg_size, accepted,
-                                              settings.duration_seconds, schedule);
+    perf_multi_measurement::print_diagnostic (
+      config.pattern_name, msg_size, accepted, settings.duration_seconds, schedule, active_replies,
+      state->paced_received_count / static_cast<double> (settings.latency_duration_seconds));
     *reply_count_out = active_replies;
     return ok;
 }

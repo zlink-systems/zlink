@@ -549,11 +549,12 @@ inline bool run_single_size_case (const std::vector<void *> &sockets,
     uint64_t active_sends = 0;
     for (size_t i = 0; i < state.slots.size (); ++i)
         active_sends += state.slots[i].active_accepted;
+    size_t received = 0;
     if (ok)
-        ok = perf_multi_handshake::wait_for_start_from_stdin (msg_size, "PHASE_PACED,");
+        ok = perf_multi_handshake::wait_for_start_from_stdin (msg_size, "PHASE_PACED,", &received);
     const uint64_t epoch = perf_multi_metric::now_ns ();
     perf_multi_measurement::schedule_t schedule (
-      perf_multi_measurement::target_rate (active_sends, active_s), epoch);
+      perf_multi_measurement::target_rate (received, active_s), epoch);
     for (size_t i = 0; i < state.slots.size (); ++i)
         state.slots[i].schedule = &schedule;
     ok = ok && schedule.rate > 0.0
@@ -562,12 +563,15 @@ inline bool run_single_size_case (const std::vector<void *> &sockets,
     ok = ok && send_phase_stop_tokens (sockets);
     for (size_t i = 0; i < state.slots.size (); ++i)
         state.slots[i].schedule = NULL;
-    perf_multi_measurement::print_diagnostic (k_pattern, msg_size, active_sends, active_s,
-                                              schedule);
     // Admission of a stop token does not prove receipt. Keep the sockets open
     // until the receiver has consumed every paced tail and published results.
+    size_t paced_received = 0;
     if (ok)
-        ok = perf_multi_handshake::wait_for_start_from_stdin (msg_size, "PHASE_COMPLETE,");
+        ok = perf_multi_handshake::wait_for_start_from_stdin (msg_size, "PHASE_COMPLETE,",
+                                                              &paced_received);
+    perf_multi_measurement::print_diagnostic (
+      k_pattern, msg_size, active_sends, active_s, schedule, received,
+      paced_received / static_cast<double> (settings.latency_duration_seconds));
     close_dd_send_state (&state);
     return ok;
 }

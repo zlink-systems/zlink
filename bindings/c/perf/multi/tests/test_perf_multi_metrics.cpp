@@ -115,6 +115,39 @@ void test_absolute_latency_schedule ()
     assert (schedule.next_ns () == epoch + 1000000000ULL);
     assert (perf_multi_measurement::target_rate (100, 2.0) == 40.0);
     assert (perf_multi_measurement::target_rate (100, 0.0) == 0.0);
+    // Admissions can exceed arrivals; only the received count sets the total.
+    const uint64_t received = 200, accepted_a = 300, accepted_b = 500;
+    const double rate_a = perf_multi_measurement::target_rate (received, 2.0, accepted_a, 800);
+    const double rate_b = perf_multi_measurement::target_rate (received, 2.0, accepted_b, 800);
+    assert (rate_a == 30.0 && rate_b == 50.0);
+    assert (rate_a + rate_b == perf_multi_measurement::target_rate (received, 2.0));
+    assert (perf_multi_measurement::target_rate (received, 2.0, 0, 800) == 0.0);
+    assert (perf_multi_measurement::target_rate (received, 2.0, 300, 0) == 0.0);
+    size_t size = 0, count = 0;
+    for (const char *prefix : {"PHASE_PACED,", "PHASE_DRAINED,", "PHASE_COMPLETE,"}) {
+        assert (perf_multi_handshake::parse_size_count_command_line (
+          std::string (prefix) + "64,12345", prefix, &size, &count));
+        assert (size == 64 && count == 12345);
+        for (const char *suffix : {"64", "64,", "64,0", "64,-1", "64,+1", "64, 1", "64,1.5",
+                                   "64,18446744073709551616", "64,1,2"})
+            assert (!perf_multi_handshake::parse_size_count_command_line (
+              std::string (prefix) + suffix, prefix, &size, &count));
+    }
+    assert (perf_multi_handshake::parse_size_count_command_line (
+      "PHASE_COMPLETE,64,0", "PHASE_COMPLETE,", &size, &count, true));
+    assert (count == 0);
+    perf_multi_handshake::start_signal_state_t gate;
+    perf_multi_handshake::signal_start (&gate, 64, perf_multi_metric::phase_active, 12345);
+    assert (
+      perf_multi_handshake::wait_for_start (&gate, 64, 1, perf_multi_metric::phase_active, &count));
+    assert (count == 12345);
+    std::ostringstream diagnostic;
+    std::streambuf *saved = std::cout.rdbuf (diagnostic.rdbuf ());
+    perf_multi_measurement::print_diagnostic ("TEST", 64, 800, 2.0, schedule, 200, 79.0);
+    std::cout.rdbuf (saved);
+    assert (diagnostic.str ().find (",active_sender_rate,400,") != std::string::npos);
+    assert (diagnostic.str ().find (",received_rate,100,paced_received_rate,79")
+            != std::string::npos);
     perf_multi_measurement::schedule_t idle (0.0, epoch);
     assert (!idle.due (epoch + 1000000000ULL));
 }
@@ -166,9 +199,18 @@ void test_request_metrics_separate_active_and_latency ()
               schedule.epoch_ns + perf_multi_measurement::settle_ns - 1);
     assert (state.active_reply_count == 0);
     assert (state.latency.count () == 0);
+    // An arrival inside the sample window counts even if its send was settling.
+    assert (state.paced_received_count == 1);
     complete (perf_multi_metric::phase_latency, now);
     assert (state.active_reply_count == 1);
     assert (state.latency.count () == 1);
+    assert (state.paced_received_count == 2);
+    // Tail replies remain latency samples but are outside paced receive rate.
+    schedule.epoch_ns = now - perf_multi_measurement::settle_ns - 2000000000ULL;
+    complete (perf_multi_metric::phase_latency,
+              schedule.epoch_ns + perf_multi_measurement::settle_ns + 1);
+    assert (state.latency.count () == 2);
+    assert (state.paced_received_count == 2);
     zlink_multipart_close (parts, 2u);
 }
 

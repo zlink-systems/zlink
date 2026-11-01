@@ -901,8 +901,16 @@ def forward_multi_phase(line, source, pattern, server, client, expected_sizes):
     token, separator, size_text = line.strip().partition(",")
     if not separator or token not in ("PHASE_DRAINED", "PHASE_COMPLETE", "PHASE_DONE"):
         return False
-    if token == "PHASE_COMPLETE" and pattern != "DEALER_DEALER":
-        return False
+    if token in ("PHASE_DRAINED", "PHASE_COMPLETE"):
+        size_text, separator, count_text = size_text.partition(",")
+        if not separator or not count_text.isascii() or not count_text.isdecimal():
+            return False
+        try:
+            received = int(count_text)
+        except ValueError:
+            return False
+        if not (0 if token == "PHASE_COMPLETE" else 1) <= received <= (1 << 64) - 1:
+            return False
     if token == "PHASE_DONE":
         if pattern != "PUBSUB":
             return False
@@ -926,6 +934,8 @@ def forward_multi_phase(line, source, pattern, server, client, expected_sizes):
     try:
         forwarded_token = "PHASE_PACED" if token == "PHASE_DRAINED" else token
         forwarded_line = f"{forwarded_token},{size}"
+        if token in ("PHASE_DRAINED", "PHASE_COMPLETE"):
+            forwarded_line += f",{count_text}"
         if token == "PHASE_DONE":
             forwarded_line += f",{phase_text}"
         target.stdin.write(forwarded_line + "\n")

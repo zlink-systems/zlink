@@ -115,20 +115,20 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                     ("PHASE_DRAINED", receiver, sender, "PHASE_PACED"),
                 ):
                     self.assertTrue(RC.forward_multi_phase(
-                        f"{token},64\n", source, pattern,
+                        f"{token},64,12345\n", source, pattern,
                         processes["server"], processes["client"], {64},
                     ))
                     self.assertEqual(
-                        processes[destination].stdin.getvalue(), f"{expected},64\n"
+                        processes[destination].stdin.getvalue(), f"{expected},64,12345\n"
                     )
 
     def test_dealer_completion_gate_forwards_server_receipt_to_client(self):
         server = mock.Mock(stdin=io.StringIO())
         client = mock.Mock(stdin=io.StringIO())
         self.assertTrue(RC.forward_multi_phase(
-            "PHASE_COMPLETE,64\n", "server", "DEALER_DEALER", server, client, {64},
+            "PHASE_COMPLETE,64,9876\n", "server", "DEALER_DEALER", server, client, {64},
         ))
-        self.assertEqual(client.stdin.getvalue(), "PHASE_COMPLETE,64\n")
+        self.assertEqual(client.stdin.getvalue(), "PHASE_COMPLETE,64,9876\n")
         self.assertEqual(server.stdin.getvalue(), "")
 
     def test_pub_phase_done_forwards_publisher_phase_to_subscriber(self):
@@ -143,6 +143,12 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
 
     def test_one_way_phase_gates_reject_invalid_source_size_and_pattern(self):
         for line, source, pattern in (
+            ("PHASE_DRAINED,64,42", "client", "DEALER_DEALER"),
+            ("PHASE_DRAINED,64,42", "server", "PUBSUB"),
+            ("PHASE_DRAINED,128,42", "server", "DEALER_DEALER"),
+            ("PHASE_DRAINED,64,42", "server", "STREAM"),
+            ("PHASE_COMPLETE,64,42", "client", "DEALER_DEALER"),
+            ("PHASE_COMPLETE,64,42", "server", "PUBSUB"),
             ("PHASE_DRAINED,64", "client", "DEALER_DEALER"),
             ("PHASE_LATENCY_DONE,64", "server", "DEALER_DEALER"),
             ("PHASE_COMPLETE,64", "client", "DEALER_DEALER"),
@@ -182,6 +188,33 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         self.assertFalse(RC.forward_multi_phase(
             "PHASE_DRAINED,64", "server", "DEALER_DEALER", None, None, {64},
         ))
+
+    def test_one_way_receive_counts_are_required_positive_uint64(self):
+        for pattern, receiver in (("DEALER_DEALER", "server"), ("PUBSUB", "client")):
+            for token in ("PHASE_DRAINED", "PHASE_COMPLETE"):
+                for suffix in ("", ",", ",-1", ",+1", ", 1", ",1.5", ",nan",
+                               ",１", ",18446744073709551616", ",12,extra", "," + "9" * 5000):
+                    with self.subTest(pattern=pattern, token=token, suffix=suffix):
+                        server = mock.Mock(stdin=io.StringIO())
+                        client = mock.Mock(stdin=io.StringIO())
+                        self.assertFalse(RC.forward_multi_phase(
+                            f"{token},64{suffix}", receiver, pattern, server, client, {64}))
+                        self.assertEqual(server.stdin.getvalue(), "")
+                        self.assertEqual(client.stdin.getvalue(), "")
+                server = mock.Mock(stdin=io.StringIO())
+                client = mock.Mock(stdin=io.StringIO())
+                self.assertEqual(RC.forward_multi_phase(
+                    f"{token},64,0", receiver, pattern, server, client, {64}),
+                    token == "PHASE_COMPLETE")
+                server = mock.Mock(stdin=io.StringIO())
+                client = mock.Mock(stdin=io.StringIO())
+                self.assertTrue(RC.forward_multi_phase(
+                    f"{token},64,18446744073709551615", receiver, pattern,
+                    server, client, {64}))
+                target = client if receiver == "server" else server
+                forwarded = "PHASE_PACED" if token == "PHASE_DRAINED" else token
+                self.assertEqual(target.stdin.getvalue(),
+                                 f"{forwarded},64,18446744073709551615\n")
 
     def test_latency_duration_option_and_environment_reject_invalid_values(self):
         for value in ("0", "-1", "1.5", "invalid", "", "１"):

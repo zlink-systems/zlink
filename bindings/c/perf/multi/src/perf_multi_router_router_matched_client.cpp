@@ -47,6 +47,8 @@ struct child_command_t
     uint64_t msg_size;
     uint32_t duration_seconds;
     perf_multi_metric::phase_t phase;
+    uint64_t active_received;
+    uint64_t total_accepted;
 };
 
 struct child_result_t
@@ -54,6 +56,8 @@ struct child_result_t
     int32_t status;
     uint32_t sample_count;
     uint64_t received;
+    uint64_t accepted;
+    uint64_t paced_received;
     uint64_t latency_count;
     double latency_sum_ns;
     double samples[k_child_sample_cap];
@@ -169,12 +173,14 @@ bool run_reqrep_case (perf_multi_socket_reqrep::client_state_t *state,
     const bool ran = perf_multi_socket_reqrep::run_measurement_window (
       config, state, settings, websocket_transport, command.run_id,
       static_cast<size_t> (command.msg_size), window_seconds, &received, &latency, schedule);
+    result->paced_received = state->paced_received_count;
     state->schedule = NULL;
     if (!ran)
         return false;
     if (!schedule) {
         *active_accepted = state->accepted_count;
         result->received = received;
+        result->accepted = *active_accepted;
         return received > 0 && *active_accepted > 0;
     }
 
@@ -212,10 +218,12 @@ bool run_sendsend_case (void *socket,
           sockets, settings, payload, payload_size, msg_size, k_server_routing_id, true,
           command.run_id, command.phase, perf_multi_client::metric_capture_bytes (), window_seconds,
           true, schedule != NULL, transport == "tcp", &received, &latency_sum, &latency_count,
-          &latency, &samples, k_child_sample_cap, active_accepted, schedule))
+          &latency, &samples, k_child_sample_cap, active_accepted, schedule,
+          &result->paced_received))
         return false;
     if (!schedule) {
         result->received = static_cast<uint64_t> (std::max<long> (0, received));
+        result->accepted = *active_accepted;
         return received > 0 && *active_accepted > 0;
     }
 
@@ -297,7 +305,8 @@ int child_main (int index,
             prepared = false;
         }
         perf_multi_measurement::schedule_t schedule (
-          perf_multi_measurement::target_rate (active_accepted, command.duration_seconds),
+          perf_multi_measurement::target_rate (command.active_received, command.duration_seconds,
+                                               active_accepted, command.total_accepted),
           perf_multi_metric::now_ns ());
         const bool paced = command.phase == perf_multi_metric::phase_latency;
         const double window_seconds = paced ? 0.5 + settings.latency_duration_seconds
@@ -331,7 +340,8 @@ int child_main (int index,
         if (ran && paced)
             perf_multi_measurement::print_diagnostic (
               k_pattern, static_cast<size_t> (command.msg_size), active_accepted,
-              command.duration_seconds, schedule);
+              command.duration_seconds, schedule, command.active_received,
+              result.paced_received / static_cast<double> (settings.latency_duration_seconds));
         result.status = ran ? 0 : 1;
         if (!write_full (result_fd, &result, sizeof (result)))
             break;
@@ -416,6 +426,7 @@ int run_client (const std::string &lib_name,
         // starts paced traffic. The parent owns this cross-process barrier.
         for (size_t phase_index = 0; phase_index < 2 && ok; ++phase_index) {
             command.phase = phases[phase_index];
+            command.active_received = total_received;
             for (size_t i = 0; i < children.size (); ++i) {
                 if (!write_full (children[i].command_fd, &command, sizeof (command))) {
                     ok = false;
@@ -450,6 +461,7 @@ int run_client (const std::string &lib_name,
                         break;
                     }
                     total_received += result.received;
+                    command.total_accepted += result.accepted;
                 } else {
                     if (result.received != 0 || result.latency_count == 0
                         || result.sample_count > k_child_sample_cap

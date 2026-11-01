@@ -169,9 +169,9 @@ class bench_client_t : public bench_client_iface_t
         mode (phase_ready),
         phase_end_ns (0),
         latency_epoch_ns (0),
-        active_accepted (0),
         paced_accepted (0),
         paced_late (0),
+        paced_received (0),
         phase_size (opt.sizes.empty () ? 64 : opt.sizes[0]),
         outstanding_total (0),
         seq_gen (0),
@@ -341,12 +341,11 @@ class bench_client_t : public bench_client_iface_t
         outstanding_total.fetch_add (1, std::memory_order_relaxed);
     }
 
-    void on_send_accepted () override
+    bool on_send_accepted () override
     {
-        if (mode.load (std::memory_order_acquire) == phase_active
-            && perf_stream_common::perf_stream_now_ns ()
-                 < phase_end_ns.load (std::memory_order_relaxed))
-            active_accepted.fetch_add (1, std::memory_order_relaxed);
+        return mode.load (std::memory_order_acquire) == phase_active
+               && perf_stream_common::perf_stream_now_ns ()
+                    < phase_end_ns.load (std::memory_order_relaxed);
     }
 
     void on_paced_send (bool late) override
@@ -361,6 +360,10 @@ class bench_client_t : public bench_client_iface_t
     {
         const uint64_t epoch = latency_epoch_ns.load (std::memory_order_acquire);
         const bool paced = epoch != 0;
+        if (paced
+            && perf_multi_measurement::latency_sample (perf_stream_common::perf_stream_now_ns (),
+                                                       epoch, opt.latency_duration))
+            paced_received.fetch_add (1, std::memory_order_relaxed);
         const bool count_active_completion =
           paced ? perf_multi_measurement::latency_sample (sent_ts_ns, epoch, opt.latency_duration)
                 : active_metrics_enabled_now ();
@@ -590,7 +593,6 @@ class bench_client_t : public bench_client_iface_t
 
         if (!paced) {
             latency_epoch_ns.store (0, std::memory_order_release);
-            active_accepted.store (0, std::memory_order_relaxed);
             const std::vector<std::shared_ptr<client_session_t>> connected =
               snapshot_connected_sessions ();
             for (size_t i = 0; i < connected.size (); ++i)
@@ -697,7 +699,7 @@ class bench_client_t : public bench_client_iface_t
     }
 
     // --- Per-size benchmark execution ---
-    // Multi latency uses 80% of this sender's active accepts/second.
+    // Multi latency uses 80% of active received messages/second.
     // The first 0.5 seconds are discarded; echo latency remains RTT/2.
     case_metrics_t run_case (size_t size)
     {
@@ -748,28 +750,37 @@ class bench_client_t : public bench_client_iface_t
 
         bool window_ok = run_active_window (std::max (1, opt.duration));
         if (window_ok && opt.start_gate > 0) {
-            const uint64_t accepted = active_accepted.load (std::memory_order_relaxed);
-            const double rate = perf_multi_measurement::target_rate (accepted, opt.duration);
+            const uint64_t received =
+              static_cast<uint64_t> (bytes_recv_measure.load (std::memory_order_relaxed)) / size;
+            const double rate = perf_multi_measurement::target_rate (received, opt.duration);
             const std::vector<std::shared_ptr<client_session_t>> connected =
               snapshot_connected_sessions ();
-            if (rate <= 0.0 || connected.empty ()) {
+            uint64_t accepted = 0;
+            for (size_t i = 0; i < connected.size (); ++i)
+                accepted += connected[i]->active_send_count ();
+            if (rate <= 0.0 || connected.empty () || accepted == 0) {
                 window_ok = false;
             } else {
                 const uint64_t epoch = perf_stream_common::perf_stream_now_ns ();
                 latency_epoch_ns.store (epoch, std::memory_order_release);
                 paced_accepted.store (0, std::memory_order_relaxed);
                 paced_late.store (0, std::memory_order_relaxed);
+                paced_received.store (0, std::memory_order_relaxed);
                 for (size_t i = 0; i < connected.size (); ++i) {
                     const uint64_t offset =
                       static_cast<uint64_t> (static_cast<long double> (i) * 1000000000.0L / rate);
-                    connected[i]->configure_pacing (rate / connected.size (), epoch + offset);
+                    const double session_rate = perf_multi_measurement::target_rate (
+                      received, opt.duration, connected[i]->active_send_count (), accepted);
+                    connected[i]->configure_pacing (session_rate, epoch + offset);
                 }
                 window_ok = run_active_window (0.5 + opt.latency_duration, true);
                 perf_multi_measurement::schedule_t diagnostic (rate, epoch);
                 diagnostic.accepted_count = paced_accepted.load (std::memory_order_relaxed);
                 diagnostic.late_count = paced_late.load (std::memory_order_relaxed);
-                perf_multi_measurement::print_diagnostic (opt.pattern.c_str (), size, accepted,
-                                                          opt.duration, diagnostic);
+                perf_multi_measurement::print_diagnostic (
+                  opt.pattern.c_str (), size, accepted, opt.duration, diagnostic, received,
+                  paced_received.load (std::memory_order_relaxed)
+                    / static_cast<double> (opt.latency_duration));
             }
         }
 
@@ -867,9 +878,9 @@ class bench_client_t : public bench_client_iface_t
     std::atomic<int> mode; // phase_mode_t
     std::atomic<uint64_t> phase_end_ns;
     std::atomic<uint64_t> latency_epoch_ns;
-    std::atomic<uint64_t> active_accepted;
     std::atomic<uint64_t> paced_accepted;
     std::atomic<uint64_t> paced_late;
+    std::atomic<uint64_t> paced_received;
     std::atomic<size_t> phase_size;
     std::atomic<long> outstanding_total; // global in-flight count
 

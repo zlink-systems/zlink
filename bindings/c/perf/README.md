@@ -160,8 +160,13 @@ bounded timeout. PUBSUB retains its lossy contract, so a dropped message cannot
 require an unbounded wait.
 
 Latency comes from a second phase on the same sockets and clients. Its target
-send rate is 80% of the sender's own saturated successful-send count divided by
-the active duration. Send number `k` is due at `start + k / target_rate`, using
+send rate is 80% of the messages received inside the saturated active window,
+divided by that window's duration. This is the receive count used for RESULT
+throughput. For PUBSUB, each subscriber receives the full fan-out, so the
+smallest subscriber count sets the publisher rate. Independent sender schedules
+share the total target in proportion to their successful in-window admissions.
+One-way receivers include the count in `PHASE_DRAINED,size,received`; the runner
+forwards `PHASE_PACED,size,received`. Missing or invalid counts fail the case. Send number `k` is due at `start + k / target_rate`, using
 an absolute schedule so timing errors do not accumulate. Each pattern keeps its
 existing socket traversal and backpressure policy while waiting for scheduled
 sends. The first 0.5 seconds
@@ -172,8 +177,16 @@ One-way patterns use the send-to-receive elapsed time; echo patterns retain
 round-trip time divided by two. Message timestamps record the send attempt.
 
 A diagnostic line outside `RESULT,` reports the saturated sender rate, the
-80% target rate, and the number of successful paced sends more than 1 ms behind
-their absolute schedule. `RESULT,` keys, units, and formatting are unchanged.
+80% target rate, successful paced sends, and sends more than 1 ms behind their
+absolute schedule. `received_rate` is the saturated receive rate used for
+calibration. `paced_received_rate` counts arrivals during the paced sample
+window, after the 0.5-second settling interval, divided by the latency duration;
+it excludes tail-drain arrivals. PUBSUB uses the smallest subscriber rate for
+both calibration and paced reception, so both rates use publisher message units.
+Settling messages that arrive inside the sample window count toward reception
+but remain excluded from latency samples.
+One-way receivers return this sample count in `PHASE_COMPLETE,size,received`
+so the sender can print its complete diagnostic. `RESULT,` keys, units, and formatting are unchanged.
 
 An ordinary `DONTWAIT` socket send makes one admission attempt. Immediate
 admission returns completion ID zero and produces no completion. On

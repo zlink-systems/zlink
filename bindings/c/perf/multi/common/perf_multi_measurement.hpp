@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <iomanip>
 #include <sstream>
 
 namespace perf_multi_measurement
@@ -11,12 +12,19 @@ namespace perf_multi_measurement
 static const uint64_t settle_ns = 500000000ULL;
 
 // Throughput remains the saturated receive window. Latency uses the same
-// sender's admitted records/active second at 80%; active accepts exclude drain.
+// received records/active second at 80%; independent senders share that rate
+// in proportion to their in-window admissions.
 // After bounded drain, schedule at epoch + k/rate; discard the first 0.5s
 // by actual send timestamp, then collect latency_duration_seconds of samples.
-inline double target_rate (uint64_t active_accepted, double active_seconds)
+inline double target_rate (uint64_t active_received,
+                           double active_seconds,
+                           uint64_t sender_accepted = 1,
+                           uint64_t total_accepted = 1)
 {
-    return active_seconds > 0.0 ? active_accepted / active_seconds * 0.8 : 0.0;
+    return active_seconds > 0.0 && total_accepted > 0
+             ? active_received / active_seconds * 0.8
+                 * (static_cast<double> (sender_accepted) / total_accepted)
+             : 0.0;
 }
 
 inline bool latency_sample (uint64_t sent_ns, uint64_t epoch_ns, double duration_seconds)
@@ -58,13 +66,17 @@ inline void print_diagnostic (const char *pattern,
                               size_t msg_size,
                               uint64_t active_sends,
                               double active_seconds,
-                              const schedule_t &schedule)
+                              const schedule_t &schedule,
+                              uint64_t active_received,
+                              double paced_received_rate)
 {
     std::ostringstream line;
-    line << "BENCH_DIAG," << pattern << ',' << msg_size << ",active_sender_rate,"
-         << (active_seconds > 0 ? active_sends / active_seconds : 0) << ",target_sender_rate,"
-         << schedule.rate << ",latency_sends," << schedule.accepted_count << ",late_sends_gt_1ms,"
-         << schedule.late_count;
+    line << std::setprecision (12) << "BENCH_DIAG," << pattern << ',' << msg_size
+         << ",active_sender_rate," << (active_seconds > 0 ? active_sends / active_seconds : 0)
+         << ",target_sender_rate," << schedule.rate << ",latency_sends," << schedule.accepted_count
+         << ",late_sends_gt_1ms," << schedule.late_count << ",received_rate,"
+         << (active_seconds > 0 ? active_received / active_seconds : 0) << ",paced_received_rate,"
+         << paced_received_rate;
     std::cout << line.str () << std::endl;
 }
 }

@@ -957,8 +957,11 @@ inline bool run_echo_window_round_robin (
   std::vector<double> *latency_samples_out = NULL,
   size_t maximum_latency_sample_cap = std::numeric_limits<size_t>::max (),
   uint64_t *accepted_out = NULL,
-  perf_multi_measurement::schedule_t *schedule = NULL)
+  perf_multi_measurement::schedule_t *schedule = NULL,
+  uint64_t *paced_received_out = NULL)
 {
+    if (paced_received_out)
+        *paced_received_out = 0;
     if (sockets.empty ())
         return false;
     if (duration_seconds <= 0.0) {
@@ -1043,7 +1046,12 @@ inline bool run_echo_window_round_robin (
             }
             --slot->replies;
 
-            const bool inside_active_deadline = std::chrono::steady_clock::now () < deadline;
+            const uint64_t received_ns = perf_multi_metric::now_ns ();
+            if (schedule && paced_received_out
+                && perf_multi_measurement::latency_sample (received_ns, latency_epoch,
+                                                           settings.latency_duration_seconds))
+                ++*paced_received_out;
+            const bool inside_active_deadline = received_ns < acceptance_deadline_ns;
             // Paced samples are selected by actual attempt time; include their
             // echoes during the bounded drain and discard the first 0.5 seconds.
             if (schedule) {
@@ -1055,10 +1063,9 @@ inline bool run_echo_window_round_robin (
 
             ++local_recv;
             if (collect_latency) {
-                const uint64_t now_ns = perf_multi_metric::now_ns ();
-                if (header.sent_ts_ns > 0 && now_ns >= header.sent_ts_ns) {
+                if (header.sent_ts_ns > 0 && received_ns >= header.sent_ts_ns) {
                     const double sample_ns =
-                      static_cast<double> (now_ns - header.sent_ts_ns) * 0.5;
+                      static_cast<double> (received_ns - header.sent_ts_ns) * 0.5;
                     lat_sum_local += sample_ns;
                     ++lat_count_local;
                     lat_samples.add (sample_ns);
@@ -1308,19 +1315,22 @@ inline bool run_echo_duration (const std::vector<void *> &sockets,
         return false;
 
     perf_multi_measurement::schedule_t schedule (
-      perf_multi_measurement::target_rate (accepted, active_seconds), perf_multi_metric::now_ns ());
+      perf_multi_measurement::target_rate (recv_count, active_seconds),
+      perf_multi_metric::now_ns ());
     double latency_sum = 0.0;
     long latency_count = 0;
-    if (!run_echo_window_round_robin (sockets, settings, payload, payload_size, msg_size, server_id,
-                                      client_router_send, run_id, perf_multi_metric::phase_latency,
-                                      scratch_capacity, 0.5 + settings.latency_duration_seconds,
-                                      true, true, per_socket_payload, NULL, &latency_sum,
-                                      &latency_count, latency_out, NULL,
-                                      std::numeric_limits<size_t>::max (), NULL, &schedule))
+    uint64_t paced_received = 0;
+    if (!run_echo_window_round_robin (
+          sockets, settings, payload, payload_size, msg_size, server_id, client_router_send, run_id,
+          perf_multi_metric::phase_latency, scratch_capacity,
+          0.5 + settings.latency_duration_seconds, true, true, per_socket_payload, NULL,
+          &latency_sum, &latency_count, latency_out, NULL, std::numeric_limits<size_t>::max (),
+          NULL, &schedule, &paced_received))
         return false;
-    perf_multi_measurement::print_diagnostic (client_router_send ? "ROUTER_ROUTER_SENDSEND"
-                                                                 : "DEALER_ROUTER_SENDSEND",
-                                              msg_size, accepted, active_seconds, schedule);
+    perf_multi_measurement::print_diagnostic (
+      client_router_send ? "ROUTER_ROUTER_SENDSEND" : "DEALER_ROUTER_SENDSEND", msg_size, accepted,
+      active_seconds, schedule, recv_count,
+      paced_received / static_cast<double> (settings.latency_duration_seconds));
     if (latency_count <= 0)
         return false;
     *throughput_out = static_cast<double> (recv_count) / active_seconds;

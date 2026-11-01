@@ -239,12 +239,14 @@ inline bool run_server_loop (void *ctx,
         if (!publish_stop_token (server, size, run_id, perf_multi_metric::phase_active))
             return false;
         std::cout << "PHASE_DONE," << size << ',' << perf_multi_metric::phase_active << std::endl;
+        size_t received = 0;
         if (!perf_multi_handshake::wait_for_start (&g_paced_gate, size,
-                                                   settings.connect_ready_timeout_ms))
+                                                   settings.connect_ready_timeout_ms,
+                                                   perf_multi_metric::phase_active, &received))
             return false;
         const uint64_t epoch = perf_multi_metric::now_ns ();
         perf_multi_measurement::schedule_t schedule (
-          perf_multi_measurement::target_rate (active_sends, active_s), epoch);
+          perf_multi_measurement::target_rate (received, active_s), epoch);
         if (schedule.rate <= 0.0)
             return false;
         const uint64_t end_ns =
@@ -279,8 +281,14 @@ inline bool run_server_loop (void *ctx,
         if (!publish_stop_token (server, size, run_id, perf_multi_metric::phase_latency))
             return false;
         std::cout << "PHASE_DONE," << size << ',' << perf_multi_metric::phase_latency << std::endl;
-        perf_multi_measurement::print_diagnostic (k_pattern, size, active_sends, active_s,
-                                                  schedule);
+        size_t paced_received = 0;
+        if (!perf_multi_handshake::wait_for_start (
+              &g_paced_gate, size, settings.connect_ready_timeout_ms,
+              perf_multi_metric::phase_latency, &paced_received))
+            return false;
+        perf_multi_measurement::print_diagnostic (
+          k_pattern, size, active_sends, active_s, schedule, received,
+          paced_received / static_cast<double> (settings.latency_duration_seconds));
     }
     (void) lib_name;
     // Production completed; the receiver's normal STOP may already be present.
@@ -353,9 +361,24 @@ inline int run_server_benchmark (const std::string &lib_name, const std::string 
                 perf_multi_handshake::signal_start (&g_start_gate, start_size);
                 continue;
             }
-            if (perf_multi_handshake::parse_size_command_line (line, "PHASE_PACED,", &start_size)) {
-                perf_multi_handshake::signal_start (&g_paced_gate, start_size);
+            size_t received = 0;
+            if (perf_multi_handshake::parse_size_count_command_line (line, "PHASE_PACED,",
+                                                                     &start_size, &received)) {
+                perf_multi_handshake::signal_start (&g_paced_gate, start_size,
+                                                    perf_multi_metric::phase_active, received);
                 continue;
+            }
+            if (perf_multi_handshake::parse_size_count_command_line (
+                  line, "PHASE_COMPLETE,", &start_size, &received, true)) {
+                perf_multi_handshake::signal_start (&g_paced_gate, start_size,
+                                                    perf_multi_metric::phase_latency, received);
+                continue;
+            }
+            if (line.compare (0, 12, "PHASE_PACED,") == 0
+                || line.compare (0, 15, "PHASE_COMPLETE,") == 0) {
+                perf_stop_requested ().store (true, std::memory_order_release);
+                perf_multi_handshake::signal_stop (&g_paced_gate);
+                break;
             }
             if (line == "STOP" || line == "QUIT") {
                 perf_stop_requested ().store (true, std::memory_order_release);

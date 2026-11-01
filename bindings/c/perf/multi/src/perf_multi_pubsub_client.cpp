@@ -146,6 +146,10 @@ bool run_recv_duration (const std::vector<void *> &sockets,
 
     const double active_seconds = static_cast<double> (std::max (1, settings.duration_seconds));
     long recv_count = 0;
+    std::map<void *, uint64_t> phase_received;
+    for (size_t i = 0; i < sockets.size (); ++i) {
+        phase_received[sockets[i]] = 0;
+    }
     double lat_sum = 0.0;
     long lat_count = 0;
     bench_latency_sampler_t lat_samples;
@@ -156,6 +160,7 @@ bool run_recv_duration (const std::vector<void *> &sockets,
         const auto deadline = std::chrono::steady_clock::now ()
                               + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
                                 std::chrono::duration<double> (seconds));
+        const auto sample_start = deadline - std::chrono::duration<double> (seconds - 0.5);
         const auto drain_deadline = deadline + std::chrono::seconds (10);
         auto last_payload = std::chrono::steady_clock::now ();
         std::set<void *> stopped;
@@ -182,6 +187,7 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                 if ((events[i].events & ZLINK_POLLIN) == 0)
                     continue;
                 void *socket = events[i].socket;
+                uint64_t &socket_received = phase_received[socket];
                 for (;;) {
                     perf_multi_metric::header_t header = {};
                     double sample_ns = 0.0;
@@ -197,6 +203,12 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                         errno = ETIMEDOUT;
                         return false;
                     }
+                    // Settling messages can arrive after settling ends. Count
+                    // their arrivals, while keeping them out of latency samples.
+                    if (phase == perf_multi_metric::phase_latency
+                        && header.phase == perf_multi_metric::phase_warmup
+                        && last_payload >= sample_start && last_payload < deadline)
+                        ++socket_received;
                     if (header.phase != static_cast<uint8_t> (phase))
                         continue;
                     if (perf_multi_handshake::is_phase_end_marker (header, run_id, phase,
@@ -205,9 +217,13 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                         continue;
                     }
                     if (phase == perf_multi_metric::phase_active) {
-                        if (std::chrono::steady_clock::now () < deadline)
+                        if (std::chrono::steady_clock::now () < deadline) {
                             ++recv_count;
+                            ++socket_received;
+                        }
                     } else if (have_sample) {
+                        if (last_payload >= sample_start && last_payload < deadline)
+                            ++socket_received;
                         lat_sum += sample_ns;
                         ++lat_count;
                         lat_samples.add (sample_ns);
@@ -220,11 +236,23 @@ bool run_recv_duration (const std::vector<void *> &sockets,
     };
     if (!receive_phase (perf_multi_metric::phase_active, active_seconds))
         return false;
-    std::cout << "PHASE_DRAINED," << msg_size << std::endl;
+    const auto smallest_received = [&] () {
+        uint64_t count = std::numeric_limits<uint64_t>::max ();
+        for (const auto &entry : phase_received)
+            count = std::min (count, entry.second);
+        return count;
+    };
+    const uint64_t min_received = smallest_received ();
+    if (min_received == 0)
+        return false;
+    std::cout << "PHASE_DRAINED," << msg_size << ',' << min_received << std::endl;
+    for (auto &entry : phase_received)
+        entry.second = 0;
     if (!receive_phase (perf_multi_metric::phase_latency, settings.latency_duration_seconds + 0.5))
         return false;
     if (recv_count <= 0 || lat_count <= 0)
         return false;
+    std::cout << "PHASE_COMPLETE," << msg_size << ',' << smallest_received () << std::endl;
     *throughput_out = throughput_per_second (static_cast<uint64_t> (recv_count), active_seconds);
     perf_multi_client::normalize_latency_stats (lat_sum, lat_count, &lat_samples, latency_out);
     return true;

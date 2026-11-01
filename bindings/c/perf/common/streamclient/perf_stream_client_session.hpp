@@ -151,6 +151,7 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
         pace_timer (io_),
         pace_schedule (0.0, 0),
         paced_attempt_ns (0),
+        active_admissions (0),
         closed (false),
         connected_flag (false),
         connect_started (false),
@@ -220,11 +221,18 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
         });
     }
 
+    uint64_t active_send_count () const
+    {
+        return active_admissions.load (std::memory_order_relaxed);
+    }
+
     void configure_pacing (double rate, uint64_t epoch_ns)
     {
         const std::shared_ptr<client_session_t> self = shared_from_this ();
         boost::asio::dispatch (strand, [self, rate, epoch_ns] () {
             self->pace_schedule = perf_multi_measurement::schedule_t (rate, epoch_ns);
+            if (epoch_ns == 0)
+                self->active_admissions.store (0, std::memory_order_relaxed);
             boost::system::error_code ec;
             self->pace_timer.cancel (ec);
         });
@@ -476,6 +484,8 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
             return;
         if (!owner.allow_send ())
             return;
+        if (pace_schedule.epoch_ns != 0 && pace_schedule.rate <= 0.0)
+            return;
         if (pace_schedule.rate > 0.0
             && !pace_schedule.due (perf_stream_common::perf_stream_now_ns ())) {
             pace_timer.expires_at (std::chrono::steady_clock::time_point (
@@ -592,7 +602,8 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
             return;
         }
 
-        owner.on_send_accepted ();
+        if (owner.on_send_accepted ())
+            active_admissions.fetch_add (1, std::memory_order_relaxed);
         if (pace_schedule.rate > 0.0) {
             const uint64_t late_before = pace_schedule.late_count;
             pace_schedule.accepted (paced_attempt_ns);
@@ -991,6 +1002,7 @@ class client_session_t : public std::enable_shared_from_this<client_session_t>
     boost::asio::steady_timer pace_timer;
     perf_multi_measurement::schedule_t pace_schedule;
     uint64_t paced_attempt_ns;
+    std::atomic<uint64_t> active_admissions;
 
     std::atomic<bool> closed;         // permanently shut down
     std::atomic<bool> connected_flag; // connect succeeded

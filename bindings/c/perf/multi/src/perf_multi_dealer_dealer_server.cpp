@@ -117,7 +117,7 @@ inline recv_result_t receive_one_message (void *server,
         return recv_fatal;
     }
 
-    perf_multi_metric::header_t header;
+    perf_multi_metric::header_t header = {};
     const bool matched =
       decode_and_match_header (&part, expected_msg_size, expected_run_id, expected_phase, &header);
 
@@ -129,7 +129,11 @@ inline recv_result_t receive_one_message (void *server,
                   << " got_phase=" << static_cast<unsigned int> (header.phase)
                   << " got_size=" << header.msg_size << std::endl;
     }
-    if (matched && count_message && message_count)
+    const bool paced_warmup =
+      expected_phase == perf_multi_metric::phase_latency
+      && perf_multi_metric::is_expected (header, expected_run_id, perf_multi_metric::phase_warmup,
+                                         expected_msg_size);
+    if ((matched || paced_warmup) && count_message && message_count)
         (*message_count)++;
     if (matched && detail_emitted && !*detail_emitted && transport) {
         perf_print_auto_hwm_snapshot (server, false, "server", *transport, true, expected_msg_size,
@@ -165,7 +169,8 @@ inline bool run_receive_window (void *server,
                                 double *lat_sum,
                                 long *lat_count,
                                 bench_latency_sampler_t *lat_samples,
-                                size_t expected_stop_count)
+                                size_t expected_stop_count,
+                                uint64_t *paced_received = NULL)
 {
     if (!server)
         return false;
@@ -180,14 +185,20 @@ inline bool run_receive_window (void *server,
     const auto drain_deadline = deadline
                                 + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
                                   std::chrono::duration<double> (drain_seconds));
+    const auto sample_start = deadline - std::chrono::duration<double> (measure_seconds - 0.5);
     size_t stop_count = 0;
     while (!perf_stop_requested ().load (std::memory_order_acquire)
            && std::chrono::steady_clock::now () < drain_deadline) {
         const bool in_window = std::chrono::steady_clock::now () < deadline;
+        long window_received = 0;
         const recv_result_t status = receive_one_message (
           server, ZLINK_DONTWAIT, expected_msg_size, expected_run_id, expected_phase,
-          detail_emitted, transport, count_message && in_window, collect_latency, message_count,
-          lat_sum, lat_count, lat_samples);
+          detail_emitted, transport, in_window && (count_message || paced_received),
+          collect_latency, &window_received, lat_sum, lat_count, lat_samples);
+        if (message_count)
+            *message_count += window_received;
+        if (paced_received && std::chrono::steady_clock::now () >= sample_start)
+            *paced_received += window_received;
         if (status == recv_fatal)
             return false;
         if (status == recv_stop && ++stop_count == expected_stop_count)
@@ -227,14 +238,15 @@ inline bool run_one_size_benchmark (void *server,
         return false;
     }
 
-    std::cout << "PHASE_DRAINED," << msg_size << std::endl;
+    std::cout << "PHASE_DRAINED," << msg_size << ',' << recv_count << std::endl;
     lat_sum = 0.0;
     lat_count = 0;
     lat_samples.reset ();
+    uint64_t paced_received = 0;
     if (!run_receive_window (server, msg_size, run_id, perf_multi_metric::phase_latency,
                              &detail_emitted, &transport, settings.latency_duration_seconds + 0.5,
                              false, true, NULL, &lat_sum, &lat_count, &lat_samples,
-                             settings.clients))
+                             settings.clients, &paced_received))
         return false;
 
     if (recv_count <= 0 || lat_count <= 0) {
@@ -254,7 +266,7 @@ inline bool run_one_size_benchmark (void *server,
 
     print_result (lib_name, k_pattern, transport, msg_size, throughput, latency.mean_ns,
                   latency.p95_ns, latency.p99_ns);
-    std::cout << "PHASE_COMPLETE," << msg_size << std::endl;
+    std::cout << "PHASE_COMPLETE," << msg_size << ',' << paced_received << std::endl;
 
     return true;
 }

@@ -30,7 +30,7 @@ class bench_client_iface_t
     virtual uint64_t next_seq () = 0; // monotonic sequence for latency embedding
 
     // --- Metrics callbacks (called from I/O threads via strand) ---
-    virtual void on_send_accepted () {}
+    virtual bool on_send_accepted () { return false; }
     virtual void on_paced_send (bool) {}
     virtual void on_send_begin (size_t size) = 0; // increment outstanding
     virtual void on_recv_done (size_t bytes,
