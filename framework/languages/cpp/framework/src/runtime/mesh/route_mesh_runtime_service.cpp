@@ -203,7 +203,7 @@ struct route_mesh_runtime_service_t::state_t
         std::optional<location_runtime_status_t> status_for_log;
         try {
             auto query = location_runtime->get_status ();
-            const auto &result = query.result ();
+            const auto &result = detail::task_result_access_t::read (query);
             if (result)
                 status_for_log = result.value ();
             else
@@ -245,7 +245,7 @@ struct route_mesh_runtime_service_t::state_t
             location_page_request_t page;
             for (;;) {
                 auto listed = location_store->list_mesh_nodes (mesh_name_for (hub), page);
-                const auto &result = listed.result ();
+                const auto &result = detail::task_result_access_t::read (listed);
                 if (!result)
                     return;
                 descriptors.insert (descriptors.end (), result.value ().items.begin (),

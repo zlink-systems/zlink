@@ -405,8 +405,9 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
         bool succeeded = false;
         const auto actual = fw::tests::measure_allocations ([&] { succeeded = dispatch (); });
         ASSERT_TRUE (succeeded);
-        // 24 = one record through the dto_traits typed JSON path (#2751); the nlohmann DOM path measured 27.
-        EXPECT_EQ (actual.count, 24u);
+        // The dto_traits path loses one shared ready result in add_void_member_handler
+        // (handler_registry.hpp); the former allocation budget was 24 (#2751).
+        EXPECT_EQ (actual.count, 23u);
         EXPECT_EQ (receive_handler_t::calls, sample + 2);
         EXPECT_EQ (
           server->mailbox ().pending_messages (mesh::service_mailbox_domain_t::application), 0u);

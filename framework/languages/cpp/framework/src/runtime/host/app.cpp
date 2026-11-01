@@ -557,7 +557,7 @@ class app_state_t
         }();
         // Timers are already stopped. Observe the accepted source owner's
         // cutoff cleanup before hosted services release its native resources.
-        (void) terminal.result ();
+        (void) detail::task_result_access_t::read (terminal);
     }
 
     service_collection_t services;
@@ -1082,7 +1082,7 @@ monitoring_builder_t &app_t::monitoring () noexcept
 app_t &app_t::set_message_flow_mode (message_flow_log_mode_t mode) noexcept
 {
     auto operation = set_message_flow_mode_async (mode);
-    (void) operation.result ();
+    (void) detail::task_result_access_t::read (operation);
     return *this;
 }
 

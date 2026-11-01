@@ -1406,7 +1406,7 @@ void public_host_runtime_t::start ()
             return configured;
         })
         .get ();
-    population_metrics.result ().value ();
+    detail::task_result_access_t::read (population_metrics).value ();
 }
 
 void public_host_runtime_t::close () noexcept
@@ -1440,7 +1440,7 @@ void public_host_runtime_t::close () noexcept
     auto target_terminal = seal_relocation_targets ();
     // Hosted shutdown already drained this terminal at its original deadline.
     if (!already_sealed)
-        target_terminal.result ().value ();
+        detail::task_result_access_t::read (target_terminal).value ();
     _lifecycle_configuration_lane.run ([&] { _started = false; }).get ();
     _relocation_session_terminal_lane
       .run ([&] {
@@ -3284,7 +3284,8 @@ try {
         return result_t<zlink::submit_result_t>::success (submitted (accepted));
     };
     if (accepted.await_ready ())
-        return task_t<zlink::submit_result_t> (classify (accepted.result ()));
+        return task_t<zlink::submit_result_t> (
+          classify (detail::task_result_access_t::read (accepted)));
     return detail::project_task_terminal<zlink::submit_result_t> (accepted, std::move (classify));
 }
 catch (...) {
@@ -5310,7 +5311,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         if (result.terminal_result != 0
             && admission->complete (result_t<instance_activation_admission_t>::success (result)))
             return;
-        const auto terminal = completed.result ();
+        const auto terminal = detail::task_result_access_t::read (completed);
         if (!terminal || !std::holds_alternative<instance_activation_ready_t> (terminal.value ())) {
             if (result.accepted_turn_terminal)
                 result.accepted_turn_terminal ();
@@ -5388,9 +5389,9 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         if (!admission)
             return true;
         const auto completed = admission->task ();
-        return completed.await_ready () && completed.result ()
+        return completed.await_ready () && detail::task_result_access_t::read (completed)
                && std::holds_alternative<instance_activation_ready_t> (
-                 completed.result ().value ());
+                 detail::task_result_access_t::read (completed).value ());
     };
     const auto accept_activation =
       [admission, admission_command] (const authority_snapshot_t &ready) -> std::function<void ()> {

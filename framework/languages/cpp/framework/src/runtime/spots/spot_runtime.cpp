@@ -1153,7 +1153,7 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
                 queue->drain ();
         if (context.serial_queue)
             context.serial_queue->drain ();
-        context.admitted_callbacks.result ().value ();
+        detail::task_result_access_t::read (context.admitted_callbacks).value ();
     }
     // The creation caller owns its result. Keep its execution resources until
     // that existing terminal has settled, including cancellation cleanup.
@@ -4838,7 +4838,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       if (original->completion) {
                           auto pending = original->completion->task ();
                           if (pending.await_ready ()) {
-                              const auto terminal = pending.result ();
+                              const auto terminal = detail::task_result_access_t::read (pending);
                               complete ([state, completion, admission_terminal, terminal] {
                                   settle_handler_admission_once (admission_terminal);
                                   completion->complete (terminal);
@@ -14023,7 +14023,7 @@ bool spot_node_runtime_t::close_all_user_spots (
         // Host shutdown §14 observes accepted Close completion before local teardown.
         if (!result) {
             cleanup_cancellation.request_stop ();
-            static_cast<void> (closing.result ());
+            static_cast<void> (detail::task_result_access_t::read (closing));
         }
         return result && result->value ();
     };

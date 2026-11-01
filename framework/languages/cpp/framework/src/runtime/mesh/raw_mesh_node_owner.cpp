@@ -390,7 +390,7 @@ try {
         return result_t<bool>::success (true);
     };
     if (admitted.await_ready ())
-        return task_t<bool> (convert (admitted.result ()));
+        return task_t<bool> (convert (detail::task_result_access_t::read (admitted)));
     return detail::project_task_terminal<bool> (admitted, std::move (convert));
 }
 catch (...) {

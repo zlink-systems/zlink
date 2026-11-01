@@ -943,7 +943,7 @@ maintenance_runtime_t::relocate_prepare_ready (std::shared_ptr<relocation_termin
     const auto chunks_sent = co_await relocate_send_state_chunks (state, [&prepared] {
         if (!prepared.await_ready ())
             return false;
-        const auto &result = prepared.result ();
+        const auto &result = detail::task_result_access_t::read (prepared);
         return !result || !result.value ();
     });
     release_reservation ();
@@ -1313,7 +1313,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     const auto chunks_sent = co_await relocate_send_state_chunks (state, [prepared] {
         if (!prepared->await_ready ())
             return false;
-        const auto &result = prepared->result ();
+        const auto &result = detail::task_result_access_t::read (*prepared);
         return !result || result.value () != relocation_reason_t::none;
     });
     release_transfer_budget (state->budget_reserved);

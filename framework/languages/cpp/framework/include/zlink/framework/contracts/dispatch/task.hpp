@@ -19,6 +19,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace zlink::framework
@@ -643,6 +644,9 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         return *_result;
     }
 
+    // The caller already owns a state constructed with its terminal result.
+    const result_t<T> &ready_result () const noexcept { return *_result; }
+
     std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout,
                                            std::stop_token cancellation = {})
     {
@@ -802,6 +806,136 @@ template <typename T> class coroutine_task_shared_state_t final : public task_sh
     task_wait_registration_t continuation_registration;
 };
 
+template <typename T> class task_state_t
+{
+    using storage_t = std::variant<result_t<T>, std::shared_ptr<task_shared_state_t<T>>>;
+
+    struct referenced_state_t final : task_shared_state_t<T>
+    {
+        explicit referenced_state_t (const result_t<T> &result) : task_shared_state_t<T> (result) {}
+
+        // The installed pointer owns this reference until a task adopts or releases it.
+        std::shared_ptr<task_shared_state_t<T>> owner;
+    };
+
+  public:
+    explicit task_state_t (result_t<T> result) : _storage (ready_task_state (std::move (result))) {}
+    explicit task_state_t (std::shared_ptr<task_shared_state_t<T>> state) :
+        _storage (std::in_place_index<1>, std::move (state))
+    {
+    }
+    task_state_t (task_state_t &&source) noexcept : _storage (std::in_place_index<1>)
+    {
+        move_task_state (source);
+    }
+    task_state_t &operator= (task_state_t &&source) noexcept
+    {
+        if (this != &source) {
+            (void) take_reference ();
+            move_task_state (source);
+        }
+        return *this;
+    }
+    ~task_state_t () { (void) take_reference (); }
+
+    const result_t<T> *inline_result () const noexcept
+    {
+        return std::get_if<result_t<T>> (&_storage);
+    }
+
+    const result_t<T> &read_result () const
+    {
+        if (const auto *ready = inline_result ())
+            return *ready;
+        return shared_state ()->result ();
+    }
+
+    const result_t<T> &result_reference () const
+    {
+        if constexpr (std::is_copy_constructible_v<result_t<T>>) {
+            if (const auto *ready = inline_result ()) {
+                auto *installed = _reference.load (std::memory_order_acquire);
+                if (!installed) {
+                    auto candidate = std::make_shared<referenced_state_t> (*ready);
+                    candidate->owner = candidate;
+                    auto *expected = static_cast<referenced_state_t *> (nullptr);
+                    if (_reference.compare_exchange_strong (expected, candidate.get (),
+                                                            std::memory_order_acq_rel,
+                                                            std::memory_order_acquire))
+                        installed = candidate.get ();
+                    else {
+                        candidate->owner.reset ();
+                        installed = expected;
+                    }
+                }
+                return installed->ready_result ();
+            }
+        }
+        return shared_state ()->result ();
+    }
+
+    result_t<T> take_result ()
+        requires std::is_copy_constructible_v<result_t<T>>
+    {
+        if (const auto *installed = _reference.load (std::memory_order_acquire))
+            return installed->ready_result ();
+        if (auto *ready = std::get_if<result_t<T>> (&_storage))
+            return std::move (*ready);
+        return shared_state ()->result ();
+    }
+
+    const std::shared_ptr<task_shared_state_t<T>> &share_task_state ()
+    {
+        if (auto installed = take_reference ())
+            _storage.template emplace<1> (std::move (installed));
+        else if (auto *ready = std::get_if<result_t<T>> (&_storage))
+            _storage.template emplace<1> (
+              std::make_shared<task_shared_state_t<T>> (std::move (*ready)));
+        return shared_state ();
+    }
+
+    const std::shared_ptr<task_shared_state_t<T>> &shared_state () const
+    {
+        return std::get<1> (_storage);
+    }
+
+  private:
+    static storage_t ready_task_state (result_t<T> result)
+    {
+        // Throwing moves and non-copyable results require shared storage before task moves or borrows.
+        if constexpr (std::is_nothrow_move_constructible_v<result_t<T>>
+                      && std::is_copy_constructible_v<result_t<T>>)
+            return storage_t (std::in_place_index<0>, std::move (result));
+        else
+            return storage_t (std::in_place_index<1>,
+                              std::make_shared<task_shared_state_t<T>> (std::move (result)));
+    }
+
+    std::shared_ptr<task_shared_state_t<T>> take_reference () noexcept
+    {
+        // Callers mutate the task, so no const reader can race this plain load and store.
+        auto *installed = _reference.load (std::memory_order_acquire);
+        if (!installed)
+            return {};
+        _reference.store (nullptr, std::memory_order_relaxed);
+        return std::move (installed->owner);
+    }
+
+    void move_task_state (task_state_t &source) noexcept
+    {
+        // Reconstruct so task assignment does not require payload assignment.
+        if (auto installed = source.take_reference ())
+            _storage.template emplace<1> (std::move (installed));
+        else if (auto *ready = std::get_if<result_t<T>> (&source._storage))
+            _storage.template emplace<0> (std::move (*ready));
+        else
+            _storage.template emplace<1> (std::move (std::get<1> (source._storage)));
+    }
+
+    storage_t _storage;
+    mutable std::atomic<referenced_state_t *> _reference{nullptr};
+};
+
 } // namespace detail
 
 template <typename T> class task_completion_source_t
@@ -827,6 +961,8 @@ template <typename T> class task_completion_source_t
 
 namespace detail
 {
+
+struct task_result_access_t;
 
 template <typename T, typename TCallback>
 void observe_task_completion (task_t<T> &task, TCallback &&callback);
@@ -926,18 +1062,26 @@ template <typename T> class task_t
         }
     };
 
-    explicit task_t (result_t<T> result) :
-        _state (std::make_shared<detail::task_shared_state_t<T>> (std::move (result)))
-    {
-    }
+    explicit task_t (result_t<T> result) : _state (std::move (result)) {}
 
     task_t (task_t &&) noexcept = default;
-    task_t &operator= (task_t &&) noexcept = default;
+    task_t &operator= (task_t &&other) noexcept
+    {
+        if (this != &other) {
+            _state = std::move (other._state);
+            _resume_scheduler = std::move (other._resume_scheduler);
+            _release_turn_on_suspend = other._release_turn_on_suspend;
+        }
+        return *this;
+    }
     task_t (const task_t &) = delete;
     task_t &operator= (const task_t &) = delete;
     ~task_t () = default;
 
-    bool await_ready () const noexcept { return _state->is_ready (); }
+    bool await_ready () const noexcept
+    {
+        return _state.inline_result () || _state.shared_state ()->is_ready ();
+    }
     template <typename TPromise> void await_suspend (std::coroutine_handle<TPromise> continuation)
     {
         auto scheduler =
@@ -945,10 +1089,10 @@ template <typename T> class task_t
         if constexpr (requires (TPromise &promise) { promise.continuation_registration (); }) {
             auto registration = continuation.promise ().continuation_registration ();
             registration->prepare (continuation, std::move (scheduler));
-            _state->set_continuation (registration);
+            shared_state ()->set_continuation (registration);
         } else {
             std::coroutine_handle<> erased = continuation;
-            _state->set_continuation (
+            shared_state ()->set_continuation (
               std::make_shared<detail::task_wait_registration_t> (erased, std::move (scheduler)));
         }
     }
@@ -956,16 +1100,22 @@ template <typename T> class task_t
     {
         if (const auto failure = detail::take_serial_resume_failure ())
             throw framework_exception_t (failure->kind, failure->message);
-        return result ().value ();
+        return _state.read_result ().value ();
     }
 
-    const result_t<T> &result () const { return _state->result (); }
+    const result_t<T> &result () const & { return _state.result_reference (); }
+
+    result_t<T> result () &&
+        requires std::is_copy_constructible_v<result_t<T>>
+    {
+        return _state.take_result ();
+    }
 
     // Submit/completion §1: rejected in a runtime execution context.
     std::optional<result_t<T>> result_for (std::chrono::milliseconds timeout) const
     {
         detail::ensure_blocking_submit_allowed ();
-        return _state->result_for (timeout);
+        return detail::observe_task_result_for (*this, timeout, {});
     }
 
   private:
@@ -974,7 +1124,17 @@ template <typename T> class task_t
     {
     }
 
-    std::shared_ptr<detail::task_shared_state_t<T>> _state;
+    const std::shared_ptr<detail::task_shared_state_t<T>> &shared_state ()
+    {
+        return _state.share_task_state ();
+    }
+
+    const std::shared_ptr<detail::task_shared_state_t<T>> &shared_state () const
+    {
+        return _state.shared_state ();
+    }
+
+    detail::task_state_t<T> _state;
 
     std::unique_ptr<detail::task_scheduler_t> _resume_scheduler;
     bool _release_turn_on_suspend = false;
@@ -982,6 +1142,7 @@ template <typename T> class task_t
     template <typename U>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
     template <typename U, typename TStart> friend task_t<U> detail::yield_call (TStart &&);
+    friend struct detail::task_result_access_t;
     friend class task_completion_source_t<T>;
     template <typename U> friend class request_task_t;
     template <typename U>
@@ -1004,18 +1165,26 @@ template <> class task_t<void>
         void return_void () noexcept { this->store_return (result_t<void>::success ()); }
     };
 
-    explicit task_t (result_t<void> result) :
-        _state (std::make_shared<detail::task_shared_state_t<void>> (std::move (result)))
-    {
-    }
+    explicit task_t (result_t<void> result) : _state (std::move (result)) {}
 
     task_t (task_t &&) noexcept = default;
-    task_t &operator= (task_t &&) noexcept = default;
+    task_t &operator= (task_t &&other) noexcept
+    {
+        if (this != &other) {
+            _state = std::move (other._state);
+            _resume_scheduler = std::move (other._resume_scheduler);
+            _release_turn_on_suspend = other._release_turn_on_suspend;
+        }
+        return *this;
+    }
     task_t (const task_t &) = delete;
     task_t &operator= (const task_t &) = delete;
     ~task_t () = default;
 
-    bool await_ready () const noexcept { return _state->is_ready (); }
+    bool await_ready () const noexcept
+    {
+        return _state.inline_result () || _state.shared_state ()->is_ready ();
+    }
     template <typename TPromise> void await_suspend (std::coroutine_handle<TPromise> continuation)
     {
         auto scheduler =
@@ -1023,10 +1192,10 @@ template <> class task_t<void>
         if constexpr (requires (TPromise &promise) { promise.continuation_registration (); }) {
             auto registration = continuation.promise ().continuation_registration ();
             registration->prepare (continuation, std::move (scheduler));
-            _state->set_continuation (registration);
+            shared_state ()->set_continuation (registration);
         } else {
             std::coroutine_handle<> erased = continuation;
-            _state->set_continuation (
+            shared_state ()->set_continuation (
               std::make_shared<detail::task_wait_registration_t> (erased, std::move (scheduler)));
         }
     }
@@ -1034,16 +1203,18 @@ template <> class task_t<void>
     {
         if (const auto failure = detail::take_serial_resume_failure ())
             throw framework_exception_t (failure->kind, failure->message);
-        result ().value ();
+        _state.read_result ().value ();
     }
 
-    const result_t<void> &result () const { return _state->result (); }
+    const result_t<void> &result () const & { return _state.result_reference (); }
+
+    result_t<void> result () && { return _state.take_result (); }
 
     // Submit/completion §1: rejected in a runtime execution context.
     std::optional<result_t<void>> result_for (std::chrono::milliseconds timeout) const
     {
         detail::ensure_blocking_submit_allowed ();
-        return _state->result_for (timeout);
+        return detail::observe_task_result_for (*this, timeout, {});
     }
 
   private:
@@ -1052,7 +1223,17 @@ template <> class task_t<void>
     {
     }
 
-    std::shared_ptr<detail::task_shared_state_t<void>> _state;
+    const std::shared_ptr<detail::task_shared_state_t<void>> &shared_state ()
+    {
+        return _state.share_task_state ();
+    }
+
+    const std::shared_ptr<detail::task_shared_state_t<void>> &shared_state () const
+    {
+        return _state.shared_state ();
+    }
+
+    detail::task_state_t<void> _state;
 
     std::unique_ptr<detail::task_scheduler_t> _resume_scheduler;
     bool _release_turn_on_suspend = false;
@@ -1060,6 +1241,7 @@ template <> class task_t<void>
     template <typename U>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
     template <typename U, typename TStart> friend task_t<U> detail::yield_call (TStart &&);
+    friend struct detail::task_result_access_t;
     friend class task_completion_source_t<void>;
     template <typename U> friend class request_task_t;
     template <typename U>
@@ -1081,10 +1263,20 @@ template <typename T> task_t<T> task_completion_source_t<T>::task () const
 namespace detail
 {
 
+// Internal borrows end before the task moves or registers an observer. Public
+// result() alone publishes storage that can outlive those operations.
+struct task_result_access_t
+{
+    template <typename T> static const result_t<T> &read (const task_t<T> &task)
+    {
+        return task._state.read_result ();
+    }
+};
+
 template <typename T, typename TCallback>
 void observe_task_completion (task_t<T> &task, TCallback &&callback)
 {
-    task._state->on_completed (
+    task.shared_state ()->on_completed (
       std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)),
       task._resume_scheduler ? *task._resume_scheduler : task_scheduler_t{});
 }
@@ -1092,23 +1284,44 @@ void observe_task_completion (task_t<T> &task, TCallback &&callback)
 template <typename T, typename TCallback>
 void observe_task_terminal (task_t<T> &task, TCallback &&callback)
 {
-    task._state->on_terminal (
-      std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)));
+    if (const auto *ready = task._state.inline_result ()) {
+        auto invoke = std::forward<TCallback> (callback);
+        const auto ambient = capture_ambient_context ();
+        [&] () noexcept {
+            const auto ambient_guard = enter_ambient_context (ambient);
+            invoke (*ready);
+        }();
+    } else {
+        task._state.shared_state ()->on_terminal (
+          std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)));
+    }
 }
 
 template <typename TOutput, typename TInput, typename TProject>
 task_t<TOutput> project_task_terminal (task_t<TInput> &task, TProject &&project)
 {
-    auto state = std::make_shared<application_task_shared_state_t<TOutput>> ();
-    observe_task_terminal (task, [state, project = std::forward<TProject> (project)] (
-                                   const result_t<TInput> &result) mutable {
+    auto settle = [project = std::forward<TProject> (project)] (const result_t<TInput> &result,
+                                                                auto &&complete) mutable {
         try {
-            state->complete (project (result));
+            complete (project (result));
         }
         catch (...) {
-            state->complete (current_exception_result<TOutput> ());
+            complete (current_exception_result<TOutput> ());
         }
-    });
+    };
+    if (task.await_ready ()) {
+        std::optional<result_t<TOutput>> projected;
+        observe_task_terminal (task, [&] (const result_t<TInput> &result) {
+            settle (result,
+                    [&] (result_t<TOutput> value) { projected.emplace (std::move (value)); });
+        });
+        return task_t<TOutput> (std::move (*projected));
+    }
+    auto state = std::make_shared<application_task_shared_state_t<TOutput>> ();
+    observe_task_terminal (
+      task, [state, settle = std::move (settle)] (const result_t<TInput> &result) mutable {
+          settle (result, [&] (result_t<TOutput> value) { state->complete (std::move (value)); });
+      });
     return task_t<TOutput> (std::move (state));
 }
 
@@ -1117,7 +1330,9 @@ std::optional<result_t<T>> observe_task_result_for (const task_t<T> &task,
                                                     std::chrono::milliseconds timeout,
                                                     std::stop_token cancellation)
 {
-    return task._state->result_for (timeout, cancellation);
+    if (const auto *ready = task._state.inline_result ())
+        return *ready;
+    return task._state.shared_state ()->result_for (timeout, cancellation);
 }
 
 template <typename T>

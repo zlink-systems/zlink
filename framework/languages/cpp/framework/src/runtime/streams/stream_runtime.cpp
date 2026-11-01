@@ -338,7 +338,7 @@ class stream_session_dispatcher_t
         /* dispatch_async only holds dispatch_mutex while obtaining/creating
          * the per-session serial executor. Waiting here therefore cannot block a
          * callback that re-enters session state through that mutex. */
-        return task.result ();
+        return detail::task_result_access_t::read (task);
     }
 
     result_t<void> dispatch_async (work_kind_t kind,
