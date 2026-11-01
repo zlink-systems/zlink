@@ -241,7 +241,8 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
 
         // Background GC can charge unused allocation-context space to this thread's counter
         // (dotnet/runtime#134724). Only a complete no-GC window gives a valid measurement.
-        return PerCallAllocation.MeasureWindowAsync(
+        return PerCallAllocation
+            .MeasureWindowAsync(
                 () =>
                 {
                     var before = GC.GetAllocatedBytesForCurrentThread();
