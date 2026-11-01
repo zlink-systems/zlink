@@ -188,7 +188,8 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                     continue;
                 void *socket = events[i].socket;
                 uint64_t &socket_received = phase_received[socket];
-                for (;;) {
+                // Bound each subscriber's turn before serving the next ready socket.
+                for (size_t received = 0; received < 64; ++received) {
                     perf_multi_metric::header_t header = {};
                     double sample_ns = 0.0;
                     bool have_sample = false;
