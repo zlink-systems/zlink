@@ -7,6 +7,7 @@
 #include "api/socket/socket_api_internal.hpp"
 #include "core/ctx.hpp"
 #include "core/io_thread.hpp"
+#include "core/mailbox.hpp"
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
 #include "core/session_base.hpp"
@@ -255,6 +256,18 @@ class ctx_termination_test_access_t
 class session_termination_test_access_t
 {
   public:
+    static void clear_async_owner_hook (socket_base_t *socket_)
+    {
+        socket_public_api_lock_scope_t turn (socket_->lifecycle_coordinator ());
+        test_set_async_owner_transition_hook (NULL, NULL);
+    }
+
+    static bool async_owner_active_after_turn (socket_base_t *socket_)
+    {
+        socket_public_api_lock_scope_t turn (socket_->lifecycle_coordinator ());
+        return socket_->lifecycle_coordinator ().is_async_mailbox_active ();
+    }
+
     struct own_snapshot_t
     {
         uint64_t sent;
@@ -1192,6 +1205,94 @@ void test_monitor_owner_start_waits_for_idle_detach_linearization ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, source_close_rc);
     TEST_ASSERT_EQUAL_INT (0, ctx_term_rc);
 }
+namespace
+{
+struct pending_command_handoff_t
+{
+    zlink::socket_base_t *source;
+    std::mutex sync;
+    std::condition_variable changed;
+    bool entered;
+};
+
+void refill_mailbox_at_handoff (
+  zlink::async_owner_transition_test_point_t point_, void *userdata_)
+{
+    if (point_ != zlink::async_owner_test_idle_stop_gate_held)
+        return;
+    pending_command_handoff_t &handoff =
+      *static_cast<pending_command_handoff_t *> (userdata_);
+    // Keep a command pending at every detach attempt. Progress must transfer
+    // with that command instead of depending on an empty mailbox.
+    zlink::command_t command = {};
+    command.destination = handoff.source;
+    command.type = zlink::command_t::request_completion;
+    static_cast<zlink::mailbox_t *> (handoff.source->get_mailbox ())
+      ->send (command);
+    std::lock_guard<std::mutex> lock (handoff.sync);
+    handoff.entered = true;
+    handoff.changed.notify_all ();
+}
+
+void check_command_owner_handoff (bool with_completion_poller_)
+{
+    void *ctx = zlink_ctx_new ();
+    TEST_ASSERT_NOT_NULL (ctx);
+    void *source = zlink_socket (ctx, ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (source);
+    socket_handle_t source_handle = as_socket_handle (source);
+    zlink::socket_base_t *const core = source_handle.socket;
+    TEST_ASSERT_SUCCESS_ERRNO (core->acquire_transport_pair_owner_progress ());
+    pending_command_handoff_t handoff = {core, {}, {}, false};
+    if (with_completion_poller_) {
+        TEST_ASSERT_TRUE (core->acquire_completion_poller (&handoff));
+    }
+    zlink::test_set_async_owner_transition_hook (
+      &refill_mailbox_at_handoff, &handoff);
+    core->release_transport_pair_owner_progress ();
+    bool entered;
+    {
+        std::unique_lock<std::mutex> lock (handoff.sync);
+        entered = handoff.changed.wait_for (
+          lock, std::chrono::seconds (3), [&] { return handoff.entered; });
+    }
+    const bool still_active = zlink::session_termination_test_access_t::
+      async_owner_active_after_turn (core);
+    // Removal also fences the callback's final access to this fixture.
+    zlink::session_termination_test_access_t::clear_async_owner_hook (core);
+    if (with_completion_poller_)
+        core->release_completion_poller (&handoff);
+    command_sync_probe_t pending_probe (
+      static_cast<int> (zlink::command_t::request_completion));
+    core->test_set_receive_command_sync_probe_hook (
+      &observe_command_sync_probe, &pending_probe);
+    const int drain_rc = core->test_process_commands_only ();
+    core->test_set_receive_command_sync_probe_hook (NULL, NULL);
+    bool pending_command_drained;
+    {
+        std::lock_guard<std::mutex> lock (pending_probe.sync);
+        pending_command_drained = pending_probe.observed;
+    }
+    TEST_ASSERT_SUCCESS_ERRNO (drain_rc);
+    source_handle = socket_handle_t ();
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (source));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
+    TEST_ASSERT_TRUE (entered);
+    TEST_ASSERT_FALSE (still_active);
+    TEST_ASSERT_TRUE (pending_command_drained);
+}
+}
+
+void test_unowned_command_handoff_preserves_pending_mailbox ()
+{
+    check_command_owner_handoff (false);
+}
+
+void test_completion_poller_does_not_retain_command_lease ()
+{
+    check_command_owner_handoff (true);
+}
+
 void test_transport_owner_start_waits_for_explicit_async_quiesce ()
 {
     void *ctx = zlink_ctx_new ();
@@ -1395,6 +1496,8 @@ int main ()
     RUN_CTX_DESTROY_TEST (test_routing_id_snapshot_is_consistent_during_publication);
     RUN_CTX_DESTROY_TEST (test_session_decoder_queue_accounting_publication);
     RUN_CTX_DESTROY_TEST (test_monitor_owner_start_waits_for_idle_detach_linearization);
+    RUN_CTX_DESTROY_TEST (test_unowned_command_handoff_preserves_pending_mailbox);
+    RUN_CTX_DESTROY_TEST (test_completion_poller_does_not_retain_command_lease);
     RUN_CTX_DESTROY_TEST (test_transport_owner_start_waits_for_explicit_async_quiesce);
     RUN_CTX_DESTROY_TEST (test_socket_creation_rejects_invalid_mailbox);
 #undef RUN_CTX_DESTROY_TEST
