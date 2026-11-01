@@ -129,6 +129,8 @@ public sealed class ClientServerLoopOwnershipTests
         {
             await Task.WhenAll(first.StartAsync(), second.StartAsync())
                 .WaitAsync(TimeSpan.FromSeconds(60));
+            var monitoring = second.Services.GetRequiredService<IZLinkClientServerRuntime>();
+            await WaitForReadyTargetsAsync(monitoring, 2);
             var client = second.Services.GetRequiredService<IZLinkRouteClient>();
             var before = await client
                 .RequestToChannel(Channels[0], new Ping(1, Channels[0]))
@@ -138,6 +140,7 @@ public sealed class ClientServerLoopOwnershipTests
             firstStop = first.StopAsync();
             await firstStop.WaitAsync(TimeSpan.FromSeconds(60));
             first.Dispose();
+            await WaitForReadyTargetsAsync(monitoring, 1);
             var after = await client
                 .RequestToChannel(Channels[0], new Ping(2, Channels[0]))
                 .Timeout(TimeSpan.FromSeconds(10))
@@ -150,6 +153,22 @@ public sealed class ClientServerLoopOwnershipTests
                 .WaitAsync(TimeSpan.FromSeconds(60));
             first.Dispose();
         }
+    }
+
+    private static async Task WaitForReadyTargetsAsync(
+        IZLinkClientServerRuntime monitoring,
+        int expectedCount
+    )
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await foreach (var observed in monitoring.ObserveAsync(Channels[0], deadline.Token))
+        {
+            if (observed.Status.ReadyTargetCount == expectedCount)
+                return;
+        }
+        throw new InvalidOperationException(
+            "ClientServer observation ended before targets were ready."
+        );
     }
 
     private static IHost CreateHost(ZLinkInMemoryProviderLocationStore store)
