@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
@@ -203,13 +204,14 @@ final class ZLinkChannelCallRuntimeTest {
     void requestEnvelopeUsesTheOperationIdentityAndBorrowsTheEncodedPayload() {
         var identity = ZLinkServiceOperationIds.next();
         try (Message payload = Message.from("payload");
+                var retained = ZLinkFrameworkMultipartView.owned(payload);
                 var ignored = ZLinkFlowContext.suppress()) {
             var parts =
                     ZLinkChannelCallRuntime.envelopeParts(
                             ZLinkChannelEnvelope.KIND_REQUEST,
                             "orders",
                             Optional.of("request"),
-                            payload,
+                            retained,
                             "application/json",
                             Map.of(),
                             identity);

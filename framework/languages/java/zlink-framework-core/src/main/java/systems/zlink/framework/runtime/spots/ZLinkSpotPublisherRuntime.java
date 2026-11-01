@@ -143,7 +143,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                 meshName,
                 channelName,
                 topic,
-                encoded.payload(),
+                encoded.payload().getFirst(),
                 Optional.of(encoded.packetName()),
                 encoded.contentType());
     }

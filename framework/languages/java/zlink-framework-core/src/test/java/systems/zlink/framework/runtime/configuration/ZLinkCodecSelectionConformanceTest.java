@@ -146,7 +146,9 @@ final class ZLinkCodecSelectionConformanceTest {
                         wireEncoded.packetName(),
                         scenario.path("name").asText());
                 assertTrue(
-                        new String(wireEncoded.payload().toByteArray(), StandardCharsets.UTF_8)
+                        new String(
+                                        wireEncoded.payload().getFirst().toByteArray(),
+                                        StandardCharsets.UTF_8)
                                 .startsWith(expectedCodec + ":"),
                         scenario.path("name").asText());
             } finally {

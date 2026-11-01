@@ -5052,7 +5052,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             }
             ZLinkPayloadEncoding.EncodedPayload encoded =
                     ZLinkPayloadEncoding.encode(serializer, request);
-            return encoded.payload();
+            return encoded.payload().getFirst();
         }
 
         long bindSession(ZLinkBoundSession boundSession) {

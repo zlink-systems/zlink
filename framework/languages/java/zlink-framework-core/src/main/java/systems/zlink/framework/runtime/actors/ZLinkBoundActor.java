@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -336,14 +337,17 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
 
     private CompletionStage<Void> replyLocal(
             ZLinkStreamHeader header, ZLinkSessionActorsRuntime.LocalActorReply reply) {
+        ZLinkFrameworkMultipartView retained = ZLinkFrameworkMultipartView.owned(reply.payload());
+        if (header.requestSequence().isEmpty()) {
+            retained.close();
+            return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                            "actor reply requires a stream request sequence: "
+                                    + header.packetName()));
+        }
+        ZLinkStreamHeader replyHeader;
         try {
-            if (header.requestSequence().isEmpty()) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkConfigurationException(
-                                "actor reply requires a stream request sequence: "
-                                        + header.packetName()));
-            }
-            ZLinkStreamHeader replyHeader =
+            replyHeader =
                     ZLinkStreamHeader.createResponse(
                                     header,
                                     reply.codec(),
@@ -351,18 +355,21 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                                     header.packetName(),
                                     Map.of())
                             .withActorSlot(actorSlot);
-            Message replyPart = Message.from(reply.payload());
-            CompletionStage<Void> submission;
-            try {
-                submission = stream.replyAsync(sessionRid, replyHeader, List.of(replyPart));
-            } catch (RuntimeException failure) {
-                replyPart.close();
-                return CompletableFuture.failedFuture(failure);
-            }
-            return submission.whenComplete((ignored, failure) -> replyPart.close());
-        } finally {
-            reply.payload().close();
+        } catch (RuntimeException | Error failure) {
+            retained.close();
+            throw failure;
         }
+        CompletionStage<Void> submission;
+        try {
+            submission = stream.replyAsync(sessionRid, replyHeader, retained);
+        } catch (RuntimeException failure) {
+            retained.close();
+            return CompletableFuture.failedFuture(failure);
+        } catch (Error failure) {
+            retained.close();
+            throw failure;
+        }
+        return submission.whenComplete((ignored, failure) -> retained.close());
     }
 
     private CompletionStage<Void> relayUsingStoredBinding(

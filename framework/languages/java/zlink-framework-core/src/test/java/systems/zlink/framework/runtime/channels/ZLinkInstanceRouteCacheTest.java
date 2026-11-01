@@ -12,6 +12,7 @@ import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.locations.*;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
@@ -153,7 +154,8 @@ final class ZLinkInstanceRouteCacheTest {
                                 requestAdmission) -> CompletableFuture.failedFuture(terminal));
         try {
             for (int i = 0; i < 2; i++) {
-                try (var payload = Message.from(new byte[] {1})) {
+                try (var payload =
+                        ZLinkFrameworkMultipartView.owned(Message.from(new byte[] {1}))) {
                     java.util.concurrent.CompletionStage<?> submitted;
                     if (request) {
                         var call =

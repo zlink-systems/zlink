@@ -28,6 +28,7 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobCont
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 
@@ -471,14 +472,20 @@ final class ZLinkChannelBlockingSubmissionTest {
                                                 "unexpected backend call: " + method);
                                     });
             sockets.registerSpotRouterNode("orders", node);
-            send = new ChannelSendCall(runtime, "orders", sockets, sendPayload, "packet");
+            send =
+                    new ChannelSendCall(
+                            runtime,
+                            "orders",
+                            sockets,
+                            ZLinkFrameworkMultipartView.owned(sendPayload),
+                            "packet");
             request =
                     new ChannelRequestCall(
                             runtime,
                             "orders",
                             sockets,
                             Duration.ofSeconds(5),
-                            requestPayload,
+                            ZLinkFrameworkMultipartView.owned(requestPayload),
                             Optional.of("packet"),
                             null);
         }

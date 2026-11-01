@@ -9,6 +9,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
 import java.util.concurrent.CompletableFuture;
@@ -34,7 +35,7 @@ final class ZLinkSendPacketNameTest {
                         "Selected",
                         ZLinkChannelEnvelope.decodeHeader(fixture.parts.getFirst(), false)
                                 .messageName());
-                assertSame(payload, fixture.parts.getLast());
+                assertSame(payload, fixture.payload);
                 assertDuplicate(original);
                 assertDuplicate(clone);
                 assertDuplicate(original.metadata("after", "submit"));
@@ -52,7 +53,7 @@ final class ZLinkSendPacketNameTest {
                 Message payload = Message.from("bare");
                 call(fixture, payload, null).submit().toCompletableFuture().join();
                 assertEquals(1, fixture.parts.size());
-                assertSame(payload, fixture.parts.getFirst());
+                assertSame(payload, fixture.payload);
                 assertThrows(IllegalStateException.class, payload::refCount);
             }
         }
@@ -81,14 +82,19 @@ final class ZLinkSendPacketNameTest {
             ZLinkSendAdmissionAllocationTest.Fixture fixture, Message payload, String name) {
         return switch (fixture.kind) {
             case CLIENT, MESH_CHANNEL ->
-                    new ChannelSendCall(fixture.runtime, CHANNEL, fixture.sockets, payload, name);
+                    new ChannelSendCall(
+                            fixture.runtime,
+                            CHANNEL,
+                            fixture.sockets,
+                            ZLinkFrameworkMultipartView.owned(payload),
+                            name);
             default ->
                     new RouteSendCall(
                             fixture.runtime,
                             CHANNEL,
                             fixture.sockets,
                             TARGET,
-                            payload,
+                            ZLinkFrameworkMultipartView.owned(payload),
                             name,
                             ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
                             null);
