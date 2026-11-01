@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/execution/state_lane.hpp"
@@ -55,7 +57,7 @@ std::size_t &executor_owner_count ()
 
 std::size_t default_worker_count ()
 {
-    return std::max (1u, std::thread::hardware_concurrency ());
+    return std::max (1u, ::zlink::framework::runtime::available_processor_count ());
 }
 
 // Caller holds executor_mutex; capture and late-bound delivery share creation.

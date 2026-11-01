@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include "runtime/channels/channel_host_service.hpp"
 #include "runtime/channels/channel_host_service_test_access.hpp"
 #include "runtime/configuration/service_scope.hpp"
@@ -62,8 +64,8 @@ class channel_host_service_t::server_loop_t
 
     static std::unique_ptr<offload_executor_t> make_handler_executor ()
     {
-        const auto workers =
-          static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
+        const auto workers = static_cast<std::size_t> (
+          std::max (1u, ::zlink::framework::runtime::available_processor_count ()));
         return std::make_unique<offload_executor_t> (
           0, std::min<std::size_t> (workers, channel_handler_worker_limit),
           channel_worker_idle_timeout, "zlink-channel-server");
@@ -690,8 +692,8 @@ class channel_host_service_t::subscriber_loop_t
         detail::apply_common_channel_socket_options (*_subscriber, _capability);
         fanout::apply_fanout_subscriptions (*_subscriber, _capability.subscription_topics);
         apply_runtime_connections ();
-        const auto hardware_workers =
-          static_cast<std::size_t> (std::max (1u, std::thread::hardware_concurrency ()));
+        const auto hardware_workers = static_cast<std::size_t> (
+          std::max (1u, ::zlink::framework::runtime::available_processor_count ()));
         const auto max_handler_workers = std::max<std::size_t> (
           1, std::min<std::size_t> (hardware_workers, channel_handler_worker_limit));
         _handler_executor = std::make_unique<offload_executor_t> (

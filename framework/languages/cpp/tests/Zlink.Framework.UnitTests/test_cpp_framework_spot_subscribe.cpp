@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+
+#include "runtime/utils/available_processor_count.hpp"
 #include <zlink/json.hpp>
 #include "../support/stateful_object_sync.hpp"
 #include "../support/runtime_failure_fixture.hpp"
@@ -235,7 +237,8 @@ TEST_F (SpotSubscribe, ContextFrameKeepsNamedChannelThroughLocalDelivery)
     {
         // Occupy the existing multicast workers so the temporary call dies
         // before the worker can submit its frame. No timing wait is needed.
-        const auto worker_count = std::max<std::size_t> (2, std::thread::hardware_concurrency ());
+        const auto worker_count =
+          std::max<std::size_t> (2, zlink::framework::runtime::available_processor_count ());
         std::latch finished (static_cast<std::ptrdiff_t> (worker_count));
         std::promise<void> release;
         const auto released = release.get_future ().share ();

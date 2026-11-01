@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+
+#include "runtime/utils/available_processor_count.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "test_completion_poller_driver.hpp"
 #include "test_runtime_options_owner_pause.hpp"
@@ -516,7 +518,8 @@ TEST (ManualIngressWait, SuspendedHandlersReturnWorkersBeforeTerminal)
     client.set_routing_id (zlink::routing_id_t::from ("manual-worker-client"));
     client.connect (source.endpoint);
     ASSERT_TRUE (observe_until ([] { return server_ready; }));
-    const auto workers = std::min (8u, std::max (1u, std::thread::hardware_concurrency ()));
+    const auto workers =
+      std::min (8u, std::max (1u, zlink::framework::runtime::available_processor_count ()));
     for (unsigned index = 0; index <= workers; ++index) {
         fw::runtime::messaging::envelope_header_t header;
         header.channel_name = "manual-wait";

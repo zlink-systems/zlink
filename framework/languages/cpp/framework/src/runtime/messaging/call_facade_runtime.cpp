@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include <zlink/framework/contracts/channels/call.hpp>
 
 #include "runtime/dispatch/offload_executor.hpp"
@@ -20,7 +22,7 @@ namespace
 runtime::offload_executor_t &blocking_call_executor ()
 {
     static runtime::offload_executor_t executor (
-      0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
+      0, std::max<std::size_t> (1, ::zlink::framework::runtime::available_processor_count ()),
       std::chrono::milliseconds (100), "zlink-call");
     return executor;
 }
