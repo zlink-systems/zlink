@@ -7,6 +7,7 @@
 
 #if defined(__linux__)
 #include <sched.h>
+#include <unistd.h>
 #elif defined(_WIN32)
 #include <winsock2.h>
 #include <windows.h>
@@ -20,7 +21,8 @@ inline unsigned available_processor_count () noexcept
 #if defined(__linux__)
     cpu_set_t set;
     CPU_ZERO (&set);
-    if (sched_getaffinity (0, sizeof (set), &set) == 0)
+    // pid 0 would read the calling thread's mask; pools must follow the process.
+    if (sched_getaffinity (getpid (), sizeof (set), &set) == 0)
         return (std::max) (1u, static_cast<unsigned> (CPU_COUNT (&set)));
 #elif defined(_WIN32)
     DWORD_PTR process_mask = 0;
