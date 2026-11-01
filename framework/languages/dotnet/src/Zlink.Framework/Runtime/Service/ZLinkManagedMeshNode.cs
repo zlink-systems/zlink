@@ -11082,7 +11082,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return true;
     }
 
-    private async Task ObserveNativeDeadlineReplyAsync<TReply>(
+    internal async Task ObserveNativeDeadlineReplyAsync<TReply>(
         PendingOperation<TReply> operation,
         Task<IReadOnlyList<Message>> physical,
         Func<ManagedRequestCompletion, TReply> decode,
@@ -11162,7 +11162,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             requestAdmission: requestAdmission
         );
 
-    private Task<TReply> RunDeadlineRequestAsync<TReply>(
+    internal Task<TReply> RunDeadlineRequestAsync<TReply>(
         TimeSpan timeout,
         CancellationToken cancellationToken,
         Func<ManagedRequestCompletion, TReply> decode,
@@ -12543,7 +12543,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         >= ZLinkReceiveBatchBudget.MaximumMilliseconds;
 
     // Index visits and terminal publication share one owner turn and time budget.
-    private TimeSpan ExpireOperations()
+    internal TimeSpan ExpireOperations()
     {
         var now = _deadlineClock.Elapsed;
         if (now.Ticks >= Volatile.Read(ref _nextDeadlineVisitTicks))

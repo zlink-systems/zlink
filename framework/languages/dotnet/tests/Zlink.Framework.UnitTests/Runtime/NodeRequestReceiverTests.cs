@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Systems.Zlink.Framework.Runtime.Protocol;
@@ -10,8 +9,6 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class NodeRequestReceiverTests
 {
-    private const BindingFlags InstancePrivate = BindingFlags.Instance | BindingFlags.NonPublic;
-
     [Theory]
     [InlineData("normal", false)]
     [InlineData("normal", true)]
@@ -41,12 +38,6 @@ public sealed class NodeRequestReceiverTests
         );
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task? observation = null;
-        var run = typeof(ZLinkManagedMeshNode)
-            .GetMethods(InstancePrivate)
-            .Single(method =>
-                method.Name == "RunDeadlineRequestAsync" && method.IsGenericMethodDefinition
-            )
-            .MakeGenericMethod(typeof(Reply));
         Func<ZLinkManagedMeshNode.ManagedRequestCompletion, Reply> decode = completion =>
         {
             if (completion.Result != RequestResult.Ok)
@@ -66,30 +57,18 @@ public sealed class NodeRequestReceiverTests
             _
         ) =>
         {
-            observation = (Task)
-                typeof(ZLinkManagedMeshNode)
-                    .GetMethod("ObserveNativeDeadlineReplyAsync", InstancePrivate)!
-                    .MakeGenericMethod(typeof(Reply))
-                    .Invoke(node, [operation, physical.Task, decode, null, null])!;
+            observation = node.ObserveNativeDeadlineReplyAsync(operation, physical.Task, decode);
             started.SetResult();
             return observation;
         };
         var caller = ObserveCallerAsync(
-            (Task<Reply>)
-                run.Invoke(
-                    node,
-                    [
-                        TimeSpan.FromSeconds(1),
-                        cancellation.Token,
-                        decode,
-                        produce,
-                        null,
-                        MeshOperationKind.NodeRequest,
-                        null,
-                        null,
-                        null,
-                    ]
-                )!
+            node.RunDeadlineRequestAsync(
+                TimeSpan.FromSeconds(1),
+                cancellation.Token,
+                decode,
+                produce,
+                kind: MeshOperationKind.NodeRequest
+            )
         );
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(caller.IsCompleted);
@@ -101,9 +80,7 @@ public sealed class NodeRequestReceiverTests
             else if (terminal == "timeout")
             {
                 clock.Timestamp += TimeSpan.FromSeconds(2).Ticks;
-                typeof(ZLinkManagedMeshNode)
-                    .GetMethod("ExpireOperations", InstancePrivate)!
-                    .Invoke(node, null);
+                node.ExpireOperations();
             }
             else
                 node.CloseSubmissions();
@@ -251,11 +228,11 @@ public sealed class NodeRequestReceiverTests
                 );
                 // The correlation is already retired: the physical receiver must still
                 // convert once and reclaim the input, including a retained route record.
-                var observe = typeof(ZLinkManagedMeshNode)
-                    .GetMethod("ObserveNativeDeadlineReplyAsync", InstancePrivate)!
-                    .MakeGenericMethod(typeof(TReply));
-                await (Task)
-                    observe.Invoke(node, [operation, Task.FromResult(parts), decode, null, null])!;
+                await node.ObserveNativeDeadlineReplyAsync(
+                    operation,
+                    Task.FromResult(parts),
+                    decode
+                );
                 Assert.False(operation.Completion.IsCompleted);
             }
         }
