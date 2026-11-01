@@ -2298,7 +2298,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
                 }
                 catch (const framework_exception_t &error) {
                     // §9 follows authority only for a refusal before target admission.
-                    if (!admission.await_ready () || !admission.result ()
+                    if (!admission.await_ready () || !detail::task_result_access_t::read (admission)
                         || (detail::failure_code (error)
                               != static_cast<std::uint32_t> (
                                 runtime::protocol::framework_error_code::spotMoving)

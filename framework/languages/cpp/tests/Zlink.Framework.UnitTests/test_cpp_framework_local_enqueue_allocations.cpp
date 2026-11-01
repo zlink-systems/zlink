@@ -448,14 +448,16 @@ TEST (LocalEnqueueAllocations, StatefulOwnerClaimWithoutQueuedTurnNeedsNoContinu
     const auto claim_object = [&] {
         auto claim = objects.try_claim_async (fixture.object, stateful::turn_domain_t::application);
         ASSERT_TRUE (claim.await_ready ());
-        EXPECT_EQ (claim.result ().value ().error, stateful::stateful_error_t::none);
-        EXPECT_FALSE (claim.result ().value ().turn.has_value ());
+        const auto terminal = std::move (claim).result ();
+        EXPECT_EQ (terminal.value ().error, stateful::stateful_error_t::none);
+        EXPECT_FALSE (terminal.value ().turn.has_value ());
     };
     const auto claim_dispatch = [&] {
         auto claim = dispatch.try_claim_async (fixture.object);
         ASSERT_TRUE (claim.await_ready ());
-        EXPECT_EQ (claim.result ().value ().error, stateful::stateful_error_t::none);
-        EXPECT_FALSE (claim.result ().value ().delivery.has_value ());
+        const auto terminal = std::move (claim).result ();
+        EXPECT_EQ (terminal.value ().error, stateful::stateful_error_t::none);
+        EXPECT_FALSE (terminal.value ().delivery.has_value ());
     };
     claim_object ();
     claim_dispatch ();
@@ -513,7 +515,8 @@ TEST (LocalEnqueueAllocations, RecordedAuthorityUsesOnlyReadyResultStorage)
     const auto resolve = [&] {
         auto result = runtime->accepted_record_authority (query, lease);
         ASSERT_TRUE (result.await_ready ());
-        const auto &authority = result.result ().value ();
+        const auto terminal = std::move (result).result ();
+        const auto &authority = terminal.value ();
         ASSERT_TRUE (authority.has_value ());
         EXPECT_EQ (authority->source.owner_id, lease->owner_id);
         EXPECT_EQ (authority->source.node_routing_id, query.source_node_routing_id);

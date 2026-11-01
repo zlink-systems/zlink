@@ -54,7 +54,8 @@ void verify_result (detail::mesh_node_runtime_t &runtime,
         require (result.value ().items ()[0].to_bytes ()
                    == std::vector<std::uint8_t> ({1, 3, 5, 7}),
                  "reply payload lifetime changed");
-        const auto &retained = operation.completion->task ().result ().value ();
+        auto retained_task = operation.completion->task ();
+        const auto &retained = retained_task.result ().value ();
         require (retained.parts.size () == 1 && retained.parts[0].valid (),
                  "conversion consumed the original shared result");
     }

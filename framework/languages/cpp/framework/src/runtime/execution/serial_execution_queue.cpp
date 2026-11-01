@@ -301,7 +301,7 @@ class serial_deferred_barrier_t final
                 return;
             }
             if (acquisition) {
-                const auto &acquired = acquisition->result ();
+                const auto &acquired = detail::task_result_access_t::read (*acquisition);
                 if (!acquired) {
                     settle (source, acquired);
                     return;

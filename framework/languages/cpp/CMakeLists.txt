@@ -3471,4 +3471,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
     COMMAND test_cpp_framework_ready_task
     LABELS "framework-unit;framework-foundation;execution"
     TIMEOUT 30)
+  foreach(mode IN ITEMS move share void mixed allocations concurrency)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_ready_task_${mode}
+      COMMAND test_cpp_framework_ready_task ${mode}
+      LABELS "framework-unit;framework-foundation;execution"
+      TIMEOUT 60)
+  endforeach()
 endif()

@@ -4,6 +4,9 @@
 #include "../support/task_allocation_counter.hpp"
 
 #include <condition_variable>
+#include <barrier>
+#include <latch>
+#include <string_view>
 #include <array>
 #include <future>
 #include <iostream>
@@ -244,6 +247,273 @@ void check_completion_delivery_lock ()
     }
 }
 
+void check_result_reference_move ()
+{
+    std::optional<task_t<std::string>> destination;
+    const std::string *borrowed = nullptr;
+    {
+        task_t<std::string> source (result_t<std::string>::success ("ready"));
+        borrowed = &source.result ().value ();
+        destination.emplace (std::move (source));
+    }
+    require (borrowed == &destination->result ().value (), "move replaced the borrowed string");
+    require (*borrowed == "ready", "move invalidated the borrowed string");
+    task_t<std::string> assigned (result_t<std::string>::success ("old"));
+    assigned = std::move (*destination);
+    destination.reset ();
+    require (borrowed == &assigned.result ().value () && *borrowed == "ready",
+             "assignment invalidated the borrowed string");
+    std::cout << "string result reference: move and assignment passed\n";
+}
+
+void check_result_reference_share ()
+{
+    task_t<std::string> source (result_t<std::string>::success ("ready"));
+    const std::string_view borrowed = source.result ().value ();
+    bool observed = false;
+    detail::observe_task_completion (
+      source, [&] (const auto &result) { observed = result.value () == "ready"; });
+    require (observed && borrowed == "ready", "observer invalidated the borrowed string view");
+    std::cout << "string result reference: observer registration passed\n";
+}
+
+void check_void_result_reference ()
+{
+    for (const bool observe : {false, true}) {
+        std::optional<task_t<void>> destination;
+        const result_t<void> *borrowed = nullptr;
+        const framework_exception_t *error = nullptr;
+        {
+            task_t<void> source (
+              result_t<void>::failure (framework_error_kind_t::rejected, "ready failure"));
+            borrowed = &source.result ();
+            error = borrowed->error ();
+            if (observe) {
+                bool observed = false;
+                detail::observe_task_completion (
+                  source, [&] (const auto &result) { observed = result.error () == error; });
+                require (observed && &source.result () == borrowed,
+                         "observer replaced the borrowed void failure");
+            }
+            destination.emplace (std::move (source));
+        }
+        require (&destination->result () == borrowed, "move replaced the borrowed void failure");
+        task_t<void> assigned (result_t<void>::success ());
+        assigned = std::move (*destination);
+        destination.reset ();
+        require (&assigned.result () == borrowed && borrowed->error () == error,
+                 "assignment replaced the borrowed void error");
+        require (error->kind () == framework_error_kind_t::rejected
+                   && std::string_view (error->what ()) == "ready failure",
+                 "void failure error reference changed");
+    }
+    std::cout << "void error reference: move, assignment and observer registration passed\n";
+}
+
+struct tracked_resource_t
+{
+    static inline unsigned destroyed = 0;
+    ~tracked_resource_t () { ++destroyed; }
+};
+
+void check_mixed_result_lifetime ()
+{
+    for (unsigned iteration = 0; iteration != 100000; ++iteration) {
+        std::weak_ptr<tracked_resource_t> lifetime;
+        const auto before = tracked_resource_t::destroyed;
+        {
+            auto payload = std::make_shared<tracked_resource_t> ();
+            lifetime = payload;
+            task_t<std::shared_ptr<tracked_resource_t>> source (
+              result_t<std::shared_ptr<tracked_resource_t>>::success (std::move (payload)));
+            const auto *borrowed = iteration % 2 == 0 ? &source.result () : nullptr;
+            unsigned observers = 0;
+            auto observe = [&] (auto &task) {
+                detail::observe_task_completion (task, [&] (const auto &result) {
+                    require (result.value () != nullptr, "mixed observer lost its resource");
+                    ++observers;
+                });
+            };
+            if (iteration % 3 == 0)
+                observe (source);
+            auto moved = std::move (source);
+            if (iteration % 3 == 1)
+                observe (moved);
+            task_t<std::shared_ptr<tracked_resource_t>> assigned (
+              result_t<std::shared_ptr<tracked_resource_t>>::success (nullptr));
+            assigned = std::move (moved);
+            if (iteration % 3 == 2)
+                observe (assigned);
+            auto projected = detail::project_task_terminal<int> (assigned, [] (const auto &result) {
+                require (result.value () != nullptr, "mixed projection lost its resource");
+                return result_t<int>::success (42);
+            });
+            require (!borrowed || &assigned.result () == borrowed,
+                     "mixed operations replaced the result");
+            require (projected.await_resume () == 42 && observers == 1 && !lifetime.expired (),
+                     "mixed operations lost their terminal or lifetime");
+            task_t<std::string> text (result_t<std::string>::success ("ready"));
+            const auto *text_reference = &text.result ().value ();
+            auto text_moved = std::move (text);
+            text = std::move (text_moved);
+            detail::observe_task_completion (text, [] (const auto &result) {
+                require (result.value () == "ready", "mixed string observer changed its value");
+            });
+            auto length = detail::project_task_terminal<int> (text, [] (const auto &result) {
+                return result_t<int>::success (static_cast<int> (result.value ().size ()));
+            });
+            require (text_reference == &text.result ().value () && *text_reference == "ready"
+                       && length.await_resume () == 5,
+                     "mixed string operations invalidated their reference");
+            task_t<void> empty (
+              result_t<void>::failure (framework_error_kind_t::rejected, "ready failure"));
+            const auto *failure_reference = &empty.result ();
+            const auto *error = failure_reference->error ();
+            auto empty_moved = std::move (empty);
+            empty = std::move (empty_moved);
+            detail::observe_task_completion (empty, [error] (const auto &result) {
+                require (result.error () == error, "mixed void observer changed its error");
+            });
+            auto failure = detail::project_task_terminal<int> (empty, [] (const auto &result) {
+                return result_t<int>::success (result.has_value () ? 0 : 42);
+            });
+            require (&empty.result () == failure_reference && failure_reference->error () == error
+                       && failure.await_resume () == 42,
+                     "mixed void operations invalidated their error reference");
+        }
+        require (lifetime.expired () && tracked_resource_t::destroyed == before + 1,
+                 "mixed operations leaked or destroyed a resource twice");
+    }
+    std::cout
+      << "100000 mixed move/assignment/observer/projection iterations passed; resources destroyed="
+      << tracked_resource_t::destroyed << '\n';
+}
+
+void check_result_reference_allocations ()
+{
+    auto check = []<typename T> (task_t<T> &task) {
+        const result_t<T> *first = nullptr;
+        const result_t<T> *second = nullptr;
+        begin_count ();
+        const auto initial = tests::count_allocations ([&] { first = &task.result (); });
+        const auto repeated = tests::count_allocations ([&] { second = &task.result (); });
+        end_count ();
+        std::cout << "lvalue result " << (std::is_void_v<T> ? "void" : "value")
+                  << ": first=" << initial << " second=" << repeated << " locks=" << mutex_locks
+                  << " notifications=" << notifications << '\n';
+        require (initial == 1 && repeated == 0 && first == second,
+                 "lvalue result did not allocate exactly once");
+        require (mutex_locks == 0 && notifications == 0, "lvalue result synchronized");
+    };
+    task_t<int> value (result_t<int>::success (42));
+    task_t<void> empty (result_t<void>::success ());
+    check (value);
+    check (empty);
+}
+
+void check_rvalue_result_allocations ()
+{
+    begin_count ();
+    const auto allocations = tests::count_allocations ([] {
+        auto value = task_t<std::string> (result_t<std::string>::success ("ready")).result ();
+        require (value.value () == "ready", "rvalue result lost its value");
+        task_t<void> (result_t<void>::success ()).result ().value ();
+        task_t<std::string> source (result_t<std::string>::success ("ready"));
+        auto terminal = source.result_for (std::chrono::milliseconds::zero ());
+        require (terminal && terminal->value () == "ready", "ready result_for lost its value");
+        require (source.await_resume () == "ready", "ready await_resume lost its value");
+    });
+    end_count ();
+    std::cout << "rvalue result, result_for, await_resume: allocations=" << allocations
+              << " locks=" << mutex_locks << " notifications=" << notifications << '\n';
+    require (allocations == 0 && mutex_locks == 0 && notifications == 0,
+             "immediate result consumption allocated or synchronized");
+    task_t<std::string> source (result_t<std::string>::success ("ready"));
+    const auto *borrowed = &source.result ().value ();
+    auto terminal = std::move (source).result ();
+    require (terminal.value () == "ready" && *borrowed == "ready"
+               && &source.result ().value () == borrowed,
+             "rvalue consumption invalidated a published reference");
+}
+
+void check_noncopyable_ready_allocations ()
+{
+    using payload_t = std::unique_ptr<int>;
+    static_assert (!std::is_copy_constructible_v<result_t<payload_t>>);
+    static_assert (std::is_same_v<decltype (std::declval<task_t<payload_t>> ().result ()),
+                                  const result_t<payload_t> &>);
+    auto payload = result_t<payload_t>::success (std::make_unique<int> (7));
+    std::optional<task_t<payload_t>> task;
+    begin_count ();
+    const auto initial = tests::count_allocations ([&] { task.emplace (std::move (payload)); });
+    end_count ();
+    std::cout << "move-only success: allocations=" << initial << " locks=" << mutex_locks
+              << " notifications=" << notifications << '\n';
+    require (initial == 1 && mutex_locks == 0 && notifications == 0,
+             "non-copyable result did not start in one unpublished shared state");
+    const auto *borrowed = &task->result ();
+    const auto moved_allocations = tests::count_allocations ([&] {
+        auto moved = std::move (*task);
+        task.reset ();
+        require (&moved.result () == borrowed && *borrowed->value () == 7,
+                 "move-only task lost its result reference");
+        task.emplace (std::move (moved));
+    });
+    require (moved_allocations == 0, "moving a non-copyable ready task allocated");
+}
+
+void check_const_result_concurrency ()
+{
+    constexpr unsigned threads = 8;
+    constexpr unsigned rounds = 10000;
+    std::optional<task_t<std::string>> value;
+    std::optional<task_t<void>> failure;
+    std::array<const result_t<std::string> *, threads> values{};
+    std::array<const result_t<void> *, threads> failures{};
+    std::atomic_bool valid{true};
+    std::latch start (threads + 1);
+    std::barrier phase (threads + 1);
+    std::array<std::thread, threads> workers;
+    for (unsigned index = 0; index != threads; ++index) {
+        workers[index] = std::thread ([&, index] {
+            start.arrive_and_wait ();
+            for (unsigned round = 0; round != rounds; ++round) {
+                phase.arrive_and_wait ();
+                const auto &text = *value;
+                const auto &empty = *failure;
+                for (unsigned read = 0; read != 16; ++read) {
+                    const auto *result = &text.result ();
+                    const auto *error = &empty.result ();
+                    if (result->value () != "ready" || error->has_value ()
+                        || error->error_kind () != framework_error_kind_t::rejected
+                        || (read && (values[index] != result || failures[index] != error)))
+                        valid.store (false, std::memory_order_relaxed);
+                    values[index] = result;
+                    failures[index] = error;
+                }
+                phase.arrive_and_wait ();
+            }
+        });
+    }
+    start.arrive_and_wait ();
+    for (unsigned round = 0; round != rounds; ++round) {
+        value.emplace (result_t<std::string>::success ("ready"));
+        failure.emplace (
+          result_t<void>::failure (framework_error_kind_t::rejected, "ready failure"));
+        phase.arrive_and_wait ();
+        phase.arrive_and_wait ();
+        for (unsigned index = 1; index != threads; ++index) {
+            if (values[index] != values[0] || failures[index] != failures[0])
+                valid.store (false, std::memory_order_relaxed);
+        }
+    }
+    for (auto &worker : workers)
+        worker.join ();
+    require (valid.load (), "concurrent const result returned inconsistent values or addresses");
+    std::cout << "const result concurrency: 8 threads, 10000 fresh task pairs, 16 reads per thread "
+                 "passed\n";
+}
+
 void check_failure (const result_t<int> &result)
 {
     require (!result.has_value (), "failure became success");
@@ -282,9 +552,28 @@ extern "C" void __wrap__ZNSt18condition_variable10notify_oneEv (std::condition_v
     __real__ZNSt18condition_variable10notify_oneEv (condition);
 }
 
-int main ()
+int main (int argc, char **argv)
 {
     try {
+        if (argc == 2) {
+            const std::string_view mode = argv[1];
+            if (mode == "move")
+                check_result_reference_move ();
+            else if (mode == "share")
+                check_result_reference_share ();
+            else if (mode == "void")
+                check_void_result_reference ();
+            else if (mode == "mixed")
+                check_mixed_result_lifetime ();
+            else if (mode == "allocations") {
+                check_result_reference_allocations ();
+                check_rvalue_result_allocations ();
+            } else if (mode == "concurrency")
+                check_const_result_concurrency ();
+            else
+                require (false, "unknown ready task test mode");
+            return 0;
+        }
         std::mutex mutex;
         std::condition_variable condition;
         begin_count ();
@@ -331,11 +620,7 @@ int main ()
             require (std::string (error.what ()) == "ready failure",
                      "void failure message changed");
         }
-        auto owned = make_ready (
-          result_t<std::unique_ptr<int>>::success (std::make_unique<int> (7)), "move-only success");
-        require (*owned.result ().value () == 7, "move-only value changed");
-        auto moved = std::move (owned);
-        require (*moved.result ().value () == 7, "moved task lost result");
+        check_noncopyable_ready_allocations ();
 
         task_completion_source_t<int> pending;
         auto pending_task = pending.task ();

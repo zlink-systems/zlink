@@ -50,7 +50,7 @@ template <typename Start> auto infrastructure_result (Start &&start)
         ~scope_t () { detail::exchange_infrastructure_wait (previous); }
     } scope;
     auto pending = std::forward<Start> (start) ();
-    auto result = pending.result ();
+    auto result = detail::task_result_access_t::read (pending);
     return result;
 }
 

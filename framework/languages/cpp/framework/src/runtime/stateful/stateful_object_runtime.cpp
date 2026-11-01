@@ -1079,7 +1079,8 @@ stateful_object_runtime_t::try_claim_async (object_ref_t owner, turn_domain_t do
     // An owner turn that claims or rejects in place needs no continuation frame (#2418).
     if (first.await_ready ()) {
         try {
-            if (const auto *claim = std::get_if<owner_claim_t> (&first.result ().value ()))
+            if (const auto *claim =
+                  std::get_if<owner_claim_t> (&detail::task_result_access_t::read (first).value ()))
                 return task_t<owner_claim_t> (result_t<owner_claim_t>::success (*claim));
         }
         catch (...) {

@@ -3638,7 +3638,7 @@ actor_gateway_runtime_t::dispatch_bound_session_send (const actor_ref_t &actor_r
         return admitted;
     if (!submitted)
         submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
-    auto sent = submitted->result ();
+    auto sent = detail::task_result_access_t::read (*submitted);
     if (!sent) {
         return result_t<void>::failure (sent.error_kind (),
                                         sent.error () ? sent.error ()->what ()
@@ -3714,7 +3714,7 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
               return admitted;
           if (!submitted)
               submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
-          auto terminal = submitted->result ();
+          auto terminal = detail::task_result_access_t::read (*submitted);
           const auto *session_rid = admitted_session_rid ? &*admitted_session_rid : nullptr;
           actor_gateway.trace_bound_session_send_stage (
             actor_id, "session_node_stream_write_terminal",
