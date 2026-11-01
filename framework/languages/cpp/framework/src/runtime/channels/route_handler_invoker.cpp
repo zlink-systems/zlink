@@ -23,6 +23,11 @@ route_handler_invoker_t::invoke (const route_handler_registry_t::entry_t &handle
     auto message = std::move (incoming_message);
     auto context = std::move (incoming_context);
     auto before_application_handler = std::move (incoming_before);
+    const auto enter_handler = [&] {
+        terminal.enter_handler ();
+        if (before_application_handler)
+            before_application_handler ();
+    };
     auto complete = std::move (incoming_complete);
     incoming_message = zlink::message_t{};
     incoming_before = {};
@@ -35,10 +40,9 @@ route_handler_invoker_t::invoke (const route_handler_registry_t::entry_t &handle
         auto &invocation_services = invocation_scope->provider ();
         auto pending = filters.invoke_filters_async (
           dispatch_kind, invocation_services, serializers, context,
-          [&handler, &invocation_services, &serializers, &message, &context,
-           &before_application_handler] {
+          [&handler, &invocation_services, &serializers, &message, &context, &enter_handler] {
               return handler.invoker (invocation_services, serializers, message, context,
-                                      handler_start_callback_ref_t (before_application_handler));
+                                      handler_start_callback_ref_t (enter_handler));
           });
         if (!pending.await_ready () && executor)
             terminal.retain_physical_work (executor->retain_internal_work ());

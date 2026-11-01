@@ -83,6 +83,7 @@ constexpr std::uint32_t actor_recv_info_no_bind_flag = 1u;
 struct spot_handler_terminal_t : task_completion_source_t<zlink::message_t>
 {
     std::function<void ()> release_admission;
+    runtime::handler_entry_t before_application_handler;
     std::optional<std::pair<zlink::message_t, spot_inbound_message_t>> carrier;
 };
 
@@ -91,6 +92,7 @@ void settle_handler_admission_once (
 {
     if (!terminal)
         return;
+    terminal->before_application_handler = {};
     auto owned = std::move (terminal->release_admission);
     if (!owned)
         return;
@@ -4548,7 +4550,24 @@ spot_handler_registry_t::find_handler (spot_handler_kind_t kind,
     return std::nullopt;
 }
 
+task_t<zlink::message_t>
+spot_handler_registry_t::invoke_erased (spot_handler_kind_t kind,
+                                        std::string_view packet_name,
+                                        std::string_view topic,
+                                        std::type_index actor_type,
+                                        void *spot,
+                                        void *actor,
+                                        service_provider_t &services,
+                                        serializer_registry_t &serializers,
+                                        zlink::message_t message,
+                                        spot_inbound_message_t metadata) const
+{
+    return invoke_erased ({}, kind, packet_name, topic, actor_type, spot, actor, services,
+                          serializers, std::move (message), std::move (metadata));
+}
+
 task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
+  runtime::handler_entry_t before_application_handler,
   spot_handler_kind_t kind,
   std::string_view packet_name,
   std::string_view topic,
@@ -4565,7 +4584,6 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
   std::function<std::optional<result_t<zlink::message_t>> (
     const zlink::message_t &, const spot_inbound_message_t &)> before_invoke,
   actor_queue_dispatch_t actor_queue_dispatch,
-  std::function<void ()> before_application_handler,
   std::function<void ()> after_application_admission,
   std::function<void ()> transfer_owner_reservation,
   std::size_t transferred_owner_byte_cost,
@@ -4619,6 +4637,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
               actor_execution_spot_id, actor_execution_id);
         }
         auto completion = std::make_shared<spot_handler_terminal_t> ();
+        if (application_record && before_application_handler)
+            application_record->admission.retain_initial (std::move (before_application_handler));
         auto task = completion->task ();
         if (retained_message) {
             const auto original =
@@ -4738,12 +4758,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             completion->carrier.emplace (std::move (message), std::move (metadata));
             carrier = {completion, &*completion->carrier};
         }
-        if (application_record) {
-            if (before_application_handler)
-                application_record->admission.retain_initial (
-                  std::move (before_application_handler));
+        if (application_record)
             work_options.application_record = application_record;
-        }
         auto dispatch_flow = runtime::flow_context_t::current ();
         auto trace_serial_queue = coordinator ? coordinator->spot_queue () : state->serial_queue;
         std::function<bool (std::string, runtime::serial_execution_queue_t::async_work_t,
@@ -4803,15 +4819,15 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                                               terminal, "Actor application queue stopped"));
               };
         }
+        completion->before_application_handler = std::move (before_application_handler);
         runtime::serial_execution_queue_t::async_work_t work =
           [state, handler_index, spot, actor, &services, &serializers,
            carrier = std::move (carrier), completion, dispatch_flow = std::move (dispatch_flow),
            actor_execution_key = std::move (actor_execution_key),
            actor_execution_spot_id = std::move (actor_execution_spot_id),
-           before_invoke = std::move (before_invoke),
-           before_application_handler = std::move (before_application_handler), trace_message_kind,
-           trace_packet_name, trace_actor_id, trace_spot_id, admission_terminal, retained_message,
-           application_record, actor_queue_dispatch] (auto complete) mutable {
+           before_invoke = std::move (before_invoke), trace_message_kind, trace_packet_name,
+           trace_actor_id, trace_spot_id, admission_terminal, retained_message, application_record,
+           actor_queue_dispatch] (auto complete) mutable {
               runtime::flow_context_t::scope_t callback_flow (std::move (dispatch_flow));
               // incarnation을 넘길 때는 원본 activation record를 그대로 사용한다.
               if (state->closed) {
@@ -4895,7 +4911,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                                      ? current->activation_scope->provider ()
                                      : *empty_services;
                   auto replay = spot_handler_registry_t (current).invoke_erased (
-                    spot_handler_kind_t::packet,
+                    {}, spot_handler_kind_t::packet,
                     original->original_activation->application_payload.packet_name, {},
                     std::type_index (typeid (void)), current->spot_instance.get (), nullptr,
                     provider, *current->channel_runtime->serializers, carrier->first,
@@ -4953,8 +4969,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       application_record->retire_invocation = {};
                   if (application_record)
                       application_record->admission.enter_handler ();
-                  else if (before_application_handler)
-                      before_application_handler ();
+                  else if (completion->before_application_handler)
+                      completion->before_application_handler ();
                   auto handler_task = state->handler_invokers[handler_index](
                     spot, actor, services, serializers, carrier->first, carrier->second);
                   detail::observe_task_completion (
@@ -6499,7 +6515,7 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
             result = result_t<zlink::message_t>::success (
               co_await spot_handler_registry_t (context_state)
                 .invoke_erased (
-                  kind, packet.packet_name, {}, actor_type, context_state->spot_instance.get (),
+                  {}, kind, packet.packet_name, {}, actor_type, context_state->spot_instance.get (),
                   actor_instance.get (), services, *context_state->channel_runtime->serializers,
                   packet.application_record && packet.application_record->invocation ()
                     ? packet.application_record->invocation ()->first
@@ -6508,7 +6524,7 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
                   reuse_active_actor_queue
                     ? spot_handler_registry_t::actor_queue_dispatch_t::current_turn
                     : spot_handler_registry_t::actor_queue_dispatch_t::acquire,
-                  {}, {}, {}, 0, {}, {}, {}, packet.application_record, {},
+                  {}, {}, 0, {}, {}, {}, packet.application_record, {},
                   actor_ref.actor_id ().value ()));
         }
         catch (const framework_exception_t &error) {
@@ -12357,7 +12373,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
   serializer_registry_t &serializers,
   spot_inbound_message_t metadata,
   const runtime::protocol::actor_route_fence_t *admitted_message_follow_target,
-  std::function<void ()> before_application_handler,
+  runtime::handler_entry_t before_application_handler,
   std::function<void ()> after_application_admission,
   zlink::routing_id_t inbound_source_node_rid,
   runtime::protocol::wire_operation_id_t inbound_operation,
@@ -13097,10 +13113,10 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         invoked = result_t<zlink::message_t>::success (
           co_await spot_handler_registry_t (dispatch_plan.context_state)
             .invoke_erased (
-              handler_kind, packet_name, {}, factory.actor_type, dispatch_plan.spot_instance.get (),
-              actor_instance.get (), services, serializers, message, std::move (metadata),
-              dispatch_on_spot_serial, key, current_spot_id, claim_request, actor_queue_dispatch,
-              std::move (before_application_handler), after_application_admission,
+              std::move (before_application_handler), handler_kind, packet_name, {},
+              factory.actor_type, dispatch_plan.spot_instance.get (), actor_instance.get (),
+              services, serializers, message, std::move (metadata), dispatch_on_spot_serial, key,
+              current_spot_id, claim_request, actor_queue_dispatch, after_application_admission,
               std::move (transfer_owner_reservation), transferred_owner_byte_cost,
               admission_token ? admission_token->handler_terminal () : std::function<void ()>{},
               admit_queue, {}, application_record,
@@ -13821,6 +13837,10 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
     auto handler_task = [&] {
         try {
             return spot_handler_registry_t (state).invoke_erased (
+              [state, accept_activation = std::move (accept_activation)] {
+                  accept_activation ();
+                  state->spot_serial_executor->open_preparation_admission ();
+              },
               spot_handler_kind_t::packet, packet_name, {}, std::type_index (typeid (void)),
               state->spot_instance.get (), nullptr, services, serializers,
               zlink::message_t::from (payload),
@@ -13828,12 +13848,8 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
                                      .values = std::move (metadata),
                                      .mesh_name = state->mesh_name,
                                      .correlation_id = std::move (correlation_id)},
-              true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
-              [state, accept_activation = std::move (accept_activation)] {
-                  accept_activation ();
-                  state->spot_serial_executor->open_preparation_admission ();
-              },
-              {}, {}, 0, {}, {}, retained_message);
+              true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire, {}, {}, 0,
+              {}, {}, retained_message);
         }
         catch (...) {
             if (release_accepted_turn)
@@ -15111,7 +15127,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
   serializer_registry_t &serializers,
   std::function<void ()> deferred_terminal,
   bool *terminal_deferred,
-  std::function<void ()> before_application_handler,
+  runtime::handler_entry_t before_application_handler,
   runtime::serial_execution_queue_t::async_completion_t application_completed)
 {
     if (terminal_deferred)
@@ -15487,15 +15503,15 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                 auto handled =
                   spot_handler_registry_t (context_state)
                     .invoke_erased (
-                      spot_handler_kind_t::packet, header.message_name, {},
-                      std::type_index (typeid (void)), target->instance.get (), nullptr, services,
-                      serializers, body.value (),
+                      std::move (before_application_handler), spot_handler_kind_t::packet,
+                      header.message_name, {}, std::type_index (typeid (void)),
+                      target->instance.get (), nullptr, services, serializers, body.value (),
                       spot_inbound_message_t{.content_type = header.content_type,
                                              .values = header.metadata},
                       true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
-                      std::move (before_application_handler), [target] { target->release (); },
-                      record.release_mailbox_reservation, record.transferred_owner_byte_cost, {},
-                      {}, {}, record.application_record, std::move (on_export));
+                      [target] { target->release (); }, record.release_mailbox_reservation,
+                      record.transferred_owner_byte_cost, {}, {}, {}, record.application_record,
+                      std::move (on_export));
                 if (terminal_deferred)
                     *terminal_deferred = true;
                 detail::observe_task_completion (
@@ -16269,7 +16285,7 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
                                             const std::vector<zlink::message_t> &parts,
                                             service_provider_t &services,
                                             serializer_registry_t &serializers,
-                                            std::function<void ()> before_application_handler,
+                                            runtime::handler_entry_t before_application_handler,
                                             std::function<void ()> transfer_owner_reservation,
                                             std::size_t transferred_owner_byte_cost,
                                             const service::receive_record_t *multicast) const
@@ -16388,13 +16404,12 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
         && !detail::mesh_metadata_codec_t::decode (*multicast->metadata, inbound.values))
         return result_t<submission_t>::failure (framework_error_kind_t::protocol_error,
                                                 "logical multicast metadata is invalid");
-    return result_t<submission_t>::success (
-      registry.invoke_erased (spot_handler_kind_t::subscription, *packet_name, topic,
-                              std::type_index (typeid (void)), context._state->spot_instance.get (),
-                              nullptr, services, serializers, message, std::move (inbound), true,
-                              {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
-                              std::move (before_application_handler), {},
-                              std::move (transfer_owner_reservation), transferred_owner_byte_cost));
+    return result_t<submission_t>::success (registry.invoke_erased (
+      std::move (before_application_handler), spot_handler_kind_t::subscription, *packet_name,
+      topic, std::type_index (typeid (void)), context._state->spot_instance.get (), nullptr,
+      services, serializers, message, std::move (inbound), true, {}, {}, {},
+      spot_handler_registry_t::actor_queue_dispatch_t::acquire, {},
+      std::move (transfer_owner_reservation), transferred_owner_byte_cost));
 }
 
 

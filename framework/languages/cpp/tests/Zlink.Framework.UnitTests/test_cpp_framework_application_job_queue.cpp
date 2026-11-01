@@ -43,8 +43,10 @@ struct public_host_runtime_test_access_t
     static task_t<std::size_t> dispatch_claim (public_host_runtime_t &host,
                                                std::shared_ptr<mesh::service_mailbox_claim_t> claim)
     {
-        return host.dispatch_application_claim (std::move (claim),
-                                                [] (const auto &, const auto &, auto) {});
+        return host.dispatch_application_claim (
+          std::move (claim), [] (const auto &, const auto &record, auto, auto permit) {
+              handler_entry_t terminal (record.before_application_handler, std::move (permit));
+          });
     }
 };
 } // namespace zlink::framework::runtime::host
@@ -494,7 +496,7 @@ TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWith
     native->transport ().mailbox ().bind_application_dispatch ({}, {});
     unsigned terminals = 0;
     (void) native
-      ->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+      ->dispatch_ready ([&] (const auto &, const auto &record, auto, auto) {
           ++terminals;
           ASSERT_TRUE (record.application_record);
           ASSERT_TRUE (record.application_record->native_reply);
@@ -563,7 +565,7 @@ TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOrigina
         unsigned dispatched = 0;
         host::reply_token_t delayed_reply;
         (void) native
-          ->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+          ->dispatch_ready ([&] (const auto &, const auto &record, auto, auto) {
               ++dispatched;
               if (invalid_reply) {
                   ASSERT_TRUE (record.reply_token.local_reply);
@@ -613,7 +615,7 @@ TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOrigina
                      .value ());
         unsigned following_dispatched = 0;
         (void) native
-          ->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+          ->dispatch_ready ([&] (const auto &, const auto &record, auto, auto) {
               ++following_dispatched;
               EXPECT_TRUE (record.reply_token.local_reply ({zlink::message_t::from ("reply")}));
           })
@@ -663,10 +665,12 @@ TEST (ZLinkFrameworkApplicationJobQueue, LocalRequestsDoNotPublishWithoutSharedP
     std::size_t dispatched = 0;
     (void) native
       ->dispatch_ready (
-        [&] (const auto &, const auto &record, auto) {
+        [&] (const auto &, const auto &record, auto, auto permit) {
             ++dispatched;
-            ASSERT_TRUE (record.before_application_handler);
-            record.before_application_handler ();
+            zlink::framework::runtime::handler_entry_t before_application_handler (
+              record.before_application_handler, std::move (permit));
+            ASSERT_TRUE (before_application_handler);
+            before_application_handler ();
         },
         false)
       .result ()
@@ -713,11 +717,13 @@ TEST (ZLinkFrameworkApplicationJobQueue, LocalRequestsPreserveSubmissionOrderAcr
             ASSERT_LT (std::chrono::steady_clock::now (), deadline);
             (void) native
               ->dispatch_ready (
-                [&] (const auto &, const auto &record, auto) {
+                [&] (const auto &, const auto &record, auto, auto permit) {
                     ASSERT_LT (received, operations.size ());
                     EXPECT_EQ (operations[received++].id, record.operation_id);
-                    ASSERT_TRUE (record.before_application_handler);
-                    record.before_application_handler ();
+                    zlink::framework::runtime::handler_entry_t before_application_handler (
+                      record.before_application_handler, std::move (permit));
+                    ASSERT_TRUE (before_application_handler);
+                    before_application_handler ();
                 },
                 false)
               .result ()
@@ -757,10 +763,12 @@ TEST (ZLinkFrameworkApplicationJobQueue, ImmediateLocalRequestPublishesOnItsOwni
         std::size_t dispatched = 0;
         (void) native
           ->dispatch_ready (
-            [&] (const auto &, const auto &record, auto) {
+            [&] (const auto &, const auto &record, auto, auto permit) {
                 ++dispatched;
-                ASSERT_TRUE (record.before_application_handler);
-                record.before_application_handler ();
+                zlink::framework::runtime::handler_entry_t before_application_handler (
+                  record.before_application_handler, std::move (permit));
+                ASSERT_TRUE (before_application_handler);
+                before_application_handler ();
             },
             false)
           .result ()

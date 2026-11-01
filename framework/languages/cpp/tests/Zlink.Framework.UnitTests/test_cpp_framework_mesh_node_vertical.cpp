@@ -348,7 +348,7 @@ bool wait_until_admitted (zlink::framework::detail::mesh_node_runtime_t &node)
         (void) std::move (
           node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
                                    const zlink::framework::runtime::host::receive_record_t &,
-                                   std::vector<zlink::message_t>) {}))
+                                   std::vector<zlink::message_t>, auto) {}))
           .result ()
           .value ();
         std::this_thread::sleep_for (10ms);
@@ -401,7 +401,7 @@ bool wait_until_admitted_count (zlink::framework::detail::mesh_node_runtime_t &n
         (void) std::move (
           node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
                                    const zlink::framework::runtime::host::receive_record_t &,
-                                   std::vector<zlink::message_t>) {}))
+                                   std::vector<zlink::message_t>, auto) {}))
           .result ()
           .value ();
         std::this_thread::sleep_for (10ms);
@@ -454,7 +454,7 @@ bool receive_one (zlink::framework::detail::mesh_node_runtime_t &node,
         (void) std::move (
           node.dispatch_ready ([&] (const zlink::framework::runtime::host::ready_record_t &,
                                     const zlink::framework::runtime::host::receive_record_t &record,
-                                    std::vector<zlink::message_t> parts) {
+                                    std::vector<zlink::message_t> parts, auto) {
               matched = matched
                         || (record.kind == expected_kind && !parts.empty ()
                             && parts.front ().to_string () == expected_text);
@@ -479,7 +479,7 @@ bool reply_to_one_request (zlink::framework::detail::mesh_node_runtime_t &node,
         (void) std::move (
           node.dispatch_ready ([&] (const zlink::framework::runtime::host::ready_record_t &,
                                     const zlink::framework::runtime::host::receive_record_t &record,
-                                    std::vector<zlink::message_t> parts) {
+                                    std::vector<zlink::message_t> parts, auto) {
               if (record.kind == expected_kind && !parts.empty ()
                   && parts.front ().to_string () == expected_text) {
                   const std::vector<zlink::message_t> reply_parts{
@@ -831,7 +831,7 @@ void verify_local_join_timeout_releases_membership ()
     bool replied = false;
     (void) runtime
       .dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
-                            std::vector<zlink::message_t>) {
+                            std::vector<zlink::message_t>, auto) {
           if (record.kind == host::record_kind_t::spot_control)
               replied = host::actor_join_reply (
                 record.reply_token,
@@ -2211,7 +2211,7 @@ void verify_manual_peer_public_status ()
         (void) std::move (
           node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
                                    const zlink::framework::runtime::host::receive_record_t &,
-                                   std::vector<zlink::message_t>) {}))
+                                   std::vector<zlink::message_t>, auto) {}))
           .result ()
           .value ();
     };
@@ -2881,7 +2881,7 @@ int run_cross_process_delivery ()
             (void) std::move (
               node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
                                        const zlink::framework::runtime::host::receive_record_t &,
-                                       std::vector<zlink::message_t>) {}))
+                                       std::vector<zlink::message_t>, auto) {}))
               .result ()
               .value ();
             std::this_thread::sleep_for (10ms);
@@ -3177,7 +3177,7 @@ int run_cross_process_delivery ()
     (void) std::move (
       node.dispatch_ready ([&] (const zlink::framework::runtime::host::ready_record_t &owner,
                                 const zlink::framework::runtime::host::receive_record_t &record,
-                                std::vector<zlink::message_t> parts) {
+                                std::vector<zlink::message_t> parts, auto) {
           local_send_delivered =
             owner.owner_kind == zlink::framework::runtime::host::owner_kind_t::spot
             && owner.spot_id == "local-target"
@@ -3210,7 +3210,7 @@ int run_cross_process_delivery ()
     (void) std::move (
       node.dispatch_ready ([] (const zlink::framework::runtime::host::ready_record_t &,
                                const zlink::framework::runtime::host::receive_record_t &,
-                               std::vector<zlink::message_t>) {}))
+                               std::vector<zlink::message_t>, auto) {}))
       .result ()
       .value ();
     // Expiry claims the entry in this ingress turn; the already-reserved

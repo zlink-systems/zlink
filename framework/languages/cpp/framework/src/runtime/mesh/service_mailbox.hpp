@@ -69,12 +69,16 @@ struct service_bound_session_source_t
 struct service_mailbox_claim_t;
 class service_mailbox_t;
 
-// One local original stays inline until an authority continuation or relocation
-// cut needs a stable retained view. Promotion moves that same original once.
+// A local original stays inline until admission, authority lookup or relocation
+// needs a stable retained view. Promotion moves that same original once.
 class service_mailbox_application_t
 {
   public:
     service_mailbox_application_t () = default;
+    service_mailbox_application_t (host::local_application_dispatch_t &&original) :
+        _original (std::move (original))
+    {
+    }
     service_mailbox_application_t (service_mailbox_application_t &&) = default;
     service_mailbox_application_t &operator= (service_mailbox_application_t &&) = default;
     service_mailbox_application_t (const service_mailbox_application_t &) = delete;
@@ -91,15 +95,23 @@ class service_mailbox_application_t
         return _original.emplace<host::local_application_dispatch_t> (std::forward<Args> (args)...);
     }
     void reset () noexcept { _original.emplace<std::monostate> (); }
-
+    void emplace (std::shared_ptr<host::local_application_dispatch_t> original)
+    {
+        _original = std::move (original);
+    }
     std::shared_ptr<const host::local_application_dispatch_t> retain ()
+    {
+        return retain_mutable ();
+    }
+
+    std::shared_ptr<host::local_application_dispatch_t> retain_mutable ()
     {
         if (const auto shared =
               std::get_if<std::shared_ptr<host::local_application_dispatch_t>> (&_original))
             return *shared;
         // Allocation failure leaves the inline original and its callbacks untouched.
-        auto shared = std::make_shared<host::local_application_dispatch_t> ();
-        *shared = std::move (std::get<host::local_application_dispatch_t> (_original));
+        auto shared = std::make_shared<host::local_application_dispatch_t> (
+          std::move (std::get<host::local_application_dispatch_t> (_original)));
         _original = shared;
         return shared;
     }
@@ -142,7 +154,7 @@ struct service_mailbox_record_t
     std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
     std::optional<service_bound_session_source_t> bound_session_source;
     std::function<void ()> before_application_handler;
-    // Publication moves admission into the owning handler-entry callback.
+    // Admission moves with the original until its handler or terminal takes it.
     std::optional<application_job_queue_t::permit_t> application_permit;
     service_mailbox_application_t application;
     messaging::envelope_header_t envelope_header{.content_type = {}};
@@ -173,8 +185,10 @@ class service_mailbox_t
 
     using application_prepare_t = std::function<void (service_mailbox_record_t &)>;
     using application_ready_t = std::function<void (const std::string &)>;
-    using application_dispatch_t = std::function<void (
-      const host::ready_record_t &, const host::receive_record_t &, std::vector<zlink::message_t>)>;
+    using application_dispatch_t = std::function<void (const host::ready_record_t &,
+                                                       const host::receive_record_t &,
+                                                       std::vector<zlink::message_t>,
+                                                       application_job_queue_t::permit_t)>;
     using stateful_take_t = std::function<bool (const application_dispatch_t &)>;
     using stateful_ready_t = std::function<task_t<bool> (const std::string &, stateful_take_t)>;
     void bind_application_dispatch (application_prepare_t prepare,

@@ -208,7 +208,9 @@ int main ()
         const auto deadline = std::chrono::steady_clock::now () + 5s;
         while (source.admitted_peer_count () == 0 || target->admitted_peer_count () == 0) {
             assert (std::chrono::steady_clock::now () < deadline);
-            source.dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
+            source.dispatch_ready ([] (const auto &, const auto &, auto, auto) {})
+              .result ()
+              .value ();
             std::this_thread::yield ();
         }
         rt::messaging::client_call_codec_t codec;

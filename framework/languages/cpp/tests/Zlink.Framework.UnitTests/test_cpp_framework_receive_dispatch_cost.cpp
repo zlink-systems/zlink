@@ -104,7 +104,7 @@ int main ()
         state->routing_id = zlink::routing_id_t::from ("receive-cost");
         detail::mesh_node_runtime_t node (state);
         node.start ();
-        const dispatch_t dispatch = [] (const auto &, const auto &, auto) {
+        const dispatch_t dispatch = [] (const auto &, const auto &, auto, auto) {
             throw std::runtime_error ("empty receive invoked an application handler");
         };
         for (int path = 0; path != 3; ++path)
@@ -308,7 +308,7 @@ zlink_receive_dispatch_measure (std::size_t iterations,
         state->routing_id = zlink::routing_id_t::from ("receive-cost-dso");
         detail::mesh_node_runtime_t node (state);
         node.start ();
-        const dispatch_t dispatch = [] (const auto &, const auto &, auto) {
+        const dispatch_t dispatch = [] (const auto &, const auto &, auto, auto) {
             throw std::runtime_error ("empty DSO rotation invoked a handler");
         };
         for (int index = 0; index != 4; ++index)

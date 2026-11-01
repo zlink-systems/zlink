@@ -1811,7 +1811,7 @@ struct relay_peer_pair_t
     }
     void pump ()
     {
-        const auto discard = [] (const auto &, const auto &, auto) {};
+        const auto discard = [] (const auto &, const auto &, auto, auto) {};
         source->dispatch_ready (discard).result ().value ();
         target->dispatch_ready (discard).result ().value ();
     }
@@ -1935,8 +1935,9 @@ TEST (RelayAdmission, AcceptedRecordKeepsSourceOriginalAcrossDiscoveryChange)
           protocol::wire_operation_id_t{pair.source_wire.lifecycle_generation, 41});
         // A held dispatch turn keeps referring to its callbacks, so they outlive it.
         const std::function<void (const host::ready_record_t &, const host::receive_record_t &,
-                                  std::vector<zlink::message_t>)>
-          discard = [] (const auto &, const auto &, auto) {};
+                                  std::vector<zlink::message_t>,
+                                  zlink::framework::runtime::application_job_queue_t::permit_t)>
+          discard = [] (const auto &, const auto &, auto, auto) {};
         const std::function<bool ()> no_next_receive;
         std::optional<fw::task_t<std::size_t>> turn;
         // Settles the held claim and its dispatch turn before the hosts close.
@@ -3801,7 +3802,7 @@ TEST (NativeIntake, LocalAcceptedRecordReleasesAfterNativeTerminal)
     std::size_t received = 0;
     auto dispatch = [&] (const fw::runtime::host::ready_record_t &,
                          const fw::runtime::host::receive_record_t &record,
-                         std::vector<zlink::message_t>) {
+                         std::vector<zlink::message_t>, auto) {
         ++received;
         accepted = record.application_record;
         ASSERT_TRUE (record.application_record);
@@ -3849,7 +3850,7 @@ TEST (NativeIntake, LocalSourceAwaitKeepsCanonicalOriginalAndIgnoresStaleComplet
     auto old = claim;
     int dispatched = 0;
     auto pending = rt::host::public_host_runtime_test_access_t::dispatch_claim (
-      *host, claim, [&] (const auto &, const auto &record, auto) {
+      *host, claim, [&] (const auto &, const auto &record, auto, auto) {
           ++dispatched;
           ASSERT_TRUE (record.complete_stateful_dispatch);
           record.complete_stateful_dispatch ();
@@ -3875,7 +3876,7 @@ TEST (NativeIntake, LocalSourceAwaitKeepsCanonicalOriginalAndIgnoresStaleComplet
     ASSERT_TRUE (restored);
     EXPECT_EQ (rt::host::public_host_runtime_test_access_t::dispatch_claim (
                  *host, std::move (restored),
-                 [&] (const auto &, const auto &record, auto) {
+                 [&] (const auto &, const auto &record, auto, auto) {
                      ++dispatched;
                      ASSERT_TRUE (record.complete_stateful_dispatch);
                      record.complete_stateful_dispatch ();
@@ -3985,7 +3986,7 @@ TEST (NativeIntake, RawAuthorityFailureAfterSealKeepsClaimSuffix)
           fw::test::publish_stateful_claims (host->transport (), *object, std::move (records));
         int dispatched = 0;
         auto pending = rt::host::public_host_runtime_test_access_t::dispatch_claim (
-          *host, claim, [&] (const auto &, const auto &record, auto) {
+          *host, claim, [&] (const auto &, const auto &record, auto, auto) {
               ++dispatched;
               ASSERT_TRUE (record.complete_stateful_dispatch);
               record.complete_stateful_dispatch ();
@@ -4101,7 +4102,7 @@ TEST (NativeIntake, LocalSourceRejectionSettlesOnlyOwnedOriginal)
     const auto old = claim;
     int dispatched = 0;
     ASSERT_EQ (rt::host::public_host_runtime_test_access_t::dispatch_claim (
-                 *host, claim, [&] (const auto &, const auto &, auto) { ++dispatched; })
+                 *host, claim, [&] (const auto &, const auto &, auto, auto) { ++dispatched; })
                  .result ()
                  .value (),
                0u);
@@ -4324,7 +4325,7 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     std::size_t started = 0, rejected = 0, controls = 0, applications = 0;
     auto callback = [&] (const rt::host::ready_record_t &ready,
                          const rt::host::receive_record_t &record,
-                         std::vector<zlink::message_t> parts) {
+                         std::vector<zlink::message_t> parts, auto) {
         if (record.kind == rt::host::record_kind_t::spot_control) {
             EXPECT_TRUE (parts.empty ());
             ++controls;
@@ -4505,7 +4506,7 @@ TEST (NativeIntake, NativeMailboxTransferKeepsActualPrivateMClaim)
         } cleanup{mailbox_terminal, worker, queue, spot, host};
         const auto dispatch = [&] (const rt::host::ready_record_t &,
                                    const rt::host::receive_record_t &record,
-                                   std::vector<zlink::message_t> parts) {
+                                   std::vector<zlink::message_t> parts, auto) {
             EXPECT_EQ (parts.size (), 2u);
             const auto header = fw::detail::decode_actor_packet_header (
               rt::messaging::message_parts_t (parts), fw::detail::stream_message_kind_t::send,
@@ -6390,7 +6391,7 @@ TEST (ActorMaintenanceJoin, LocalDirectAdmissionUsesCurrentActorId)
     ASSERT_TRUE (
       node
         ->dispatch_ready ([&] (const host::ready_record_t &owner, const host::receive_record_t &,
-                               std::vector<zlink::message_t> received) {
+                               std::vector<zlink::message_t> received, auto) {
             ASSERT_TRUE (owner.actor);
             EXPECT_EQ (owner.actor->object_generation (), actor.ref ().object_generation ());
             ASSERT_EQ (received.size (), 1);

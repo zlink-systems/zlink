@@ -1560,7 +1560,7 @@ int transport_bound_close (bool tls, bool remote = false)
         caller->connect_peer (status.local_endpoint (), status.routing_id (),
                               status.lifecycle_generation ());
         const auto deadline = std::chrono::steady_clock::now () + 2s;
-        const auto noop = [] (const auto &, const auto &, auto) {};
+        const auto noop = [] (const auto &, const auto &, auto, auto) {};
         for (;;) {
             mesh->native_node ().dispatch_ready (noop).result ().value ();
             caller->dispatch_ready (noop).result ().value ();
@@ -1577,7 +1577,7 @@ int transport_bound_close (bool tls, bool remote = false)
         }
     }
     std::thread dispatcher ([&] {
-        const auto noop = [] (const auto &, const auto &, auto) {};
+        const auto noop = [] (const auto &, const auto &, auto, auto) {};
         while (!stop_dispatch.load ()) {
             mesh->native_node ().dispatch_ready (noop).result ().value ();
             if (remote)

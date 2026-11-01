@@ -272,11 +272,12 @@ TEST (SendAllocations, ReceiveTurnForwardsTheNativeTaskWithoutAnotherResult)
     node.start ();
     const auto native = [&] {
         return node.native_node ()
-          .dispatch_ready ([] (const auto &, const auto &, auto) {}, false)
+          .dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false)
           .result ();
     };
     const auto forward = [&] {
-        return node.dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ();
+        return node.dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false)
+          .result ();
     };
     ASSERT_TRUE (native ());
     ASSERT_TRUE (forward ());
@@ -377,7 +378,7 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
         ASSERT_TRUE (runtime.transport ().mailbox ().try_enqueue (std::move (record)));
         auto lifetime = std::make_shared<int> (1);
         std::weak_ptr<int> held = lifetime;
-        auto callback = [lifetime] (const auto &, const auto &, auto) {
+        auto callback = [lifetime] (const auto &, const auto &, auto, auto) {
             ADD_FAILURE () << "unexpected application callback";
         };
         auto next = [lifetime] { return false; };
