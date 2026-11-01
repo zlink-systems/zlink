@@ -2808,7 +2808,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     String spotId,
                     String stableType,
                     String meshName,
-                    Message payload,
+                    systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView
+                            payload,
                     Optional<String> packetName,
                     String contentType,
                     Map<String, String> metadata,
@@ -2842,7 +2843,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             .thenAccept(ignored -> {})
                                             .whenComplete(
                                                     (ignored, failure) -> {
-                                                        parts.forEach(Message::close);
+                                                        systems.zlink.framework.runtime.internal
+                                                                .service.ZLinkFrameworkMultipartView
+                                                                .closeAll(parts);
                                                     });
                                 });
             }

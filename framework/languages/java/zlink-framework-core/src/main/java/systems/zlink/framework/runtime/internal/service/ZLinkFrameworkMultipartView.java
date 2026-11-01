@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 
 import java.nio.ByteBuffer;
 import java.util.AbstractList;
@@ -15,13 +17,13 @@ import java.util.Objects;
 public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
         implements AutoCloseable {
     private final Object[] parts;
-    // The received frame the unmaterialized parts read from, when this view owns it.
-    private final Message frame;
+    // Keeps borrowed storage alive; outbound envelopes retain the moved payload owner.
+    private final AutoCloseable frame;
     private boolean detached;
     private boolean closed;
 
     /** Takes exclusive ownership of the codec's part slots and of {@code frame}, if any. */
-    ZLinkFrameworkMultipartView(Object[] parts, Message frame) {
+    ZLinkFrameworkMultipartView(Object[] parts, AutoCloseable frame) {
         this.parts = parts;
         this.frame = frame;
     }
@@ -54,13 +56,43 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
                 null);
     }
 
+    /** Transfers the single retained payload owner into its outbound envelope. */
+    public static ZLinkFrameworkMultipartView encoded(
+            byte[] header, ZLinkFrameworkMultipartView body) {
+        var envelope =
+                new ZLinkFrameworkMultipartView(
+                        new Object[] {Objects.requireNonNull(header, "header"), body.partValue(0)},
+                        body);
+        body.parts[0] = null;
+        return envelope;
+    }
+
+    public static ZLinkFrameworkMultipartView encoded(ZLinkEncodedPayload body) {
+        return new ZLinkFrameworkMultipartView(
+                new Object[] {ZLinkEncodedPayloadAccess.borrow(body)}, null);
+    }
+
+    /** Takes ownership of one already materialized outbound message. */
+    public static ZLinkFrameworkMultipartView owned(Message body) {
+        return new ZLinkFrameworkMultipartView(
+                new Object[] {Objects.requireNonNull(body, "body")}, null);
+    }
+
+    /** Snapshots caller-owned bytes into retained direct storage without a heap byte-array copy. */
+    public static ZLinkFrameworkMultipartView snapshot(byte[] body) {
+        Objects.requireNonNull(body, "body");
+        ByteBuffer snapshot = ByteBuffer.allocateDirect(body.length);
+        snapshot.put(body).flip();
+        return new ZLinkFrameworkMultipartView(new Object[] {snapshot}, null);
+    }
+
     /**
      * Reads one part without materializing it as a binding message. The view stays valid while this
      * record's frame owner is alive; a part already materialized is read in place.
      */
     public static ByteBuffer buffer(List<Message> parts, int index) {
         Object value = partValue(parts, index);
-        if (value instanceof ByteBuffer bytes) return bytes.duplicate();
+        if (value instanceof ByteBuffer bytes) return bytes.asReadOnlyBuffer();
         if (value instanceof byte[] bytes) return ByteBuffer.wrap(bytes).asReadOnlyBuffer();
         return ((Message) value).dataBuffer();
     }
@@ -129,12 +161,24 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
             // Every slot now owns a Message; List.of publishes an immutable list of them.
             List<Message> result = (List<Message>) (List<?>) List.of(parts);
             detached = true;
-            if (frame != null) frame.close();
+            closeOwner();
             return result;
         } catch (RuntimeException failure) {
             close();
             throw failure;
         }
+    }
+
+    /** Transfers the single part to a binding call, materializing it only at that boundary. */
+    public Message detachFirst() {
+        if (parts.length != 1) {
+            throw new IllegalStateException("multipart view does not contain exactly one part");
+        }
+        Message message = get(0);
+        parts[0] = null;
+        detached = true;
+        closeOwner();
+        return message;
     }
 
     @Override
@@ -150,7 +194,21 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
                 }
             }
         } finally {
-            if (frame != null) frame.close();
+            java.util.Arrays.fill(parts, null);
+            closeOwner();
+        }
+    }
+
+    private void closeOwner() {
+        if (frame != null) {
+            try {
+                frame.close();
+            } catch (RuntimeException | Error failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new IllegalStateException(
+                        "retained multipart owner could not be closed", failure);
+            }
         }
     }
 }

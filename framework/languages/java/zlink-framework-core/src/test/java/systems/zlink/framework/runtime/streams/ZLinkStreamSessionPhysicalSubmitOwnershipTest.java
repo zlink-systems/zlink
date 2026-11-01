@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistr
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
@@ -53,7 +54,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
                 new ZLinkStreamSessionSendCall(
                         stream,
                         SESSION,
-                        payload,
+                        ZLinkFrameworkMultipartView.owned(payload),
                         "Packet",
                         Map.of(),
                         false,
@@ -90,7 +91,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
                 new ZLinkStreamSessionSendCall(
                         stream,
                         SESSION,
-                        payload,
+                        ZLinkFrameworkMultipartView.owned(payload),
                         "Packet",
                         Map.of(),
                         false,
@@ -130,7 +131,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
                 new ZLinkStreamSessionReplyCall(
                         stream,
                         SESSION,
-                        replyPayload,
+                        ZLinkFrameworkMultipartView.owned(replyPayload),
                         context,
                         "Reply",
                         false,

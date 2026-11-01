@@ -4,6 +4,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 
@@ -36,19 +37,23 @@ final class ZLinkSpotRouteMessages {
     List<Message> encodeSend(
             String channelName,
             Optional<String> packetName,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             String contentType,
             Map<String, String> metadata,
             ZLinkFlowContext.State flowState) {
-        return encode(
-                ZLinkChannelEnvelope.KIND_COMMAND,
-                channelName,
-                packetName,
-                payload,
-                contentType,
-                null,
-                metadata,
-                flowState);
+        if (packetName.isEmpty()) {
+            return payload;
+        }
+        return ZLinkChannelEnvelope.encode(
+                header(
+                        ZLinkChannelEnvelope.KIND_COMMAND,
+                        channelName,
+                        packetName,
+                        contentType,
+                        null,
+                        metadata,
+                        flowState),
+                payload);
     }
 
     /** Request envelope (kind 1) with a generated correlation id. */
@@ -103,15 +108,26 @@ final class ZLinkSpotRouteMessages {
             return List.of(payload);
         }
         return ZLinkChannelEnvelope.encode(
-                ZLinkChannelEnvelope.create(
-                        kind,
-                        channelName,
-                        packetName.orElseThrow(),
-                        contentType,
-                        topic,
-                        metadata,
-                        flowState),
+                header(kind, channelName, packetName, contentType, topic, metadata, flowState),
                 payload);
+    }
+
+    private static ZLinkChannelEnvelope.Header header(
+            int kind,
+            String channelName,
+            Optional<String> packetName,
+            String contentType,
+            String topic,
+            Map<String, String> metadata,
+            ZLinkFlowContext.State flowState) {
+        return ZLinkChannelEnvelope.create(
+                kind,
+                channelName,
+                packetName.orElseThrow(),
+                contentType,
+                topic,
+                metadata,
+                flowState);
     }
 
     <TReply> TReply decodeReply(List<Message> replyParts, Class<TReply> replyType) {

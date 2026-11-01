@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import java.lang.reflect.Field;
@@ -359,13 +360,18 @@ final class ZLinkChannelSubmitTurnTest {
                     "orders",
                     sockets,
                     DEFAULT_TIMEOUT,
-                    Message.from("request"),
+                    ZLinkFrameworkMultipartView.owned(Message.from("request")),
                     Optional.of("packet"),
                     null);
         }
 
         ZLinkSendCall send() {
-            return new ChannelSendCall(runtime, "orders", sockets, Message.from("send"), "packet");
+            return new ChannelSendCall(
+                    runtime,
+                    "orders",
+                    sockets,
+                    ZLinkFrameworkMultipartView.owned(Message.from("send")),
+                    "packet");
         }
 
         ZLinkInternalSpotNode node(

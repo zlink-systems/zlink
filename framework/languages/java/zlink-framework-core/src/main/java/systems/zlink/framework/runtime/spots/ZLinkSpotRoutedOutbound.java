@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
 import java.time.Duration;
@@ -68,7 +69,7 @@ final class ZLinkSpotRoutedOutbound {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName) {
         return send(
                 routerChannelId, targetNodeRid, spotId, spotGeneration, payload, packetName, null);
@@ -79,7 +80,7 @@ final class ZLinkSpotRoutedOutbound {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType) {
         return new ZLinkSpotRoutedSendCall(
@@ -138,7 +139,7 @@ final class ZLinkSpotRoutedOutbound {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
             ZLinkApplicationMetadata metadata) {
@@ -180,7 +181,7 @@ final class ZLinkSpotRoutedOutbound {
                                     routerChannelId, targetNodeRid, spotId, spotGeneration, parts)
                             .whenComplete(
                                     (ignored, error) -> {
-                                        parts.forEach(Message::close);
+                                        ZLinkFrameworkMultipartView.closeAll(parts);
                                         if (error != null) {
                                             Logger.getLogger(
                                                             ZLinkSpotRoutedOutbound.class.getName())
@@ -191,7 +192,7 @@ final class ZLinkSpotRoutedOutbound {
                                         }
                                     }));
         } catch (RuntimeException error) {
-            parts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(parts);
             throw error;
         }
     }
@@ -306,7 +307,7 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
     private final RoutingId targetNodeRid;
     private final String spotId;
     private final long spotGeneration;
-    private final Message payload;
+    private final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
     private final String contentType;
     private final ZLinkApplicationMetadata metadata;
@@ -317,7 +318,7 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName) {
         this(
                 outbound,
@@ -337,7 +338,7 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType) {
         this(
@@ -358,7 +359,7 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
             ZLinkApplicationMetadata metadata) {
@@ -381,7 +382,7 @@ final class ZLinkSpotRoutedSendCall implements ZLinkSendCall {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
             ZLinkApplicationMetadata metadata,

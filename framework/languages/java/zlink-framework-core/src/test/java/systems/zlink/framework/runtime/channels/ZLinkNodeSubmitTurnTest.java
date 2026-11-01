@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
@@ -188,8 +189,8 @@ final class ZLinkNodeSubmitTurnTest {
                 }
                 ZLinkSendCall send = f.send().metadata(Map.of());
                 ZLinkRequestCall request = f.request().metadata(Map.of());
-                Message sendPayload = (Message) field(send, "payload");
-                Message requestPayload = (Message) field(request, "payload");
+                Message sendPayload = payloadMessage(send);
+                Message requestPayload = payloadMessage(request);
                 if (configuredRouter) {
                     assertSubmitFailure(UnsupportedOperationException.class, send::submit);
                     assertInstanceOf(
@@ -227,8 +228,8 @@ final class ZLinkNodeSubmitTurnTest {
         try (Fixture fixture = new Fixture()) {
             var send = fixture.runtime.sendToChannel("missing", "send");
             var request = fixture.runtime.requestToChannel("missing", "request");
-            Message sendPayload = (Message) field(send, "payload");
-            Message requestPayload = (Message) field(request, "payload");
+            Message sendPayload = payloadMessage(send);
+            Message requestPayload = payloadMessage(request);
             // Missing-route validation runs in the Registry submit turn; its stage retains the
             // original configuration exception and releases the encoded payload.
             assertSubmitFailure(ZLinkConfigurationException.class, send::submit);
@@ -694,6 +695,10 @@ final class ZLinkNodeSubmitTurnTest {
         Field field = object.getClass().getDeclaredField(name);
         field.setAccessible(true);
         return field.get(object);
+    }
+
+    private static Message payloadMessage(Object call) throws Exception {
+        return ((ZLinkFrameworkMultipartView) field(call, "payload")).getFirst();
     }
 
     private static void setField(Object object, String name, Object value) throws Exception {

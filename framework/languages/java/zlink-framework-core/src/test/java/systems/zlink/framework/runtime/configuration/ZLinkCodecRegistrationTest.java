@@ -30,13 +30,13 @@ final class ZLinkCodecRegistrationTest {
                 ZLinkPayloadEncoding.encode(serializer, new Probe("hello"));
 
         assertEquals("Probe", encoded.packetName());
-        assertEquals(
-                "AVRO:hello", new String(encoded.payload().toByteArray(), StandardCharsets.UTF_8));
+        try (var payload = encoded.payload()) {
+            byte[] bytes = payload.getFirst().toByteArray();
+            assertEquals("AVRO:hello", new String(bytes, StandardCharsets.UTF_8));
 
-        Probe decoded =
-                serializer.deserialize(
-                        ZLinkEncodedPayload.from(encoded.payload().toByteArray()), Probe.class);
-        assertEquals(new Probe("hello"), decoded);
+            Probe decoded = serializer.deserialize(ZLinkEncodedPayload.from(bytes), Probe.class);
+            assertEquals(new Probe("hello"), decoded);
+        }
     }
 
     @Test
@@ -58,8 +58,11 @@ final class ZLinkCodecRegistrationTest {
         ZLinkPayloadEncoding.EncodedPayload encoded =
                 ZLinkPayloadEncoding.encode(serializer, new Probe("hello"));
 
-        assertEquals(
-                "AVRO:hello", new String(encoded.payload().toByteArray(), StandardCharsets.UTF_8));
+        try (var payload = encoded.payload()) {
+            assertEquals(
+                    "AVRO:hello",
+                    new String(payload.getFirst().toByteArray(), StandardCharsets.UTF_8));
+        }
     }
 
     @Test

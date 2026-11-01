@@ -8,6 +8,7 @@ import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.streams.ZLinkSessionClient;
 import systems.zlink.framework.streams.ZLinkSessionReplyCall;
@@ -90,7 +91,7 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
 record ZLinkStreamSessionSendCall(
         ZLinkBackendStreamSocket stream,
         RoutingId routingId,
-        Message payload,
+        ZLinkFrameworkMultipartView payload,
         String packetName,
         Map<String, String> metadata,
         boolean compressed,
@@ -102,7 +103,7 @@ record ZLinkStreamSessionSendCall(
     ZLinkStreamSessionSendCall(
             ZLinkBackendStreamSocket stream,
             RoutingId routingId,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             String packetName,
             Map<String, String> metadata,
             boolean compressed,
@@ -124,7 +125,7 @@ record ZLinkStreamSessionSendCall(
     ZLinkStreamSessionSendCall(
             ZLinkBackendStreamSocket stream,
             RoutingId routingId,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             String packetName,
             Map<String, String> metadata,
             boolean compressed,
@@ -203,7 +204,8 @@ record ZLinkStreamSessionSendCall(
                 ZLinkFlowContext.enterCurrentOrCreate(
                         ZLinkFlowOrigin.APPLICATION, flow != null && flow.captureEnabled())) {
             ZLinkStreamPayloadCodec.Encoded encoded =
-                    ZLinkStreamPayloadCodec.encode(payload, compressed, compressionCodec);
+                    ZLinkStreamPayloadCodec.encode(
+                            payload.getFirst(), compressed, compressionCodec);
             ZLinkStreamHeader header =
                     new ZLinkStreamHeader(
                             ZLinkStreamMessageKind.SEND,
@@ -228,7 +230,7 @@ record ZLinkStreamSessionSendCall(
 record ZLinkStreamSessionReplyCall(
         ZLinkBackendStreamSocket stream,
         RoutingId routingId,
-        Message payload,
+        ZLinkFrameworkMultipartView payload,
         ZLinkStreamSessionContextState context,
         String packetName,
         boolean compressed,
@@ -240,7 +242,7 @@ record ZLinkStreamSessionReplyCall(
     ZLinkStreamSessionReplyCall(
             ZLinkBackendStreamSocket stream,
             RoutingId routingId,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             ZLinkStreamSessionContextState context,
             String packetName,
             boolean compressed,
@@ -262,7 +264,7 @@ record ZLinkStreamSessionReplyCall(
     ZLinkStreamSessionReplyCall(
             ZLinkBackendStreamSocket stream,
             RoutingId routingId,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             ZLinkStreamSessionContextState context,
             String packetName,
             boolean compressed,
@@ -324,7 +326,8 @@ record ZLinkStreamSessionReplyCall(
                                 "The request reply token has already been used."));
             }
             ZLinkStreamPayloadCodec.Encoded encoded =
-                    ZLinkStreamPayloadCodec.encode(payload, compressed, compressionCodec);
+                    ZLinkStreamPayloadCodec.encode(
+                            payload.getFirst(), compressed, compressionCodec);
             List<Message> parts = List.of(Message.from(encoded.payload()));
             ZLinkStreamHeader current = currentHeader.get();
             ZLinkStreamHeader replyHeader =

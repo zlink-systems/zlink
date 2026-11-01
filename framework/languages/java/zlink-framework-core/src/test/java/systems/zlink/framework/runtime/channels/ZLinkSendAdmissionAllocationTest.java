@@ -88,7 +88,7 @@ public final class ZLinkSendAdmissionAllocationTest {
             try (Fixture fixture = new Fixture(kind)) {
                 fixture.submission = ZLinkOneWayCalls.immediateAdmission();
                 var immediate = fixture.send();
-                assertTrue(fixture.parts.stream().allMatch(Message::empty), kind.name());
+                assertTrue(fixture.payload.empty(), kind.name());
                 var first = immediate.toCompletableFuture();
                 var second = immediate.toCompletableFuture();
                 assertNotSame(first, second);
@@ -97,20 +97,19 @@ public final class ZLinkSendAdmissionAllocationTest {
 
                 fixture.submission = CompletableFuture.completedFuture(null);
                 assertFalse(ZLinkOneWayCalls.isImmediateAdmission(fixture.send()));
-                assertTrue(fixture.parts.stream().allMatch(Message::empty));
+                assertTrue(fixture.payload.empty());
 
                 fixture.submission =
                         CompletableFuture.failedFuture(
                                 new ZlinkSubmitException(SubmitResult.NOT_FOUND));
                 assertUnavailable(fixture.send());
-                assertTrue(fixture.parts.stream().allMatch(Message::empty));
+                assertTrue(fixture.payload.empty());
 
                 for (int terminal = 0; terminal < 4; terminal++) {
                     var pending = new CompletableFuture<Void>();
                     fixture.submission = pending;
                     var caller = fixture.send().toCompletableFuture();
-                    assertFalse(
-                            fixture.parts.getLast().empty(), "pending send retains its payload");
+                    assertFalse(fixture.payload.empty(), "pending send retains its payload");
                     assertFalse(caller.isDone());
                     if (terminal == 0) {
                         pending.complete(null);
@@ -124,7 +123,7 @@ public final class ZLinkSendAdmissionAllocationTest {
                         assertFalse(
                                 pending.isDone(),
                                 "caller cancellation does not revoke binding admission");
-                        assertFalse(fixture.parts.getLast().empty());
+                        assertFalse(fixture.payload.empty());
                         pending.complete(null);
                     } else {
                         pending.cancel(false);
@@ -136,7 +135,7 @@ public final class ZLinkSendAdmissionAllocationTest {
                         assertInstanceOf(
                                 java.util.concurrent.CancellationException.class, cancelled);
                     }
-                    assertTrue(fixture.parts.stream().allMatch(Message::empty), kind.name());
+                    assertTrue(fixture.payload.empty(), kind.name());
                 }
             }
         }
@@ -151,9 +150,9 @@ public final class ZLinkSendAdmissionAllocationTest {
                 var caller = fixture.send().toCompletableFuture();
                 assertTrue(caller.cancel(false));
                 assertFalse(binding.isDone());
-                assertFalse(fixture.parts.getLast().empty());
+                assertFalse(fixture.payload.empty());
                 binding.complete(null);
-                boolean closed = fixture.parts.stream().allMatch(Message::empty);
+                boolean closed = fixture.payload.empty();
                 System.out.printf("caller-cancel kind=%s payloadsClosed=%s%n", kind, closed);
                 try {
                     assertTrue(closed, kind.name());
@@ -172,17 +171,17 @@ public final class ZLinkSendAdmissionAllocationTest {
             var caller = fixture.send().toCompletableFuture();
             assertTrue(caller.cancel(false));
             assertFalse(admission.isDone());
-            assertFalse(fixture.parts.getLast().empty());
+            assertFalse(fixture.payload.empty());
             admission.complete(ZLinkOneWayCalls.SUBMITTED);
             try {
-                assertTrue(fixture.parts.stream().allMatch(Message::empty));
+                assertTrue(fixture.payload.empty());
             } finally {
                 ZLinkFrameworkMultipartView.closeAll(fixture.parts);
             }
             fixture.localSubmission =
                     CompletableFuture.completedFuture(ZLinkOneWayCalls.ROUTE_NOT_CONNECTED);
             assertUnavailable(fixture.send());
-            assertTrue(fixture.parts.stream().allMatch(Message::empty));
+            assertTrue(fixture.payload.empty());
         }
     }
 
@@ -320,6 +319,7 @@ public final class ZLinkSendAdmissionAllocationTest {
         final ZLinkChannelCallRuntime runtime;
         CompletionStage<Void> submission = ZLinkOneWayCalls.immediateAdmission();
         List<Message> parts = List.of();
+        Message payload;
         CompletionStage<Integer> localSubmission =
                 CompletableFuture.completedFuture(ZLinkOneWayCalls.SUBMITTED);
 
@@ -356,6 +356,7 @@ public final class ZLinkSendAdmissionAllocationTest {
                                         @SuppressWarnings("unchecked")
                                         List<Message> sent = (List<Message>) args[args.length - 1];
                                         parts = sent;
+                                        payload = sent.getLast();
                                         yield submission;
                                     }
                                     case "routingId" ->
@@ -364,6 +365,7 @@ public final class ZLinkSendAdmissionAllocationTest {
                                         @SuppressWarnings("unchecked")
                                         List<Message> sent = (List<Message>) args[args.length - 1];
                                         parts = sent;
+                                        payload = sent.getLast();
                                         yield Optional.of(localSubmission);
                                     }
                                     case "classifyNodeSendTarget" -> Optional.empty();
@@ -389,14 +391,19 @@ public final class ZLinkSendAdmissionAllocationTest {
             ZLinkSendCall call =
                     switch (kind) {
                         case CLIENT, MESH_CHANNEL ->
-                                new ChannelSendCall(runtime, CHANNEL, sockets, payload, null);
+                                new ChannelSendCall(
+                                        runtime,
+                                        CHANNEL,
+                                        sockets,
+                                        ZLinkFrameworkMultipartView.owned(payload),
+                                        null);
                         default ->
                                 new RouteSendCall(
                                         runtime,
                                         CHANNEL,
                                         sockets,
                                         TARGET,
-                                        payload,
+                                        ZLinkFrameworkMultipartView.owned(payload),
                                         null,
                                         ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
                                         null);

@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSoc
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
@@ -116,7 +117,7 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         sockets(router),
                                                         TIMEOUT,
                                                         TARGET,
-                                                        payload,
+                                                        ZLinkFrameworkMultipartView.owned(payload),
                                                         Optional.of("request"),
                                                         null,
                                                         ZLinkChannelContentTypeFrame
@@ -156,7 +157,7 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         sockets(router),
                                                         TIMEOUT,
                                                         TARGET,
-                                                        payload,
+                                                        ZLinkFrameworkMultipartView.owned(payload),
                                                         Optional.of("request"),
                                                         null,
                                                         ZLinkChannelContentTypeFrame
@@ -192,7 +193,7 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         "orders",
                                                         sockets(node),
                                                         TIMEOUT,
-                                                        payload,
+                                                        ZLinkFrameworkMultipartView.owned(payload),
                                                         Optional.of("request"),
                                                         TIMEOUT)
                                                 .submit(String.class)
@@ -227,7 +228,7 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         "orders",
                                                         sockets(node),
                                                         TIMEOUT,
-                                                        payload,
+                                                        ZLinkFrameworkMultipartView.owned(payload),
                                                         Optional.of("request"),
                                                         TIMEOUT)
                                                 .submit(String.class)
@@ -260,7 +261,7 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         "orders",
                                                         sockets(node),
                                                         TARGET,
-                                                        payload,
+                                                        ZLinkFrameworkMultipartView.owned(payload),
                                                         "command",
                                                         ZLinkChannelContentTypeFrame
                                                                 .DEFAULT_CONTENT_TYPE,
@@ -302,7 +303,8 @@ final class ZLinkChannelSubmissionFailureTest {
                                                                 "orders",
                                                                 registry,
                                                                 TARGET,
-                                                                payload,
+                                                                ZLinkFrameworkMultipartView.owned(
+                                                                        payload),
                                                                 "command",
                                                                 ZLinkChannelContentTypeFrame
                                                                         .DEFAULT_CONTENT_TYPE,
@@ -338,7 +340,7 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         runtime,
                                                         "orders",
                                                         sockets(node),
-                                                        payload,
+                                                        ZLinkFrameworkMultipartView.owned(payload),
                                                         "command")
                                                 .submit());
 

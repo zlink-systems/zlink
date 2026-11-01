@@ -10,6 +10,7 @@ import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
@@ -37,7 +38,7 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
     private final SpotTransportAddressResolver resolver;
     private final Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots;
     private final String target;
-    private final Message payload;
+    private final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
     private final String contentType;
     private final boolean instanceIntent;
@@ -51,7 +52,7 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
             SpotTransportAddressResolver resolver,
             Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
             String target,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName) {
         this(
                 runtime,
@@ -74,7 +75,7 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
             SpotTransportAddressResolver resolver,
             Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
             String target,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
             boolean instanceIntent,
@@ -103,7 +104,7 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
             SpotTransportAddressResolver resolver,
             Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
             String target,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
             boolean instanceIntent,
@@ -262,7 +263,11 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                                                                                 ? CompletableFuture
                                                                                         .failedFuture(
                                                                                                 new ZLinkConfigurationException(
-                                                                                                        "Instance Spot runtime is not configured"))
+                                                                                                        "Instance"
+                                                                                                                + " Spot"
+                                                                                                                + " runtime"
+                                                                                                                + " is not"
+                                                                                                                + " configured"))
                                                                                 : activation.send(
                                                                                         target,
                                                                                         stableType,
@@ -287,7 +292,7 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
 
     private CompletionStage<Void> submitExisting(SpotTransportAddress address) {
         List<Message> sendParts =
-                ZLinkChannelCallRuntime.copyEnvelopeParts(
+                ZLinkChannelCallRuntime.envelopeParts(
                         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_COMMAND,
                         channelName,
                         packetName,
@@ -321,7 +326,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
     private final SpotTransportAddressResolver resolver;
     private final Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots;
     private final String target;
-    private final Message payload;
+    private final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
     private final Duration timeout;
     private final String contentType;
@@ -337,7 +342,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
             SpotTransportAddressResolver resolver,
             Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
             String target,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             Duration timeout) {
         this(
@@ -364,7 +369,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
             SpotTransportAddressResolver resolver,
             Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
             String target,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             Duration timeout,
             String contentType,
@@ -397,7 +402,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
             SpotTransportAddressResolver resolver,
             Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
             String target,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             Duration timeout,
             String contentType,
@@ -624,7 +629,11 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                                                                                     ? CompletableFuture
                                                                                             .failedFuture(
                                                                                                     new ZLinkConfigurationException(
-                                                                                                            "Instance Spot runtime is not configured"))
+                                                                                                            "Instance"
+                                                                                                                    + " Spot"
+                                                                                                                    + " runtime"
+                                                                                                                    + " is not"
+                                                                                                                    + " configured"))
                                                                                     : activateRequest(
                                                                                             activation,
                                                                                             replyType,
@@ -670,7 +679,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         target,
                         stableType,
                         selectedMesh,
-                        payload,
+                        payload.getFirst(),
                         packetName,
                         contentType,
                         metadata.values(),
@@ -692,7 +701,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
             SpotTransportAddress address, Class<TReply> replyType) {
         UUID operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts =
-                ZLinkChannelCallRuntime.copyEnvelopeParts(
+                ZLinkChannelCallRuntime.envelopeParts(
                         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
                         channelName,
                         packetName,

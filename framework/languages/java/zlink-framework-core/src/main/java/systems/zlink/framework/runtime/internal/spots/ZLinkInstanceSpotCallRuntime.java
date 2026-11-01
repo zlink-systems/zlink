@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.spots;
 
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 
 import java.time.Duration;
 import java.util.List;
@@ -21,7 +22,7 @@ public interface ZLinkInstanceSpotCallRuntime {
             String spotId,
             String stableType,
             String meshName,
-            Message payload,
+            ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
             Map<String, String> metadata,
