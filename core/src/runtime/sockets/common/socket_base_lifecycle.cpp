@@ -965,6 +965,19 @@ int zlink::socket_base_t::start_async_mailbox_processing (io_thread_t *io_thread
     return rc;
 }
 
+bool zlink::socket_base_t::has_async_command_processing_lease (
+  bool require_unowned_) const
+{
+    // The progress gate owns command leases. A completion poller owns reply
+    // drain, so its registration cannot retain a temporary command executor.
+    return monitor_runtime ().owns_async_command_processing.load (
+             std::memory_order_acquire)
+           || _transport_pair_owner_progress_refs != 0
+           || (require_unowned_
+               && _async_command_processing_retained.load (
+                 std::memory_order_acquire));
+}
+
 bool zlink::socket_base_t::stop_async_mailbox_processing (
   bool require_unowned_)
 {
@@ -983,17 +996,10 @@ bool zlink::socket_base_t::stop_async_mailbox_processing (
         // a temporary transport owner keep their command lease even while that
         // public poller stays idle: the pair READY/attach commands queued under
         // the transport lease must not wait for an application poll.
-        if (monitor_runtime ().owns_async_command_processing.load (
-              std::memory_order_acquire)
-            || _transport_pair_owner_progress_refs != 0)
+        if (has_async_command_processing_lease (require_unowned_))
             return false;
         if (require_unowned_
-            && (_async_command_processing_retained.load (
-                  std::memory_order_acquire)
-                || _completion_poller_refs.load (
-                  std::memory_order_acquire)
-                     != 0
-                || !lifecycle_coordinator ().is_async_mailbox_active ()
+            && (!lifecycle_coordinator ().is_async_mailbox_active ()
                 || lifecycle_coordinator ().is_async_quiesce_pending ()))
             return false;
         _async_command_processing_stop_requested = false;
@@ -1172,7 +1178,7 @@ void zlink::socket_base_t::release_monitor_async_command_processing ()
             return;
     }
     // A session callback can need this owner on its own I/O thread. Let the
-    // existing idle turn detach atomically with lease acquisition instead of
+    // existing command turn detach atomically with lease acquisition instead of
     // publishing quiescence that the callback would have to wait for.
     request_unowned_async_command_processing_stop ();
 }
@@ -1194,13 +1200,7 @@ void zlink::socket_base_t::request_unowned_async_command_processing_stop (
     bool schedule_recheck = false;
     {
         scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
-        const bool leased =
-          monitor_runtime ().owns_async_command_processing.load (
-            std::memory_order_acquire)
-          || _transport_pair_owner_progress_refs != 0
-          || _async_command_processing_retained.load (
-            std::memory_order_acquire)
-          || _completion_poller_refs.load (std::memory_order_acquire) != 0;
+        const bool leased = has_async_command_processing_lease (true);
         if (leased || !lifecycle_coordinator ().is_async_mailbox_active ()) {
             _async_command_processing_stop_requested = false;
             return;
@@ -1215,7 +1215,7 @@ void zlink::socket_base_t::request_unowned_async_command_processing_stop (
         return;
 
     // signal() alone does not post an idle mailbox handler. A real no-op
-    // command makes the current executor revisit its idle detach boundary.
+    // command makes the current executor revisit its ownership boundary.
     command_t wake;
     memset (&wake, 0, sizeof (wake));
     wake.destination = this;
@@ -1223,21 +1223,14 @@ void zlink::socket_base_t::request_unowned_async_command_processing_stop (
     static_cast<mailbox_t *> (_mailbox)->send (wake);
 }
 
-bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
+bool zlink::socket_base_t::stop_unowned_async_command_processing ()
 {
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
     socket_public_api_lock_scope_t command_owner (
       lifecycle, !lifecycle.public_api_sync_owned_by_current_thread ());
-    bool stopped = false;
     {
         scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
-        const bool leased =
-          monitor_runtime ().owns_async_command_processing.load (
-            std::memory_order_acquire)
-          || _transport_pair_owner_progress_refs != 0
-          || _async_command_processing_retained.load (
-            std::memory_order_acquire)
-          || _completion_poller_refs.load (std::memory_order_acquire) != 0;
+        const bool leased = has_async_command_processing_lease (true);
         if (!_async_command_processing_stop_requested || leased
           || !lifecycle.is_async_mailbox_active ()) {
             if (leased)
@@ -1251,9 +1244,9 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
         if (has_pending_term_acks ())
             return false;
 
-        // An empty mailbox is not idle while a pipe still owes a termination
-        // acknowledgement. Its peer can enqueue that acknowledgement only
-        // after this executor yields; retain the command owner until then.
+        // A terminating pipe still requires background command progress.
+        // Its peer can enqueue the acknowledgement only after this executor
+        // yields; retain the command owner until then.
         {
             scoped_lock_t pipes_lock (monitor_runtime ().sync);
             for (size_t i = 0;
@@ -1269,24 +1262,21 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
 #endif
 
         mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
-        // Keep the owner gate across the final empty check, physical detach and
-        // lifecycle publication. An acquire therefore either cancels the
-        // request before this point or observes a completely detached executor
-        // and starts a new one; it can never borrow an executor already
-        // committed to stop.
-        if (!mailbox->detach_io_context_if_idle ())
-            return false;
-        invalidate_completion_processing_owner ();
+        // The command turn and progress gate fence the complete transfer.
+        // Pending commands belong to the inline owner after detach; they do
+        // not extend a released lease. An acquire sees either the current
+        // executor or a completely detached mailbox.
+        mailbox->detach_io_context ();
+        // An unretained command lease never publishes a completion owner.
+        // The public poller's completion owner remains valid across this turn.
         lifecycle.stop_async_mailbox_processing (NULL);
         _async_command_processing_stop_requested = false;
         // A new executor also takes the owner gate before installing itself, so
         // publish the detached state before letting that acquire proceed.
         lifecycle.mark_async_processing_stopped (NULL);
-        stopped = true;
     }
-    if (stopped)
-        notify_receive_progress ();
-    return stopped;
+    notify_receive_progress ();
+    return true;
 }
 
 int zlink::socket_base_t::acquire_transport_pair_owner_progress ()
@@ -1745,8 +1735,7 @@ void zlink::socket_base_t::process_async_mailbox ()
                 socket_public_api_lock_scope_t command_owner (
                   lifecycle_coordinator (),
                   !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
-                if (!mailbox->detach_io_context_if_idle ())
-                    continue;
+                mailbox->detach_io_context ();
                 if (_completion_poller_refs.load (
                       std::memory_order_acquire)
                     == 0)
@@ -1757,7 +1746,7 @@ void zlink::socket_base_t::process_async_mailbox ()
             check_destroy ();
             return;
         }
-        if (stop_unowned_async_command_processing_at_idle ())
+        if (stop_unowned_async_command_processing ())
             return;
         if (lifecycle_coordinator ().is_async_mailbox_active ()) {
             process_deferred_socket_msg_pipe_terminations ();
@@ -1771,8 +1760,7 @@ void zlink::socket_base_t::process_async_mailbox ()
             socket_public_api_lock_scope_t command_owner (
               lifecycle_coordinator (),
               !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
-            if (!mailbox->detach_io_context_if_idle ())
-                continue;
+            mailbox->detach_io_context ();
             if (_completion_poller_refs.load (std::memory_order_acquire) == 0)
                 invalidate_completion_processing_owner ();
             //  Signal quiesce completion to waiting close()/start_reaping().
