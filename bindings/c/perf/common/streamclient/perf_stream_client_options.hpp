@@ -28,6 +28,7 @@ struct client_options_t
     std::vector<size_t> sizes;
     int runs;
     int duration;
+    int latency_duration;
     int completion_wait_ms;
     int size_transition_completion_wait_ms;
     int io_threads;
@@ -44,6 +45,7 @@ struct client_options_t
         sizes (),
         runs (1),
         duration (10),
+        latency_duration (10),
         completion_wait_ms (500),
         size_transition_completion_wait_ms (0),
         io_threads (4),
@@ -107,6 +109,16 @@ inline bool parse_options (int argc, char **argv, client_options_t &opt)
     opt.ccu = args.get_int ("--ccu", opt.ccu, 1);
     opt.runs = args.get_int ("--runs", opt.runs, 1);
     opt.duration = args.get_int ("--duration", opt.duration, 1);
+    const char *latency_duration = std::getenv ("PERF_MULTI_LATENCY_DURATION_SECONDS");
+    opt.latency_duration = opt.duration;
+    if (latency_duration && *latency_duration) {
+        char *end = NULL;
+        const long parsed = std::strtol (latency_duration, &end, 10);
+        if (end != latency_duration && *end == '\0')
+            opt.latency_duration = static_cast<int> (
+              std::max<long> (1, std::min<long> (std::numeric_limits<int>::max (), parsed)));
+    }
+    opt.latency_duration = args.get_int ("--latency-duration", opt.latency_duration, 1);
     opt.completion_wait_ms = args.get_int ("--completion-wait-ms", opt.completion_wait_ms, 0);
     opt.size_transition_completion_wait_ms = args.get_int (
       "--size-transition-completion-wait-ms", opt.size_transition_completion_wait_ms, 0);

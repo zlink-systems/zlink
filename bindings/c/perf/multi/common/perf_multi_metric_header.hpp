@@ -15,7 +15,8 @@ enum phase_t
     phase_unknown = 255,
     phase_warmup = 0,
     phase_active = 1,
-    phase_cooldown = 2
+    phase_cooldown = 2,
+    phase_latency = 3
 };
 
 struct header_t

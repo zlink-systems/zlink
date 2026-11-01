@@ -571,7 +571,8 @@ Run only multi-socket benchmark patterns.
 Default PATTERN is:
   DEALER_DEALER,DEALER_ROUTER_SENDSEND,ROUTER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_REQREP,PUBSUB,STREAM
 This script invokes the shared comparison runner directly.
-By default, multi-bench uses ready -> active with a 5s duration window.
+By default, multi-bench measures saturated throughput for 5s, drains, then
+measures latency at 80% of the sender rate after 0.5s settling, for another 5s.
 By default, multi-bench uses transports: tcp,tls,ws,wss (can be overridden with --transports).
 Policy contract:
   - benchmark binaries execute one pattern/transport/size/run case only
@@ -604,6 +605,7 @@ Options:
   --part-count N         Application frame count per measured message (1 or 2; default: 2).
   --transports LIST      Comma-separated transports.
   --duration N           Optional override for multi duration seconds (default 5).
+  --latency-duration N   Latency seconds (positive integer; default: --duration).
   --clients N            Override client count (default: 100).
   --hwm BYTES            Debug-only byte override PERF_MULTI_HWM.
                          Requires PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1.
@@ -774,6 +776,8 @@ HAS_EXPLICIT_RESULTS_DIR=0
 BUILD_MODE="incremental"
 BUILD_MODE_EXPLICIT=0
 DURATION_SECONDS="${PERF_MULTI_DURATION_SECONDS:-${PERF_DURATION_SECONDS:-5}}"
+LATENCY_DURATION_SECONDS="${PERF_MULTI_LATENCY_DURATION_SECONDS:-}"
+HAS_EXPLICIT_LATENCY_DURATION=0
 CLIENTS="${PERF_MULTI_CLIENTS:-${PERF_CLIENTS:-}}"
 EFFECTIVE_DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
 EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
@@ -922,6 +926,20 @@ while [[ $# -gt 0 ]]; do
       fi
       DURATION_SECONDS="${2}"
       shift 2
+      ;;
+    --latency-duration)
+      HAS_EXPLICIT_LATENCY_DURATION=1
+      if [[ $# -lt 2 ]]; then
+        echo "Error: $1 requires a value." >&2
+        exit 1
+      fi
+      LATENCY_DURATION_SECONDS="${2}"
+      shift 2
+      ;;
+    --latency-duration=*)
+      HAS_EXPLICIT_LATENCY_DURATION=1
+      LATENCY_DURATION_SECONDS="${1#*=}"
+      shift
       ;;
     --pin-cpu)
       SCRIPT_ARGS+=( "$1" )
@@ -1136,6 +1154,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "${HAS_EXPLICIT_LATENCY_DURATION}" -eq 0 && -z "${LATENCY_DURATION_SECONDS}" ]]; then
+  LATENCY_DURATION_SECONDS="${DURATION_SECONDS}"
+fi
+if [[ ! "${LATENCY_DURATION_SECONDS}" =~ ^[0-9]+$ || ! "${LATENCY_DURATION_SECONDS}" =~ [1-9] ]]; then
+  echo "Error: --latency-duration must be a positive integer." >&2
+  exit 1
+fi
+
 if [[ "${HAS_EXPLICIT_MSG_SIZES}" -eq 1 ]]; then
   STREAM_MSG_SIZES="${MSG_SIZES}"
 fi
@@ -1255,6 +1281,7 @@ fi
 
 RUN_BASE_ARGS=()
 RUN_BASE_ARGS+=(--duration "${DURATION_SECONDS}")
+RUN_BASE_ARGS+=(--latency-duration "${LATENCY_DURATION_SECONDS}")
 if [[ "${HAS_EXPLICIT_RUNS}" -eq 0 ]]; then
   RUN_BASE_ARGS+=(--runs "1")
 fi
@@ -1268,6 +1295,7 @@ RUN_ENV+=(PERF_ALLOW_MULTI="1")
 RUN_ENV+=(PERF_POLICY="1")
 RUN_ENV+=(PERF_RESULTS_DIR="${RESULTS_DIR_OVERRIDE}")
 RUN_ENV+=(PERF_MULTI_DURATION_SECONDS="${DURATION_SECONDS}")
+RUN_ENV+=(PERF_MULTI_LATENCY_DURATION_SECONDS="${LATENCY_DURATION_SECONDS}")
 RUN_ENV+=(PERF_TRANSPORTS="${TRANSPORTS}")
 RUN_ENV+=(PERF_PART_COUNT="${PART_COUNT}")
 if [[ -n "${MSG_SIZES}" ]]; then
@@ -1571,7 +1599,7 @@ PATTERN_CSV_DISPLAY="$(
   echo "${local_items[*]}"
 )"
 echo "=== Running multi benchmark: ${PATTERN_CSV_DISPLAY} ==="
-echo "    duration=${DURATION_SECONDS}s"
+echo "    duration=${DURATION_SECONDS}s latency_duration=${LATENCY_DURATION_SECONDS}s"
 RUN_EXIT_CODE=0
 if [[ ! -f "${PERF_COMPARISON_SCRIPT}" ]]; then
   echo "Error: comparison script not found: ${PERF_COMPARISON_SCRIPT}" >&2

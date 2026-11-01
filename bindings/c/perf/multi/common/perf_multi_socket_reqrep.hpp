@@ -84,10 +84,16 @@ struct client_state_t
       size_t maximum_latency_sample_cap = std::numeric_limits<size_t>::max ()) :
         poller (NULL),
         active_run_id (0),
+        accepted_count (0),
+        schedule (NULL),
+        latency_duration_seconds (0),
         active_msg_size (0),
         active_deadline_ns (0),
         active_reply_count (0),
-        capture_latency (false),
+        paced_received_count (0),
+        successful_completion_count (0),
+        failed_completion_count (0),
+        first_failed_result (0),
         fatal (false),
         slots (),
         events (),
@@ -95,12 +101,23 @@ struct client_state_t
     {
     }
 
+    perf_multi_metric::phase_t metric_phase () const
+    {
+        return schedule ? perf_multi_metric::phase_latency : perf_multi_metric::phase_active;
+    }
+
     void *poller;
     uint32_t active_run_id;
+    uint64_t accepted_count;
+    perf_multi_measurement::schedule_t *schedule;
+    double latency_duration_seconds;
     size_t active_msg_size;
     uint64_t active_deadline_ns;
     unsigned long long active_reply_count;
-    bool capture_latency;
+    uint64_t paced_received_count;
+    unsigned long long successful_completion_count;
+    unsigned long long failed_completion_count;
+    int first_failed_result;
     bool fatal;
     // Every socket is registered on one POLLCOMPLETION poller. The benchmark
     // thread therefore owns submission, reply callbacks, and metrics.
@@ -174,8 +191,14 @@ inline void record_request_completion (client_slot_t *slot,
     if (slot->outstanding > 0)
         --slot->outstanding;
 
-    if (result != ZLINK_REQUEST_OK || !parts
-        || part_count != perf_measurement_part_count ())
+    if (result != ZLINK_REQUEST_OK) {
+        if (state->failed_completion_count == 0)
+            state->first_failed_result = static_cast<int> (result);
+        ++state->failed_completion_count;
+        return;
+    }
+    ++state->successful_completion_count;
+    if (!parts || part_count != perf_measurement_part_count ())
         return;
 
     if (part_count == 2 && zlink_msg_size (&parts[1]) != 0)
@@ -187,22 +210,28 @@ inline void record_request_completion (client_slot_t *slot,
         return;
     }
 
-    if (!perf_multi_metric::is_expected (header, state->active_run_id,
-                                         perf_multi_metric::phase_active,
+    if (!perf_multi_metric::is_expected (header, state->active_run_id, state->metric_phase (),
                                          state->active_msg_size)) {
         return;
     }
 
     const uint64_t now_ns = perf_multi_metric::now_ns ();
-    if (now_ns >= state->active_deadline_ns || header.sent_ts_ns <= 0
-        || now_ns < static_cast<uint64_t> (header.sent_ts_ns)) {
+    if (state->schedule
+        && perf_multi_measurement::latency_sample (now_ns, state->schedule->epoch_ns,
+                                                   state->latency_duration_seconds))
+        ++state->paced_received_count;
+    if ((!state->schedule && now_ns >= state->active_deadline_ns)
+        || (state->schedule
+            && !perf_multi_measurement::latency_sample (
+              header.sent_ts_ns, state->schedule->epoch_ns, state->latency_duration_seconds))
+        || header.sent_ts_ns <= 0 || now_ns < static_cast<uint64_t> (header.sent_ts_ns)) {
         return;
     }
 
     const double sample_ns =
       static_cast<double> (now_ns - static_cast<uint64_t> (header.sent_ts_ns)) * 0.5;
     ++state->active_reply_count;
-    if (state->capture_latency)
+    if (state->schedule)
         state->latency.add (sample_ns);
 }
 
@@ -245,9 +274,8 @@ inline bool submit_request (const endpoint_config_t &config,
             slot->payload.assign (payload_size, 'c');
 
         if (!perf_multi_metric::stamp_payload (slot->payload.data (), payload_size, run_id,
-                                               perf_multi_metric::phase_active, msg_size,
-                                               slot->next_seq,
-                                               perf_multi_metric::now_ns ())) {
+                                               slot->owner->metric_phase (), msg_size,
+                                               slot->next_seq, perf_multi_metric::now_ns ())) {
             return false;
         }
     } else if (slot->payload.size () != payload_size) {
@@ -282,6 +310,11 @@ inline bool submit_request (const endpoint_config_t &config,
 
     if (rc == ZLINK_SUBMIT_OK) {
         ++slot->next_seq;
+        const uint64_t now_ns = perf_multi_metric::now_ns ();
+        if (now_ns < slot->owner->active_deadline_ns)
+            ++slot->owner->accepted_count;
+        if (slot->owner->schedule)
+            slot->owner->schedule->accepted (now_ns);
         return true;
     }
 
@@ -312,6 +345,11 @@ inline bool submit_request (const endpoint_config_t &config,
         ++slot->outstanding;
         ++slot->next_seq;
         clear_retained_request (slot);
+        const uint64_t now_ns = perf_multi_metric::now_ns ();
+        if (now_ns < slot->owner->active_deadline_ns)
+            ++slot->owner->accepted_count;
+        if (slot->owner->schedule)
+            slot->owner->schedule->accepted (now_ns);
         return true;
     }
 
@@ -534,9 +572,10 @@ inline bool run_measurement_window (const endpoint_config_t &config,
                                     bool websocket_transport,
                                     uint32_t run_id,
                                     size_t msg_size,
-                                    int duration_seconds,
+                                    double duration_seconds,
                                     unsigned long long *reply_count_out,
-                                    bench_latency_stats_t *latency_out)
+                                    bench_latency_stats_t *latency_out,
+                                    perf_multi_measurement::schedule_t *schedule = NULL)
 {
     if (!state || !state->poller || state->slots.empty () || !reply_count_out
         || !latency_out) {
@@ -553,12 +592,18 @@ inline bool run_measurement_window (const endpoint_config_t &config,
     }
 
     state->active_run_id = run_id;
+    state->schedule = schedule;
+    state->latency_duration_seconds = settings.latency_duration_seconds;
+    state->accepted_count = 0;
     state->active_msg_size = msg_size;
     state->active_deadline_ns =
       perf_multi_metric::now_ns ()
-      + static_cast<uint64_t> (std::max (1, duration_seconds)) * 1000000000ULL;
+      + static_cast<uint64_t> (std::max (1.0, duration_seconds) * 1000000000.0);
     state->active_reply_count = 0;
-    state->capture_latency = true;
+    state->paced_received_count = 0;
+    state->successful_completion_count = 0;
+    state->failed_completion_count = 0;
+    state->first_failed_result = 0;
     state->latency.reset ();
     for (size_t i = 0; i < state->slots.size (); ++i)
         state->slots[i].outstanding = 0;
@@ -573,7 +618,8 @@ inline bool run_measurement_window (const endpoint_config_t &config,
 
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now ()
-      + std::chrono::seconds (std::max (1, duration_seconds));
+      + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+        std::chrono::duration<double> (duration_seconds));
     const uint32_t request_timeout_ms =
       static_cast<uint32_t> (bench_timeout_ms_from_env ("PERF_MULTI_REQREP_TIMEOUT_MS", 200));
 
@@ -582,6 +628,8 @@ inline bool run_measurement_window (const endpoint_config_t &config,
         for (size_t offset = 0; offset < submit_count; ++offset) {
             const size_t i = (submit_cursor + offset) % state->slots.size ();
             client_slot_t &slot = state->slots[i];
+            if (schedule && !schedule->due (perf_multi_metric::now_ns ()))
+                break;
             bool blocked = false;
             if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
                                  request_timeout_ms, &blocked)) {
@@ -594,7 +642,16 @@ inline bool run_measurement_window (const endpoint_config_t &config,
         submit_cursor = (submit_cursor + submit_count) % state->slots.size ();
         if (state->fatal)
             break;
-        const int wait_ms = submitted ? 0 : poll_timeout_until (deadline, 50);
+        // Keep the next send deadline absolute (epoch + k/rate) so poll
+        // wakeups do not accumulate scheduling drift. Completions wake early.
+        auto poll_deadline = deadline;
+        if (!submitted && schedule && !schedule->due (perf_multi_metric::now_ns ())) {
+            const auto next_send_deadline = std::chrono::steady_clock::time_point (
+              std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+                std::chrono::nanoseconds (schedule->next_ns ())));
+            poll_deadline = std::min (poll_deadline, next_send_deadline);
+        }
+        const int wait_ms = submitted ? 0 : poll_timeout_until (poll_deadline, 50);
         const int event_count =
           zlink_poller_wait (state->poller, state->events.empty () ? NULL : &state->events[0],
                              static_cast<int> (state->events.size ()), wait_ms, NULL);
@@ -633,7 +690,7 @@ inline bool run_measurement_window (const endpoint_config_t &config,
 
     *reply_count_out = state->active_reply_count;
     *latency_out = state->latency.snapshot ();
-    if (state->latency.count () == 0) {
+    if (schedule && state->latency.count () == 0) {
         std::cerr << "[perf-multi-socket-reqrep] no latency samples size=" << msg_size
                   << " replies=" << state->active_reply_count << std::endl;
         return false;
@@ -650,10 +707,26 @@ inline bool run_active_window (const endpoint_config_t &config,
                                unsigned long long *reply_count_out,
                                bench_latency_stats_t *latency_out)
 {
-    return run_measurement_window (
-      config, state, settings, websocket_transport, run_id, msg_size,
-      settings.duration_seconds,
-      reply_count_out, latency_out);
+    if (!run_measurement_window (config, state, settings, websocket_transport, run_id, msg_size,
+                                 settings.duration_seconds, reply_count_out, latency_out))
+        return false;
+    const unsigned long long active_replies = *reply_count_out;
+    const uint64_t accepted = state->accepted_count;
+    if (accepted == 0 || active_replies == 0)
+        return false;
+    perf_multi_measurement::schedule_t schedule (
+      perf_multi_measurement::target_rate (active_replies, settings.duration_seconds),
+      perf_multi_metric::now_ns ());
+    unsigned long long paced_replies = 0;
+    const bool ok = run_measurement_window (config, state, settings, websocket_transport, run_id,
+                                            msg_size, 0.5 + settings.latency_duration_seconds,
+                                            &paced_replies, latency_out, &schedule);
+    state->schedule = NULL;
+    perf_multi_measurement::print_diagnostic (
+      config.pattern_name, msg_size, accepted, settings.duration_seconds, schedule, active_replies,
+      state->paced_received_count / static_cast<double> (settings.latency_duration_seconds));
+    *reply_count_out = active_replies;
+    return ok;
 }
 
 inline bool setup_client_state (const endpoint_config_t &config,

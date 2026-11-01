@@ -13,6 +13,7 @@ param(
     [switch]$PinCpu,
     [Alias("MultiDurationSeconds")]
     [int]$Duration = 5,
+    [string]$LatencyDuration = "",
     [Alias("MultiClients")]
     [string]$Clients = "",
     [Alias("MultiHwm")]
@@ -68,6 +69,7 @@ Options:
   -Transports LIST             Comma-separated transports.
   -PinCpu                      Enable PERF_TASKSET=1.
   -Duration N                  Override PERF_MULTI_DURATION_SECONDS.
+  -LatencyDuration N           Latency seconds (positive integer; default: Duration).
   -Clients N                   Override PERF_MULTI_CLIENTS (default: 100).
   -Hwm N                       Debug-only override PERF_MULTI_HWM.
                                Requires PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1.
@@ -91,6 +93,7 @@ if ($Help) {
     exit 0
 }
 
+$LatencyDurationExplicit = $PSBoundParameters.ContainsKey("LatencyDuration")
 $DurationExplicit = $PSBoundParameters.ContainsKey("Duration")
 $TransportTransitionExplicit = $PSBoundParameters.ContainsKey("TransportTransitionMs")
 $PatternTransitionExplicit = $PSBoundParameters.ContainsKey("PatternTransitionMs")
@@ -118,6 +121,9 @@ function Get-EnvironmentDefault {
 
 if (-not $DurationExplicit) {
     $Duration = [int](Get-EnvironmentDefault -Primary "PERF_MULTI_DURATION_SECONDS" -Fallback "PERF_DURATION_SECONDS" -Default "5")
+}
+if (-not $LatencyDurationExplicit) {
+    $LatencyDuration = Get-EnvironmentDefault -Primary "PERF_MULTI_LATENCY_DURATION_SECONDS" -Default $Duration.ToString()
 }
 if (-not $TransportTransitionExplicit) {
     $TransportTransitionMs = [int](Get-EnvironmentDefault -Primary "PERF_MULTI_TRANSPORT_TRANSITION_MS" -Fallback "PERF_TRANSPORT_TRANSITION_MS" -Default "3000")
@@ -147,6 +153,9 @@ if (-not $RecvTimeoutMs) {
     $RecvTimeoutMs = Get-EnvironmentDefault -Primary "PERF_MULTI_RCVTIMEO_MS" -Fallback "PERF_RCVTIMEO_MS" -Default "200"
 }
 
+if ($LatencyDuration -notmatch "^[0-9]*[1-9][0-9]*$") {
+    throw "LatencyDuration must be a positive integer."
+}
 if ($Duration -lt 1) { throw "Duration must be >= 1." }
 if ($TransportTransitionMs -lt 0) { throw "TransportTransitionMs must be >= 0." }
 if ($PatternTransitionMs -lt 0) { throw "PatternTransitionMs must be >= 0." }
@@ -620,6 +629,7 @@ $RunEnv["PERF_TRANSPORTS"] = $EffectiveTransports
 $RunEnv["PERF_MSG_SIZES"] = $EffectiveMsgSizes
 $RunEnv["PERF_MULTI_STREAM_MSG_SIZES"] = $EffectiveStreamMsgSizes
 $RunEnv["PERF_MULTI_DURATION_SECONDS"] = $Duration.ToString()
+$RunEnv["PERF_MULTI_LATENCY_DURATION_SECONDS"] = $LatencyDuration.ToString()
 $RunEnv["PERF_MULTI_SNDTIMEO_MS"] = $SendTimeoutMs
 $RunEnv["PERF_MULTI_RCVTIMEO_MS"] = $RecvTimeoutMs
 $RunEnv["PERF_MULTI_TRANSPORT_TRANSITION_MS"] = $TransportTransitionMs.ToString()
@@ -697,7 +707,7 @@ Write-Host "Using Python: $PythonExe"
 
 $RunArgs = @($PatternCsv)
 if ($BuildDir) { $RunArgs += @("--build-dir", $BuildDir) }
-$RunArgs += @("--runs", $Runs.ToString(), "--duration", $Duration.ToString())
+$RunArgs += @("--runs", $Runs.ToString(), "--duration", $Duration.ToString(), "--latency-duration", $LatencyDuration.ToString())
 if ($ResultsDir) { $RunArgs += @("--results-dir", $ResultsDir) }
 if ($ResultsTag) { $RunArgs += @("--results-tag", $ResultsTag) }
 if ($PinCpu) { $RunArgs += "--pin-cpu" }
