@@ -11629,6 +11629,72 @@ int verify_actor_join_completion_observations ()
     return 0;
 }
 
+bool verify_bulk_deferred_actor_joins ()
+{
+    namespace fw = zlink::framework;
+    fw::runtime::offload_executor_t deferred_executor (1);
+    fw::runtime::serial_execution_queue_t deferred_queue (deferred_executor);
+    fw::runtime::offload_executor_t target_executor (1);
+    fw::runtime::serial_execution_queue_t target_queue (target_executor);
+    fw::detail::actor_gateway_runtime_t actor_gateway;
+    fw::serializer_registry_t actor_serializers;
+    actor_gateway.bind_serializers (actor_serializers);
+    const auto actor = fw::detail::actor_ref_access_t::make (
+      fw::node_rid_t::from_string ("barrier-node"), "player", "barrier-actor", 1);
+    auto actor_context = actor_gateway.actor_context (actor);
+    constexpr std::size_t bulk_join_count = 65;
+    const std::string bulk_request (129u * 1024u, 'x');
+    std::size_t completed_bulk_joins = 0;
+    std::size_t completed_bulk_request_bytes = 0;
+    std::set<std::string> completed_bulk_targets;
+    std::vector<std::shared_ptr<zlink::framework::detail::deferred_barrier_t>> bulk_barriers;
+    actor_gateway.on_join_barrier ([&] (const auto &) {
+        auto reserved = target_queue.reserve_barrier_next ("bulk-join-barrier", true);
+        if (reserved)
+            bulk_barriers.push_back (reserved.value ());
+        return reserved;
+    });
+    actor_gateway.on_join_spot (
+      [&] (const auto &actor, const auto &spot_id, const auto &request, auto, auto,
+           auto) -> zlink::framework::task_t<zlink::framework::detail::actor_join_reply_t> {
+          ++completed_bulk_joins;
+          completed_bulk_request_bytes += request.to_string ().size ();
+          completed_bulk_targets.emplace (spot_id);
+          co_return zlink::framework::result_t<
+            zlink::framework::detail::actor_join_reply_t>::success ({1, actor, zlink::message_t{}});
+      });
+    // Defer starts each call's deadline. Prepare the distinct typed payloads
+    // before the handler so later serialization cannot consume earlier calls' budgets.
+    std::vector<fw::actor_join_call_t> calls;
+    calls.reserve (bulk_join_count);
+    for (std::size_t index = 0; index < bulk_join_count; ++index)
+        calls.push_back (actor_context.join_spot ("bulk-target-" + std::to_string (index),
+                                                  fw::message_t::from (bulk_request)));
+    deferred_queue.run ("bulk-deferred-actor-joins", [&] {
+        for (auto &call : calls)
+            call.defer ();
+    });
+    bool passed = bulk_barriers.size () == bulk_join_count;
+    for (const auto &barrier : bulk_barriers) {
+        const auto terminal = barrier->terminal ().result ();
+        if (!terminal)
+            std::cerr << "bulk deferred join terminal failed: "
+                      << (terminal.error () ? terminal.error ()->what () : "no error") << '\n';
+        passed = static_cast<bool> (terminal) && passed;
+    }
+    target_queue.drain ();
+    if (!passed || completed_bulk_joins != bulk_join_count
+        || completed_bulk_targets.size () != bulk_join_count
+        || completed_bulk_request_bytes <= 8u * 1024u * 1024u) {
+        std::cerr << "bulk deferred joins completed=" << completed_bulk_joins
+                  << " targets=" << completed_bulk_targets.size ()
+                  << " bytes=" << completed_bulk_request_bytes << '\n';
+        return false;
+    }
+
+    return true;
+}
+
 int main (int argc, char **argv)
 {
     if (argc == 2 && std::string_view (argv[1]) == "--session-control-priority")
@@ -11640,6 +11706,8 @@ int main (int argc, char **argv)
             || !verify_fanout_snapshot_state_owner ()))
         return 1;
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--bulk-deferred-actor-joins")
+        return verify_bulk_deferred_actor_joins () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--telemetry-completion")
         return verify_actor_join_completion_observations ();
     if (argc == 2 && std::string_view (argv[1]) == "--handler-origin-terminals")
@@ -12955,35 +13023,8 @@ int main (int argc, char **argv)
             barrier_events.clear ();
         }
 
-        constexpr std::size_t bulk_join_count = 65;
-        const std::string bulk_request (129u * 1024u, 'x');
-        std::size_t completed_bulk_joins = 0;
-        std::size_t completed_bulk_request_bytes = 0;
-        std::set<std::string> completed_bulk_targets;
-        actor_gateway.on_join_spot (
-          [&] (const auto &actor, const auto &spot_id, const auto &request, auto, auto,
-               auto) -> zlink::framework::task_t<zlink::framework::detail::actor_join_reply_t> {
-              ++completed_bulk_joins;
-              completed_bulk_request_bytes += request.to_string ().size ();
-              completed_bulk_targets.emplace (spot_id);
-              co_return zlink::framework::result_t<
-                zlink::framework::detail::actor_join_reply_t>::success ({1, actor,
-                                                                         zlink::message_t{}});
-          });
-        deferred_queue.run ("bulk-deferred-actor-joins", [&] {
-            for (std::size_t index = 0; index < bulk_join_count; ++index) {
-                actor_context
-                  .join_spot ("bulk-target-" + std::to_string (index),
-                              zlink::framework::message_t::from (bulk_request))
-                  .defer ();
-            }
-        });
-        target_queue.drain ();
-        if (completed_bulk_joins != bulk_join_count
-            || completed_bulk_targets.size () != bulk_join_count
-            || completed_bulk_request_bytes <= 8u * 1024u * 1024u) {
+        if (!verify_bulk_deferred_actor_joins ())
             return 74;
-        }
 
         deferred_queue.run ("failed-production-cross-actor-barrier", [&] {
             actor_context.join_spot ("target-spot").defer ();
