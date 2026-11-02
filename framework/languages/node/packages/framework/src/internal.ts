@@ -3,6 +3,19 @@ export * from './index';
 export { requireValidSendTimeoutMs } from './contracts/Configuration/SendTimeoutValidation';
 export * from './runtime/diagnostics';
 export * from './runtime/host';
+export { ZLinkActorPlacementCoordinator } from './runtime/host/actor-placement-coordinator';
+export { ZLinkActorTransferRuntime } from './runtime/host/actor-transfer-runtime';
+export {
+  ApplicationJobQueue,
+  ApplicationJobQueuePermit,
+  nodeEffectiveProcessorCount,
+  resolveApplicationJobQueueConfiguration
+} from './runtime/host/application-job-queue';
+export { ZLinkLocationRuntimeOwner } from './runtime/host/location-runtime-owner';
+export {
+  relocationFailedFailureCode,
+  ZLinkHostServiceRelocationRuntime
+} from './runtime/host/service-relocation-host-runtime';
 export * from './runtime/admission';
 export * from './runtime/activation-admission';
 export * from './runtime/streams';
@@ -21,9 +34,13 @@ export {
 } from './contracts/Locations/Values';
 export { ZLinkLocationWriteIntent, ZLinkLocationWriteStatus } from './contracts/Locations/Writes';
 export * from './runtime/channels';
+export { ZLinkChannelRuntimeLifecycle } from './runtime/channels/channel-runtime-lifecycle';
+export { ZLinkChannelSocketRegistry } from './runtime/channels/channel-socket-registry';
+export { ZLinkChannelDispatchPipeline } from './runtime/channels/channel-dispatch-pipeline';
 export * from './runtime/backend';
 export * from './runtime/codecs';
 export * from './runtime/execution';
+export { ZLinkSerialExecutionQueue } from './runtime/execution/serial-execution-queue';
 export * from './runtime/handlers';
 export * from './runtime/messaging';
 export * from './runtime/foundation';

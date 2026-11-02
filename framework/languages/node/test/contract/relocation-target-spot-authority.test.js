@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const { encodeAuthorityKey } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 
 // The target materializes a relocated Spot before the target-only CAS, so it

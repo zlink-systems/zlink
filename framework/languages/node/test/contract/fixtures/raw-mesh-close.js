@@ -1,6 +1,6 @@
 const {
   ZLinkNodeRawMeshBackend
-} = require('../../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+} = require('../../../packages/framework/dist/internal');
 const { SubmitResult } = require('../../../packages/framework/dist/runtime/backend/runtime-values');
 const {
   ApplicationJobQueue,

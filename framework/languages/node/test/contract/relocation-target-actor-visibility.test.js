@@ -1,9 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+const { ZLinkHostServiceRelocationRuntime } = framework;
 const {
   ZLinkSpotRuntimeOptionsFactory
 } = require('../../packages/framework/dist/runtime/host/spot-runtime-options-factory');
@@ -21,7 +19,7 @@ const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 const { Message, RequestResult } = require('@zlink-systems/zlink');
-const { DefaultZLinkSpotManager } = require('../../packages/framework/dist/runtime/spots');
+const { DefaultZLinkSpotManager } = require('../../packages/framework/dist/internal');
 
 for (const [changedVersion, departed] of [
   [false, false],

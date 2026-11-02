@@ -23,7 +23,7 @@ const {
 } = require('../../packages/framework/dist/runtime/host/instance-activation-authority');
 const {
   ServiceStatefulRuntime
-} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+} = require('../../packages/framework/dist/internal');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
   ZLinkBufferMessage

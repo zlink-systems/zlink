@@ -32,9 +32,9 @@ import {
   decodeQueuedHandoffPacket,
   encodeHandoffQueuedMessages,
   relocationFailedFailureCode,
-  ServiceRelocationDataLostError,
-  ZLinkHostServiceRelocationRuntime
+  ServiceRelocationDataLostError
 } from '../../packages/framework/src/runtime/host/service-relocation-host-runtime';
+import { ZLinkHostServiceRelocationRuntime } from '../../packages/framework/src/internal';
 import {
   decodeServiceRelocationControlRequest,
   decodeServiceRelocationControlResponse,
@@ -81,7 +81,7 @@ import {
   SERVICE_WIRE_REQUIRED_CAPABILITY
 } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
 import type { CanonicalActorJoinRecovery } from '../../packages/framework/src/runtime/foundation/actor-join-recovery-codec';
-import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
+import { DefaultZLinkSpotManager } from '../../packages/framework/src/internal';
 import { ZLinkActivationAdmission } from '../../packages/framework/src/runtime/activation-admission';
 import {
   ZLinkRuntimeTaskErrorSink,
@@ -1472,18 +1472,12 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
       events.push('actorRoute:invalidated');
     }
   } as never);
-  const internals = runtime as unknown as {
-    commitTargetReservation: () => Promise<ZLinkAuthoritySnapshot>;
-    targetReplyRelayCoordinator: () => unknown;
-    clearTargetRelocationPublication: () => Promise<ZLinkAuthoritySnapshot>;
-    finalizeTargetStage: (meshName: string, stagingId: string, stage: unknown) => Promise<void>;
-  };
-  internals.commitTargetReservation = async () => {
+  runtime.commitTargetReservation = async () => {
     events.push('cas');
     return authority;
   };
-  internals.targetReplyRelayCoordinator = () => ({});
-  internals.clearTargetRelocationPublication = async () => {
+  runtime.targetReplyRelayCoordinator = () => ({}) as never;
+  runtime.clearTargetRelocationPublication = async () => {
     events.push('publication:clear');
     return authority;
   };
@@ -1524,7 +1518,7 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
   const originalWarn = console.warn;
   console.warn = () => events.push('sourceLeave:warning');
   try {
-    await internals.finalizeTargetStage('mesh-a', 'actor-join-stage', stage);
+    await runtime.finalizeTargetStage('mesh-a', 'actor-join-stage', stage as never);
   } finally {
     console.warn = originalWarn;
     await runtime.dispose();
@@ -1611,17 +1605,8 @@ test('target admission opens after one publication-clear conflict and a later cl
       duration() {}
     }
   } as never);
-  const internals = runtime as unknown as {
-    commitTargetReservation: () => Promise<ZLinkAuthoritySnapshot>;
-    targetReplyRelayCoordinator: () => unknown;
-    clearTargetRelocationPublication: (
-      stage: unknown,
-      authority: ZLinkAuthoritySnapshot
-    ) => Promise<void>;
-    finalizeTargetStage: (meshName: string, stagingId: string, stage: unknown) => Promise<void>;
-  };
-  internals.commitTargetReservation = async () => current;
-  internals.targetReplyRelayCoordinator = () => ({});
+  runtime.commitTargetReservation = async () => current;
+  runtime.targetReplyRelayCoordinator = () => ({}) as never;
   const envelope = {
     aggregateId: publication.aggregateId,
     aggregateGeneration: publication.aggregateGeneration,
@@ -1652,7 +1637,7 @@ test('target admission opens after one publication-clear conflict and a later cl
   const originalWarn = console.warn;
   console.warn = (marker) => events.push(String(marker));
   try {
-    await internals.finalizeTargetStage('mesh-a', 'clear-retry-stage', stage);
+    await runtime.finalizeTargetStage('mesh-a', 'clear-retry-stage', stage as never);
     assert.equal(
       actorAvailable,
       true,
@@ -1667,7 +1652,7 @@ test('target admission opens after one publication-clear conflict and a later cl
       'metric:zlink.relocation.publication_clear_failed'
     ]);
 
-    await internals.clearTargetRelocationPublication(stage, current);
+    await runtime.clearTargetRelocationPublication(stage as never, current);
     assert.equal(
       clearAttempts,
       2,

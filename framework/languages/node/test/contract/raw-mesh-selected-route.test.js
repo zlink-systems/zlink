@@ -4,7 +4,7 @@ const test = require('node:test');
 const framework = require('../../packages/framework/dist');
 const {
   RawServiceMeshRuntime
-} = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration

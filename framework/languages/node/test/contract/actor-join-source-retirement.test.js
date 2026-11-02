@@ -19,7 +19,7 @@ for (const notification of ['delayed', 'lost']) {
     } = require('../../packages/framework/dist/runtime/foundation/service-stateful-registry');
     const {
       ZLinkHostServiceRelocationRuntime
-    } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+    } = require('../../packages/framework/dist/internal');
     const {
       encodeAuthorityKey
     } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
