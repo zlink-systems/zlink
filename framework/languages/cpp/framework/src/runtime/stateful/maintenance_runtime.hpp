@@ -608,13 +608,14 @@ class maintenance_runtime_t
     std::shared_ptr<runtime::relocation_metrics_t> _metrics;
 
     struct relocation_terminal_state_t;
+    struct shutdown_tracking_state_t;
     class relocation_metric_operation_t;
 
     class permit_t
     {
       public:
         permit_t () = default;
-        explicit permit_t (maintenance_runtime_t *owner);
+        explicit permit_t (std::shared_ptr<shutdown_tracking_state_t> owner);
         ~permit_t ();
         permit_t (permit_t &&other) noexcept;
         permit_t &operator= (permit_t &&other) noexcept;
@@ -624,7 +625,7 @@ class maintenance_runtime_t
         explicit operator bool () const noexcept;
 
       private:
-        maintenance_runtime_t *_owner = nullptr;
+        std::shared_ptr<shutdown_tracking_state_t> _owner;
     };
 
     permit_t try_acquire ();
@@ -663,7 +664,7 @@ class maintenance_runtime_t
      * the owning relocation_terminal_state_t, or the S4+window observer
      * in retain_message_follow explicitly releasing it). */
     std::shared_ptr<void> begin_pending_relocation_unit () noexcept;
-    void release () noexcept;
+    static void release (shutdown_tracking_state_t &state) noexcept;
     relocation_result_t finish (relocation_result_t result);
     std::optional<std::vector<protocol::relocation_data_t>>
     build_boundary_records (const std::vector<frozen_object_state_t> &participants,
@@ -698,8 +699,6 @@ class maintenance_runtime_t
     relocation_limits_t _limits;
     observer_t _observer;
     detail::delay_owner_t *_delay_owner = nullptr;
-    mutable std::mutex _gate_mutex;
-    relocation_gate_snapshot_t _gate;
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;
     std::function<raw_stateful_dispatch_t *()> _relocation_dispatch;
     std::function<void (const object_ref_t &)> _unavailable_terminal;
@@ -712,9 +711,12 @@ class maintenance_runtime_t
      * coroutine and its completion callback capture this shared_ptr by
      * value instead of `this`, so they never dereference a dead runtime;
      * the pending counter only ever reflects windows that were still open
-     * when the runtime itself was destroyed. */
+     * when the runtime itself was destroyed. Permits retain this same state
+     * so frame cleanup returns capacity without accessing a destroyed runtime. */
     struct shutdown_tracking_state_t
     {
+        mutable std::mutex gate_mutex;
+        relocation_gate_snapshot_t gate;
         std::atomic<std::int64_t> pending_units{0};
         std::mutex metric_mutex;
         std::function<void (double)> route_convergence_metric;
