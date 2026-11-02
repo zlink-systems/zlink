@@ -192,7 +192,7 @@ void fanout_location_runtime_t::start ()
     if (empty ())
         return;
     const auto owner = _locations->current_owner_token ();
-    _stop.store (false, std::memory_order_release);
+    _stop = std::stop_source{};
     try {
         auto poller = std::make_unique<zlink::poller_t> ();
         _lane.run ([&] { _subscriber_poller = std::move (poller); }).get ();
@@ -309,7 +309,7 @@ void fanout_location_runtime_t::publish_resources_on_lane ()
 void fanout_location_runtime_t::run ()
 {
     auto next_reconcile = std::chrono::steady_clock::now ();
-    while (!_stop.load (std::memory_order_acquire)) {
+    while (!_stop.stop_requested ()) {
         const auto now = std::chrono::steady_clock::now ();
         if (now >= next_reconcile) {
             try {
@@ -331,7 +331,7 @@ void fanout_location_runtime_t::run ()
         }
         pump ();
         request_snapshot_changes ();
-        if (_stop.load (std::memory_order_acquire))
+        if (_stop.stop_requested ())
             break;
         auto wake_at = next_reconcile;
         const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
@@ -359,7 +359,10 @@ void fanout_location_runtime_t::wait_for_activity (std::chrono::milliseconds tim
     }
 }
 
-task_t<bool> fanout_location_runtime_t::publish_descriptors (location_write_intent_t intent)
+task_t<bool> fanout_location_runtime_t::publish_descriptors (
+  location_write_intent_t intent,
+  std::stop_token cancellation,
+  std::optional<std::chrono::steady_clock::time_point> deadline)
 {
     auto completion = std::make_shared<task_completion_source_t<void>> ();
     struct release_t
@@ -374,7 +377,7 @@ task_t<bool> fanout_location_runtime_t::publish_descriptors (location_write_inte
         return previous ? previous->task () : task_t<void> (result_t<void>::success ());
     });
     const auto owner = _locations->current_owner_token ();
-    if (!owner)
+    if (!owner || cancellation.stop_requested () || _stop.stop_requested ())
         co_return false;
     struct pending_descriptor_t
     {
@@ -413,8 +416,15 @@ task_t<bool> fanout_location_runtime_t::publish_descriptors (location_write_inte
         return result;
     });
     for (auto &item : pending) {
+        if (cancellation.stop_requested () || _stop.stop_requested ())
+            co_return false;
         const auto written = co_await _locations->descriptor_write_confirmed (
-          [&] { return _store->update_fanout_publisher (item.descriptor, item.intent); });
+          [store = _store, descriptor = item.descriptor, intent = item.intent] {
+              return store->update_fanout_publisher (descriptor, intent);
+          },
+          std::chrono::steady_clock::now, cancellation, deadline, _stop.get_token ());
+        if (cancellation.stop_requested () || _stop.stop_requested ())
+            co_return false;
         if (!written) {
             published = false;
             continue;
@@ -429,9 +439,12 @@ task_t<bool> fanout_location_runtime_t::publish_descriptors (location_write_inte
     co_return published;
 }
 
-bool fanout_location_runtime_t::republish_after_store_recovery (location_write_intent_t intent)
+task_t<bool> fanout_location_runtime_t::republish_after_store_recovery (
+  location_write_intent_t intent,
+  std::stop_token cancellation,
+  std::optional<std::chrono::steady_clock::time_point> deadline)
 {
-    return publish_descriptors (intent).result ().value ();
+    return publish_descriptors (intent, cancellation, deadline);
 }
 
 void fanout_location_runtime_t::reconcile_subscribers ()
@@ -545,7 +558,7 @@ fanout_location_runtime_t::build_snapshot_on_lane (const std::string &channel_na
                      [] (const auto &publisher) { return publisher.state == peer_state_t::ready; });
     result.ready_publisher_count = static_cast<std::uint32_t> (
       std::min<std::size_t> (ready_count, std::numeric_limits<std::uint32_t>::max ()));
-    const auto host_state = _stop.load (std::memory_order_acquire)
+    const auto host_state = _stop.stop_requested ()
                               ? (_subscriber_poller ? framework_runtime_state_t::draining
                                                     : framework_runtime_state_t::stopped)
                               : _framework_state ();
@@ -777,7 +790,7 @@ task_t<void> fanout_location_runtime_t::publish (const std::string &channel_name
                                                  std::string content_type,
                                                  zlink::message_t message)
 {
-    if (_stop.load (std::memory_order_acquire))
+    if (_stop.stop_requested ())
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "fanout runtime is shutting down");
     std::shared_ptr<raw_fanout_publisher_t> publisher;
@@ -793,7 +806,7 @@ task_t<void> fanout_location_runtime_t::publish (const std::string &channel_name
           })
           .get ();
     }
-    if (_stop.load (std::memory_order_acquire))
+    if (_stop.stop_requested ())
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "fanout runtime is shutting down");
     auto encoded = protocol::application_payload_t{std::move (packet_name),
@@ -826,12 +839,20 @@ bool fanout_location_runtime_t::wait_for_accepted_callbacks_until (
       lock, deadline, [&] { return accepted_callbacks_drained (*resources); });
 }
 
-void fanout_location_runtime_t::stop ()
+void fanout_location_runtime_t::request_stop () noexcept
 {
+    _stop.request_stop ();
+    _wake_timer.signal ();
+}
+
+void fanout_location_runtime_t::stop (
+  std::optional<std::chrono::steady_clock::time_point> requested_deadline)
+{
+    const auto deadline = requested_deadline.value_or (
+      std::chrono::steady_clock::now () + _locations->options ().owner_lease_renew_timeout);
     _lane.throw_if_reentrant ();
     runtime_failure_collector_t failures;
-    const bool was_stopped = _stop.exchange (true, std::memory_order_acq_rel);
-    _wake_timer.signal ();
+    request_stop ();
     if (_thread.joinable ())
         failures.capture ([&] { _thread.join (); });
     if (_descriptor_renewal) {
@@ -856,9 +877,9 @@ void fanout_location_runtime_t::stop ()
     const auto resources = std::atomic_load_explicit (&_resources, std::memory_order_acquire);
     bool has_publishers = !resources->publishers.empty ();
     bool has_subscribers = !resources->subscribers.empty ();
-    if (!was_stopped || has_publishers || has_subscribers) {
+    if (has_publishers || has_subscribers) {
         has_subscribers = !failures.capture ([&] { stop_subscribers (); });
-        has_publishers = !failures.capture ([&] { stop_publishers (); });
+        has_publishers = !failures.capture ([&] { stop_publishers (deadline); });
     }
     /* Keep the automatic binding until its owner has rejected and completed
      * every pending retry. Removing it first lets the generic publish path
@@ -876,8 +897,7 @@ void fanout_location_runtime_t::stop ()
           .run ([&] {
               if (poller_closed)
                   _subscriber_poller.reset ();
-              if (!was_stopped || has_publishers || has_subscribers)
-                  publish_snapshot_changes_on_lane ();
+              publish_snapshot_changes_on_lane ();
           })
           .get ();
     });
@@ -908,7 +928,7 @@ void fanout_location_runtime_t::stop_subscribers ()
       .get ();
 }
 
-void fanout_location_runtime_t::stop_publishers ()
+void fanout_location_runtime_t::stop_publishers (std::chrono::steady_clock::time_point deadline)
 {
     runtime_failure_collector_t failures;
     auto publishers = _lane
@@ -921,31 +941,43 @@ void fanout_location_runtime_t::stop_publishers ()
                         .get ();
     for (auto &[_, publisher] : publishers) {
         failures.capture ([&] { publisher->owner->close (); });
-        failures.capture ([&] {
-            auto draining = publisher->descriptor;
-            if (draining.descriptor_revision
-                < static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())) {
-                ++draining.descriptor_revision;
-                draining.state = framework_runtime_state_t::draining;
-                const auto written =
-                  _store->update_fanout_publisher (draining, location_write_intent_t::renew)
-                    .result ()
-                    .value ();
-                if (written.status == location_write_status_t::stored)
-                    publisher->descriptor = std::move (draining);
-            }
-        });
-        const auto &descriptor = publisher->descriptor;
-        failures.capture ([&] {
-            (void) _store
-              ->remove_fanout_publisher ({descriptor.channel_name, descriptor.publisher_rid},
-                                         {descriptor.owner_id, descriptor.lease_generation})
-              .result ()
-              .value ();
-        });
+        if (!publisher->descriptor.owner_id.empty ()) {
+            failures.capture ([&] {
+                auto draining = publisher->descriptor;
+                if (draining.descriptor_revision
+                    < static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())) {
+                    ++draining.descriptor_revision;
+                    draining.state = framework_runtime_state_t::draining;
+                    const auto written =
+                      infrastructure_result ([this, draining, deadline] {
+                          return _locations->descriptor_write_confirmed (
+                            [store = _store, draining] {
+                                return store->update_fanout_publisher (
+                                  draining, location_write_intent_t::renew);
+                            },
+                            std::chrono::steady_clock::now, std::stop_token{}, deadline);
+                      }).value ();
+                    if (written)
+                        publisher->descriptor = std::move (draining);
+                }
+            });
+            const auto &descriptor = publisher->descriptor;
+            failures.capture ([&] {
+                (void) infrastructure_result ([this, descriptor, deadline] {
+                    return _locations->descriptor_write_confirmed (
+                      [store = _store, descriptor] {
+                          return store->remove_fanout_publisher (
+                            {descriptor.channel_name, descriptor.publisher_rid},
+                            {descriptor.owner_id, descriptor.lease_generation});
+                      },
+                      std::chrono::steady_clock::now, std::stop_token{}, deadline);
+                }).value ();
+            });
+        }
         if (_listener_statuses)
             failures.capture ([&] {
-                _listener_statuses->remove (listener_kind_t::fanout, descriptor.channel_name);
+                _listener_statuses->remove (listener_kind_t::fanout,
+                                            publisher->descriptor.channel_name);
             });
     }
     try {

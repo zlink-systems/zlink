@@ -57,12 +57,15 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     fanout_location_runtime_t &operator= (const fanout_location_runtime_t &) = delete;
 
     void start ();
-    void stop ();
+    void request_stop () noexcept;
+    void stop (std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     void seal_application_dispatch () noexcept;
     bool
     wait_for_accepted_callbacks_until (std::chrono::steady_clock::time_point deadline) noexcept;
-    bool republish_after_store_recovery (
-      location_write_intent_t intent = location_write_intent_t::new_claim);
+    task_t<bool> republish_after_store_recovery (
+      location_write_intent_t intent = location_write_intent_t::new_claim,
+      std::stop_token cancellation = {},
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     bool empty () const noexcept;
 
     fanout_channel_snapshot_t snapshot (std::string channel_name) const override;
@@ -88,7 +91,10 @@ class fanout_location_runtime_t final : public fanout_runtime_t
                           const std::optional<location_owner_token_t> &owner);
     void start_subscriber (const channel_snapshot_t &channel);
     void run ();
-    task_t<bool> publish_descriptors (location_write_intent_t intent);
+    task_t<bool> publish_descriptors (
+      location_write_intent_t intent,
+      std::stop_token cancellation = {},
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     void reconcile_subscribers ();
     void reconcile_subscriber (const subscriber_resource_t &subscriber);
     void publish_snapshot_changes ();
@@ -103,7 +109,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
                                      const fanout_channel_snapshot_t &right) noexcept;
     void pump ();
     void wait_for_activity (std::chrono::milliseconds timeout) noexcept;
-    void stop_publishers ();
+    void stop_publishers (std::chrono::steady_clock::time_point deadline);
     void stop_subscribers ();
     task_t<void> publish (const std::string &channel_name,
                           std::string topic,
@@ -150,7 +156,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     mutable std::map<std::string, fanout_channel_snapshot_t> _last_snapshots;
     mutable std::map<std::string, std::vector<std::weak_ptr<observer_t>>> _observers;
     std::size_t _subscriber_pump_cursor = 0;
-    std::atomic_bool _stop{false};
+    std::stop_source _stop;
     std::thread _thread;
 };
 

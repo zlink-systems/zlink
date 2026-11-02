@@ -828,17 +828,19 @@ int main ()
 
     /* IMP-CP-06 — recovery connects new targets immediately and defers missing-target removal by owner lease TTL. */
     const auto complete_recovery_snapshot =
-      location_auto_connect.find ("poll_mesh_sources (loop.mesh_name).result ().value ()");
+      location_auto_connect.find ("co_await _live_store->poll_mesh_sources (loop.mesh_name)");
     const auto recovery_owner_check =
       location_auto_connect.find ("owner_lease_usable ()", complete_recovery_snapshot);
-    const auto recovery_republish =
-      location_auto_connect.find ("republish_after_store_recovery (intent)", recovery_owner_check);
+    const auto recovery_republish = location_auto_connect.find (
+      "co_await _republish_after_store_recovery (intent, stopped, deadline)", recovery_owner_check);
     const auto recovery_invalidation = location_auto_connect.find (
       "invalidate_all_routes_after_store_recovery ();", recovery_republish);
     const auto recovery_diff =
       location_auto_connect.find ("auto desired = select_endpoint_winners", recovery_invalidation);
     gate.require (
       complete_recovery_snapshot != std::string::npos
+        && location_auto_connect.find ("co_await republish_after_store_recovery (intent)")
+             != std::string::npos
         && live_location_reader.find ("} while (page.continuation_token);") != std::string::npos
         && recovery_owner_check != std::string::npos && recovery_republish != std::string::npos
         && recovery_invalidation != std::string::npos && recovery_diff != std::string::npos

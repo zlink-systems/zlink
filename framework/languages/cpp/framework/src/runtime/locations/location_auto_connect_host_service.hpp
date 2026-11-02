@@ -13,6 +13,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 #include "runtime/transport/listener_identity.hpp"
+#include "runtime/dispatch/offload_executor.hpp"
 
 #include <zlink/framework/contracts/configuration/module.hpp>
 
@@ -28,7 +29,6 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -67,7 +67,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
       std::map<std::string, std::string> fanout_publisher_advertise_hosts = {},
       std::set<std::string> route_mesh_client_channels = {},
       std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes = {},
-      std::function<bool (location_write_intent_t)> republish_after_store_recovery = {},
+      std::function<task_t<bool> (
+        location_write_intent_t, std::stop_token, std::chrono::steady_clock::time_point)>
+        republish_after_store_recovery = {},
       std::shared_ptr<client_server::client_server_location_runtime_t> client_server_runtime =
         nullptr,
       std::shared_ptr<fanout::fanout_location_runtime_t> fanout_runtime = nullptr,
@@ -255,24 +257,50 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             loop.recovering_from_store_failure = !_runtime->owner_lease_usable ();
         }
         const auto observed = _runtime->owner_lease_observation ();
-        _thread = std::thread ([this, observed] { run_loop (observed); });
+        _loop_finished = std::make_shared<task_completion_source_t<void>> ();
+        try {
+            if (!infrastructure_executor ()->try_submit_internal ([this, observed] {
+                    auto pending = run_loop (observed);
+                    detail::observe_task_terminal (
+                      pending, [finished = _loop_finished] (const result_t<void> &result) {
+                          finished->complete (result);
+                      });
+                })) {
+                throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                             "Location coordinator executor stopped");
+            }
+        }
+        catch (...) {
+            _loop_finished->complete (result_t<void>::success ());
+            throw;
+        }
         co_return;
     }
 
     void stop () noexcept override
     {
-        _runtime_failures->capture ([&] { _stop_requested.complete (result_t<void>::success ()); });
+        const auto deadline = std::chrono::steady_clock::now ()
+                              + (_runtime ? _runtime->options ().owner_lease_renew_timeout
+                                          : std::chrono::milliseconds::zero ());
+        _runtime_failures->capture ([&] { _stop_requested.request_stop (); });
+        // A coordinator publication can follow a periodic domain publication.
+        // Cancel that existing owner too before waiting for the serial chain.
+        if (_client_server)
+            _client_server->request_stop ();
+        if (_fanout)
+            _fanout->request_stop ();
         _runtime_failures->capture (
           [&] { _startup_publication.complete (result_t<bool>::success (false)); });
         if (_runtime)
             _runtime->wake_owner_lease_observers ();
-        if (_thread.joinable ())
-            _runtime_failures->capture ([&] { _thread.join (); });
-        if (_client_server && _runtime_failures->capture ([&] { _client_server->stop (); })) {
+        if (_loop_finished)
+            _runtime_failures->capture ([&] { _loop_finished->task ().result ().value (); });
+        if (_client_server
+            && _runtime_failures->capture ([&] { _client_server->stop (deadline); })) {
             _client_server_started = false;
             _client_server.reset ();
         }
-        if (_fanout && _runtime_failures->capture ([&] { _fanout->stop (); }))
+        if (_fanout && _runtime_failures->capture ([&] { _fanout->stop (deadline); }))
             _fanout.reset ();
         for (auto &loop : _loops) {
             std::erase_if (loop.active, [&] (const auto &entry) {
@@ -353,20 +381,23 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         _loops.push_back (std::move (loop));
     }
 
-    void run_loop (std::optional<std::chrono::steady_clock::time_point> observed)
+    task_t<void> run_loop (std::optional<std::chrono::steady_clock::time_point> observed)
     {
-        auto stopped = _stop_requested.task ();
+        const auto stopped = _stop_requested.get_token ();
         std::vector<
           std::pair<loop_t *, std::shared_ptr<const live_location_reader_t::mesh_sources_t>>>
           snapshots;
         snapshots.reserve (_loops.size ());
-        while (!stopped.await_ready ()) {
+        while (!stopped.stop_requested ()) {
             for (auto &loop : _loops) {
                 try {
-                    snapshots.emplace_back (&loop, read_descriptors (loop));
+                    auto descriptors = co_await _live_store->poll_mesh_sources (loop.mesh_name);
+                    if (stopped.stop_requested ())
+                        co_return;
+                    snapshots.emplace_back (&loop, std::move (descriptors));
                     if (loop.local_rid)
-                        (void) _store->refresh_capacity_metrics (loop.mesh_name, *loop.local_rid)
-                          .result ();
+                        (void) co_await _store->refresh_capacity_metrics (loop.mesh_name,
+                                                                          *loop.local_rid);
                 }
                 catch (const std::exception &error) {
                     handle_loop_failure (loop, "tick", error.what ());
@@ -379,7 +410,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             const auto intent = current != observed ? location_write_intent_t::new_claim
                                                     : location_write_intent_t::renew;
             observed = current;
-            const bool published = republish_after_store_recovery (intent);
+            const bool published = co_await republish_after_store_recovery (intent);
+            if (stopped.stop_requested ())
+                co_return;
             for (auto &[loop, descriptors] : snapshots) {
                 try {
                     reconcile (*loop, std::move (descriptors), published);
@@ -392,8 +425,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 }
             }
             snapshots.clear ();
-            _runtime->wait_for_owner_lease_change (observed, stopped,
-                                                   _runtime->options ().polling_interval);
+            (void) co_await observe_until (
+              _runtime->wait_for_owner_lease_change (observed),
+              std::chrono::steady_clock::now () + _runtime->options ().polling_interval, stopped);
         }
     }
 
@@ -415,31 +449,39 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     }
 
 
-    std::shared_ptr<const live_location_reader_t::mesh_sources_t>
-    read_descriptors (const loop_t &loop)
-    {
-        return _live_store->poll_mesh_sources (loop.mesh_name).result ().value ();
-    }
-
-    bool republish_after_store_recovery (location_write_intent_t intent) noexcept
+    task_t<bool> republish_after_store_recovery (location_write_intent_t intent)
     {
         try {
-            if (!_runtime->owner_lease_usable ())
-                return false;
+            const auto stopped = _stop_requested.get_token ();
+            if (stopped.stop_requested () || !_runtime->owner_lease_usable ())
+                co_return false;
+            const auto deadline =
+              std::chrono::steady_clock::now () + _runtime->options ().owner_lease_renew_timeout;
             bool published = true;
-            if (_republish_after_store_recovery)
-                published = _republish_after_store_recovery (intent) && published;
-            if (_client_server && _client_server_started)
-                published = _client_server->republish_after_store_recovery (intent) && published;
-            if (_fanout)
-                published = _fanout->republish_after_store_recovery (intent) && published;
-            if (published)
+            if (_republish_after_store_recovery) {
+                published = co_await _republish_after_store_recovery (intent, stopped, deadline);
+            }
+            if (stopped.stop_requested ())
+                co_return false;
+            if (_client_server && _client_server_started) {
+                const auto result = co_await observe_until (
+                  _client_server->republish_after_store_recovery (intent), deadline, stopped);
+                published = result && result.value () && published;
+            }
+            if (stopped.stop_requested ())
+                co_return false;
+            if (_fanout) {
+                const auto result =
+                  co_await _fanout->republish_after_store_recovery (intent, stopped, deadline);
+                published = result && published;
+            }
+            if (published && !stopped.stop_requested ())
                 _startup_publication.complete (result_t<bool>::success (true));
-            return published;
+            co_return published;
         }
         catch (const std::exception &error) {
             _runtime->record_runtime_failure (error.what ());
-            return false;
+            co_return false;
         }
     }
 
@@ -646,15 +688,17 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     location_repository_t *_store = nullptr;
     live_location_reader_t *_live_store = nullptr;
     store_location_resolvers_t *_route_cache = nullptr;
-    task_completion_source_t<void> _stop_requested;
-    std::thread _thread;
+    std::stop_source _stop_requested;
+    std::shared_ptr<task_completion_source_t<void>> _loop_finished;
     task_completion_source_t<bool> _startup_publication;
     std::vector<loop_t> _loops;
     std::shared_ptr<client_server::client_server_location_runtime_t> _client_server;
     bool _client_server_started = false;
     std::shared_ptr<fanout::fanout_location_runtime_t> _fanout;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
-    std::function<bool (location_write_intent_t)> _republish_after_store_recovery;
+    std::function<task_t<bool> (
+      location_write_intent_t, std::stop_token, std::chrono::steady_clock::time_point)>
+      _republish_after_store_recovery;
 };
 
 } // namespace zlink::framework::runtime

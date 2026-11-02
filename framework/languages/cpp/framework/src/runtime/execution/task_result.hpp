@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/detail/deadline_scheduler.hpp>
 
 #include <memory>
 #include <utility>
@@ -17,6 +18,48 @@ template <typename T> task_t<result_t<T>> await_result (task_t<T> pending)
         completion->complete (result_t<result_t<T>>::success (result));
     });
     return task;
+}
+
+// Bounds the observation, not opaque provider I/O. Losing completions retain no
+// runtime or coroutine owner and cannot resume the observer a second time.
+template <typename T>
+task_t<result_t<T>> observe_until (task_t<T> pending,
+                                   std::chrono::steady_clock::time_point deadline_at,
+                                   std::stop_token cancellation = {})
+{
+    const auto observed = [deadline_at, cancellation] (result_t<T> result) {
+        if (cancellation.stop_requested ())
+            return result_t<T>::failure (framework_error_kind_t::shutting_down,
+                                         "Location coordinator stopped");
+        if (std::chrono::steady_clock::now () >= deadline_at)
+            return result_t<T>::failure (framework_error_kind_t::deadline_exceeded,
+                                         "Location coordinator wait timed out");
+        return result;
+    };
+    if (cancellation.stop_requested ())
+        co_return observed (result_t<T>::failure (framework_error_kind_t::shutting_down,
+                                                  "Location coordinator stopped"));
+    if (pending.await_ready ())
+        co_return observed (detail::task_result_access_t::read (pending));
+    auto completion = std::make_shared<task_completion_source_t<result_t<T>>> ();
+    auto deadline = std::make_shared<detail::deadline_state_t> ();
+    auto settle = [weak = std::weak_ptr{completion}, observed] (result_t<T> result) {
+        if (auto source = weak.lock ())
+            source->complete (result_t<result_t<T>>::success (observed (std::move (result))));
+    };
+    std::stop_callback stopped (cancellation, [settle] {
+        settle (result_t<T>::failure (framework_error_kind_t::shutting_down,
+                                      "Location coordinator stopped"));
+    });
+    detail::observe_task_terminal (pending, settle);
+    detail::deadline_scheduler_t::instance ().schedule (deadline_at, deadline, [settle] {
+        settle (result_t<T>::failure (framework_error_kind_t::deadline_exceeded,
+                                      "Location coordinator wait timed out"));
+    });
+    auto result = co_await completion->task ();
+    deadline->cancelled.store (true, std::memory_order_release);
+    detail::deadline_scheduler_t::instance ().wake ();
+    co_return result;
 }
 
 /* Ready results continue on the caller's stack; only an unfinished task gets a
