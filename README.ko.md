@@ -128,8 +128,8 @@ DEALER/ROUTER, request/reply, STREAM, monitoring 샘플을 함께 제공합니�
 
 설치 절차와 언어별 5분 예제는 [설치](https://docs.zlink.systems/ko/install/) 페이지와
 [Bindings 가이드](https://docs.zlink.systems/ko/bindings/guide/)에 있습니다. 정식 계약은
-[Core 스펙](https://docs.zlink.systems/ko/spec/)과
-[Framework 공통 스펙](https://docs.zlink.systems/ko/common/spec/server/)입니다.
+[Core 스펙](core/doc/spec/README.ko.md)과
+[Framework 공통 스펙](framework/doc/framework/common/spec/server/README.ko.md)입니다.
 
 ## 소스에서 빌드
 

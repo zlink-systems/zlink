@@ -865,6 +865,8 @@ export interface ZLinkMeshBackendAdapter {
     options: {
       readonly meshName: string;
       readonly routingId?: RoutingId;
+      readonly sendHighWaterMark?: number;
+      readonly receiveHighWaterMark?: number;
       readonly receiveTimeoutMs?: number;
       readonly trustProfile?: string;
       readonly applicationJobQueue: import('../../application-jobs/contracts').ApplicationJobQueuePort;
