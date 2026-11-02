@@ -25,8 +25,10 @@ make_bound_session_send_stage_trace (const bound_session_send_stage_trace_contex
 
     return [gateway = *context.gateway, actor_id = std::string (context.actor_id),
             session_rid = *context.session_rid] (std::string_view stage, std::string_view result) {
-        gateway.trace_bound_session_send_stage (
-          actor_id, stage, [&] { return std::string (result); }, &session_rid);
+        if (gateway.trace_bound_session_send_stage_enabled ()) {
+            gateway.trace_bound_session_send_stage (
+              actor_id, stage, [&] { return std::string (result); }, &session_rid);
+        }
     };
 }
 
