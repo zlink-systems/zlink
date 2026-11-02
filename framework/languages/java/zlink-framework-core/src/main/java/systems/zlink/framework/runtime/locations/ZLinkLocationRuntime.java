@@ -24,6 +24,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -331,11 +332,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     public void cancelStartup() {
-        cancelStartup(inStateLane(this::startupCompletion));
-    }
-
-    private static void cancelStartup(CompletableFuture<Void> completion) {
-        if (completion != null) completion.cancel(false);
+        cancel(inStateLane(this::startupCompletion));
     }
 
     public CompletionStage<Void> stop() {
@@ -372,11 +369,17 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                         : lifecycle.cleanupDeadline());
                             }
                             return new StopState(
-                                    shouldStop, heartbeat, token, lifecycle, completion);
+                                    shouldStop,
+                                    heartbeat,
+                                    token,
+                                    lifecycle,
+                                    completion,
+                                    ownerLeaseRecoveryOperation);
                         });
         cancel(state.heartbeat());
+        cancel(state.recovery());
         if (state.lifecycle() == null) return CompletableFuture.completedFuture(null);
-        cancelStartup(state.lifecycle().completion());
+        cancel(state.lifecycle().completion());
         if (!state.shouldStop()) return state.completion();
         long deadlineNanos = deadlineNanos(deadline);
         ZLinkLocationOwnerToken token = state.token();
@@ -690,8 +693,26 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
      * deadline; only this wait completes, so late Store results can finish normally.
      */
     public <T> CompletionStage<T> writeDescriptor(Supplier<CompletionStage<T>> write) {
-        return withinDeadline(
-                write, saturatingAdd(monotonicNow.getAsLong(), ownerLeaseRenewTimeout.toNanos()));
+        long deadlineNanos =
+                saturatingAdd(monotonicNow.getAsLong(), ownerLeaseRenewTimeout.toNanos());
+        return stateLane
+                .runAsync(() -> ownerLeaseRecoveryOperation)
+                .thenCompose(
+                        recovery -> {
+                            if (recovery != null && recovery.isCompletedExceptionally()) {
+                                return recovery.<T>thenApply(ignored -> null);
+                            }
+                            var completion =
+                                    withinDeadline(write, deadlineNanos).toCompletableFuture();
+                            if (recovery != null) {
+                                recovery.whenComplete(
+                                        (ignored, failure) -> {
+                                            if (failure != null)
+                                                completion.completeExceptionally(unwrap(failure));
+                                        });
+                            }
+                            return completion;
+                        });
     }
 
     private <T> CompletionStage<T> withinDeadline(
@@ -756,8 +777,17 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                             ownerLeaseRecoveryOperation = completion;
                             var listener = ownerLeaseRecoveryListener;
                             return () -> {
-                                CompletableFuture.completedFuture(null)
-                                        .thenCompose(ignored -> listener.apply(admissionWasOpen))
+                                if (completion.isDone()) return completion;
+                                var publication =
+                                        CompletableFuture.<Void>completedFuture(null)
+                                                .thenCompose(
+                                                        ignored ->
+                                                                listener.apply(admissionWasOpen));
+                                completion.whenComplete(
+                                        (ignored, failure) -> {
+                                            if (completion.isCancelled()) publication.cancel(false);
+                                        });
+                                publication
                                         .handle(
                                                 (ignored, failure) ->
                                                         stateLane.runAsync(
@@ -994,9 +1024,16 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                             started = false;
                             ScheduledFuture<?> heartbeat = heartbeatTask;
                             heartbeatTask = null;
-                            return new StopState(false, heartbeat, null, startupLifecycle, null);
+                            return new StopState(
+                                    false,
+                                    heartbeat,
+                                    null,
+                                    startupLifecycle,
+                                    null,
+                                    ownerLeaseRecoveryOperation);
                         });
         cancel(state.heartbeat());
+        cancel(state.recovery());
         heartbeatExecutor.shutdownNow();
         heartbeatExecutor.close();
     }
@@ -1056,7 +1093,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         lastError = message == null || message.isBlank() ? "owner lease operation failed" : message;
     }
 
-    private static void cancel(ScheduledFuture<?> task) {
+    private static void cancel(Future<?> task) {
         if (task != null) {
             task.cancel(false);
         }
@@ -1069,7 +1106,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             ScheduledFuture<?> heartbeat,
             ZLinkLocationOwnerToken token,
             StartupLifecycle lifecycle,
-            CompletableFuture<Void> completion) {}
+            CompletableFuture<Void> completion,
+            CompletableFuture<Void> recovery) {}
 
     private record StartupLifecycle(
             CompletableFuture<Void> completion,

@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
@@ -53,8 +54,12 @@ final class ZLinkAutoConnectReconciler {
     }
 
     CompletionStage<Void> tick() {
+        return tick(Runnable::run);
+    }
+
+    CompletionStage<Void> tick(Executor continuationExecutor) {
         return peers.listPeers(local.type(), local.meshName(), null)
-                .handle(
+                .handleAsync(
                         (rows, failure) -> {
                             if (failure != null) {
                                 if (!storeFailed) storeFailureStartedNanos = nanoTime.getAsLong();
@@ -62,8 +67,9 @@ final class ZLinkAutoConnectReconciler {
                                 retryPendingTargetsWithinStoreFailureGrace();
                                 return CompletableFuture.<Void>completedFuture(null);
                             }
-                            return reconcile(rows);
-                        })
+                            return reconcile(rows, continuationExecutor);
+                        },
+                        continuationExecutor)
                 .thenCompose(stage -> stage);
     }
 
@@ -86,7 +92,8 @@ final class ZLinkAutoConnectReconciler {
         return CompletableFuture.completedFuture(null);
     }
 
-    private CompletionStage<Void> reconcile(List<ZLinkAutoConnectPeer> rows) {
+    private CompletionStage<Void> reconcile(
+            List<ZLinkAutoConnectPeer> rows, Executor continuationExecutor) {
         if (storeFailed) {
             storeFailed = false;
             storeFailureStartedNanos = -1;
@@ -111,18 +118,20 @@ final class ZLinkAutoConnectReconciler {
         for (var entry : admissionExpectations.entrySet()) {
             if (!nextExpectations.containsKey(entry.getKey())) {
                 registered =
-                        registered.thenCompose(
-                                ignored -> executor.forgetAdmissionExpectation(entry.getValue()));
+                        registered.thenComposeAsync(
+                                ignored -> executor.forgetAdmissionExpectation(entry.getValue()),
+                                continuationExecutor);
             }
         }
         for (var entry : nextExpectations.entrySet()) {
             if (!entry.getValue().equals(admissionExpectations.get(entry.getKey()))) {
                 registered =
-                        registered.thenCompose(
-                                ignored -> executor.observeAdmissionExpectation(entry.getValue()));
+                        registered.thenComposeAsync(
+                                ignored -> executor.observeAdmissionExpectation(entry.getValue()),
+                                continuationExecutor);
             }
         }
-        return registered.thenRun(
+        return registered.thenRunAsync(
                 () -> {
                     admissionExpectations.clear();
                     admissionExpectations.putAll(nextExpectations);
@@ -192,7 +201,8 @@ final class ZLinkAutoConnectReconciler {
                                 if (attemptConnection(() -> executor.disconnect(target)))
                                     active.remove(key);
                             });
-                });
+                },
+                continuationExecutor);
     }
 
     private boolean attemptConnection(BooleanSupplier operation) {

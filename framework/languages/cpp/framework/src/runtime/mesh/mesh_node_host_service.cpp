@@ -3425,51 +3425,78 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
     }
 }
 
-bool mesh_node_host_service_t::republish_after_store_recovery (location_write_intent_t intent)
+task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
+  location_write_intent_t intent,
+  std::stop_token cancellation,
+  std::chrono::steady_clock::time_point deadline)
 {
-    std::lock_guard lock (_descriptor_publish_mutex);
     const auto owner = current_location_owner ();
-    if (!_location_store || !owner)
-        return _published_mesh_descriptors.empty ();
-    for (std::size_t index = 0; index < _published_mesh_descriptors.size (); ++index) {
-        auto descriptor = _published_mesh_descriptors[index];
+    std::vector<mesh_node_descriptor_t> descriptors;
+    {
+        std::lock_guard lock (_descriptor_publish_mutex);
+        if (!_location_store || !owner)
+            co_return _published_mesh_descriptors.empty ();
+        descriptors = _published_mesh_descriptors;
+    }
+    for (const auto &original : descriptors) {
+        if (cancellation.stop_requested ())
+            co_return false;
+        auto descriptor = original;
         const auto key = mesh_node_descriptor_key_t{descriptor.mesh_name, descriptor.rid};
-        const bool first_publication =
-          std::find_if (_published_mesh_nodes.begin (), _published_mesh_nodes.end (),
-                        [&key] (const auto &published) {
-                            return published.mesh_name == key.mesh_name && published.rid == key.rid;
-                        })
-          == _published_mesh_nodes.end ();
+        bool first_publication;
+        {
+            std::lock_guard lock (_descriptor_publish_mutex);
+            first_publication =
+              std::find_if (_published_mesh_nodes.begin (), _published_mesh_nodes.end (),
+                            [&key] (const auto &published) {
+                                return published.mesh_name == key.mesh_name
+                                       && published.rid == key.rid;
+                            })
+              == _published_mesh_nodes.end ();
+        }
         if (!first_publication && descriptor.owner_id == owner->owner_id
             && descriptor.lease_generation == owner->lease_generation)
             continue;
         if (intent == location_write_intent_t::renew)
-            return false;
+            co_return false;
         descriptor.owner_id = owner->owner_id;
         descriptor.lease_generation = owner->lease_generation;
         if (!first_publication
-            && descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ()) {
-            return false;
-        }
+            && descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+            co_return false;
         if (!first_publication)
             ++descriptor.descriptor_revision;
-        const auto written =
-          infrastructure_result ([&] {
-              return _location_runtime->descriptor_write_confirmed ([&] {
-                  return _location_store->update_mesh_node (
-                    descriptor, first_publication ? location_write_intent_t::new_claim
-                                                  : location_write_intent_t::renew);
-              });
-          }).value ();
-        if (!written)
-            return false;
-        _published_mesh_descriptors[index] = std::move (descriptor);
+        const auto written = co_await _location_runtime->descriptor_write_confirmed (
+          [store = _location_store, descriptor, first_publication] {
+              return store->update_mesh_node (descriptor, first_publication
+                                                            ? location_write_intent_t::new_claim
+                                                            : location_write_intent_t::renew);
+          },
+          std::chrono::steady_clock::now, cancellation, deadline);
+        if (!written || cancellation.stop_requested ())
+            co_return false;
+        std::lock_guard lock (_descriptor_publish_mutex);
+        const auto current =
+          std::find_if (_published_mesh_descriptors.begin (), _published_mesh_descriptors.end (),
+                        [&key] (const auto &value) {
+                            return value.mesh_name == key.mesh_name && value.rid == key.rid;
+                        });
+        // A concurrent state/weight publication owns its newer descriptor. Never
+        // overwrite it with the copy captured before external confirmation.
+        if (current == _published_mesh_descriptors.end ()
+            || current->descriptor_revision != original.descriptor_revision
+            || current->owner_id != original.owner_id
+            || current->lease_generation != original.lease_generation)
+            co_return false;
+        *current = std::move (descriptor);
         if (first_publication)
-            _published_mesh_nodes.push_back (std::move (key));
+            _published_mesh_nodes.push_back (key);
     }
+    if (cancellation.stop_requested ())
+        co_return false;
     _accept_application_dispatch.store (true, std::memory_order_release);
     _dispatch_gate_changed.notify_all ();
-    return true;
+    co_return true;
 }
 
 void mesh_node_host_service_t::stop () noexcept
