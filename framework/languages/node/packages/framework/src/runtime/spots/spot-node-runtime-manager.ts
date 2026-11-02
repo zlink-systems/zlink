@@ -158,10 +158,10 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
 }
 
 export class ZLinkSpotNodeRuntimeManager {
-  private readonly meshNodes = new Map<string, ZLinkBackendMeshNode>();
+  readonly meshNodes = new Map<string, ZLinkBackendMeshNode>();
   private readonly meshPumps = new Map<string, ZLinkMeshDispatchPump>();
   private readonly meshCompletions = new Map<string, ZLinkMeshCompletionTable>();
-  private readonly entryActivations = new Map<string, ZLinkEntrySpotActivation>();
+  readonly entryActivations = new Map<string, ZLinkEntrySpotActivation>();
   private readonly entryActivationStarts = new Map<string, Promise<void>>();
   private readonly publishers = new Map<
     string,
@@ -179,11 +179,11 @@ export class ZLinkSpotNodeRuntimeManager {
   private readonly runtimeChannelWeights = new Map<string, Map<string, number>>();
   private readonly entrySpotIds = new Map<string, string>();
   private runtimeWeightPublication = Promise.resolve();
-  private statePublication = Promise.resolve();
-  private locationAutoConnect?: ZLinkSpotNodeLocationAutoConnectContext;
+  statePublication = Promise.resolve();
+  locationAutoConnect?: ZLinkSpotNodeLocationAutoConnectContext;
   private readonly applicationJobQueue: ApplicationJobQueue;
 
-  constructor(private readonly options: ZLinkSpotNodeRuntimeManagerOptions) {
+  constructor(readonly options: ZLinkSpotNodeRuntimeManagerOptions) {
     if ((options.detachedTaskRunner as unknown) === undefined) {
       throw new ZLinkConfigurationException('Spot node runtime requires a detached task runner.');
     }
@@ -1091,7 +1091,7 @@ export class ZLinkSpotNodeRuntimeManager {
     }
   }
 
-  private async initializeEntrySpot(
+  async initializeEntrySpot(
     spotNodeName: string,
     node: ZLinkBackendMeshNode,
     spotNode: ZLinkSpotNodeOptions

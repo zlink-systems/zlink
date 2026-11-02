@@ -1,29 +1,67 @@
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { scanPrivateAccess } = require('./fixtures/private-member-access');
+const {
+  accessAllowlist,
+  compareAccesses,
+  scanPrivateAccess
+} = require('./fixtures/private-member-access');
 
 const nodeRoot = path.resolve(__dirname, '../..');
+const repository = path.resolve(nodeRoot, '../../..');
+const allowlistRelative =
+  'framework/languages/node/test/contract/fixtures/private-member-access-allowlist.json';
 
-test('tests use public operations or internal constructor seams instead of private members', () => {
+function allowlistGrowth(current, previous) {
+  if (Array.isArray(previous)) {
+    // Main still has the original file-only baseline; later revisions carry per-access identities.
+    const oldFiles = new Set(previous);
+    return Object.keys(current)
+      .filter((file) => !oldFiles.has(file))
+      .map((file) => `Allowlist may only shrink: ${file}`);
+  }
+  const errors = [];
+  for (const [file, entry] of Object.entries(current)) {
+    const old = previous[file]?.accesses ?? {};
+    for (const [identity, count] of Object.entries(entry.accesses))
+      if (count > (old[identity] ?? 0)) errors.push(`Allowlist may only shrink: ${file}`);
+  }
+  return errors;
+}
+
+function readMainAllowlist() {
+  execFileSync('git', ['rev-parse', '--verify', 'origin/main^{commit}'], {
+    cwd: repository,
+    stdio: 'ignore'
+  });
+  return JSON.parse(
+    execFileSync('git', ['show', `origin/main:${allowlistRelative}`], {
+      cwd: repository,
+      encoding: 'utf8'
+    })
+  );
+}
+
+test('Node tests reject new private accesses and shrink the legacy baseline', () => {
   const probeFile = path.join(__dirname, 'private-access-probe.contract.ts');
   const probe = `
     import { ZLinkFrameworkRuntimeHost } from '../../packages/framework/src/runtime/host';
     import { PrivateHashProbe } from '../../packages/framework/src/runtime/foundation/service-weighted-selection';
     declare const host: ZLinkFrameworkRuntimeHost;
-    host.admission;
-    host['admission'];
-    (host as any).admission;
+    host.runtimeStatus;
+    host['runtimeStatus'];
+    (host as any).runtimeStatus;
     const erased = host as any;
-    erased.admission;
-    Reflect.get(host, 'admission');
+    erased.runtimeStatus;
+    Reflect.get(host, 'runtimeStatus');
     const copied = erased;
-    copied.admission;
+    copied.runtimeStatus;
     const prototypeHost = Object.create(ZLinkFrameworkRuntimeHost.prototype);
-    prototypeHost.admission;
+    prototypeHost.runtimeStatus;
     declare const mock: any;
-    mock.method(host, 'preflightAutomaticPeerReadiness');
+    mock.method(host, 'ownerAdmissionOpen');
     const publicObject = { admission: 1 };
     publicObject.admission;
     publicObject['admission'];
@@ -58,19 +96,32 @@ test('tests use public operations or internal constructor seams instead of priva
   );
   assert.deepEqual(
     probeAccesses.map((row) => row.member),
-    [...Array(7).fill('admission'), 'preflightAutomaticPeerReadiness', '#secret']
+    [...Array(7).fill('runtimeStatus'), 'ownerAdmissionOpen', '#secret']
   );
   const actual = accesses.filter((row) => !row.file.endsWith('private-access-probe.contract.ts'));
   const allowed = JSON.parse(
     fs.readFileSync(path.join(__dirname, 'fixtures/private-member-access-allowlist.json'), 'utf8')
   );
-  const actualFiles = [...new Set(actual.map((row) => row.file))].sort();
-  const unexpected = actual.filter((row) => !allowed.includes(row.file));
   assert.deepEqual(
-    unexpected,
+    compareAccesses(actual, allowed),
     [],
-    unexpected.map((row) => `${row.file}:${row.line}: private ${row.member}`).join('\n')
+    'Remove or migrate every unlisted private access before updating the baseline'
   );
-  // A file leaves the baseline as soon as its last access is migrated.
-  assert.deepEqual(actualFiles, allowed, 'Remove stale files from the private access allowlist');
+  assert.deepEqual(allowlistGrowth(allowed, readMainAllowlist()), []);
+
+  const probeBaseline = accessAllowlist(probeAccesses);
+  assert.deepEqual(compareAccesses(probeAccesses, probeBaseline), []);
+  const withNewAccess = [
+    ...probeAccesses,
+    probeAccesses.find((row) => row.member === 'runtimeStatus')
+  ];
+  assert.match(
+    compareAccesses(withNewAccess, probeBaseline).join('\n'),
+    /Unlisted private access:.*1 accesses/u,
+    'A new private access in an already allowed file must fail'
+  );
+  assert.deepEqual(
+    allowlistGrowth(accessAllowlist(withNewAccess), probeBaseline),
+    ['Allowlist may only shrink: test/contract/private-access-probe.contract.ts']
+  );
 });

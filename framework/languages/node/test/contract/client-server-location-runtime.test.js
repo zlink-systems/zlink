@@ -11,7 +11,7 @@ const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
 const {
   ZLinkChannelSocketRegistry
-} = require('../../packages/framework/dist/runtime/channels/channel-socket-registry');
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkChannelReceiveLoop
 } = require('../../packages/framework/dist/runtime/channels/channel-receive-loops');

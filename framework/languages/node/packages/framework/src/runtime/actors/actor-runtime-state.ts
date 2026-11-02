@@ -174,7 +174,7 @@ export class ZLinkActorRuntimeState {
   private spotMembershipEpochValue = 0n;
   private nativeActorRefValue: ZLinkBackendActorRef | undefined;
   private entryNodeRidValue: RoutingId | undefined;
-  private boundSessionValue: ZLinkRemoteBoundSessionTarget | undefined;
+  boundSessionValue: ZLinkRemoteBoundSessionTarget | undefined;
   private remoteActorPacketTargetValue: ZLinkRemoteActorPacketTarget | undefined;
   private createRequestPayloadValue: Buffer | undefined;
   private ownsLocationValue = false;
