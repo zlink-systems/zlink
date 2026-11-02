@@ -47,21 +47,26 @@ framework는 메트릭 계기와 host 종료 시의 drain 절차를 제공한다
 
 ## 2. 런타임 메트릭
 
-framework는 `"zlink.framework"` 하나를 정식 meter 이름으로 삼아
-모든 계기를 방출한다. application은 이 정식 meter 이름을 수집 파이프라인에 등록한다.
+Framework의 계기와 message-flow 기록은 언어별 collector에 연결한다. Application이
+각 언어의 provider와 exporter를 구성하며, Framework는 내장 scrape server를 두지 않는다.
 
 ```typescript
-// OpenTelemetry Node SDK에 zlink meter를 연결한다.
-// "zlink.framework"가 Framework가 계기를 방출하는 정식 meter 이름이다.
+// Exporter를 포함해 구성한 SDK provider를 OpenTelemetry global API에 등록한다.
 const meterProvider = new MeterProvider({ readers: [prometheusExporter] });
-meterProvider.getMeter('zlink.framework');
 ```
 
-- zlink 전용 메트릭 API는 없다. 각 언어의 표준 메트릭 API가 그대로 표면이다.
-  OTel 없이 수집하려면 `MeterListener`에서 meter 이름 `"zlink.framework"`를 직접 구독한다.
-- 어떤 listener도 붙지 않으면 계기 갱신은 최소 비용의 비활성 경로로 끝난다. 계기를
-  등록만 해 두고 켜지 않아도 messaging 성능에 영향이 없다.
-- 대시보드와 exporter 선택은 application 몫이다. framework는 내장 scrape 서버를 두지 않는다.
+- .NET metric 이름은 `zlink.framework`, trace source 이름은 `Zlink.Framework`다. OTel
+  tracing 설정에서 `AddSource("Zlink.Framework")`를 등록한다. OTel을 쓰지 않는 .NET
+  application은 `MeterListener`에서 `zlink.framework`를 구독할 수 있다.
+- C++은 `app_t::use_metric_provider(...)`로 metric provider를 연결하고, message-flow 기록은
+  application이 구성한 logger로 보낸다. C++에는 OpenTelemetry `Tracer` source가 없다.
+- Java/Kotlin Spring Boot starter는 application의 Micrometer `MeterRegistry`에 `zlink.*`
+  계기를 연결한다. Message-flow 기록은 SLF4J logger category
+  `systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer`로 전달하며 OTel `Tracer`는 없다.
+- Node.js는 `metrics.setGlobalMeterProvider(...)`와 `trace.setGlobalTracerProvider(...)`로
+  OpenTelemetry SDK provider를 등록한다. Framework는 meter `zlink.framework`와 tracer
+  `@zlink-systems/framework`를 조회한다.
+- 대시보드와 exporter 선택은 application 몫이다.
 
 계기 카탈로그는 다음 표가 MeshNode, object·STREAM, location·fanout의 측정값과 단위를 정리한다.
 세부 라벨·단위·종류는 [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)와
