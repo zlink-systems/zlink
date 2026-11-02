@@ -15,6 +15,7 @@ assembly Zlink.Framework
   type interface Zlink.Framework.Contracts.Actors.IZLinkActor
     property Zlink.Framework.Contracts.Actors.IZLinkActorContext Context { get; } [nullability=read:not-null,write:unknown]
     method virtual System.Void Configure() [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask<System.String?> OnDuplicateBindAsync(Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity current [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity incoming [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method virtual System.Threading.Tasks.ValueTask OnJoinCompletedAsync(Zlink.Framework.Contracts.Actors.ZLinkActorJoinCompletion completion [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Actors.IZLinkActorClient
     method abstract Zlink.Framework.Contracts.Actors.IZLinkActorRequestCall RequestToActor<TRequest>(System.String actorId [nullability=read:not-null,write:not-null], TRequest? request [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
@@ -186,6 +187,18 @@ assembly Zlink.Framework
     method override System.String ToString() [return=read:unknown,write:unknown]
     method static System.Boolean op_Equality(Zlink.Framework.Contracts.Actors.ZLinkActorJoinOperationId left [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Actors.ZLinkActorJoinOperationId right [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method static System.Boolean op_Inequality(Zlink.Framework.Contracts.Actors.ZLinkActorJoinOperationId left [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Actors.ZLinkActorJoinOperationId right [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type readonly-struct Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity : System.IEquatable<Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity>
+    ctor ZLinkSessionBindingIdentity(Systems.Zlink.RoutingId SessionOwnerNodeRid [nullability=read:not-null,write:not-null], System.UInt64 SessionOwnerNodeGeneration [nullability=read:not-null,write:not-null], System.UInt64 BindingGeneration [nullability=read:not-null,write:not-null])
+    property System.UInt64 BindingGeneration { get; init; } [nullability=read:not-null,write:not-null]
+    property System.UInt64 SessionOwnerNodeGeneration { get; init; } [nullability=read:not-null,write:not-null]
+    property Systems.Zlink.RoutingId SessionOwnerNodeRid { get; init; } [nullability=read:not-null,write:not-null]
+    method System.Void Deconstruct(out Systems.Zlink.RoutingId SessionOwnerNodeRid [nullability=read:not-null,write:not-null], out System.UInt64 SessionOwnerNodeGeneration [nullability=read:not-null,write:not-null], out System.UInt64 BindingGeneration [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method override System.Boolean Equals(System.Object obj [nullability=read:unknown,write:unknown]) [return=read:not-null,write:not-null]
+    method virtual System.Boolean Equals(Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity other [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]
+    method override System.String ToString() [return=read:unknown,write:unknown]
+    method static System.Boolean op_Equality(Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity left [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity right [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method static System.Boolean op_Inequality(Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity left [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity right [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Channels.IZLinkFanoutClient
     method abstract Zlink.Framework.Contracts.Channels.IZLinkFanoutPublishCall Publish<TEvent>(System.String channelName [nullability=read:not-null,write:not-null], System.String topic [nullability=read:not-null,write:not-null], TEvent? message [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
       generic TEvent variance=invariant nullable=nullable

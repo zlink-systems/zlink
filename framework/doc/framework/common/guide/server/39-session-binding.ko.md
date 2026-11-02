@@ -27,7 +27,55 @@ Actor를 고르지 않는다** — 현재 binding이 아닌 slot의 packet은 se
 묶는 호출은 중복 묶기를 오류로 처리한다. 인증 재전송처럼 이미 묶여 있을 수 있는 흐름에서는
 찾거나 묶는 호출을 사용한다.
 
-## 2. 묶음과 Spot membership — 서로 독립이다
+## 2. 중복 연결은 Actor가 결정한다
+
+다른 session이 current인 Actor를 새 session에 bind하면 Framework는 Actor 순서 안에서
+`onDuplicateBind(current, incoming, signal)`을 호출한다. 두 인자는 session owner node, 그 node의
+lifecycle generation, binding generation으로 식별하는 읽기 전용 값이다. callback은 `undefined` 또는 빈 문자열을 반환해 받아들이고,
+비어 있지 않은 문자열을 반환해 그 메시지로 거부한다.
+
+EntrySpot의 계정 Actor는 기존 로그인 연결을 유지하려고 새 연결을 거부할 수 있다.
+
+=== "Node/TypeScript"
+
+    ```typescript
+    class EntryAccountActor {
+      onDuplicateBind(
+        current: ZLinkSessionBindingIdentity,
+        incoming: ZLinkSessionBindingIdentity,
+        signal: AbortSignal,
+      ): Promise<string | undefined> {
+        return Promise.resolve("An account session is already active.");
+      }
+    }
+    ```
+
+UserSpot의 game Actor는 application 상태에 따라 연결 교체를 허용할 수 있다.
+
+=== "Node/TypeScript"
+
+    ```typescript
+    class MatchActor {
+      private matchFinished = false;
+
+      onDuplicateBind(
+        current: ZLinkSessionBindingIdentity,
+        incoming: ZLinkSessionBindingIdentity,
+        signal: AbortSignal,
+      ): Promise<string | undefined> {
+        return Promise.resolve(
+          this.matchFinished ? "This match no longer accepts a connection." : undefined,
+        );
+      }
+    }
+    ```
+
+callback이 없으면 기존 동작처럼 새 session을 받아들인다. 거부하거나 callback이 제한 시간 안에 끝나지
+않으면 current binding을 유지하고 incoming bind만 오류로 끝낸다. Framework는 incoming 연결을 끊지 않고
+command 51도 보내지 않는다. 받아들이면 새 session을 current로 등록하고 이전 연결에 기존 교체 절차를
+적용한다. callback 제한 시간의 설정은 [Session–Actor binding §6](../spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 소유한다.
+
+## 3. 묶음과 Spot membership — 서로 독립이다
 
 묶음은 Actor의 Spot membership과 별개다. Actor가 다른 Spot이나 node로 옮겨 가도 actor id와
 [generation](22-actor.ko.md#33-참조의-generation)은 유지되고, Framework가 묶음의 경로를 갱신한다 —
@@ -41,7 +89,7 @@ application이 다시 묶지 않는다.
 묶은 뒤 Actor가 보낼 수 있는 것은 먼저 보내기와 끊기뿐이다. 요청에 대한 답은 요청 handler의
 반환값으로 처리한다.
 
-## 3. 연결이 끊길 때의 통지
+## 4. 연결이 끊길 때의 통지
 
 물리적으로 연결이 끊기면 Framework가 그 시점의 묶음 전체에 자동으로 알린다. 연결이 유지된 채
 논리적으로 끊겼다고 알릴 때만 application이 직접 호출한다.
@@ -127,7 +175,7 @@ Framework가 합치므로, 직접 호출한 직후에 연결이 끊겨도 Spot�
     --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Sessions/play-session.ts:session-disconnect-notify"
     ```
 
-## 4. 묶기가 실패하거나 무효가 되는 경우
+## 5. 묶기가 실패하거나 무효가 되는 경우
 
 | 상황 | 결과 |
 | --- | --- |
@@ -144,7 +192,7 @@ Framework가 합치므로, 직접 호출한 직후에 연결이 끊겨도 Spot�
 [Location](25-location.ko.md#5-조회-결과의-사용-범위--node-이름은-호출-주소가-아니다)이 그 경계를
 다룬다.
 
-## 5. 관련 문서
+## 6. 관련 문서
 
 - 묶기까지의 절차 — [Session과 Actor 연결](24-actor-session.ko.md)
 - 연결을 받는 자리 — [STREAM](23-stream.ko.md) · [STREAM의 동작 원리](38-stream-boundary.ko.md)

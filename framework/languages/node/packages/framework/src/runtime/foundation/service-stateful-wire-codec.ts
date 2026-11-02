@@ -3,6 +3,7 @@ import { decodeBoundSessionCloseCommand } from '../protocol/service_wire_codec.g
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { isCanonicalWireReplyTerminal } from '../framework-errors-internal';
+import { RequestResult } from '../backend/runtime-values';
 import {
   decodeActorRequestCommand,
   decodeActorSendCommand,
@@ -1154,6 +1155,10 @@ export type ServiceStatefulReplyTail =
       readonly authorityOwnerGeneration: bigint;
     }
   | {
+      readonly kind: 'streamBindRejected';
+      readonly rejectionMessage: string;
+    }
+  | {
       readonly kind: 'userSpotCreate';
       readonly createResult: 'existing' | 'created' | 'rejected';
       readonly spotId: string;
@@ -2149,6 +2154,11 @@ export function decodeStatefulReply(
         ...(actor === undefined ? {} : { actor })
       };
     }
+  } else if (operationKind === 'streamBind' && terminalResult === RequestResult.Rejected) {
+    tail = {
+      kind: 'streamBindRejected',
+      rejectionMessage: reader.text16('rejectionMessage')
+    };
   }
   reader.end();
   return {
@@ -2222,6 +2232,8 @@ function encodeReplyTail(tail: ServiceStatefulReplyTail): Buffer {
     }
     case 'streamBind':
       return concat(u64(tail.bindingGeneration), u64(tail.authorityOwnerGeneration));
+    case 'streamBindRejected':
+      return concat(text16(tail.rejectionMessage, 'rejectionMessage'));
     case 'userSpotCreate':
       return concat(
         Buffer.of((['existing', 'created', 'rejected'] as const).indexOf(tail.createResult) + 1),
@@ -2402,6 +2414,12 @@ function rid(value: string, name: string): Buffer {
 
 function text8(value: string, name: string): Buffer {
   return sized8(value, name);
+}
+
+function text16(value: string, name: string): Buffer {
+  const bytes = encodeCanonicalServiceWireText(value, name, 0xffff, outOfRange);
+  if (bytes.byteLength === 0) fail(`${name} must not be empty.`);
+  return concat(u16(bytes.byteLength), bytes);
 }
 
 function optionalRid(value: string | undefined): Buffer {

@@ -298,14 +298,19 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
 
     host::bound_session_operations_t operations;
-    operations.bind =
-      [] (const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
-          const location_owner_token_t &,
-          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
-          (void) submit_terminal_reply (
-            {bind.binding.generation, bind.actor.authority_owner_generation});
-          return host::bound_session_bind_operation_result_t{};
-      };
+    operations.bind = [] (const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &,
+                          std::uint64_t, const location_owner_token_t &,
+                          std::function<bool (std::uint32_t, std::uint32_t,
+                                              std::optional<protocol::stream_bind_reply_tail_t>)>
+                            submit_terminal_reply) {
+        (void) submit_terminal_reply (
+          static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+          static_cast<std::uint32_t> (protocol::framework_error_code::none),
+          protocol::stream_bind_reply_tail_t{bind.binding.generation,
+                                             bind.actor.authority_owner_generation});
+        using bind_result_t = host::bound_session_bind_operation_result_t;
+        return task_t<bind_result_t> (result_t<bind_result_t>::success (bind_result_t{}));
+    };
     operations.send = [deliveries, delivered] (const protocol::bound_session_send_t &,
                                                std::vector<zlink::message_t> parts) {
         if (parts.size () != 1)

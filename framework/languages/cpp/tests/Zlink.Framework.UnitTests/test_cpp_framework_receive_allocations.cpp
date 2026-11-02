@@ -148,8 +148,9 @@ void verify_infrastructure_claim_across_suspension (std::size_t bind_count)
        .bind =
          [&] (const auto &, const auto &, auto, const auto &, auto) {
              ++bind_calls;
-             return host::bound_session_bind_operation_result_t{stateful::stateful_error_t::none,
-                                                                std::nullopt};
+             using bind_result_t = host::bound_session_bind_operation_result_t;
+             return fw::task_t<bind_result_t> (fw::result_t<bind_result_t>::success (
+               bind_result_t{stateful::stateful_error_t::none, std::nullopt}));
          },
        .send =
          [] (const auto &, auto) {

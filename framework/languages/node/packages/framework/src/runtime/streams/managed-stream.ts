@@ -478,7 +478,8 @@ export class ZLinkManagedStream implements ZLinkStream {
         throw wireReplyFailureException(
           completion.terminalResult,
           completion.failureErrno,
-          `${operationName} failed with result ${completion.terminalResult} (errno ${completion.failureErrno}).`
+          completion.failureMessage ??
+            `${operationName} failed with result ${completion.terminalResult} (errno ${completion.failureErrno}).`
         );
       }
     } finally {

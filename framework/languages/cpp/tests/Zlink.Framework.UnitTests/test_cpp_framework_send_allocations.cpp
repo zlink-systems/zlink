@@ -818,8 +818,9 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
            .bind =
              [&] (const auto &, const auto &, auto, const auto &, auto) {
                  ++bind_calls;
-                 return host::bound_session_bind_operation_result_t{
-                   stateful::stateful_error_t::none, std::nullopt};
+                 using bind_result_t = host::bound_session_bind_operation_result_t;
+                 return fw::task_t<bind_result_t> (fw::result_t<bind_result_t>::success (
+                   bind_result_t{stateful::stateful_error_t::none, std::nullopt}));
              },
            .send = [] (const auto &, auto) { return stateful::stateful_error_t::conflict; },
            .replaced = [] (const auto &) { ADD_FAILURE () << "unexpected Session replacement"; },

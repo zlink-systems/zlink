@@ -953,7 +953,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId,
         ulong,
         ServiceWireCodec.BoundSessionBind38,
-        Action,
+        Action<RequestResult, uint, string?>,
         CancellationToken,
         ValueTask
     >? _boundSessionBindHandler;
@@ -963,7 +963,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             RoutingId,
             ulong,
             ServiceWireCodec.BoundSessionBind38,
-            Action,
+            Action<RequestResult, uint, string?>,
             CancellationToken,
             ValueTask
         > handler
@@ -983,6 +983,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var target = RoutingId.From(request.Actor.TargetNodeRid.Value);
         if (target == _routingId)
         {
+            RequestResult? localResult = null;
+            string? localRejectionMessage = null;
             try
             {
                 await AcceptBoundSessionBindAsync(
@@ -992,7 +994,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         ),
                         _routingId,
                         _lifecycleGeneration,
-                        static () => { },
+                        (result, _, rejectionMessage) =>
+                        {
+                            localResult = result;
+                            localRejectionMessage = rejectionMessage;
+                        },
                         cancellationToken
                     )
                     .AsTask()
@@ -1012,6 +1018,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 throw ZLinkRequestFailureMapper.CreateCompletionException(
                     failure.Result,
                     (int)failure.FailureCode,
+                    "Bound-session bind"
+                );
+            }
+            if (localResult is { } terminal && terminal != RequestResult.Ok)
+            {
+                if (terminal == RequestResult.Rejected && localRejectionMessage is not null)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Rejected,
+                        localRejectionMessage,
+                        ZLinkRetryAdvice.DoNotRetry
+                    );
+                throw ZLinkRequestFailureMapper.CreateCompletionException(
+                    terminal,
                     "Bound-session bind"
                 );
             }
@@ -1046,6 +1065,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ZLinkFrameworkErrorKind.ProtocolError,
                     "Invalid bound-session bind reply correlation."
                 );
+            if (reply.TerminalResult == ServiceWireCodec.RequestTerminalResult.Rejected)
+            {
+                if (reply.Tail is ServiceWireCodec.RequestSpecificTailCase3 rejected)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Rejected,
+                        rejected.RejectionMessage.Value,
+                        ZLinkRetryAdvice.DoNotRetry
+                    );
+            }
             if (reply.TerminalResult != ServiceWireCodec.RequestTerminalResult.Ok)
                 throw ZLinkRequestFailureMapper.CreateCompletionException(
                     (RequestResult)reply.TerminalResult,
@@ -1073,7 +1101,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ServiceWireCodec.BoundSessionBind38 request,
         RoutingId source,
         ulong sourceGeneration,
-        Action reply,
+        Action<RequestResult, uint, string?> reply,
         CancellationToken cancellationToken
     )
     {
@@ -1102,7 +1130,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         request,
                         sourceRid,
                         sourceGeneration,
-                        () => SendTerminal(RequestResult.Ok, 0),
+                        (result, failure, rejectionMessage) =>
+                            SendTerminal(result, failure, rejectionMessage),
                         _stop?.Token ?? CancellationToken.None
                     )
                     .ConfigureAwait(false);
@@ -1144,10 +1173,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     );
                 }
                 var failure = ZLinkRequestFailureMapper.TargetFailureReply(error);
-                SendTerminal(failure.Result, (uint)failure.FailureCode);
+                SendTerminal(failure.Result, (uint)failure.FailureCode, null);
             }
         });
-        void SendTerminal(RequestResult result, uint failure)
+        void SendTerminal(RequestResult result, uint failure, string? rejectionMessage)
         {
             var submitted = SendNativeInfrastructureTerminal(
                 sourceRid,
@@ -1161,12 +1190,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             (ServiceWireCodec.RequestTerminalResult)result,
                             (ServiceWireCodec.FrameworkErrorCode)failure,
                             result == RequestResult.Ok
-                            && request.Binding
-                                is ServiceWireCodec.BoundSessionBindingTransitionCase0 active
-                                ? new ServiceWireCodec.RequestSpecificTailCase2(
-                                    active.BindingGeneration,
-                                    request.Actor.ExpectedAuthorityOwnerGeneration
-                                )
+                                && request.Binding
+                                    is ServiceWireCodec.BoundSessionBindingTransitionCase0 active
+                                    ? new ServiceWireCodec.RequestSpecificTailCase2(
+                                        active.BindingGeneration,
+                                        request.Actor.ExpectedAuthorityOwnerGeneration
+                                    )
+                                : result == RequestResult.Rejected && rejectionMessage is not null
+                                    ? new ServiceWireCodec.RequestSpecificTailCase3(
+                                        new ServiceWireCodec.Text16(rejectionMessage)
+                                    )
                                 : new ServiceWireCodec.RequestSpecificTailOtherwise(),
                             null
                         ),

@@ -6187,13 +6187,14 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                         session_owner = co_await bound_session_operations.session_owner (
                           session_owner_rid, mailbox_record.source_node_generation);
                     if (admission == bound_session_bind_admission_t::ready && session_owner) {
-                        operation_result = bound_session_operations.bind (
+                        operation_result = co_await bound_session_operations.bind (
                           bind, session_owner_rid, mailbox_record.source_node_generation,
                           *session_owner,
-                          [this, &mailbox_record,
-                           &terminal_replied] (const protocol::stream_bind_reply_tail_t &binding) {
+                          [this, &mailbox_record, &terminal_replied] (
+                            std::uint32_t terminal, std::uint32_t failure,
+                            std::optional<protocol::stream_bind_reply_tail_t> tail) {
                               terminal_replied = _transport->reply_bound_session_bind (
-                                mailbox_record, 0u, 0u, binding);
+                                mailbox_record, terminal, failure, std::move (tail));
                               return terminal_replied;
                           });
                     }
@@ -6202,17 +6203,21 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                     using terminal_t = protocol::request_terminal_result;
                     using code_t = protocol::framework_error_code;
                     const auto [terminal, code] =
-                      operation_result.error == stateful::stateful_error_t::none
+                      operation_result.terminal_result
+                        ? std::pair{static_cast<terminal_t> (*operation_result.terminal_result),
+                                    static_cast<code_t> (operation_result.failure_code)}
+                      : operation_result.error == stateful::stateful_error_t::none
                         ? std::pair{terminal_t::ok, code_t::none}
                       : admission == bound_session_bind_admission_t::stale_route
                         ? std::pair{terminal_t::conflict, code_t::actorLocationStale}
                       : admission == bound_session_bind_admission_t::actor_not_ready
                         ? std::pair{terminal_t::busy, code_t::none}
                         : std::pair{terminal_t::internalError, code_t::routeNotConnected};
-                    const auto replied = terminal_replied
-                                         || _transport->reply_bound_session_bind (
-                                           mailbox_record, static_cast<std::uint32_t> (terminal),
-                                           static_cast<std::uint32_t> (code));
+                    const auto replied =
+                      terminal_replied
+                      || _transport->reply_bound_session_bind (
+                        mailbox_record, static_cast<std::uint32_t> (terminal),
+                        static_cast<std::uint32_t> (code), operation_result.reply_tail);
                     if (replied && operation_result.replacement) {
                         (void) co_await _transport->send_bound_session_replaced (
                           operation_result.replacement->retired_session
@@ -9272,6 +9277,7 @@ task_t<void> public_host_runtime_t::enqueue_local_multicast (
   std::function<void ()> before_application_handler,
   application_job_queue_t::permit_t application_permit)
 {
+    auto pending_permit = std::move (application_permit);
     const auto targets = co_await target_snapshot;
     const auto local = _transport->topology ().local_descriptor ();
     for (const auto &target : targets) {
@@ -9296,7 +9302,7 @@ task_t<void> public_host_runtime_t::enqueue_local_multicast (
                             : std::shared_ptr<task_completion_source_t<void>>{};
         const auto enqueue = [&] {
             local_application_dispatch_t dispatch{std::move (owner), std::move (record), parts};
-            dispatch.application_permit = std::move (application_permit);
+            dispatch.application_permit = std::move (pending_permit);
             admit_local_application (std::move (dispatch), {}, completion);
         };
         if (_local_dispatch_completion_lane.is_on_lane ())

@@ -494,17 +494,17 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests(
             );
         }
 
-        Assert.Equal(121, cases.Count);
+        Assert.Equal(123, cases.Count);
         var operationCases = index
             .RootElement.GetProperty("operationCases")
             .EnumerateArray()
             .ToArray();
         Assert.Equal(
-            34,
+            35,
             operationCases.Count(item => item.GetProperty("expect").GetString() == "accept")
         );
         Assert.Equal(
-            64,
+            65,
             operationCases.Count(item => item.GetProperty("expect").GetString() == "reject")
         );
         Assert.Equal(
@@ -753,6 +753,8 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests(
         }
 
         var context = ContextFor(vector);
+        var seedContext =
+            vector.GetProperty("operation").GetString() == "negotiated-bound" ? Context : context;
         if (direction == "decode")
         {
             DecodeSurface(vector, wire, context);
@@ -771,12 +773,12 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests(
             var seed = (ServiceWireCodec.SavedWorkVector)DecodeType(
                 vector.GetProperty("surface").GetProperty("type").GetString()!,
                 Convert.FromHexString(encodeInputHex.GetString()!),
-                Context
+                seedContext
             );
             value = new ServiceWireCodec.SavedWorkVector([seed.Items[0], seed.Items[0]]);
         }
         else
-            value = DecodeSurface(vector, wire, Context);
+            value = DecodeSurface(vector, wire, seedContext);
         var encoded = EncodeSurface(vector, value, context);
         if (vector.GetProperty("expect").GetString() == "accept")
             AssertWireEqual(wire, encoded, name);
@@ -793,6 +795,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests(
             return surface.GetProperty("commandId").GetInt32() switch
             {
                 16 => ServiceWireCodec.DecodeNodeSend16((byte[][])wire, context),
+                20 => ServiceWireCodec.DecodeReply20((byte[][])wire, context),
                 24 => ServiceWireCodec.DecodeActorSend24((byte[][])wire, context),
                 _ => throw new ConformanceHarnessException("operation command surface"),
             };
@@ -825,6 +828,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests(
                     (ServiceWireCodec.NodeSend16)value,
                     context
                 ),
+                20 => ServiceWireCodec.EncodeReply20((ServiceWireCodec.Reply20)value, context),
                 24 => ServiceWireCodec.EncodeActorSend24(
                     (ServiceWireCodec.ActorSend24)value,
                     context
@@ -1122,7 +1126,13 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests(
         )
             ? envelope.GetInt64()
             : null;
-        return new(null, null, null, payloadMaximum, envelopeMaximum);
+        ServiceWireCodec.MeshOperationKind? operationKind = values.TryGetProperty(
+            "originalOperationKind",
+            out var operation
+        )
+            ? Enum.Parse<ServiceWireCodec.MeshOperationKind>(Pascal(operation.GetString()!))
+            : null;
+        return new(operationKind, null, null, payloadMaximum, envelopeMaximum);
     }
 
     private static object OperationWire(JsonElement vector)

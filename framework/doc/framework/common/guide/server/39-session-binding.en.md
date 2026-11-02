@@ -28,7 +28,56 @@ binding isn't handed to the session; it is refused.
 The binding call treats a duplicate bind as an error. A flow that may already be bound, such as a
 resent authentication, uses the find-or-bind call instead.
 
-## 2. Binding and Spot Membership — Independent of Each Other
+## 2. The Actor Decides Whether to Replace a Session
+
+When a new session binds an Actor whose current binding belongs to another session, the framework
+calls `onDuplicateBind(current, incoming, signal)` in the Actor's order. The two arguments are
+read-only values identified by session-owner node, its lifecycle generation, and binding generation. The callback accepts by
+returning `undefined` or an empty string, and rejects with a non-empty returned string as its message.
+
+An Entry Spot account Actor can reject a new connection to keep the existing login session.
+
+=== "Node/TypeScript"
+
+    ```typescript
+    class EntryAccountActor {
+      onDuplicateBind(
+        current: ZLinkSessionBindingIdentity,
+        incoming: ZLinkSessionBindingIdentity,
+        signal: AbortSignal,
+      ): Promise<string | undefined> {
+        return Promise.resolve("An account session is already active.");
+      }
+    }
+    ```
+
+A User Spot game Actor can allow replacement based on application state.
+
+=== "Node/TypeScript"
+
+    ```typescript
+    class MatchActor {
+      private matchFinished = false;
+
+      onDuplicateBind(
+        current: ZLinkSessionBindingIdentity,
+        incoming: ZLinkSessionBindingIdentity,
+        signal: AbortSignal,
+      ): Promise<string | undefined> {
+        return Promise.resolve(
+          this.matchFinished ? "This match no longer accepts a connection." : undefined,
+        );
+      }
+    }
+    ```
+
+Without a callback, the framework accepts the new session as before. Rejection or a callback that
+doesn't finish within its timeout keeps the current binding and ends only the incoming bind with an
+error. The framework doesn't close the incoming connection or send command 51. Acceptance registers
+the new session as current and applies the existing replacement procedure to the previous
+connection. [Session–Actor binding §6](../spec/server/04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection) owns the callback timeout setting.
+
+## 3. Binding and Spot Membership — Independent of Each Other
 
 Binding is separate from the Actor's Spot membership. Even when the Actor moves to another Spot or
 another node, the actor id and [generation](22-actor.en.md#33-generation-in-a-reference) are kept and the framework refreshes the
@@ -42,7 +91,7 @@ route once the move is committed — the application does not bind again.
 Once bound, all an Actor can do on that connection is push and disconnect. The answer to a request
 is handled by the request handler's return value.
 
-## 3. Notification When the Connection Drops
+## 4. Notification When the Connection Drops
 
 When the connection drops physically, the framework notifies every binding held at that moment
 automatically. The application calls explicitly only to announce a logical disconnect while the
@@ -130,7 +179,7 @@ is still up but the application protocol treats it as disconnected.
     --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Sessions/play-session.ts:session-disconnect-notify"
     ```
 
-## 4. When a Bind Fails or Becomes Void
+## 5. When a Bind Fails or Becomes Void
 
 | Situation | Result |
 | --- | --- |
@@ -148,7 +197,7 @@ through the manager's lookup call —
 [Location](25-location.en.md#5-the-scope-of-a-lookup-result--a-node-name-is-not-a-call-address)
 covers that boundary.
 
-## 5. Related Documents
+## 6. Related Documents
 
 - The steps up to binding — [Session and Actor](24-actor-session.en.md)
 - Where the connection is accepted — [STREAM](23-stream.en.md) · [How STREAM Works](38-stream-boundary.en.md)

@@ -14,6 +14,7 @@ import './m6b-execution-policy.contract';
 import './m6b-serial-execution-conformance.contract';
 import './m6b-user-spot-terminal-replay.contract';
 import './m6b-session-owner-identity.contract';
+import './m6b-duplicate-bind.contract';
 
 import {
   Message,

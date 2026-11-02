@@ -3168,6 +3168,251 @@ public sealed partial class EntrySpotActorDispatchTests
             )
         );
 
+    private static async Task<(
+        ZLinkFrameworkRuntime Runtime,
+        CapturingSpotNode Node,
+        ZLinkBackendActorRef ActorRef,
+        ProbeActor Actor,
+        ZLinkActorRuntimeState State,
+        RoutingId SessionNode
+    )> CreateDuplicateBindFixtureAsync(TimeSpan? callbackTimeout = null)
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            ),
+            sessionReplacementCallbackTimeout: callbackTimeout
+        );
+        var actor = RegisterProbeActor(runtime, actorRef);
+        var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+        var sessionNode = RoutingId.From("session-node-duplicate-bind");
+        node.AdmittedMeshPeers.Add(
+            new MeshNodePeer(
+                1,
+                MeshPeerSource.Discovery,
+                MeshPeerState.Admitted,
+                sessionNode,
+                61,
+                1,
+                "inproc://session-node-duplicate-bind",
+                1,
+                0,
+                1
+            )
+        );
+        node.SetLocalActorAuthorityFence(actorRef, 41, 51);
+        return (runtime, node, actorRef, actor, state, sessionNode);
+    }
+
+    private static async Task BindDuplicateSessionAsync(
+        ZLinkFrameworkRuntime runtime,
+        ZLinkBackendActorRef actorRef,
+        RoutingId sessionNode,
+        string session,
+        ulong generation,
+        List<(RequestResult Result, uint Code, string? Message)> replies
+    ) =>
+        await runtime.ApplyBoundSessionBindAsync(
+            actorRef.NodeRid,
+            sessionNode,
+            61,
+            CanonicalBind(actorRef, session, generation),
+            (result, code, message) => replies.Add((result, code, message)),
+            CancellationToken.None
+        );
+
+    [Fact]
+    public async Task RemoteSessionBind_DuplicateCallback_AcceptsAndReplacesCurrentBinding()
+    {
+        var (runtime, _, actorRef, actor, state, sessionNode) =
+            await CreateDuplicateBindFixtureAsync();
+        try
+        {
+            var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity? current = null;
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity? incoming = null;
+            actor.DuplicateBindCallback = (oldIdentity, newIdentity, _) =>
+            {
+                current = oldIdentity;
+                incoming = newIdentity;
+                return ValueTask.FromResult<string?>(null);
+            };
+
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies
+            );
+
+            Assert.Equal(RequestResult.Ok, replies[^1].Result);
+            Assert.Equal(new(sessionNode, 61, 1), current);
+            Assert.Equal(new(sessionNode, 61, 2), incoming);
+            Assert.True(state.TryGetBoundSession(out var bound));
+            Assert.Equal(RoutingId.From("session-incoming"), bound.SessionRid);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteSessionBind_DuplicateCallback_RejectsAndKeepsCurrentBinding()
+    {
+        var (runtime, _, actorRef, actor, state, sessionNode) =
+            await CreateDuplicateBindFixtureAsync();
+        try
+        {
+            var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+            actor.DuplicateBindCallback = (_, _, _) =>
+                ValueTask.FromResult<string?>("already signed in");
+
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies
+            );
+
+            Assert.Equal(RequestResult.Rejected, replies[^1].Result);
+            Assert.Equal("already signed in", replies[^1].Message);
+            Assert.True(state.TryGetBoundSession(out var bound));
+            Assert.Equal(RoutingId.From("session-current"), bound.SessionRid);
+
+            actor.DuplicateBindCallback = (_, _, _) => ValueTask.FromResult<string?>(string.Empty);
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-empty",
+                3,
+                replies
+            );
+
+            Assert.Equal(RequestResult.Ok, replies[^1].Result);
+            Assert.Null(replies[^1].Message);
+            Assert.True(state.TryGetBoundSession(out bound));
+            Assert.Equal(RoutingId.From("session-empty"), bound.SessionRid);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteSessionBind_DuplicateCallbackTimeout_RejectsAndIgnoresLateAcceptance()
+    {
+        var (runtime, _, actorRef, actor, state, sessionNode) =
+            await CreateDuplicateBindFixtureAsync(TimeSpan.FromMilliseconds(25));
+        try
+        {
+            var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+            using var callbackStarted = new ManualResetEventSlim();
+            using var callbackCancellation = new ManualResetEventSlim();
+            var release = new TaskCompletionSource<string?>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            actor.DuplicateBindCallback = async (_, _, cancellationToken) =>
+            {
+                callbackStarted.Set();
+                using var registration = cancellationToken.Register(callbackCancellation.Set);
+                return await release.Task.ConfigureAwait(false);
+            };
+
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies
+            );
+
+            Assert.True(callbackStarted.IsSet);
+            Assert.True(callbackCancellation.IsSet);
+            Assert.Equal(RequestResult.TimedOut, replies[^1].Result);
+            Assert.True(state.TryGetBoundSession(out var bound));
+            Assert.Equal(RoutingId.From("session-current"), bound.SessionRid);
+            release.SetResult(null);
+            await state.ExecuteDispatchAsync(_ => ValueTask.CompletedTask, CancellationToken.None);
+            Assert.True(state.TryGetBoundSession(out bound));
+            Assert.Equal(RoutingId.From("session-current"), bound.SessionRid);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteSessionBind_WithoutDuplicateCallback_PreservesLaterSessionWins()
+    {
+        var (runtime, _, actorRef, _, state, sessionNode) = await CreateDuplicateBindFixtureAsync();
+        try
+        {
+            var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies
+            );
+
+            Assert.Equal(RequestResult.Ok, replies[^1].Result);
+            Assert.True(state.TryGetBoundSession(out var bound));
+            Assert.Equal(RoutingId.From("session-incoming"), bound.SessionRid);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task RemoteSessionBindPublication_OldCleanup_Cannot_Interrupt_The_Owner_Turn()
     {
@@ -3207,7 +3452,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionNode,
                 61,
                 request,
-                static () => { },
+                static (_, _, _) => { },
                 CancellationToken.None
             );
             Assert.True(state.TryGetBoundSession(out var oldBinding));
@@ -3245,7 +3490,7 @@ public sealed partial class EntrySpotActorDispatchTests
                             new(2)
                         ),
                 },
-                static () => { },
+                static (_, _, _) => { },
                 CancellationToken.None
             );
             await cleanup;
@@ -3306,7 +3551,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionNode,
                 61,
                 request,
-                static () => { },
+                static (_, _, _) => { },
                 CancellationToken.None
             );
 
@@ -3365,7 +3610,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionNode,
                 61,
                 request,
-                static () => { },
+                static (_, _, _) => { },
                 CancellationToken.None
             );
             if (migrated)
@@ -3422,7 +3667,7 @@ public sealed partial class EntrySpotActorDispatchTests
                                     new(2)
                                 ),
                         },
-                        static () => { },
+                        static (_, _, _) => { },
                         CancellationToken.None
                     )
                     .AsTask()
@@ -3485,7 +3730,7 @@ public sealed partial class EntrySpotActorDispatchTests
                         sessionNode,
                         61,
                         request,
-                        static () => { },
+                        static (_, _, _) => { },
                         CancellationToken.None
                     )
                     .AsTask()
@@ -12456,7 +12701,8 @@ public sealed partial class EntrySpotActorDispatchTests
             null,
         AcceptedSendProbe? acceptedSendProbe = null,
         ILoggerFactory? loggerFactory = null,
-        TimeProvider? joinTimeProvider = null
+        TimeProvider? joinTimeProvider = null,
+        TimeSpan? sessionReplacementCallbackTimeout = null
     )
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
@@ -12546,6 +12792,8 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             TimeProvider = joinTimeProvider ?? TimeProvider.System,
             DefaultRequestTimeout = defaultRequestTimeout ?? TimeSpan.FromSeconds(1),
+            SessionReplacementCallbackTimeout =
+                sessionReplacementCallbackTimeout ?? TimeSpan.FromSeconds(30),
             ImplicitHandlerAutoRegistrationEnabled = false,
         };
         registration.Locations.StoreInstance = runtimeLocationProvider;
@@ -13180,6 +13428,21 @@ public sealed partial class EntrySpotActorDispatchTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Func<ValueTask>? JoinCompletionCallback { get; set; }
+
+        internal Func<
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity,
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity,
+            CancellationToken,
+            ValueTask<string?>
+        >? DuplicateBindCallback { get; set; }
+
+        public ValueTask<string?> OnDuplicateBindAsync(
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity current,
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity incoming,
+            CancellationToken cancellationToken = default
+        ) =>
+            DuplicateBindCallback?.Invoke(current, incoming, cancellationToken)
+            ?? ValueTask.FromResult<string?>(null);
 
         public ValueTask OnJoinCompletedAsync(
             ZLinkActorJoinCompletion completion,
@@ -14918,7 +15181,7 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId,
             ulong,
             Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38,
-            Action,
+            Action<RequestResult, uint, string?>,
             CancellationToken,
             ValueTask
         >? _bindHandler;
@@ -14928,7 +15191,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 RoutingId,
                 ulong,
                 Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38,
-                Action,
+                Action<RequestResult, uint, string?>,
                 CancellationToken,
                 ValueTask
             > handler
@@ -14946,7 +15209,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 RoutingId,
                 MeshStatus().LifecycleGeneration,
                 request,
-                static () => { },
+                static (_, _, _) => { },
                 cancellationToken
             );
             return

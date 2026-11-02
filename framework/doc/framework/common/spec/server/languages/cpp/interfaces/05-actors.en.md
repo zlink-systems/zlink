@@ -33,6 +33,12 @@ public:
  const node_rid_t &node_rid() const noexcept;
 };
 
+struct actor_session_binding_identity_t final {
+ node_rid_t session_owner_node_rid;
+ std::uint64_t session_owner_node_generation;
+ std::uint64_t binding_generation;
+};
+
 struct actor_join_accepted_t {
  std::uint64_t operation_id_high;
  std::uint64_t operation_id_low;
@@ -63,6 +69,10 @@ public:
  virtual actor_context_t &context() noexcept = 0;
  virtual const actor_context_t &context() const noexcept = 0;
  virtual void configure() {}
+ virtual task_t<std::optional<std::string>> on_duplicate_bind(
+ const actor_session_binding_identity_t &current,
+ const actor_session_binding_identity_t &incoming,
+ std::stop_token cancellation);
  virtual task_t<void> on_join_completed(
  const actor_join_completion_t &completion);
 };
@@ -159,6 +169,11 @@ source and target process can call either method more than once, the
 implementation must be retry-safe. A different target isn't
 automatically selected. The Framework doesn't guarantee exactly-once
 for the adapter's external side effect.
+
+`on_duplicate_bind` accepts when it returns `std::nullopt` or an empty string and rejects with a
+non-empty returned `std::string` as its message. Its default implementation returns `std::nullopt`, so an Actor that doesn't override
+it accepts a new Session as before. When the timeout expires, the framework signals cancellation
+through `std::stop_token`.
 
 ## 2. ID-Only Messaging
 

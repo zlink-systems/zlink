@@ -5986,13 +5986,19 @@ void test_application_relocation_remote_production_path (test_context_t &test,
       std::make_shared<detail::actor_gateway_state_t> ());
     target.configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
-        [] (
-          const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
-          const framework::location_owner_token_t &,
-          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
+        [] (const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
+            const framework::location_owner_token_t &,
+            std::function<bool (std::uint32_t, std::uint32_t,
+                                std::optional<protocol::stream_bind_reply_tail_t>)>
+              submit_terminal_reply) {
             (void) submit_terminal_reply (
-              {bind.binding.generation, bind.actor.authority_owner_generation});
-            return host::bound_session_bind_operation_result_t{};
+              static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+              static_cast<std::uint32_t> (protocol::framework_error_code::none),
+              protocol::stream_bind_reply_tail_t{bind.binding.generation,
+                                                 bind.actor.authority_owner_generation});
+            using bind_result_t = host::bound_session_bind_operation_result_t;
+            return framework::task_t<bind_result_t> (
+              framework::result_t<bind_result_t>::success (bind_result_t{}));
         },
       .send = [] (const protocol::bound_session_send_t &,
                   std::vector<zlink::message_t>) { return stateful_error_t::conflict; },
@@ -6093,8 +6099,11 @@ void test_application_relocation_remote_production_path (test_context_t &test,
           {.bind =
              [&] (const auto &, const auto &, auto, const auto &, auto) {
                  ++bound_session_callback_errors;
-                 return framework::runtime::host::bound_session_bind_operation_result_t{
-                   stateful_error_t::conflict, std::nullopt};
+                 using bind_result_t =
+                   framework::runtime::host::bound_session_bind_operation_result_t;
+                 return framework::task_t<bind_result_t> (
+                   framework::result_t<bind_result_t>::success (
+                     bind_result_t{stateful_error_t::conflict, std::nullopt}));
              },
            .send =
              [&] (const auto &record, auto parts) {
