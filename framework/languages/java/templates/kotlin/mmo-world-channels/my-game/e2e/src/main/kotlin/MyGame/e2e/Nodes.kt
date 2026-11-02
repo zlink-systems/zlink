@@ -204,7 +204,10 @@ private class Node(private val id: String, module: String, config: Path, root: P
         check(process.isAlive) { "$id exited unexpectedly" }
         command(Control.SHUTDOWN)
         waitFor(Control.STOPPED)
-        check(process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS)) { "$id failed to exit" }
+        if (!process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS)) {
+            DockerRuntime.threadDump(process)
+            error("$id failed to exit; thread dump is in $id-stdout.log")
+        }
         check(process.exitValue() == 0) { "$id shutdown exit: ${process.exitValue()}" }
     }
 
