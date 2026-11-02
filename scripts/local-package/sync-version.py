@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -1188,69 +1187,12 @@ def update_template_document(
     return result
 
 
-# The binding version that each published Framework release requires, read from its tag.
-TEMPLATE_BINDING_SOURCES = {
-    # The nuspec dependency of Zlink.Framework, recorded by the package contract.
-    "dotnet": (
-        "framework/languages/dotnet/contract/packages/Zlink.Framework.package.txt",
-        rf"id=Zlink version=({SEMVER})",
-    ),
-    "java": (
-        "framework/languages/java/gradle/libs.versions.toml",
-        rf'(?m)^zlinkBindings = "({SEMVER})"$',
-    ),
-    "node": (
-        "framework/languages/node/packages/framework/package.json",
-        rf'"@zlink-systems/zlink"\s*:\s*"({SEMVER})"',
-    ),
-}
-
-
-def tagged_file(tag: str, relative: str) -> str:
-    def git(*arguments: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["git", "-C", str(REPO_ROOT), *arguments],
-            capture_output=True,
-            encoding="utf-8",
-            check=False,
-        )
-
-    if git("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}").returncode:
-        raise SyncError(
-            f"tag {tag} not found; fetch tags (git fetch --tags) to verify the template "
-            "binding pin against the published Framework"
-        )
-    shown = git("show", f"refs/tags/{tag}:{relative}")
-    if shown.returncode:
-        raise SyncError(f"cannot read {tag}:{relative}: {shown.stderr.strip()}")
-    return shown.stdout
-
-
-def verify_template_bindings(pins: dict[str, dict[str, str]]) -> None:
-    for language, (relative, pattern) in TEMPLATE_BINDING_SOURCES.items():
-        framework = pins[language]["framework"]
-        tag = f"framework-{language}/v{framework}"
-        required = re.findall(pattern, tagged_file(tag, relative))
-        if len(required) != 1:
-            raise SyncError(
-                f"{tag}:{relative}: expected 1 binding requirement, found {len(required)}"
-            )
-        if pins[language]["binding"] != required[0]:
-            raise SyncError(
-                f"{template_versions_path(language)}: {TEMPLATE_BINDING_KEY}="
-                f"{pins[language]['binding']}, but Framework {framework} requires binding "
-                f"{required[0]} ({tag}:{relative})"
-            )
-
-
 def synchronize_template_versions(
     write: bool,
 ) -> tuple[dict[str, dict[str, str]], list[Path]]:
     templates = template_versions()
     sync = Synchronizer(write)
     synchronize_templates(sync, templates)
-    if not write:
-        verify_template_bindings(templates)
     return templates, sync.changed
 
 

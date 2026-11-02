@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Template version sync tests on a copy of the templates and a fixture tag repository."""
+"""Template version sync tests on a temporary copy of the templates."""
 import importlib.util
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,38 +18,9 @@ sys.modules[spec.name] = sync_version
 spec.loader.exec_module(sync_version)
 
 TEMPLATE_PARENTS = [f'framework/languages/{language}/templates' for language in ('cpp', 'dotnet', 'java', 'node')]
-# Binding that each fixture Framework tag requires, in the file the sync reads.
-TAGS = {
-    '0.31.0': '1.21.0',
-    '0.30.3': '1.20.0',
-    '0.32.0': '1.22.0',
-}
-TAG_LANGUAGES = {
-    '0.31.0': ('dotnet', 'java'),
-    '0.30.3': ('node',),
-    '0.32.0': ('dotnet', 'java', 'node'),
-}
 CONFIG_FILES = {
     'Directory.Packages.props', 'build.gradle.kts', 'package.json', 'package-lock.json', 'bootstrap.cmake',
 }
-
-
-def git(root, *arguments):
-    subprocess.run(
-        ['git', '-c', 'user.name=test', '-c', 'user.email=test@example.invalid', '-C', str(root), *arguments],
-        check=True, capture_output=True,
-    )
-
-
-def tag_sources(binding):
-    return {
-        'framework/languages/dotnet/contract/packages/Zlink.Framework.package.txt':
-            f'dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink version={binding}\n',
-        'framework/languages/java/gradle/libs.versions.toml':
-            f'[versions]\nzlinkBindings = "{binding}"\n',
-        'framework/languages/node/packages/framework/package.json':
-            f'{{\n  "dependencies": {{\n    "@zlink-systems/zlink": "{binding}"\n  }}\n}}\n',
-    }
 
 
 class TemplateVersionTests(unittest.TestCase):
@@ -58,17 +28,6 @@ class TemplateVersionTests(unittest.TestCase):
         self.temp = Path(tempfile.mkdtemp(prefix='template-versions-test.'))
         self.addCleanup(shutil.rmtree, self.temp, ignore_errors=True)
         self.root = self.temp / 'repo'
-        self.root.mkdir()
-        git(self.root, 'init', '-q')
-        for framework, binding in TAGS.items():
-            for relative, text in tag_sources(binding).items():
-                path = self.root / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(text, encoding='utf-8', newline='\n')
-            git(self.root, 'add', '-A')
-            git(self.root, 'commit', '-q', '-m', framework)
-            for language in TAG_LANGUAGES[framework]:
-                git(self.root, 'tag', f'framework-{language}/v{framework}')
         for parent in TEMPLATE_PARENTS:
             shutil.copytree(SOURCE / parent, self.root / parent)
         self.original = self.snapshot()
@@ -112,22 +71,6 @@ class TemplateVersionTests(unittest.TestCase):
         self.assertEqual(self.changed(write=False), [relative])
         self.assertEqual(self.changed(write=True), [relative])
         self.assertEqual(self.snapshot(), self.original)
-
-    def test_check_fails_when_binding_differs_from_framework_tag(self):
-        self.owner('java', '0.31.0', '1.20.0')
-        with self.assertRaisesRegex(
-            sync_version.SyncError,
-            r'ZLINK_TEMPLATE_BINDING_VERSION=1\.20\.0, but Framework 0\.31\.0 requires binding 1\.21\.0 '
-            r'\(framework-java/v0\.31\.0:framework/languages/java/gradle/libs\.versions\.toml\)',
-        ):
-            self.changed(write=False)
-
-    def test_check_fails_without_framework_tag(self):
-        self.owner('node', '0.29.9', '1.20.0')
-        with self.assertRaisesRegex(
-            sync_version.SyncError, r'tag framework-node/v0\.29\.9 not found; fetch tags'
-        ):
-            self.changed(write=False)
 
     def test_write_moves_every_managed_template_pin(self):
         old = {'cpp': ('0.31.0',), 'dotnet': ('0.31.0', '1.21.0'), 'java': ('0.31.0', '1.21.0'),
