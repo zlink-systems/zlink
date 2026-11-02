@@ -407,6 +407,8 @@ jobs:
           name: template-logs-${{ matrix.lang }}-${{ matrix.template }}
           path: ${{ env.TEMPLATE_WORK }}/${{ matrix.lang }}-${{ matrix.template }}/my-game/.logs/
           if-no-files-found: ignore
+          # The logs live under .logs/; upload-artifact skips hidden paths unless asked.
+          include-hidden-files: true
 
   template-cpp:
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.cpp_count != '0' && needs.packages-cpp.result != 'failure' }}
@@ -468,6 +470,8 @@ jobs:
           name: template-logs-${{ matrix.lang }}-${{ matrix.template }}
           path: ${{ env.TEMPLATE_WORK }}/${{ matrix.lang }}-${{ matrix.template }}/my-game/.logs/
           if-no-files-found: ignore
+          # The logs live under .logs/; upload-artifact skips hidden paths unless asked.
+          include-hidden-files: true
 
       # run-e2e.sh removes its compose project on exit; a cancelled job may not get there.
       # Only this job's projects (named under the copy's .logs/docker-*) are removed, since
