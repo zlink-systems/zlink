@@ -417,13 +417,18 @@ relocation, the Framework updates the binding route.
 5. The Player Actor handler registers a deferred join and responds with the
    `WaitingForPlayers` projection. The join runs after the handler returns, so
    `MatchBingoRes` alone does not prove the join completed.
-6. The Observer prepares that `RoomId`'s observation room and receives
-   `Subscribed = true`, which means the deferred join was registered. The later reward publish and
-   client push verify that the observation path actually works.
+6. The Observer request first checks the Game room state. If the room is already `Finished` or no
+   longer exists, it doesn't create an observation room and returns `Subscribed = false`. Otherwise,
+   it prepares the observation room and deferred join, then returns `Subscribed = true`. The later
+   reward publish and client push verify that the observation path actually works.
 7. When `player-2` runs the same process, Redis returns the same reservation.
 8. Once the second Actor join finishes, the room changes to `Running` and sends
    `BingoGameStartedNotify` to both players. This notification is the authoritative game-start
    completion.
+
+The `PlayerJoinedNotify` sent to existing players is an admission notification. If delivery fails,
+the Room records the recipient and error, then continues sending to other recipients. This failure
+doesn't change the new player's room admission result.
 
 The Location Store handles the room owner lookup and remote join. Reservation Redis doesn't decide
 which Play node owns the room. A concurrent `GetOrCreate` caller waits for the single `Creating`
@@ -457,11 +462,16 @@ implement game rules either.
 <iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe-en.html" title="Reward observation" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-reward-observe-en.html" target="_blank">↗ View larger</a></p>
 
-The game room first confirms the end result, submits the player push, and then publishes
+The game room first confirms the end result and reward settlement, submits the player push, and then publishes
 `BingoRewardAcquiredEvent` to the `bingo.room.reward` topic. Each Play node's local observation
 `BingoRoom` subscribes to the same topic. Only a room whose event `RoomId` matches its own
 `ObservedRoomId` sends a typed message to the observer Actor, which the Actor notifies via bound
 session.
+
+If the Game room is already `Finished` or no longer exists when observation starts, the request
+returns `Subscribed = false`. The end result is final, so an Observer that arrives late receives no
+finished snapshot or reward compensation. An Observer subscribed before the end receives the
+notification through the reward publish.
 
 The observation room doesn't participate in player membership, cards, the timer, or winner
 determination. A separate Spot type just for receiving rewards isn't created either. Normal publish
@@ -474,7 +484,9 @@ execution or per-target acceptance. The Client confirms the delivery result via 
 When the STREAM connection drops, the Framework automatically submits disconnect to each exact
 identity in the current binding snapshot. The current Spot's disconnect callback only reflects
 domain state that push can't reach. The Session callback doesn't iterate Actors or directly remove
-a binding. Disconnect doesn't destroy the Actor or change room membership. This boundary follows
+a binding. Disconnect doesn't destroy the Actor or change room membership. The Game room's
+`Finished` transition finalizes the result and reward settlement. A later Observer request returns
+`Subscribed = false` and receives no reward compensation. This boundary follows
 [Session Actor dispatch §4.1](../../spec/server/04-session/02-session-actor-binding.en.md).
 
 Player Actor cleanup after the game ends runs in a separate order.
