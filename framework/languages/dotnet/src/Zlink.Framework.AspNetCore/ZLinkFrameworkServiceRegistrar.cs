@@ -210,7 +210,9 @@ internal static class ZLinkFrameworkServiceRegistrar
                     provider.GetRequiredService<ZLinkFrameworkRuntime>().SafeToShutdown,
                 subscribeSafeToShutdownChanged: handler =>
                     provider.GetRequiredService<ZLinkFrameworkRuntime>().SafeToShutdownChanged +=
-                        handler
+                        handler,
+                flowCaptureEnabled: () =>
+                    provider.GetRequiredService<ZLinkFrameworkRuntime>().Flow.CaptureEnabled
             )
         );
         services.TryAddSingleton<IZLinkFrameworkRuntime>(static provider =>

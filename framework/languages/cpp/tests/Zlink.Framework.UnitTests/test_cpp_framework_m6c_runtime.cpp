@@ -3967,6 +3967,11 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
           {"source-owner", 1}, store_now + std::chrono::seconds{1}, store_now};
         auto authority = std::make_shared<public_authority_store_adapter_t> (store);
         auto roots = std::make_shared<memory_relocation_repository_t> ();
+        fw::test::telemetry_observations_t<fw::message_flow_event_t> flow_events;
+        fw::dispatch_options_t flow_dispatch;
+        flow_dispatch.message_flow (fw::message_flow_log_mode_t::normal);
+        fw::detail::dispatch_options_access_t::set_observer_for_tests (
+          flow_dispatch, [&] (const auto &event) { flow_events.record (event); });
         std::mutex delay_mutex;
         fw::detail::delay_owner_t delays (delay_mutex);
         maintenance_runtime_t relocation (objects, authority, roots);
@@ -4009,11 +4014,15 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
                                 : std::chrono::steady_clock::time_point::max (),
           .abort_target_before_cutover = [] { return true; },
           .monitoring = monitoring,
+          .dispatch = &flow_dispatch,
           .mesh_name = "outcome-contract",
           .policy = scenario == "cleanup-error"
                       ? fw::detail::factory_relocation_kind_t::preserve_state
                       : fw::detail::factory_relocation_kind_t::recreate};
         try {
+            const std::string flow_id = "01930000-0000-7000-8000-000000000002";
+            fw::runtime::flow_context_t::scope_t flow_scope (fw::runtime::flow_value_t{
+              flow_id, fw::flow_origin_t::application, fw::message_flow_log_mode_t::normal});
             const auto result = await_task (relocation.relocate (
               actor, "target-owner", {"target-owner", 2}, 1024 * 1024, digest_with (0x41), wire));
             const auto observed =
@@ -4033,6 +4042,26 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
         }
         catch (const std::runtime_error &) {
             test.require (scenario == "cleanup-error", "only the controlled cleanup may fail");
+        }
+        fw::test::acknowledge_delivery ();
+        const auto observed_flows = flow_events.snapshot ();
+        test.require (observed_flows.size () == 1,
+                      "each source relocation must write one terminal message-flow record");
+        if (observed_flows.size () == 1) {
+            const auto &event = observed_flows.front ();
+            const auto flow_outcome = scenario == "preserve"   ? "aborted"
+                                      : scenario == "shutdown" ? "shutdown"
+                                      : scenario == "missing"  ? "failed"
+                                                               : "completed";
+            test.require (
+              event.outcome == fw::message_flow_outcome_t::completed
+                && event.surface == fw::dispatch_error_surface_t::actor_relocation
+                && event.message_kind == fw::dispatch_message_kind_t::control
+                && event.actor_id == actor.key
+                && event.flow_id == "01930000-0000-7000-8000-000000000002"
+                && event.flow_origin == fw::flow_origin_t::application
+                && event.detail_result == flow_outcome,
+              "source terminal record must retain the actor, flow pair, and confirmed result");
         }
         const auto expected = scenario == "preserve"   ? "aborted"
                               : scenario == "shutdown" ? "shutdown"
@@ -6372,10 +6401,20 @@ void test_application_relocation_remote_production_path (test_context_t &test,
                       "Session owner lookup failure must reject relocation");
         framework::test::acknowledge_delivery ();
         const auto resolver_failures = resolver_observations->snapshot ();
-        test.require (resolver_failures.size () == 1,
-                      "Session owner lookup failure must report one relocation terminal");
-        if (resolver_failures.size () == 1) {
-            const auto &event = resolver_failures.front ();
+        std::vector<const framework::message_flow_event_t *> failure_records;
+        std::vector<const framework::message_flow_event_t *> terminal_records;
+        for (const auto &event : resolver_failures) {
+            if (event.detail_stage == "source_terminal")
+                terminal_records.push_back (&event);
+            else if (event.reason == framework::message_flow_reason_t::location_unavailable)
+                failure_records.push_back (&event);
+        }
+        test.require (resolver_failures.size () == 2 && failure_records.size () == 1
+                        && terminal_records.size () == 1,
+                      "Session owner lookup failure must retain its source failure and report one "
+                      "relocation terminal");
+        if (failure_records.size () == 1) {
+            const auto &event = *failure_records.front ();
             test.require (
               event.outcome == framework::message_flow_outcome_t::completed
                 && event.result == framework::message_flow_result_t::failed
@@ -6421,6 +6460,17 @@ void test_application_relocation_remote_production_path (test_context_t &test,
             test.require (
               event.exception && owned_cause,
               "Session owner lookup failure must report the owned error type and message");
+        }
+        if (terminal_records.size () == 1) {
+            const auto &event = *terminal_records.front ();
+            test.require (
+              event.outcome == framework::message_flow_outcome_t::completed
+                && event.result == framework::message_flow_result_t::failed
+                && event.message_kind == framework::dispatch_message_kind_t::control
+                && event.actor_id == "production-remote-actor" && event.flow_id == flow_id
+                && event.flow_origin == framework::flow_origin_t::application
+                && event.detail_result == "failed",
+              "source relocation terminal must retain the Actor, flow pair, and confirmed result");
         }
         source.stop ();
         target.stop ();
