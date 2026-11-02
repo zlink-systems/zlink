@@ -288,7 +288,9 @@ internal sealed class ZLinkRequestDeadlineIndex : IAsyncDisposable
         public Entry? DeadlineNext { get; set; }
         public Entry? DeadlinePrevious { get; set; }
         long IZLinkDeadlineEntry<Entry>.AbsoluteDeadline => Deadline;
-        internal TaskCompletionSource<IReadOnlyList<Message>>? Source = new();
+        internal TaskCompletionSource<IReadOnlyList<Message>>? Source = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         private IReadOnlyList<Message>? _parts;
         internal Exception? Error;
 
