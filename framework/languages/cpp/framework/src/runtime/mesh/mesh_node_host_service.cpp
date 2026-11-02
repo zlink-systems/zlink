@@ -60,6 +60,25 @@ namespace zlink::framework::runtime
 
 namespace
 {
+bool requires_location_owner_state (const mesh::service_mailbox_record_t &record)
+{
+    if (record.application) {
+        return !detail::is_node_or_channel_record_kind (record.application->record.kind);
+    }
+    if (record.parts.empty ())
+        return true;
+    const auto header = protocol::decode_header (protocol::message_bytes (record.parts.front ()));
+    switch (header.kind) {
+        case protocol::command::nodeSend:
+        case protocol::command::nodeRequest:
+        case protocol::command::channelSend:
+        case protocol::command::channelRequest:
+            return false;
+        default:
+            return true;
+    }
+}
+
 bool is_application_request (host::record_kind_t kind)
 {
     using kind_t = host::record_kind_t;
@@ -3175,7 +3194,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [this, node, receive_permit] (mesh::service_mailbox_record_t &record) {
                   std::lock_guard lock (_dispatch_gate_mutex);
                   if (!_accept_application_dispatch.load (std::memory_order_relaxed)
-                      || !_location_runtime || !_location_runtime->owner_lease_usable ()) {
+                      || (requires_location_owner_state (record)
+                          && (!_location_runtime || !_location_runtime->owner_lease_usable ()))) {
                       if (record.before_application_handler
                           || (record.application_permit && *record.application_permit)) {
                           record.before_application_handler = {};

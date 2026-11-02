@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
+#include "runtime/dispatch/application_record.hpp"
 
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/channels/route_packet.hpp"
@@ -16,6 +17,13 @@
 
 namespace zlink::framework::detail
 {
+
+constexpr bool is_node_or_channel_record_kind (runtime::host::record_kind_t kind) noexcept
+{
+    using record_kind_t = runtime::host::record_kind_t;
+    return kind == record_kind_t::node_send || kind == record_kind_t::node_request
+           || kind == record_kind_t::channel_send || kind == record_kind_t::channel_request;
+}
 
 class mesh_record_dispatcher_t
 {
