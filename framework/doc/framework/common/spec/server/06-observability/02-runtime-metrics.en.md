@@ -434,8 +434,17 @@ Individual Actor/Spot/message flows are checked via
 
 ## 11. Collection Boundary
 
-Each language uses a standard meter or registry. The public API doesn't
-configure exporter, reader, storage, or histogram bucket.
+Metric provider names and message-flow collection methods vary by language.
+
+| Language | Metric collection name | Trace source / message-flow log |
+|---|---|---|
+| .NET | `System.Diagnostics.Metrics.Meter` named `zlink.framework` | `System.Diagnostics.ActivitySource` named `Zlink.Framework` |
+| C++ | OpenTelemetry `MeterProvider` meter named `zlink.framework` | No OpenTelemetry `Tracer`; structured records go to the Framework logger category `zlink.framework.dispatch`. |
+| Java / Kotlin | The Spring Boot starter registers each `zlink.*` instrument in Micrometer `MeterRegistry`; there is no shared Meter name. | No OpenTelemetry `Tracer`; records go through the SLF4J logger category `systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer`. |
+| Node.js | OpenTelemetry meter named `zlink.framework` | OpenTelemetry `Tracer` named `@zlink-systems/framework` |
+
+The public API doesn't configure exporter, reader, storage, or histogram
+bucket.
 
 - **A path with metrics turned off doesn't copy payload or build a
   per-message label dictionary.**
