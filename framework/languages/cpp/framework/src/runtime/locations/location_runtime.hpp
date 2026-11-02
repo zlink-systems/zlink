@@ -24,6 +24,7 @@
 #include <random>
 #include <stop_token>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -82,6 +83,20 @@ class location_runtime_t
         std::condition_variable wake;
         bool pending_peer_reconcile = false;
         std::shared_ptr<heartbeat_attempt_t> current;
+        task_completion_source_t<void> discovery_changed;
+
+        void notify (bool reconcile = false)
+        {
+            task_completion_source_t<void> changed;
+            {
+                std::lock_guard lock (gate);
+                pending_peer_reconcile = pending_peer_reconcile || reconcile;
+                changed = std::exchange (discovery_changed, task_completion_source_t<void>{});
+                wake.notify_all ();
+            }
+            // A continuation may register the next observation immediately.
+            changed.complete (result_t<void>::success ());
+        }
     };
 
     struct heartbeat_attempt_t
@@ -112,8 +127,12 @@ class location_runtime_t
     {
         explicit descriptor_publication_t (
           std::chrono::milliseconds timeout,
-          std::function<std::chrono::steady_clock::time_point ()> clock) :
-            now (std::move (clock)), deadline_at (now () + timeout)
+          std::function<std::chrono::steady_clock::time_point ()> clock,
+          std::optional<std::chrono::steady_clock::time_point> requested_deadline = std::nullopt) :
+            now (std::move (clock)),
+            deadline_at (std::min (
+              now () + timeout,
+              requested_deadline.value_or (std::chrono::steady_clock::time_point::max ())))
         {
         }
 
@@ -370,13 +389,23 @@ class location_runtime_t
     // Location runtime §5: provider failures leave publication unknown. Only a
     // confirmed conflicting claim is a startup error. The repository owns §10 reads.
     template <typename Start>
-    task_t<bool>
-    descriptor_write_confirmed (Start start,
-                                std::function<std::chrono::steady_clock::time_point ()> now =
-                                  std::chrono::steady_clock::now) const
+    task_t<bool> descriptor_write_confirmed (
+      Start start,
+      std::function<std::chrono::steady_clock::time_point ()> now = std::chrono::steady_clock::now,
+      std::stop_token cancellation = {},
+      std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt,
+      std::stop_token owner_cancellation = {}) const
     {
         auto operation = std::make_shared<descriptor_publication_t> (
-          _options.owner_lease_renew_timeout, std::move (now));
+          _options.owner_lease_renew_timeout, std::move (now), deadline);
+        const auto cancel = [weak = std::weak_ptr{operation}] {
+            if (auto active = weak.lock ())
+                active->observe (result_t<location_write_result_t>::failure (
+                  framework_error_kind_t::shutting_down,
+                  "Location descriptor publication stopped"));
+        };
+        std::stop_callback stopped (cancellation, cancel);
+        std::stop_callback owner_stopped (owner_cancellation, cancel);
         try {
             co_await _lane.run_task ([this, operation] {
                 std::erase_if (_descriptor_publications, [] (const auto &pending) {
@@ -395,7 +424,19 @@ class location_runtime_t
           });
         if (operation->observe ()) {
             try {
-                operation->pending.emplace (start ());
+                auto pending = start ();
+                if constexpr (std::is_same_v<decltype (pending), task_t<location_write_status_t>>) {
+                    // Removal callers already ignore stale/no-row status. They
+                    // need the same bounded observation and physical-I/O drain.
+                    operation->pending.emplace (continue_task<location_write_result_t> (
+                      std::move (pending), [] (location_write_status_t) {
+                          return task_t<location_write_result_t> (
+                            result_t<location_write_result_t>::success (
+                              {location_write_status_t::stored, 0, {}}));
+                      }));
+                } else {
+                    operation->pending.emplace (std::move (pending));
+                }
             }
             catch (...) {
                 operation->pending.emplace (
@@ -414,6 +455,8 @@ class location_runtime_t
                 co_return detail::propagate_failure<bool> (
                   result, "Location descriptor publication failed");
 
+            if (result.error_kind () == framework_error_kind_t::shutting_down)
+                co_return false;
             co_await _lane.run_task (
               [this, message = std::string (result.error ()->what ())] () mutable {
                   record_failure_on_lane (std::move (message));
@@ -440,9 +483,7 @@ class location_runtime_t
           [owner = std::weak_ptr{std::atomic_load_explicit (
              &_heartbeat_state, std::memory_order_acquire)}] (const std::vector<std::uint8_t> &) {
               if (auto heartbeat = owner.lock ()) {
-                  std::lock_guard lock (heartbeat->gate);
-                  heartbeat->pending_peer_reconcile = true;
-                  heartbeat->wake.notify_all ();
+                  heartbeat->notify (true);
               }
           };
     }
@@ -451,32 +492,26 @@ class location_runtime_t
     {
         if (auto heartbeat =
               std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire)) {
-            std::lock_guard lock (heartbeat->gate);
-            heartbeat->wake.notify_all ();
+            heartbeat->notify ();
         }
     }
 
-    void wait_for_owner_lease_change (std::optional<std::chrono::steady_clock::time_point> observed,
-                                      const task_t<void> &stopped,
-                                      std::chrono::milliseconds polling_interval) const
+    task_t<void> wait_for_owner_lease_change (
+      std::optional<std::chrono::steady_clock::time_point> observed) const
     {
-        if (auto heartbeat =
-              std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
-            heartbeat && !heartbeat->stop.load (std::memory_order_acquire)) {
-            std::unique_lock lock (heartbeat->gate);
-            runtime::infrastructure_wait_guard::condition_wait_for (
-              heartbeat->wake, lock, polling_interval,
-              [&] {
-                  return stopped.await_ready () || heartbeat->stop.load (std::memory_order_acquire)
-                         || owner_lease_observation () != observed
-                         || heartbeat->pending_peer_reconcile;
-              },
-              "location/discovery-input",
-              runtime::infrastructure_wait_guard::wait_relation_t::own_input);
+        auto heartbeat = std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
+        if (!heartbeat)
+            return task_completion_source_t<void>{}.task ();
+        std::lock_guard lock (heartbeat->gate);
+        if (!heartbeat->stop.load (std::memory_order_acquire)
+            && (owner_lease_observation () != observed || heartbeat->pending_peer_reconcile)) {
             heartbeat->pending_peer_reconcile = false;
-        } else {
-            (void) detail::observe_task_result_for (stopped, polling_interval, std::stop_token{});
+            return task_t<void> (result_t<void>::success ());
         }
+        // The preceding polling observation has ended. Retire its notification
+        // registration instead of retaining timed-out observers until renewal.
+        heartbeat->discovery_changed = task_completion_source_t<void>{};
+        return heartbeat->discovery_changed.task ();
     }
 
 
@@ -918,8 +953,8 @@ class location_runtime_t
         {
             std::lock_guard lock (heartbeat->gate);
             heartbeat->stop.store (true, std::memory_order_release);
-            heartbeat->wake.notify_all ();
         }
+        heartbeat->notify ();
         if (_heartbeat.joinable ())
             runtime::infrastructure_wait_guard::join (_heartbeat, "location/heartbeat");
         std::shared_ptr<heartbeat_attempt_t> attempt;
