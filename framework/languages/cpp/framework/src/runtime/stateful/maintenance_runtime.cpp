@@ -1419,8 +1419,8 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
 
 relocation_gate_snapshot_t maintenance_runtime_t::gate_snapshot () const
 {
-    std::lock_guard lock (_gate_mutex);
-    return _gate;
+    std::lock_guard lock (_shutdown_tracking->gate_mutex);
+    return _shutdown_tracking->gate;
 }
 
 std::uint64_t maintenance_runtime_t::apply_advertised_receive_chunk_limit (
@@ -1805,18 +1805,19 @@ maintenance_runtime_t::compute_inventory_digest (const std::vector<object_ref_t>
     return output;
 }
 
-maintenance_runtime_t::permit_t::permit_t (maintenance_runtime_t *owner) : _owner (owner)
+maintenance_runtime_t::permit_t::permit_t (std::shared_ptr<shutdown_tracking_state_t> owner) :
+    _owner (std::move (owner))
 {
 }
 
 maintenance_runtime_t::permit_t::~permit_t ()
 {
     if (_owner)
-        _owner->release ();
+        maintenance_runtime_t::release (*_owner);
 }
 
 maintenance_runtime_t::permit_t::permit_t (permit_t &&other) noexcept :
-    _owner (std::exchange (other._owner, nullptr))
+    _owner (std::move (other._owner))
 {
 }
 
@@ -1826,8 +1827,8 @@ maintenance_runtime_t::permit_t::operator= (permit_t &&other) noexcept
     if (this == &other)
         return *this;
     if (_owner)
-        _owner->release ();
-    _owner = std::exchange (other._owner, nullptr);
+        maintenance_runtime_t::release (*_owner);
+    _owner = std::move (other._owner);
     return *this;
 }
 
@@ -1838,27 +1839,28 @@ maintenance_runtime_t::permit_t::operator bool () const noexcept
 
 maintenance_runtime_t::permit_t maintenance_runtime_t::try_acquire ()
 {
-    std::lock_guard lock (_gate_mutex);
-    if (_gate.outbound_units >= _limits.outbound_units
-        || _gate.inbound_units >= _limits.inbound_units
-        || _gate.capture_callbacks >= _limits.capture_callbacks
-        || _gate.restore_callbacks >= _limits.restore_callbacks) {
+    std::lock_guard lock (_shutdown_tracking->gate_mutex);
+    auto &gate = _shutdown_tracking->gate;
+    if (gate.outbound_units >= _limits.outbound_units || gate.inbound_units >= _limits.inbound_units
+        || gate.capture_callbacks >= _limits.capture_callbacks
+        || gate.restore_callbacks >= _limits.restore_callbacks) {
         return {};
     }
-    ++_gate.outbound_units;
-    ++_gate.inbound_units;
-    ++_gate.capture_callbacks;
-    ++_gate.restore_callbacks;
-    return permit_t (this);
+    ++gate.outbound_units;
+    ++gate.inbound_units;
+    ++gate.capture_callbacks;
+    ++gate.restore_callbacks;
+    return permit_t (_shutdown_tracking);
 }
 
-void maintenance_runtime_t::release () noexcept
+void maintenance_runtime_t::release (shutdown_tracking_state_t &state) noexcept
 {
-    std::lock_guard lock (_gate_mutex);
-    --_gate.outbound_units;
-    --_gate.inbound_units;
-    --_gate.capture_callbacks;
-    --_gate.restore_callbacks;
+    std::lock_guard lock (state.gate_mutex);
+    auto &gate = state.gate;
+    --gate.outbound_units;
+    --gate.inbound_units;
+    --gate.capture_callbacks;
+    --gate.restore_callbacks;
 }
 
 relocation_result_t maintenance_runtime_t::finish (relocation_result_t result)
