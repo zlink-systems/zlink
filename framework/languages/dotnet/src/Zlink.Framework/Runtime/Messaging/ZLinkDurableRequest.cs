@@ -5,7 +5,7 @@ internal static class ZLinkDurableRequest
 {
     private static readonly Task CancellationOnly = new TaskCompletionSource().Task;
 
-    internal static async ValueTask<TReply> RequestAsync<TReply>(
+    internal static ValueTask<TReply> RequestAsync<TReply>(
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         long startTimestamp,
         TimeSpan timeout,
@@ -19,9 +19,70 @@ internal static class ZLinkDurableRequest
         Func<ZLinkPeerRouteObservation> observeRoute,
         TimeProvider? timeProvider = null,
         Task? terminal = null
+    ) =>
+        RequestAsync<ReadOnlyMemory<byte>, TReply>(
+            wire,
+            startTimestamp,
+            timeout,
+            submit,
+            cancellationToken,
+            observeRoute,
+            timeProvider,
+            terminal
+        );
+
+    internal static ValueTask<TReply> RequestAsync<TWire, TReply>(
+        IReadOnlyList<TWire> wire,
+        long startTimestamp,
+        TimeSpan timeout,
+        Func<IReadOnlyList<TWire>, TimeSpan, CancellationToken, ValueTask<TReply>> submit,
+        CancellationToken cancellationToken,
+        Func<ZLinkPeerRouteObservation> observeRoute,
+        TimeProvider? timeProvider = null,
+        Task? terminal = null
     )
     {
         timeProvider ??= TimeProvider.System;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var remaining = timeout - timeProvider.GetElapsedTime(startTimestamp);
+            var route = remaining > TimeSpan.Zero ? observeRoute() : default;
+            if (remaining > TimeSpan.Zero && route.ReadyGeneration != 0)
+                return submit(wire, remaining, cancellationToken);
+            return WaitAndSubmitAsync(
+                wire,
+                startTimestamp,
+                timeout,
+                submit,
+                cancellationToken,
+                observeRoute,
+                timeProvider,
+                terminal,
+                route
+            );
+        }
+        catch (Exception failure)
+        {
+            var completion =
+                System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder<TReply>.Create();
+            completion.SetException(failure);
+            return completion.Task;
+        }
+    }
+
+    private static async ValueTask<TReply> WaitAndSubmitAsync<TWire, TReply>(
+        IReadOnlyList<TWire> wire,
+        long startTimestamp,
+        TimeSpan timeout,
+        Func<IReadOnlyList<TWire>, TimeSpan, CancellationToken, ValueTask<TReply>> submit,
+        CancellationToken cancellationToken,
+        Func<ZLinkPeerRouteObservation> observeRoute,
+        TimeProvider timeProvider,
+        Task? terminal,
+        ZLinkPeerRouteObservation route
+    )
+    {
         ConnectionAttempt? baseline = null;
         var waiting = false;
         string? endpoint = null;
@@ -43,7 +104,6 @@ internal static class ZLinkDurableRequest
                     await CancellationOnly.WaitAsync(cancellationToken).ConfigureAwait(false);
                 throw Exhausted();
             }
-            var route = observeRoute();
             var attempt = route.Attempt;
             // Ready observations do not scan attempts. Only an already waiting
             // request needs the retained endpoint's failure history after recovery.
@@ -100,6 +160,7 @@ internal static class ZLinkDurableRequest
                     await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
                     throw;
                 }
+                route = observeRoute();
                 continue;
             }
             return await submit(wire, remaining, cancellationToken).ConfigureAwait(false);

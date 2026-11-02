@@ -281,6 +281,74 @@ public sealed class RequestSerialCostTests(ITestOutputHelper output)
         }
     }
 
+    [Fact]
+    public async Task Source_request_returns_one_typed_terminal_result()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "source-result-cost");
+        using var body = Message.From(new byte[1024]);
+        using var cancellation = new CancellationTokenSource();
+        var request = node.RequestToNodeDirectAsync(
+                RoutingId.From("missing-target"),
+                [body],
+                SendFlags.None,
+                default,
+                TimeSpan.FromSeconds(30),
+                cancellation.Token,
+                static _ => 7,
+                static error => error
+            )
+            .AsTask();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request);
+        // A second compiler-generated async result would have a derived task type.
+        Assert.IsType<Task<int>>(request);
+    }
+
+    [Fact]
+    public async Task Source_wire_construction_has_no_managed_payload_sized_allocation()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "source-wire-cost");
+        using var small = Message.From(new byte[1024]);
+        using var large = Message.From(new byte[65536]);
+        IReadOnlyList<Message> smallParts = [small];
+        IReadOnlyList<Message> largeParts = [large];
+        var target = RoutingId.From("missing-target");
+        long Measure(IReadOnlyList<Message> parts)
+        {
+            using var cancellation = new CancellationTokenSource();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var request = node.RequestToNodeDirectAsync(
+                    target,
+                    parts,
+                    SendFlags.None,
+                    default,
+                    TimeSpan.FromSeconds(30),
+                    cancellation.Token,
+                    static _ => 7,
+                    static error => error
+                )
+                .AsTask();
+            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            cancellation.Cancel();
+            Assert.ThrowsAny<OperationCanceledException>(() => request.GetAwaiter().GetResult());
+            return bytes;
+        }
+        for (var index = 0; index < 32; index++)
+        {
+            Measure(smallParts);
+            Measure(largeParts);
+        }
+        var smallBytes = Enumerable.Range(0, 32).Min(_ => Measure(smallParts));
+        var largeBytes = Enumerable.Range(0, 32).Min(_ => Measure(largeParts));
+        output.WriteLine($"source request managed allocation: 1K {smallBytes}, 64K {largeBytes} B");
+        Assert.True(
+            largeBytes - smallBytes < 4096,
+            $"payload-sized copy: {largeBytes - smallBytes} B"
+        );
+    }
+
     private static (int Gen0, int Gen1, int Gen2) Collections() =>
         (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
 }

@@ -5,12 +5,70 @@ using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class CompletionDispatcherIsolationTests
 {
     private static readonly TimeSpan TestGuard = TimeSpan.FromSeconds(5);
+
+    [ThreadStatic]
+    private static bool _postingStack;
+
+    [Fact]
+    public async Task Completion_starts_on_a_fresh_pool_turn_without_the_posting_lane()
+    {
+        await using var lane = new ZLinkStateLane();
+        var operation = new ZLinkManagedMeshNode.PendingOperation<int>(
+            new MeshOperationId(1, 1),
+            MeshOperationKind.NodeRequest,
+            default,
+            static _ => 1
+        );
+        var result = operation.Completion;
+        var observed = new TaskCompletionSource<(
+            bool Posting,
+            bool Lane,
+            bool Pool,
+            bool Dispatcher
+        )>(TaskCreationOptions.RunContinuationsAsynchronously);
+        result
+            .ConfigureAwait(false)
+            .GetAwaiter()
+            .UnsafeOnCompleted(() =>
+                observed.SetResult(
+                    (
+                        _postingStack,
+                        ZLinkStateLane.Current is not null,
+                        Thread.CurrentThread.IsThreadPoolThread,
+                        ZLinkCompletionDispatcher.IsCurrentExecution
+                    )
+                )
+            );
+        await Task.Run(async () =>
+            await lane.RunAsync(() =>
+            {
+                _postingStack = true;
+                try
+                {
+                    operation.DispatchReply(1);
+                    return true;
+                }
+                finally
+                {
+                    _postingStack = false;
+                }
+            })
+        );
+        var turn = await observed.Task.WaitAsync(TestGuard);
+        Assert.False(turn.Posting);
+        Assert.False(turn.Lane);
+        Assert.True(turn.Pool);
+        Assert.True(turn.Dispatcher);
+        Assert.Equal(1, await result);
+    }
 
     [Fact]
     public async Task CallerCanSynchronouslyWaitForAnotherTableRequest()

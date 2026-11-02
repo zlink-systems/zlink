@@ -5,6 +5,37 @@ namespace Zlink.Framework.UnitTests;
 public sealed class DurableRequestTests
 {
     [Fact]
+    public async Task Ready_route_returns_the_existing_pending_result_without_an_allocation()
+    {
+        var physical = new TaskCompletionSource<string>();
+        Func<
+            IReadOnlyList<ReadOnlyMemory<byte>>,
+            TimeSpan,
+            CancellationToken,
+            ValueTask<string>
+        > submit = (_, _, _) => new(physical.Task);
+        Func<ZLinkPeerRouteObservation> observe = ReadyRoute;
+        ValueTask<string> reply = default;
+        var allocated = PerCallAllocation.MinWindow(
+            () =>
+                reply = ZLinkDurableRequest.RequestAsync(
+                    [],
+                    Stopwatch.GetTimestamp(),
+                    TimeSpan.FromSeconds(30),
+                    submit,
+                    CancellationToken.None,
+                    observe
+                ),
+            256
+        );
+        var result = reply.AsTask();
+        physical.SetResult("reply");
+        Assert.Equal("reply", await result);
+        Assert.Equal(0, allocated);
+        Assert.Same(physical.Task, result);
+    }
+
+    [Fact]
     public async Task Readiness_cancellation_does_not_run_completion_inside_the_cancelling_turn()
     {
         using var cancellation = new CancellationTokenSource();

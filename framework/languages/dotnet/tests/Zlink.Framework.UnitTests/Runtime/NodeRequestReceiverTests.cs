@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
 
@@ -61,15 +62,30 @@ public sealed class NodeRequestReceiverTests
             started.SetResult();
             return observation;
         };
-        var caller = ObserveCallerAsync(
-            node.RunDeadlineRequestAsync(
-                TimeSpan.FromSeconds(1),
-                cancellation.Token,
-                decode,
-                produce,
-                kind: MeshOperationKind.NodeRequest
-            )
+        var deliveries = 0;
+        var inDispatcher = false;
+        var pending = new ZLinkManagedMeshNode.PendingOperation<Reply>(
+            new MeshOperationId(node.Status().LifecycleGeneration, 1),
+            MeshOperationKind.NodeRequest,
+            default,
+            decode,
+            receive: failure =>
+            {
+                deliveries++;
+                inDispatcher = ZLinkCompletionDispatcher.IsCurrentExecution;
+                return failure;
+            }
         );
+        var result = pending.Completion;
+        var caller = node.RunDeadlineRequestAsync(
+            TimeSpan.FromSeconds(1),
+            cancellation.Token,
+            decode,
+            produce,
+            kind: MeshOperationKind.NodeRequest,
+            preparedOperation: pending
+        );
+        Assert.Same(result, caller);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(caller.IsCompleted);
         Exception? originalFailure = null;
@@ -140,11 +156,9 @@ public sealed class NodeRequestReceiverTests
         else
             Assert.Same(originalFailure, await Record.ExceptionAsync(() => caller));
         Assert.Equal(0, node.PendingOperationCount);
+        Assert.Equal(1, deliveries);
+        Assert.True(inDispatcher);
     }
-
-    // The public lifetime awaits the selected terminal and preserves its exception.
-    private static async Task<Reply> ObserveCallerAsync(Task<Reply> pending) =>
-        await pending.ConfigureAwait(false);
 
     [JsonConverter(typeof(ReplyConverter))]
     private sealed record Reply(string Value);
