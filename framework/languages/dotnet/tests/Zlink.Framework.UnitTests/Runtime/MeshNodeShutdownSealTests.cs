@@ -2008,6 +2008,72 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
+    public async Task ContextDispose_CompletesAfterMeshNodesWithIntentsAndAdmittedPeers()
+    {
+        var context = Systems.Zlink.Zlink.CreateContext();
+        var contextDisposeStarted = false;
+        try
+        {
+            await using (var left = new ZLinkManagedMeshNode(context, MeshName))
+            await using (var right = new ZLinkManagedMeshNode(context, MeshName))
+            {
+                var suffix = Guid.NewGuid().ToString("N");
+                var leftRid = RoutingId.From($"dispose-intent-left-{suffix}");
+                var rightRid = RoutingId.From($"dispose-intent-right-{suffix}");
+                left.SetRoutingId(leftRid);
+                left.SetBind(EphemeralTcpEndpoint);
+                left.AddChannel(MeshName);
+                right.SetRoutingId(rightRid);
+                right.SetBind(EphemeralTcpEndpoint);
+                right.AddChannel(MeshName);
+                left.Start();
+                right.Start();
+
+                var rightIntent = right.ConnectPeer(left.Status().LocalEndpoint, leftRid);
+                await WaitUntilAsync(() =>
+                    left.Status().AdmittedPeerCount == 1
+                    && right.Status().AdmittedPeerCount == 1
+                    && right
+                        .Peers()
+                        .Any(peer =>
+                            peer.ConnectionIntentId == rightIntent
+                            && peer.State == MeshPeerState.Admitted
+                        )
+                );
+
+                var leftIntent = left.ConnectPeer(right.Status().LocalEndpoint);
+                MeshNodePeer[]? admittedPeers = null;
+                await WaitUntilAsync(() =>
+                {
+                    var peers = left.Peers();
+                    if (
+                        peers.Length != 1
+                        || peers[0].RoutingId != rightRid
+                        || peers[0].ConnectionIntentId != leftIntent
+                        || peers[0].State != MeshPeerState.Admitted
+                    )
+                        return false;
+                    admittedPeers = peers;
+                    return true;
+                });
+
+                // Keep both endpoint intents and the admitted peer until node teardown.
+                var peer = Assert.Single(admittedPeers!);
+                Assert.Equal(leftIntent, peer.ConnectionIntentId);
+                Assert.Equal(MeshPeerState.Admitted, peer.State);
+            }
+
+            contextDisposeStarted = true;
+            await Task.Run(context.Dispose).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            if (!contextDisposeStarted)
+                context.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task SelectedRouteLoss_KeepsConfiguredNotRequiredPeer()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
