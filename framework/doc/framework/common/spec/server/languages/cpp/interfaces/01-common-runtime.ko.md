@@ -353,7 +353,7 @@ template <> struct zlink::json::dto_traits<player_state_t>
 {
     static constexpr auto fields = std::tuple{
       zlink::json::field ("playerId", &player_state_t::player_id),
-      zlink::json::field ("score", &player_state_t::score),
+      zlink::json::field ("score", &player_state_t::score, zlink::json::defaulted),
       zlink::json::field ("nickname", &player_state_t::nickname),
       zlink::json::field ("status", &player_state_t::status)};
 };
@@ -369,8 +369,14 @@ template <> struct zlink::json::enum_traits<player_status_t>
 - DTO는 기본 생성할 수 있어야 한다. 선언한 field는 그 DTO에 직접 선언된 public, non-const data member여야 한다.
   Immutable DTO는 지원하지 않으며 base class의 traits를 자동으로 합치지 않는다. `dto_traits<T>::fields`에 선언한
   member만 wire property이며 선언 순서는 의미가 없다. Wire property 이름은 유일해야 한다.
-- 선언한 모든 property는 required이며 누락되면 거부한다. `std::optional<U>` field만 nullable이며 `null`은 빈 값으로
-  읽고 빈 값은 `null`로 쓴다.
+| C++ field declaration | Missing-property handling |
+|---|---|
+| `field(name, member)` | Required; missing is rejected |
+| `field(name, member, zlink::json::defaulted)` | Optional; the default-constructed member value is used |
+
+- Field는 기본적으로 required이며 누락되면 거부한다. 기본 생성한 DTO의 member 값이 기본값인 field는
+  `zlink::json::field(..., zlink::json::defaulted)`로 표시하면 누락 시 그 값을 쓴다. `std::optional<U>`는
+  nullable을 표시할 뿐 required 판정은 바꾸지 않는다. Nullable field의 명시적 `null`은 빈 값으로 읽고 빈 값은 `null`로 쓴다.
 - Field type은 `bool`, 8~64 bit signed·unsigned 정수, `float`·`double`, `std::string`, `std::vector<std::byte>`(base64),
   `std::vector<U>`, `std::map<std::string, U>`, `std::optional<U>`, `dto_traits`를 선언한 DTO와 `enum_traits`를
   선언한 enum이다. 이 밖의 type은 지원하지 않는다. 정수·실수·byte의 wire 표현은 message model §5를 따른다.
