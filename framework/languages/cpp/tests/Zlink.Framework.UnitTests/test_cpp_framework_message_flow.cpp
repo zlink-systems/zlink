@@ -1280,6 +1280,61 @@ int main (int argc, char **argv)
             return 39;
     }
 
+    // The result-aware live gate covers every terminal result, including
+    // optional results, without sampling or creating a builder while Off.
+    {
+        for (const auto mode :
+             {message_flow_log_mode_t::off, message_flow_log_mode_t::errors,
+              message_flow_log_mode_t::normal, message_flow_log_mode_t::detailed}) {
+            auto options = options_with_mode (mode);
+            options.trace_sample_rate (0.0);
+            message_flow_tracer_t tracer (options);
+            for (const auto outcome :
+                 {message_flow_outcome_t::received, message_flow_outcome_t::reply_received,
+                  message_flow_outcome_t::dropped, message_flow_outcome_t::backpressured}) {
+                if (tracer.enabled_for (outcome, std::nullopt) != tracer.enabled_for (outcome))
+                    return 1;
+                for (const auto result :
+                     {message_flow_result_t::succeeded, message_flow_result_t::failed,
+                      message_flow_result_t::backpressured, message_flow_result_t::dropped,
+                      message_flow_result_t::cancelled, message_flow_result_t::shutdown}) {
+                    const bool expected = mode != message_flow_log_mode_t::off
+                                          && (mode != message_flow_log_mode_t::errors
+                                              || result != message_flow_result_t::succeeded
+                                              || outcome == message_flow_outcome_t::dropped
+                                              || outcome == message_flow_outcome_t::backpressured);
+                    if (tracer.enabled_for (outcome, result) != expected
+                        || tracer.enabled_for (outcome, std::optional{result}) != expected) {
+                        std::cerr << "result-aware trace gate disagrees with diagnostics level\n";
+                        return 1;
+                    }
+                    int built = 0;
+                    const auto out = capture_logs ([&] {
+                        if (tracer.enabled_for (outcome, result)) {
+                            tracer.trace (outcome, result, [&] {
+                                ++built;
+                                return flow_event (outcome);
+                            });
+                        }
+                    });
+                    const bool sampled = result == message_flow_result_t::succeeded
+                                         && outcome != message_flow_outcome_t::dropped
+                                         && outcome != message_flow_outcome_t::backpressured;
+                    if (built != static_cast<int> (expected && !sampled)
+                        || out.empty () != (built == 0)) {
+                        std::cerr << "result-aware trace gate changed sampling or builder cost\n";
+                        return 1;
+                    }
+                }
+            }
+        }
+        dispatch_options_t no_provider;
+        no_provider.message_flow (message_flow_log_mode_t::detailed);
+        if (message_flow_tracer_t (no_provider)
+              .enabled_for (message_flow_outcome_t::reply_received, message_flow_result_t::failed))
+            return 1;
+    }
+
     // Failed/cancelled/shutdown request terminals are also never sampled,
     // even though their phase is reply_received.
     {

@@ -405,59 +405,62 @@ stateful_error_t raw_stateful_dispatch_t::finish_accepted_ingress (
         mailbox_claim_release_guard_t release (std::move (claim));
     }
     if (admission.admitted_application) {
-        tracer.trace (message_flow_outcome_t::admitted, [&] {
-            message_flow_event_t event{};
-            event.outcome = message_flow_outcome_t::admitted;
-            const bool actor = owner.kind == object_kind_t::actor;
-            const bool request =
-              admission.admitted_kind == protocol::frozen_record_kind_t::actor_request
-              || admission.admitted_kind == protocol::frozen_record_kind_t::spot_request;
-            event.surface =
-              actor ? dispatch_error_surface_t::spot_actor : dispatch_error_surface_t::spot_route;
-            event.message_kind =
-              actor ? (request ? dispatch_message_kind_t::actor_request
-                               : dispatch_message_kind_t::actor_send)
-                    : (request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send);
-            if (actor)
-                event.actor_id = owner.key;
-            else
-                event.spot_id = owner.key;
-            event.packet_name = admission.admitted_application->packet_name;
-            event.flow_id = admission.admitted_application->flow_id;
-            event.flow_origin = admission.admitted_application->flow_origin;
-            if (admission.admitted_application->packet_name
-                  == protocol::framework_multipart_packet_name
-                && admission.admitted_application->content_type
-                     == protocol::framework_multipart_content_type) {
-                const messaging::message_parts_t parts (
-                  protocol::decode_application_parts (*admission.admitted_application));
-                if (parts.size () != 0) {
-                    const auto header = actor ? detail::decode_actor_packet_header (
+        if (tracer.enabled_for (message_flow_outcome_t::admitted)) {
+            tracer.trace (message_flow_outcome_t::admitted, [&] {
+                message_flow_event_t event{};
+                event.outcome = message_flow_outcome_t::admitted;
+                const bool actor = owner.kind == object_kind_t::actor;
+                const bool request =
+                  admission.admitted_kind == protocol::frozen_record_kind_t::actor_request
+                  || admission.admitted_kind == protocol::frozen_record_kind_t::spot_request;
+                event.surface = actor ? dispatch_error_surface_t::spot_actor
+                                      : dispatch_error_surface_t::spot_route;
+                event.message_kind = actor ? (request ? dispatch_message_kind_t::actor_request
+                                                      : dispatch_message_kind_t::actor_send)
+                                           : (request ? dispatch_message_kind_t::request
+                                                      : dispatch_message_kind_t::send);
+                if (actor)
+                    event.actor_id = owner.key;
+                else
+                    event.spot_id = owner.key;
+                event.packet_name = admission.admitted_application->packet_name;
+                event.flow_id = admission.admitted_application->flow_id;
+                event.flow_origin = admission.admitted_application->flow_origin;
+                if (admission.admitted_application->packet_name
+                      == protocol::framework_multipart_packet_name
+                    && admission.admitted_application->content_type
+                         == protocol::framework_multipart_content_type) {
+                    const messaging::message_parts_t parts (
+                      protocol::decode_application_parts (*admission.admitted_application));
+                    if (parts.size () != 0) {
+                        const auto header = actor
+                                              ? detail::decode_actor_packet_header (
                                                   parts,
                                                   request ? detail::stream_message_kind_t::request
                                                           : detail::stream_message_kind_t::send,
                                                   tracer.capture_enabled ())
                                               : messaging::envelope_codec_t{}.decode_header (
                                                   parts[0], tracer.capture_enabled ());
-                    if (header) {
-                        event.packet_name = header.value ().message_name;
-                        event.channel_name = header.value ().channel_name;
-                        if (!header.value ().correlation_id.empty ())
-                            event.correlation_id = header.value ().correlation_id;
-                        event.flow_id = header.value ().flow_id;
-                        event.flow_origin = header.value ().flow_origin;
+                        if (header) {
+                            event.packet_name = header.value ().message_name;
+                            event.channel_name = header.value ().channel_name;
+                            if (!header.value ().correlation_id.empty ())
+                                event.correlation_id = header.value ().correlation_id;
+                            event.flow_id = header.value ().flow_id;
+                            event.flow_origin = header.value ().flow_origin;
+                        }
                     }
                 }
-            }
-            if (tracer.enabled (message_flow_log_mode_t::detailed)) {
-                event.detail_stage = "canonical_application.commit_accepted_ingress";
-                event.detail_result =
-                  "sequence=" + std::to_string (admission.pending_key.sequence)
-                  + " operation_high=" + std::to_string (admission.admitted_operation.high)
-                  + " operation_low=" + std::to_string (admission.admitted_operation.low);
-            }
-            return event;
-        });
+                if (tracer.enabled (message_flow_log_mode_t::detailed)) {
+                    event.detail_stage = "canonical_application.commit_accepted_ingress";
+                    event.detail_result =
+                      "sequence=" + std::to_string (admission.pending_key.sequence)
+                      + " operation_high=" + std::to_string (admission.admitted_operation.high)
+                      + " operation_low=" + std::to_string (admission.admitted_operation.low);
+                }
+                return event;
+            });
+        }
     }
     if (outcome.delivery)
         outcome.delivery ();
