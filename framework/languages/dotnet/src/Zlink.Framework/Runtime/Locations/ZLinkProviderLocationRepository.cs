@@ -536,11 +536,23 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
                     meta.Allocation.DescriptorLifecycleGeneration,
                     owner
                 );
-                if (
-                    await AbortAsync(reservation, cancellationToken).ConfigureAwait(false)
-                    is ZLinkObjectAbortResult.Aborted
-                )
+                var result = await AbortAsync(reservation, cancellationToken).ConfigureAwait(false);
+                if (result is ZLinkObjectAbortResult.Aborted)
                     removed++;
+                else if (result is ZLinkObjectAbortResult.Stale)
+                {
+                    if (
+                        await ReleaseEndedReservationAsync(
+                                key,
+                                row.Value.Version.Value,
+                                null,
+                                cancellationToken,
+                                owner
+                            )
+                            .ConfigureAwait(false)
+                    )
+                        removed++;
+                }
             }
         }
         return removed;
