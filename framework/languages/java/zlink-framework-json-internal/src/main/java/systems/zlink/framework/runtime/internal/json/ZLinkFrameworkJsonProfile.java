@@ -8,6 +8,7 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.core.io.IOContext;
 import com.fasterxml.jackson.core.io.InputDecorator;
+import com.fasterxml.jackson.databind.AnnotationIntrospector;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonDeserializer;
@@ -19,9 +20,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategy;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
+import com.fasterxml.jackson.databind.deser.NullValueProvider;
+import com.fasterxml.jackson.databind.deser.SettableBeanProperty;
+import com.fasterxml.jackson.databind.deser.ValueInstantiator;
+import com.fasterxml.jackson.databind.deser.ValueInstantiators;
+import com.fasterxml.jackson.databind.introspect.AnnotatedMember;
 import com.fasterxml.jackson.databind.introspect.AnnotatedMethod;
+import com.fasterxml.jackson.databind.introspect.AnnotatedParameter;
+import com.fasterxml.jackson.databind.introspect.JacksonAnnotationIntrospector;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
+import com.fasterxml.jackson.databind.util.AccessPattern;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -31,12 +40,18 @@ import java.io.InputStream;
 import java.io.PushbackInputStream;
 import java.io.Reader;
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.lang.reflect.RecordComponent;
 import java.util.Base64;
+import java.util.List;
 
 /** Owns the framework-json-v1 mapper decisions shared by JVM transports. */
 public final class ZLinkFrameworkJsonProfile {
     public static final String CONTENT_TYPE = "application/json";
     private static final String KOTLIN_METADATA_CLASS_NAME = "kotlin.Metadata";
+    private static final String ZLINK_JSON_OPTIONAL_ANNOTATION_CLASS_NAME =
+            "systems.zlink.framework.ZLinkJsonOptional";
     private static final int UTF8_BOM_LENGTH = 3;
     private static final int UTF8_BOM_PREFIX = 0xefbbbf;
 
@@ -64,6 +79,81 @@ public final class ZLinkFrameworkJsonProfile {
 
     private ZLinkFrameworkJsonProfile() {}
 
+    private static final class ConstructorRequirednessIntrospector
+            extends JacksonAnnotationIntrospector {
+        @Override
+        public Boolean hasRequiredMarker(AnnotatedMember member) {
+            if (!(member instanceof AnnotatedParameter parameter)) {
+                return super.hasRequiredMarker(member);
+            }
+            if (parameter.getDeclaringClass().isRecord()) {
+                return !isJavaRecordOptionalComponent(parameter);
+            }
+            Boolean optional = isKotlinOptionalParameter(parameter);
+            return optional != null ? !optional : Boolean.TRUE;
+        }
+    }
+
+    private static boolean isJavaRecordOptionalComponent(AnnotatedParameter parameter) {
+        RecordComponent[] components = parameter.getDeclaringClass().getRecordComponents();
+        int index = parameter.getIndex();
+        if (index < 0 || index >= components.length) {
+            return false;
+        }
+        return java.util.Arrays.stream(components[index].getAnnotations())
+                .anyMatch(
+                        annotation ->
+                                annotation
+                                        .annotationType()
+                                        .getName()
+                                        .equals(ZLINK_JSON_OPTIONAL_ANNOTATION_CLASS_NAME));
+    }
+
+    private static Boolean isKotlinOptionalParameter(AnnotatedParameter parameter) {
+        Class<?> declaringClass = parameter.getDeclaringClass();
+        boolean kotlinType =
+                java.util.Arrays.stream(declaringClass.getAnnotations())
+                        .anyMatch(
+                                annotation ->
+                                        annotation
+                                                .annotationType()
+                                                .getName()
+                                                .equals(KOTLIN_METADATA_CLASS_NAME));
+        if (!kotlinType) {
+            return null;
+        }
+        try {
+            Class<?> mapping = Class.forName("kotlin.reflect.jvm.ReflectJvmMapping");
+            Method getKotlinFunction = mapping.getMethod("getKotlinFunction", Constructor.class);
+            Object owner = parameter.getOwner().getAnnotated();
+            if (!(owner instanceof Constructor<?> constructor)) {
+                return null;
+            }
+            Object function = getKotlinFunction.invoke(null, constructor);
+            if (function == null) {
+                return null;
+            }
+            Class<?> callable = Class.forName("kotlin.reflect.KCallable");
+            List<?> parameters = (List<?>) callable.getMethod("getParameters").invoke(function);
+            Class<?> kotlinParameter = Class.forName("kotlin.reflect.KParameter");
+            Method getKind = kotlinParameter.getMethod("getKind");
+            Method isOptional = kotlinParameter.getMethod("isOptional");
+            int valueIndex = 0;
+            for (Object candidate : parameters) {
+                if (!"VALUE".equals(getKind.invoke(candidate).toString())) {
+                    continue;
+                }
+                if (valueIndex++ == parameter.getIndex()) {
+                    return (Boolean) isOptional.invoke(candidate);
+                }
+            }
+            return null;
+        } catch (ReflectiveOperationException ex) {
+            throw new IllegalStateException(
+                    "failed to inspect Kotlin constructor requiredness", ex);
+        }
+    }
+
     public static ObjectMapper mapper(Module... transportModules) {
         JsonMapper.Builder builder =
                 JsonMapper.builder(
@@ -73,7 +163,8 @@ public final class ZLinkFrameworkJsonProfile {
                         .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                         .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, false)
                         .configure(MapperFeature.USE_STD_BEAN_NAMING, true)
-                        .configure(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES, true)
+                        .configure(DeserializationFeature.FAIL_ON_MISSING_CREATOR_PROPERTIES, false)
+                        .configure(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES, true)
                         .configure(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY, true)
                         .configure(DeserializationFeature.ACCEPT_FLOAT_AS_INT, false)
                         .configure(DeserializationFeature.FAIL_ON_NUMBERS_FOR_ENUMS, true)
@@ -86,7 +177,15 @@ public final class ZLinkFrameworkJsonProfile {
         for (Module module : transportModules) {
             builder.addModule(module);
         }
-        return builder.build();
+        ObjectMapper mapper = builder.build();
+        AnnotationIntrospector existing =
+                mapper.getDeserializationConfig().getAnnotationIntrospector();
+        mapper.setConfig(
+                mapper.getDeserializationConfig()
+                        .with(
+                                AnnotationIntrospector.pair(
+                                        new ConstructorRequirednessIntrospector(), existing)));
+        return mapper;
     }
 
     private static void rejectBomPrefix(int prefix) throws IOException {
@@ -153,7 +252,28 @@ public final class ZLinkFrameworkJsonProfile {
     }
 
     private static SimpleModule profileModule() {
-        SimpleModule module = new SimpleModule("framework-json-v1");
+        SimpleModule module =
+                new SimpleModule("framework-json-v1") {
+                    @Override
+                    public void setupModule(Module.SetupContext context) {
+                        super.setupModule(context);
+                        context.addValueInstantiators(
+                                new ValueInstantiators.Base() {
+                                    @Override
+                                    public ValueInstantiator findValueInstantiator(
+                                            com.fasterxml.jackson.databind.DeserializationConfig
+                                                    config,
+                                            com.fasterxml.jackson.databind.BeanDescription
+                                                    beanDescription,
+                                            ValueInstantiator valueInstantiator) {
+                                        return beanDescription.getBeanClass().isRecord()
+                                                ? new OptionalPrimitiveValueInstantiator(
+                                                        valueInstantiator)
+                                                : valueInstantiator;
+                                    }
+                                });
+                    }
+                };
         JsonSerializer<Number> finiteNumberSerializer =
                 new JsonSerializer<>() {
                     @Override
@@ -257,6 +377,69 @@ public final class ZLinkFrameworkJsonProfile {
                     }
                 });
         return module;
+    }
+
+    private static final class OptionalPrimitiveValueInstantiator
+            extends ValueInstantiator.Delegating {
+        private OptionalPrimitiveValueInstantiator(ValueInstantiator delegate) {
+            super(delegate);
+        }
+
+        @Override
+        public SettableBeanProperty[] getFromObjectArguments(
+                com.fasterxml.jackson.databind.DeserializationConfig config) {
+            SettableBeanProperty[] properties = super.getFromObjectArguments(config);
+            if (properties == null) {
+                return null;
+            }
+            for (int index = 0; index < properties.length; index++) {
+                SettableBeanProperty property = properties[index];
+                if (property != null
+                        && property.getType().isPrimitive()
+                        && !property.getMetadata().isRequired()) {
+                    properties[index] =
+                            property.withNullProvider(
+                                    new OptionalPrimitiveValueProvider(
+                                            property.getType().getRawClass(), property.getName()));
+                }
+            }
+            return properties;
+        }
+    }
+
+    private static final class OptionalPrimitiveValueProvider implements NullValueProvider {
+        private final Class<?> primitiveType;
+        private final String propertyName;
+
+        private OptionalPrimitiveValueProvider(Class<?> primitiveType, String propertyName) {
+            this.primitiveType = primitiveType;
+            this.propertyName = propertyName;
+        }
+
+        @Override
+        public Object getNullValue(DeserializationContext context) throws JsonMappingException {
+            throw JsonMappingException.from(
+                    context.getParser(), "Property '" + propertyName + "' does not allow null.");
+        }
+
+        @Override
+        public Object getAbsentValue(DeserializationContext context) {
+            if (primitiveType == boolean.class) return false;
+            if (primitiveType == byte.class) return (byte) 0;
+            if (primitiveType == short.class) return (short) 0;
+            if (primitiveType == int.class) return 0;
+            if (primitiveType == long.class) return 0L;
+            if (primitiveType == float.class) return 0.0f;
+            if (primitiveType == double.class) return 0.0d;
+            if (primitiveType == char.class) return '\0';
+            throw new IllegalStateException(
+                    "Unsupported primitive record component: " + primitiveType);
+        }
+
+        @Override
+        public AccessPattern getNullAccessPattern() {
+            return AccessPattern.DYNAMIC;
+        }
     }
 
     private static Number readFiniteNumber(JsonParser parser, boolean singlePrecision)

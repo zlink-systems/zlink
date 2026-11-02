@@ -19,7 +19,18 @@ instance with `IZLinkCodecRegistryBuilder.Use(...)`.
 `ZLinkEncodedPayload` are the SPI only a custom codec provider
 implements.
 
-## 2. Codec Registration API And Provider SPI
+## 2. Default JSON for Application DTOs
+
+The default JSON codec follows requiredness in the [common message contract §5](../../../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile). In C#, a constructor parameter without a default is required. A parameter with a declared default may be omitted.
+
+Requiredness and nullability are independent. An explicit `null` is accepted for a nullable parameter, while omission of a required nullable parameter is rejected.
+
+| C# constructor parameter | Handling when missing |
+|---|---|
+| `string? accountId` | Required; explicit `null` is accepted |
+| `string? accessToken = null` | Optional; omission supplies `null` |
+
+## 3. Codec Registration API And Provider SPI
 
 `IZLinkCodecRegistrar` only registers a business payload serializer. The
 STREAM header's codec value is declared with the Stream Connector-owned

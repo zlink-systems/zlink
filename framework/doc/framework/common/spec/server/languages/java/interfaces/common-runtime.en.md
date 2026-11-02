@@ -309,6 +309,32 @@ again. A call with another type also does not deserialize again and ends with
 `TYPE_MISMATCH` if that type cannot accept the first value. If the first call failed, that
 failure is delivered again.
 
+The default JSON DTO follows requiredness in the [common message contract §5](../../../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile).
+Java record components are required by default; mark an optional component with the Framework
+annotation `@ZLinkJsonOptional`. A Jackson `@JsonProperty` used to name a wire property does not
+change requiredness. An omitted optional component receives its Java primitive
+default or `null` for a reference. A Kotlin primary-constructor property is required without a
+default and may be omitted when it declares a default. A required nullable property accepts
+explicit `null` and rejects omission.
+
+| JVM DTO declaration | Requiredness |
+|---|---|
+| Java record component | Required by default; mark an optional component with `@ZLinkJsonOptional` |
+| Kotlin constructor property | Required without a default; optional with a declared `= ...` default |
+
+```java
+package systems.zlink.framework;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Target(ElementType.RECORD_COMPONENT)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface ZLinkJsonOptional {}
+```
+
 ```java
 public final class systems.zlink.framework.ZLinkEncodedPayload {
  public static systems.zlink.framework.ZLinkEncodedPayload from(byte[]);
