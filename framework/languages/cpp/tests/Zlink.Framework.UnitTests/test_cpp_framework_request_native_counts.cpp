@@ -9,11 +9,27 @@
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime_failure_fixture.hpp"
 #include <cstdio>
+#include <zlink.h>
 namespace
 {
 namespace fw = zlink::framework;
 namespace wire = fw::runtime::protocol;
 using fw::tests::native_call_scope_t;
+
+bool service_control_message (const void *data, std::size_t size) noexcept
+{
+    const auto bytes = std::span (static_cast<const std::uint8_t *> (data), size);
+    if (bytes.size () < wire::prefix_size
+        || !std::equal (std::begin (wire::magic), std::end (wire::magic), bytes.begin ())
+        || bytes[sizeof (wire::magic)] != wire::wire_major)
+        return false;
+    const auto header = wire::decode_header (bytes);
+    return header.kind == wire::command::hello || header.kind == wire::command::admit
+           || header.kind == wire::command::reject || header.kind == wire::command::update
+           || header.kind == wire::command::livenessProbe
+           || header.kind == wire::command::livenessAck;
+}
+
 TEST (RequestNativeCounts, BorrowedCodecViewDoesNotInitializeAnUnusedNativeMessage)
 {
     auto message = zlink::message_t::from (std::string (128, 'x'));
@@ -222,10 +238,29 @@ TEST (RequestNativeCounts, HostResultProjectionBorrowsItsNativeParts)
 TEST (RequestNativeCounts, NativeCountersDetectAnInjectedCopyAndItsLifecycle)
 {
     auto source = zlink::message_t::from (std::string (128, 'x'));
-    native_call_scope_t calls;
+    zlink_msg_t consumed[2];
+    for (auto &message : consumed)
+        ASSERT_EQ (0, zlink_msg_init (&message));
+    native_call_scope_t calls (service_control_message);
     {
         auto injected = source.copy ();
         EXPECT_EQ (injected.size (), 128u);
+    }
+    std::size_t index = 0;
+    for (const auto command : {wire::command::livenessProbe, wire::command::livenessAck}) {
+        auto bytes = wire::encode_liveness (command, 1);
+        zlink_msg_t control, borrowed;
+        EXPECT_EQ (0, zlink_msg_init_data (
+                        &control, bytes.data (), bytes.size (), [] (void *, void *) {}, nullptr));
+        EXPECT_EQ (0, zlink_msg_init (&borrowed));
+        EXPECT_EQ (0, zlink_msg_copy (&borrowed, &control));
+        // Core consumes the submitted view. Its empty close still belongs to
+        // the control message, whose public owner retains the original bytes.
+        EXPECT_EQ (0, zlink_msg_move (&consumed[index], &borrowed));
+        EXPECT_EQ (0u, zlink_msg_size (&borrowed));
+        EXPECT_EQ (0, zlink_msg_close (&borrowed));
+        EXPECT_EQ (0, zlink_msg_close (&control));
+        EXPECT_EQ (0, zlink_msg_close (&consumed[index++]));
     }
     std::printf ("injected copy init=%zu copy=%zu close=%zu\n", calls[0], calls[3], calls[4]);
     EXPECT_EQ (calls[0], 1u);
@@ -287,7 +322,7 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
       });
     auto client = builder.route_client (serializers);
     constexpr std::size_t requests = 8;
-    native_call_scope_t calls;
+    native_call_scope_t calls (service_control_message);
     for (std::size_t i = 0; i < requests; ++i) {
         auto reply =
           client.request_to_node ("native-count", target_status.routing_id (), count_payload_t{})
@@ -354,9 +389,10 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
     }
     source.stop ();
     fw::tests::count_native_calls.store (false);
-    std::printf ("source-native requests=%zu init=%zu init_size=%zu init_data=%zu copy=%zu "
-                 "close=%zu poller_wait=%zu (includes source shutdown)\n",
-                 requests, calls[0], calls[1], calls[2], calls[3], calls[4], calls[5]);
+    std::printf (
+      "source-native requests=%zu init=%zu init_size=%zu init_data=%zu copy=%zu "
+      "close=%zu poller_wait=%zu (excludes service controls; includes source shutdown)\n",
+      requests, calls[0], calls[1], calls[2], calls[3], calls[4], calls[5]);
     // Binding retains two native send views. Framework adds two inner parts
     // and two service parts; the receive owner initializes two adoption slots.
     EXPECT_EQ (calls[3], requests * 2);

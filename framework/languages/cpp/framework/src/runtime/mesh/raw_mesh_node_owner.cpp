@@ -2161,7 +2161,7 @@ raw_mesh_node_owner_t::request_to_spot (const std::vector<std::uint8_t> &target_
                                                        source_spot_id, target, exact, correlation,
                                                        message_follow_hop_count);
       },
-      application_payload, deadline, std::move (callback), correlation, false,
+      application_payload, deadline, std::move (callback), correlation, true,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot),
       request_identity (operation));
 }
