@@ -76,6 +76,16 @@ jobs:
           # The merge commit and its base parent give the pull request's changed paths.
           fetch-depth: 2
 
+      # The template binding pins (TEMPLATE_VERSIONS) must equal the binding each published
+      # Framework release requires, read at its framework-<language>/v<version> tag (#3575).
+      # A changed TEMPLATE_VERSIONS is under the template paths, so its pull request runs this.
+      - name: Check template binding pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin '+refs/tags/framework-*:refs/tags/framework-*'
+          python3 scripts/templates/check-template-bindings.py
+
       - id: plan
         shell: bash
         env:
