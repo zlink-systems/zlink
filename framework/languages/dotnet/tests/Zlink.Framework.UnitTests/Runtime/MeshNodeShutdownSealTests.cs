@@ -2010,20 +2010,42 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         right.AddChannel(MeshName);
         left.Start();
         right.Start();
-        right.ConnectPeer(left.Status().LocalEndpoint, leftRid);
+        var rightIntent = right.ConnectPeer(left.Status().LocalEndpoint, leftRid);
         await WaitUntilAsync(() =>
             left.Status().AdmittedPeerCount == 1 && right.Status().AdmittedPeerCount == 1
         );
 
         var intent = left.ConnectPeer(right.Status().LocalEndpoint);
-        var peer = Assert.Single(left.Peers());
+        MeshNodePeer[]? admittedPeers = null;
+        await WaitUntilAsync(() =>
+        {
+            var peers = left.Peers();
+            if (
+                peers.Length != 1
+                || peers[0].RoutingId != rightRid
+                || peers[0].ConnectionIntentId != intent
+                || peers[0].State != MeshPeerState.Admitted
+            )
+                return false;
+            admittedPeers = peers;
+            return true;
+        });
+        var peer = Assert.Single(admittedPeers!);
         Assert.Equal(rightRid, peer.RoutingId);
         Assert.Equal(intent, peer.ConnectionIntentId);
         Assert.Equal(MeshPeerState.Admitted, peer.State);
 
+        right.RemovePeerConnection(rightIntent);
         left.RemovePeerConnection(intent);
-        Assert.Equal(0U, left.Status().AdmittedPeerCount);
         Assert.DoesNotContain(left.Peers(), candidate => candidate.ConnectionIntentId == intent);
+        await WaitUntilAsync(() =>
+            right.Status().AdmittedPeerCount == 0
+            && left.Status().AdmittedPeerCount == 0
+            && !right.Peers().Any(candidate => candidate.RoutingId == leftRid)
+            && !left.Peers().Any(candidate => candidate.RoutingId == rightRid)
+        );
+        Assert.Equal(0U, left.Status().AdmittedPeerCount);
+        Assert.DoesNotContain(right.Peers(), candidate => candidate.RoutingId == leftRid);
         Assert.DoesNotContain(left.Peers(), candidate => candidate.RoutingId == rightRid);
     }
 
