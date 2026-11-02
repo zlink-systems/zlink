@@ -26,7 +26,11 @@ export class ZLinkNodeMeshBackendAdapter implements ZLinkMeshBackendAdapter {
     return new ZLinkNodeRawMeshBackend(
       options.meshName,
       options.routingId,
-      new ZLinkNodeRawBindingPort(bindingContext, options.receiveTimeoutMs),
+      new ZLinkNodeRawBindingPort(bindingContext, {
+        sendHighWaterMark: options.sendHighWaterMark,
+        receiveHighWaterMark: options.receiveHighWaterMark,
+        receiveTimeoutMs: options.receiveTimeoutMs
+      }),
       options.applicationJobQueue,
       options.applicationJobReceiveFlowFailureSink,
       options.peerAdmissionSealed,
