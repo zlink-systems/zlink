@@ -317,7 +317,8 @@ class stateful_object_runtime_t
                                   const std::optional<object_ref_t> &,
                                   std::stop_token)>;
     using relocation_state_commit_t = std::function<bool (const std::vector<object_ref_t> &)>;
-    using relocation_state_abort_t = std::function<void (const std::vector<object_ref_t> &)>;
+    using relocation_state_abort_t =
+      std::function<task_t<void> (const std::vector<object_ref_t> &)>;
     // Relocation flow §4.2 cut S of the participants' actual execution owner. In one producer
     // step it binds the attempt and takes the accepted, unstarted originals; it returns after
     // those originals entered their source FIFOs ahead of later ingress. The result holds the
@@ -517,11 +518,12 @@ class stateful_object_runtime_t
     stateful_error_t
     commit_relocation_restore_aggregate (const std::vector<object_ref_t> &targets,
                                          const relocation_restore_identity_t &identity);
-    stateful_error_t abort_relocation_restore (const object_ref_t &target,
-                                               const relocation_restore_identity_t &identity);
-    stateful_error_t
-    abort_relocation_restore_aggregate (const std::vector<object_ref_t> &targets,
-                                        const relocation_restore_identity_t &identity);
+    task_t<stateful_error_t>
+    abort_relocation_restore_async (object_ref_t target, relocation_restore_identity_t identity);
+    task_t<stateful_error_t>
+    abort_relocation_restore_aggregate_async (std::vector<object_ref_t> targets,
+                                              relocation_restore_identity_t identity);
+
 
   private:
     std::pair<stateful_error_t, object_ref_t>
