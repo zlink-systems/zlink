@@ -4,6 +4,7 @@ using Bingo.Server.Play.Infrastructure.ZLink.Actors;
 using Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot;
 using Bingo.Shared.Contracts;
 using Zlink.Framework.Contracts.Actors;
+using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
@@ -25,6 +26,19 @@ internal sealed class ObserveBingoEventsHandler(IZLinkSpotManager spots)
         CancellationToken cancellationToken
     )
     {
+        try
+        {
+            var observation = await entrySpot
+                .Context.Outbound.RequestToSpot(message.RoomId, new GetBingoObservationReq())
+                .Async<GetBingoObservationRes>(cancellationToken);
+            if (observation.State.Status == BingoRoomStatus.Finished)
+                return new ObserveBingoEventsRes { Subscribed = false };
+        }
+        catch (ZLinkFrameworkException error) when (error.Kind == ZLinkFrameworkErrorKind.NotFound)
+        {
+            return new ObserveBingoEventsRes { Subscribed = false };
+        }
+
         var observerSpotId = ObserverSpotId(message.RoomId, actor.ActorId);
         var settings = BingoRoomSettings.CreateObserver(message.RoomId, actor.ActorId);
         _ = await spots

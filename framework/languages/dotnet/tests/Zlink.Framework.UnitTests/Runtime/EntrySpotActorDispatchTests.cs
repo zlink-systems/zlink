@@ -2,7 +2,6 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -358,21 +357,17 @@ public sealed partial class EntrySpotActorDispatchTests
             var caller = Request();
             var (record, requestParts) = await ReceiveActorRequest();
             Assert.Equal(1, mesh.PendingOperationCount);
-            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
-            var operations = (System.Collections.IDictionary)
-                typeof(ZLinkManagedMeshNode).GetField("_operations", flags)!.GetValue(mesh)!;
             var pending = Assert.IsType<ZLinkManagedMeshNode.PendingOperation<CountingActorReply>>(
-                operations[record.OperationId.Low]
+                mesh._operations[record.OperationId.Low]
             );
             // Cooperative native input uses the SAME receiver captured before local
             // submission; no replacement decoder or pending operation is installed.
-            var physical = record
-                .CaptureReplyRoute()!
-                .Target!.GetType()
-                .GetFields(flags | BindingFlags.Public)
-                .Select(field => field.GetValue(record.CaptureReplyRoute()!.Target))
-                .OfType<Action<ZLinkManagedMeshNode.ManagedRequestCompletion>>()
-                .Single();
+            var replyRoute = Assert.IsType<ZLinkManagedMeshNode.LocalActorReplyRoute>(
+                record.CaptureReplyRoute()!.Target
+            );
+            var physical = Assert.IsAssignableFrom<
+                Action<ZLinkManagedMeshNode.ManagedRequestCompletion>
+            >(replyRoute.PhysicalCompletion);
             Assert.Equal(0, CountingActorReplyConverter.Reads);
             var requestHeader = ZLinkStreamProtocolDefaults.DecodeHeader(
                 requestParts[0].AsReadOnlyMemory()
@@ -386,27 +381,17 @@ public sealed partial class EntrySpotActorDispatchTests
                 else if (terminal == "deadline")
                 {
                     clock.Timestamp += TimeSpan.FromSeconds(5).Ticks;
-                    typeof(ZLinkManagedMeshNode)
-                        .GetMethod(
-                            "ExpireOperations",
-                            BindingFlags.NonPublic | BindingFlags.Instance
-                        )!
-                        .Invoke(mesh, null);
+                    mesh.ExpireOperations();
                 }
                 else if (terminal == "lifecycle")
                     // Cooperative lifecycle failure enters the existing exact-pair owner.
-                    typeof(ZLinkManagedMeshNode)
-                        .GetMethod("FailNativeDeadline", flags)!
-                        .Invoke(
-                            mesh,
-                            [
-                                pending,
-                                new ZLinkFrameworkException(
-                                    ZLinkFrameworkErrorKind.Unavailable,
-                                    "Actor request lifecycle ended."
-                                ),
-                            ]
-                        );
+                    mesh.FailNativeDeadline(
+                        pending,
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            "Actor request lifecycle ended."
+                        )
+                    );
                 else
                     mesh.CloseSubmissions();
                 originalFailure = await Record.ExceptionAsync(() =>
@@ -457,9 +442,7 @@ public sealed partial class EntrySpotActorDispatchTests
                         response,
                     ]),
                 ];
-                typeof(ZLinkManagedMeshNode)
-                    .GetMethod("CompleteNativeApplicationRequest", flags)!
-                    .Invoke(mesh, [pending, RequestResult.Ok, wire, physical]);
+                mesh.CompleteNativeApplicationRequest(pending, RequestResult.Ok, wire, physical);
                 Assert.All(
                     wire,
                     part => Assert.Throws<ObjectDisposedException>(() => _ = part.Size)
@@ -8512,19 +8495,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime,
                 parts
             );
-            var manager = Assert.IsType<ZLinkActorSessionManager>(
-                typeof(ZLinkFrameworkRuntime)
-                    .GetField(
-                        "_actorSessionManager",
-                        BindingFlags.Instance | BindingFlags.NonPublic
-                    )!
-                    .GetValue(runtime)
-            );
-            var registry = Assert.IsType<ZLinkActorSessionRegistry>(
-                typeof(ZLinkActorSessionManager)
-                    .GetField("_actorSessions", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(manager)
-            );
+            var manager = runtime._actorSessionManager;
+            var registry = manager._actorSessions;
             var actorId = ZLinkActorId.FromBoundary(actorRef.ActorId, "actorId");
             registry.RemoveIfCurrent(actorId, acceptedState);
             var successor = registry.GetOrCreate(actorId);
@@ -10583,57 +10555,16 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(node);
-        object? targetAttemptLease = null;
+        ZLinkStandaloneActorRelocationRuntime.AttemptSlotLease? targetAttemptLease = null;
         Task? targetAttemptRun = null;
         TaskCompletionSource? releaseTargetAttempt = null;
         try
         {
             var owner = runtime.StandaloneActorRelocationRuntime;
-            var ownerType = owner.GetType();
-            var keyType =
-                ownerType.GetNestedType("AttemptKey", BindingFlags.NonPublic)
-                ?? throw new InvalidOperationException("Target attempt key was not found.");
-            var key =
-                Activator.CreateInstance(
-                    keyType,
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                    binder: null,
-                    args: [11UL, 12UL, 1UL],
-                    culture: null
-                )
-                ?? throw new InvalidOperationException("Target attempt key could not be created.");
-            var acquire =
-                ownerType.GetMethod(
-                    "AcquireTargetAttempt",
-                    BindingFlags.Instance | BindingFlags.NonPublic,
-                    binder: null,
-                    types: [keyType],
-                    modifiers: null
-                )
-                ?? throw new InvalidOperationException(
-                    "Target attempt acquisition owner was not found."
-                );
-            targetAttemptLease =
-                acquire.Invoke(owner, [key])
-                ?? throw new InvalidOperationException("Target attempt lease was not acquired.");
-            var slot =
-                targetAttemptLease
-                    .GetType()
-                    .GetProperty("Slot", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(targetAttemptLease)
-                ?? throw new InvalidOperationException("Target attempt slot was not found.");
-            var runAsync =
-                slot.GetType()
-                    .GetMethod(
-                        "RunAsync",
-                        BindingFlags.Instance | BindingFlags.NonPublic,
-                        binder: null,
-                        types: [typeof(Func<ValueTask>)],
-                        modifiers: null
-                    )
-                ?? throw new InvalidOperationException(
-                    "Target attempt state-lane runner was not found."
-                );
+            var key = new ZLinkStandaloneActorRelocationRuntime.AttemptKey(11, 12, 1);
+            var lease = owner.AcquireTargetAttempt(key);
+            targetAttemptLease = lease;
+            var slot = lease.Slot;
             var targetAttemptStarted = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
@@ -10645,14 +10576,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 targetAttemptStarted.TrySetResult();
                 return new ValueTask(releaseTargetAttempt.Task);
             };
-            targetAttemptRun = (
-                (ValueTask)(
-                    runAsync.Invoke(slot, [holdTargetAttempt])
-                    ?? throw new InvalidOperationException(
-                        "Target attempt state-lane work was not scheduled."
-                    )
-                )
-            ).AsTask();
+            targetAttemptRun = slot.RunAsync(holdTargetAttempt).AsTask();
             await targetAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
@@ -10668,7 +10592,7 @@ public sealed partial class EntrySpotActorDispatchTests
             releaseTargetAttempt?.TrySetResult();
             if (targetAttemptRun is not null)
                 await targetAttemptRun;
-            (targetAttemptLease as IDisposable)?.Dispose();
+            targetAttemptLease?.Dispose();
             await runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -11245,15 +11169,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 Reply: rawReplyBytes
             );
 
-            var method =
-                typeof(ZLinkSpotActorJoinDispatcher).GetMethod(
-                    "ReplyCanonicalAdmission",
-                    BindingFlags.NonPublic | BindingFlags.Instance
-                )
-                ?? throw new InvalidOperationException(
-                    "ReplyCanonicalAdmission was not found by reflection."
-                );
-            method.Invoke(dispatcher, [joinRequest, admission]);
+            dispatcher.ReplyCanonicalAdmission(joinRequest, admission);
 
             Assert.Equal(0, nativeSpot.ActorJoinResultCode);
             Assert.Equal(rawReplyBytes, nativeSpot.ActorJoinReplyMessageBytes);

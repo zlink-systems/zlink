@@ -409,6 +409,7 @@ export class ZLinkChannelDispatchPipeline {
       contentType: context.contentType,
       metadata: context.metadata,
       correlationId: context.correlationId,
+      receivedAt: context.receivedAt,
       dispatchKind
     };
   }

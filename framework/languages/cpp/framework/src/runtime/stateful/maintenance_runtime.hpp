@@ -38,6 +38,11 @@ class delay_owner_t;
 class monitoring_runtime_state_t;
 }
 
+namespace zlink::framework
+{
+struct dispatch_options_t;
+}
+
 namespace zlink::framework::runtime::stateful
 {
 
@@ -359,6 +364,7 @@ struct eligible_relocation_unit_t
         // Cutover enqueue.  It fences source admission restoration.
         std::function<bool ()> abort_target_before_cutover;
         std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring;
+        const ::zlink::framework::dispatch_options_t *dispatch = nullptr;
         std::string mesh_name;
         framework::detail::factory_relocation_kind_t policy =
           framework::detail::factory_relocation_kind_t::unspecified;

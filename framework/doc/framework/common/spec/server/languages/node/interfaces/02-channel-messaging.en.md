@@ -281,6 +281,16 @@ export class TableViewHandler implements ZLinkSpotActorSendHandler<Room, Player,
 - A STREAM session handler receives a `ZLinkMessage` and picks the type with
   `decode(type)`, so it isn't covered by this rule.
 
+The default JSON schema follows requiredness in the [common message contract §5](../../../00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile).
+The default codec doesn't call the constructor.
+
+| TypeScript property | Handling when missing |
+|---|---|
+| A property without `?`, including definite-assignment `!` | Required; omission is rejected |
+| A property with `?` | Optional; the structural value is delivered without that property |
+
+Application code applies a property default to the structural value received by the handler when needed.
+
 ## 3. Location Peer And Logical Multicast
 
 ```ts

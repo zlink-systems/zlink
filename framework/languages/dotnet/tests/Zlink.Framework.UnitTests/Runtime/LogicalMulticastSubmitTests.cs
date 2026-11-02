@@ -59,29 +59,18 @@ public sealed class LogicalMulticastSubmitTests
 
         Assert.False(pending.IsCompleted);
 
-        var poolType = typeof(ZLinkWorkerPool);
-        var sync = poolType
-            .GetField("_sync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(pool)!;
-        var capacitySignalField = poolType.GetField(
-            "_directCapacityChanged",
-            BindingFlags.Instance | BindingFlags.NonPublic
-        )!;
-        var idleThreadsField = poolType.GetField(
-            "_idleThreads",
-            BindingFlags.Instance | BindingFlags.NonPublic
-        )!;
+        var sync = pool._sync;
         Task<int> idleThreadsAtNotification;
         lock (sync)
         {
-            var waiterSignal = (TaskCompletionSource)capacitySignalField.GetValue(pool)!;
+            var waiterSignal = pool._directCapacityChanged;
             var notification = new TaskCompletionSource();
             // Observe publication synchronously at the notification boundary, while
             // the actual admission waiter retains its asynchronous continuations.
             idleThreadsAtNotification = notification.Task.ContinueWith(
                 _ =>
                 {
-                    var idleThreads = (int)idleThreadsField.GetValue(pool)!;
+                    var idleThreads = pool._idleThreads;
                     waiterSignal.TrySetResult();
                     return idleThreads;
                 },
@@ -89,7 +78,7 @@ public sealed class LogicalMulticastSubmitTests
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default
             );
-            capacitySignalField.SetValue(pool, notification);
+            pool._directCapacityChanged = notification;
         }
 
         release.Set();

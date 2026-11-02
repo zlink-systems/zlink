@@ -1377,30 +1377,32 @@ void report_spot_dispatch_trace (const std::shared_ptr<detail::spot_node_builder
     }
     // string_view params + lazy build: callers pass cheap views; std::string is
     // only allocated inside the lambda after the gate passes (zero cost when off).
-    detail::message_flow_tracer_t (state->dispatch).trace (outcome, result, [&] {
-        auto field = [] (std::string_view value) -> std::optional<std::string> {
-            if (value.empty ()) {
-                return std::nullopt;
-            }
-            return std::string (value);
-        };
-        auto event = message_flow_event_t{outcome,
-                                          surface,
-                                          message_kind,
-                                          field (packet_name),
-                                          std::nullopt,
-                                          field (topic),
-                                          field (correlation_id),
-                                          std::nullopt,
-                                          field (spot_id),
-                                          field (actor_id),
-                                          std::nullopt};
-        event.result = result;
-        event.reason = reason;
-        event.detail_result = field (detail_result);
-        event.exception = error;
-        return event;
-    });
+    if (detail::message_flow_tracer_t (state->dispatch).enabled_for (outcome, result)) {
+        detail::message_flow_tracer_t (state->dispatch).trace (outcome, result, [&] {
+            auto field = [] (std::string_view value) -> std::optional<std::string> {
+                if (value.empty ()) {
+                    return std::nullopt;
+                }
+                return std::string (value);
+            };
+            auto event = message_flow_event_t{outcome,
+                                              surface,
+                                              message_kind,
+                                              field (packet_name),
+                                              std::nullopt,
+                                              field (topic),
+                                              field (correlation_id),
+                                              std::nullopt,
+                                              field (spot_id),
+                                              field (actor_id),
+                                              std::nullopt};
+            event.result = result;
+            event.reason = reason;
+            event.detail_result = field (detail_result);
+            event.exception = error;
+            return event;
+        });
+    }
 }
 
 void report_actor_leave_failure (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
@@ -1434,19 +1436,22 @@ void report_actor_dispatch_stage_trace_lazy (
         return;
     }
     detail::message_flow_tracer_t tracer (state->dispatch);
-    tracer.trace (message_flow_log_mode_t::detailed, outcome, [&] {
-        return message_flow_event_t{
-          .outcome = outcome,
-          .surface = dispatch_error_surface_t::spot_actor,
-          .message_kind = message_kind,
-          .packet_name =
-            packet_name.empty () ? std::nullopt : std::make_optional (std::string (packet_name)),
-          .spot_id = spot_id.empty () ? std::nullopt : std::make_optional (std::string (spot_id)),
-          .actor_id =
-            actor_id.empty () ? std::nullopt : std::make_optional (std::string (actor_id)),
-          .detail_stage = std::string (stage),
-          .detail_result = std::forward<BuildResult> (build_result) ()};
-    });
+    if (tracer.enabled (message_flow_log_mode_t::detailed)) {
+        tracer.trace (message_flow_log_mode_t::detailed, outcome, [&] {
+            return message_flow_event_t{
+              .outcome = outcome,
+              .surface = dispatch_error_surface_t::spot_actor,
+              .message_kind = message_kind,
+              .packet_name = packet_name.empty () ? std::nullopt
+                                                  : std::make_optional (std::string (packet_name)),
+              .spot_id =
+                spot_id.empty () ? std::nullopt : std::make_optional (std::string (spot_id)),
+              .actor_id =
+                actor_id.empty () ? std::nullopt : std::make_optional (std::string (actor_id)),
+              .detail_stage = std::string (stage),
+              .detail_result = std::forward<BuildResult> (build_result) ()};
+        });
+    }
 }
 
 void report_actor_dispatch_stage_trace (
@@ -1459,8 +1464,13 @@ void report_actor_dispatch_stage_trace (
   std::string_view stage,
   std::string_view result)
 {
-    report_actor_dispatch_stage_trace_lazy (state, outcome, message_kind, packet_name, spot_id,
-                                            actor_id, stage, [&] { return std::string (result); });
+    if (state
+        && detail::message_flow_tracer_t (state->dispatch)
+             .enabled (message_flow_log_mode_t::detailed)) {
+        report_actor_dispatch_stage_trace_lazy (state, outcome, message_kind, packet_name, spot_id,
+                                                actor_id, stage,
+                                                [&] { return std::string (result); });
+    }
 }
 
 zlink::message_t encode_spot_publish_frame (std::string channel_name,
@@ -1506,18 +1516,21 @@ void report_actor_handoff_request_trace (
     if (!state || request_id.empty () || transfer_id.empty ()) {
         return;
     }
-    detail::message_flow_tracer_t (state->dispatch)
-      .trace (message_flow_outcome_t::dispatched, transfer_id, [&] {
-          return message_flow_event_t{.outcome = message_flow_outcome_t::dispatched,
-                                      .surface = dispatch_error_surface_t::spot_actor,
-                                      .message_kind = dispatch_message_kind_t::actor_request,
-                                      .packet_name = marker,
-                                      .channel_name = "request",
-                                      .correlation_id = request_id,
-                                      .actor_id = std::string (actor_ref.actor_id ().value ()),
-                                      .flow_id = transfer_id,
-                                      .flow_origin = flow_origin_t::lifecycle};
-      });
+    if (detail::message_flow_tracer_t (state->dispatch)
+          .enabled_for (message_flow_outcome_t::dispatched)) {
+        detail::message_flow_tracer_t (state->dispatch)
+          .trace (message_flow_outcome_t::dispatched, transfer_id, [&] {
+              return message_flow_event_t{.outcome = message_flow_outcome_t::dispatched,
+                                          .surface = dispatch_error_surface_t::spot_actor,
+                                          .message_kind = dispatch_message_kind_t::actor_request,
+                                          .packet_name = marker,
+                                          .channel_name = "request",
+                                          .correlation_id = request_id,
+                                          .actor_id = std::string (actor_ref.actor_id ().value ()),
+                                          .flow_id = transfer_id,
+                                          .flow_origin = flow_origin_t::lifecycle};
+          });
+    }
 }
 
 void decrement_actor_count_unlocked (detail::spot_context_state_t &state)
@@ -4610,24 +4623,27 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
         std::string trace_actor_id;
         std::string trace_spot_id;
         if (trace_owner) {
-            detail::message_flow_tracer_t (trace_owner->dispatch)
-              .trace (message_flow_log_mode_t::detailed, message_flow_outcome_t::received, [&] {
-                  trace_packet_name = packet_name;
-                  trace_actor_id = actor_execution_id;
-                  trace_spot_id = actor_execution_spot_id;
-                  return message_flow_event_t{
-                    .outcome = message_flow_outcome_t::received,
-                    .surface = dispatch_error_surface_t::spot_actor,
-                    .message_kind = trace_message_kind,
-                    .packet_name = trace_packet_name,
-                    .spot_id =
-                      trace_spot_id.empty () ? std::nullopt : std::make_optional (trace_spot_id),
-                    .actor_id =
-                      trace_actor_id.empty () ? std::nullopt : std::make_optional (trace_actor_id),
-                    .detail_stage = "invoke_erased.enter",
-                    .detail_result =
-                      std::string ("serial_dispatch=") + (serial_dispatch ? "true" : "false")};
-              });
+            if (detail::message_flow_tracer_t (trace_owner->dispatch)
+                  .enabled (message_flow_log_mode_t::detailed)) {
+                detail::message_flow_tracer_t (trace_owner->dispatch)
+                  .trace (message_flow_log_mode_t::detailed, message_flow_outcome_t::received, [&] {
+                      trace_packet_name = packet_name;
+                      trace_actor_id = actor_execution_id;
+                      trace_spot_id = actor_execution_spot_id;
+                      return message_flow_event_t{
+                        .outcome = message_flow_outcome_t::received,
+                        .surface = dispatch_error_surface_t::spot_actor,
+                        .message_kind = trace_message_kind,
+                        .packet_name = trace_packet_name,
+                        .spot_id = trace_spot_id.empty () ? std::nullopt
+                                                          : std::make_optional (trace_spot_id),
+                        .actor_id = trace_actor_id.empty () ? std::nullopt
+                                                            : std::make_optional (trace_actor_id),
+                        .detail_stage = "invoke_erased.enter",
+                        .detail_result =
+                          std::string ("serial_dispatch=") + (serial_dispatch ? "true" : "false")};
+                  });
+            }
         }
         std::string callback_spot_id;
         if (trace_owner && trace_owner->handler_invocation_for_tests) {
@@ -4653,12 +4669,16 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             && coordinator) {
             serial_dispatch = true;
         }
-        report_actor_dispatch_stage_trace_lazy (
-          trace_owner, message_flow_outcome_t::received, trace_message_kind, trace_packet_name,
-          trace_spot_id, trace_actor_id, "invoke_erased.queue_select", [&] {
-              return std::string ("actor_queue=coordinator")
-                     + " spot_serial=" + (requires_spot_serial ? "true" : "false");
-          });
+        if (trace_owner
+            && detail::message_flow_tracer_t (trace_owner->dispatch)
+                 .enabled (message_flow_log_mode_t::detailed)) {
+            report_actor_dispatch_stage_trace_lazy (
+              trace_owner, message_flow_outcome_t::received, trace_message_kind, trace_packet_name,
+              trace_spot_id, trace_actor_id, "invoke_erased.queue_select", [&] {
+                  return std::string ("actor_queue=coordinator")
+                         + " spot_serial=" + (requires_spot_serial ? "true" : "false");
+              });
+        }
         if (!serial_dispatch) {
             const bool admission_preclaimed = static_cast<bool> (application_admission_terminal);
             if (!admission_preclaimed
@@ -4698,13 +4718,17 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                   handler_task, [state, completion, carrier, admission_terminal, trace_message_kind,
                                  trace_packet_name, trace_spot_id, trace_actor_id] (
                                   const result_t<zlink::message_t> &result) mutable {
-                      report_actor_dispatch_stage_trace_lazy (
-                        state->node, message_flow_outcome_t::dispatched, trace_message_kind,
-                        trace_packet_name, trace_spot_id, trace_actor_id,
-                        "invoke_erased.application_handler", [&] {
-                            return std::string ("result=finished success=")
-                                   + (result ? "true" : "false");
-                        });
+                      if (state->node
+                          && detail::message_flow_tracer_t (state->node->dispatch)
+                               .enabled (message_flow_log_mode_t::detailed)) {
+                          report_actor_dispatch_stage_trace_lazy (
+                            state->node, message_flow_outcome_t::dispatched, trace_message_kind,
+                            trace_packet_name, trace_spot_id, trace_actor_id,
+                            "invoke_erased.application_handler", [&] {
+                                return std::string ("result=finished success=")
+                                       + (result ? "true" : "false");
+                            });
+                      }
                       settle_handler_admission_once (admission_terminal);
                       if (result) {
                           completion->complete (
@@ -4977,13 +5001,17 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                     handler_task, [state, finish_handler, carrier, trace_message_kind,
                                    trace_packet_name, trace_spot_id, trace_actor_id] (
                                     const result_t<zlink::message_t> &result) mutable {
-                        report_actor_dispatch_stage_trace_lazy (
-                          state->node, message_flow_outcome_t::dispatched, trace_message_kind,
-                          trace_packet_name, trace_spot_id, trace_actor_id,
-                          "invoke_erased.application_handler", [&] {
-                              return std::string ("result=finished success=")
-                                     + (result ? "true" : "false");
-                          });
+                        if (state->node
+                            && detail::message_flow_tracer_t (state->node->dispatch)
+                                 .enabled (message_flow_log_mode_t::detailed)) {
+                            report_actor_dispatch_stage_trace_lazy (
+                              state->node, message_flow_outcome_t::dispatched, trace_message_kind,
+                              trace_packet_name, trace_spot_id, trace_actor_id,
+                              "invoke_erased.application_handler", [&] {
+                                  return std::string ("result=finished success=")
+                                         + (result ? "true" : "false");
+                              });
+                        }
                         result_t<zlink::message_t> final_result =
                           result ? result_t<zlink::message_t>::success (result.value ())
                                  : result_t<zlink::message_t>::failure (result.error_kind (),
@@ -5039,20 +5067,25 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
         const bool posted = *admission;
         if (posted && admit_actor_queue && transfer_owner_reservation)
             transfer_owner_reservation ();
-        report_actor_dispatch_stage_trace_lazy (
-          trace_owner,
-          posted && (kind == spot_handler_kind_t::packet || !application_record)
-            ? message_flow_outcome_t::admitted
-            : message_flow_outcome_t::received,
-          trace_message_kind, trace_packet_name, trace_spot_id, trace_actor_id,
-          "invoke_erased.post_serial", [&] {
-              return std::string ("posted=") + (posted ? "true" : "false")
-                     + (trace_serial_queue
-                          ? " closed="
-                              + std::string (trace_serial_queue->closed () ? "true" : "false")
-                              + " pending=" + std::to_string (trace_serial_queue->pending_count ())
-                          : " queue=inline");
-          });
+        if (trace_owner
+            && detail::message_flow_tracer_t (trace_owner->dispatch)
+                 .enabled (message_flow_log_mode_t::detailed)) {
+            report_actor_dispatch_stage_trace_lazy (
+              trace_owner,
+              posted && (kind == spot_handler_kind_t::packet || !application_record)
+                ? message_flow_outcome_t::admitted
+                : message_flow_outcome_t::received,
+              trace_message_kind, trace_packet_name, trace_spot_id, trace_actor_id,
+              "invoke_erased.post_serial", [&] {
+                  return std::string ("posted=") + (posted ? "true" : "false")
+                         + (trace_serial_queue
+                              ? " closed="
+                                  + std::string (trace_serial_queue->closed () ? "true" : "false")
+                                  + " pending="
+                                  + std::to_string (trace_serial_queue->pending_count ())
+                              : " queue=inline");
+              });
+        }
         if (trace_owner && trace_owner->handler_invocation_for_tests)
             trace_owner->handler_invocation_for_tests (
               detail::handler_invocation_phase_t::after_queue_submission, packet_name,
@@ -6465,13 +6498,12 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
             co_await emit_actor_transfer_marker_async ("handoff_replay_enqueued", actor_ref,
                                                        transfer_id, *location);
         }
-        spot_inbound_message_t metadata;
-        if (packet.application_record && packet.application_record->invocation ())
-            metadata = std::move (packet.application_record->invocation ()->second);
-        else {
-            metadata.content_type = std::move (packet.content_type);
-            metadata.values = std::move (packet.metadata);
-        }
+        auto *invocation =
+          packet.application_record ? packet.application_record->invocation () : nullptr;
+        spot_inbound_message_t metadata =
+          invocation ? std::move (invocation->second)
+                     : spot_inbound_message_t{.content_type = std::move (packet.content_type),
+                                              .values = std::move (packet.metadata)};
         const auto terminal_route =
           packet.is_request ? handoff_terminal_route (metadata.values) : std::nullopt;
         const auto replay_operation =
@@ -10692,10 +10724,8 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
 bool spot_node_runtime_t::actor_transfer_marker_enabled (
   message_flow_result_t result) const noexcept
 {
-    const auto tracer = message_flow_tracer_t (_state->dispatch);
-    return result == message_flow_result_t::failed
-             ? tracer.enabled (message_flow_log_mode_t::errors)
-             : tracer.enabled_for (message_flow_outcome_t::dispatched);
+    return message_flow_tracer_t (_state->dispatch)
+      .enabled_for (message_flow_outcome_t::dispatched, result);
 }
 
 void spot_node_runtime_t::emit_actor_transfer_marker (std::string marker,
@@ -12658,14 +12688,18 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
             }
             return "unknown";
         }();
-        report_actor_dispatch_stage_trace_lazy (
-          _state,
-          append_result == detail::handoff_append_result_t::appended && !application_record
-            ? message_flow_outcome_t::admitted
-            : message_flow_outcome_t::received,
-          dispatch_kind, packet_name, {}, actor_ref.actor_id ().value (),
-          "relay_actor_packet.try_append_backlog",
-          [&] { return "result=" + std::string (append_result_name); });
+        if (_state
+            && detail::message_flow_tracer_t (_state->dispatch)
+                 .enabled (message_flow_log_mode_t::detailed)) {
+            report_actor_dispatch_stage_trace_lazy (
+              _state,
+              append_result == detail::handoff_append_result_t::appended && !application_record
+                ? message_flow_outcome_t::admitted
+                : message_flow_outcome_t::received,
+              dispatch_kind, packet_name, {}, actor_ref.actor_id ().value (),
+              "relay_actor_packet.try_append_backlog",
+              [&] { return "result=" + std::string (append_result_name); });
+        }
         if (append_result == detail::handoff_append_result_t::appended) {
             if (actor_transfer_marker_enabled ()) {
                 emit_actor_transfer_marker (
@@ -12675,9 +12709,12 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
             if (is_request) {
                 const auto request_id = metadata.values.find ("__zlink.actorRequestId");
                 if (request_id != metadata.values.end ()) {
-                    report_actor_handoff_request_trace (
-                      _state, "handoff_request_frame", actor_ref, request_id->second,
-                      _state->actor_transfer_coordinator->transfer_id (key).value_or (key));
+                    if (detail::message_flow_tracer_t (_state->dispatch)
+                          .enabled_for (message_flow_outcome_t::dispatched)) {
+                        report_actor_handoff_request_trace (
+                          _state, "handoff_request_frame", actor_ref, request_id->second,
+                          _state->actor_transfer_coordinator->transfer_id (key).value_or (key));
+                    }
                 }
             }
             if (after_application_admission)
@@ -13768,6 +13805,7 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
   std::function<void ()> *accepted_turn_terminal,
   std::shared_ptr<const instance_spot_retained_message_t> retained_message)
 {
+    const auto received_at = std::chrono::system_clock::now ();
     if (accepted_turn_terminal)
         *accepted_turn_terminal = {};
     /* Instance Spot cold activation carries the first application message
@@ -13820,7 +13858,7 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
       request ? dispatch_message_kind_t::request : dispatch_message_kind_t::send;
     report_spot_dispatch_trace (_state, message_flow_outcome_t::received,
                                 dispatch_error_surface_t::spot_route, message_kind, packet_name, {},
-                                std::string (spot_id), {}, correlation_id);
+                                spot_id, {}, correlation_id);
     /* Copies exist only for the completion-time trace/error report; skip them
      * while tracing is fully off (spec 26 §4: no allocation before the gate). */
     const bool activation_trace_enabled =
@@ -13847,7 +13885,8 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
               spot_inbound_message_t{.content_type = std::move (content_type),
                                      .values = std::move (metadata),
                                      .mesh_name = state->mesh_name,
-                                     .correlation_id = std::move (correlation_id)},
+                                     .correlation_id = std::move (correlation_id),
+                                     .received_at = received_at},
               true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire, {}, {}, 0,
               {}, {}, retained_message);
         }
@@ -15318,7 +15357,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                              record.operation_id.low == 0
                                                ? std::nullopt
                                                : std::make_optional (record.operation_id.low),
-                                             std::move (encoded), std::nullopt};
+                                             std::move (encoded), std::nullopt, record.received_at};
             const auto dispatched =
               transfer_actor_leave_owner_reservation
                 ? dispatcher.dispatch_send (received, header, services, deferred_terminal,
@@ -15348,7 +15387,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                              record.operation_id.low == 0
                                                ? std::nullopt
                                                : std::make_optional (record.operation_id.low),
-                                             std::move (encoded), std::nullopt};
+                                             std::move (encoded), std::nullopt, record.received_at};
             detail::channel_reply_writer_t replies;
             if (deferred_terminal) {
                 const auto async_dispatched = dispatcher.dispatch_request_async (
@@ -15507,7 +15546,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                       header.message_name, {}, std::type_index (typeid (void)),
                       target->instance.get (), nullptr, services, serializers, body.value (),
                       spot_inbound_message_t{.content_type = header.content_type,
-                                             .values = header.metadata},
+                                             .values = header.metadata,
+                                             .received_at = record.received_at},
                       true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
                       [target] { target->release (); }, record.release_mailbox_reservation,
                       record.transferred_owner_byte_cost, {}, {}, {}, record.application_record,
@@ -15737,19 +15777,24 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                   && (follows_committed_source || targets_current_authority
                                       || targets_current_bound_route
                                       || (follows_in_flight_source && !requires_exact_incarnation));
-            report_actor_dispatch_stage_trace_lazy (
-              _state, message_flow_outcome_t::received, actor_dispatch_kind, header.message_name,
-              owner.spot_id, actor.actor_id ().value (), "dispatch_mesh_record.route_admission",
-              [&] {
-                  return std::string ("accepted=") + (admitted ? "true" : "false")
-                         + " local=" + (targets_local_actor ? "true" : "false")
-                         + " incarnation=" + (targets_exact_incarnation ? "true" : "false")
-                         + " committed_source=" + (follows_committed_source ? "true" : "false")
-                         + " current_authority=" + (targets_current_authority ? "true" : "false")
-                         + " current_bound_route="
-                         + (targets_current_bound_route ? "true" : "false")
-                         + " in_flight_source=" + (follows_in_flight_source ? "true" : "false");
-              });
+            if (_state
+                && detail::message_flow_tracer_t (_state->dispatch)
+                     .enabled (message_flow_log_mode_t::detailed)) {
+                report_actor_dispatch_stage_trace_lazy (
+                  _state, message_flow_outcome_t::received, actor_dispatch_kind,
+                  header.message_name, owner.spot_id, actor.actor_id ().value (),
+                  "dispatch_mesh_record.route_admission", [&] {
+                      return std::string ("accepted=") + (admitted ? "true" : "false")
+                             + " local=" + (targets_local_actor ? "true" : "false")
+                             + " incarnation=" + (targets_exact_incarnation ? "true" : "false")
+                             + " committed_source=" + (follows_committed_source ? "true" : "false")
+                             + " current_authority="
+                             + (targets_current_authority ? "true" : "false")
+                             + " current_bound_route="
+                             + (targets_current_bound_route ? "true" : "false")
+                             + " in_flight_source=" + (follows_in_flight_source ? "true" : "false");
+                  });
+            }
             if (!admitted) {
                 const bool exact_generation_mismatch =
                   requires_exact_incarnation && targets_local_actor && !targets_exact_incarnation;
@@ -15773,17 +15818,21 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                   actor, record.source_node_rid, *record.source_session_rid,
                   record.source_binding_generation, record.source_session_sequence));
             }
-            report_actor_dispatch_stage_trace_lazy (
-              _state, message_flow_outcome_t::received, actor_dispatch_kind, header.message_name,
-              owner.spot_id, actor.actor_id ().value (), "dispatch_mesh_record.session_admission",
-              [&] {
-                  if (*session_relay_admission)
-                      return std::string ("accepted=true");
-                  return std::string ("accepted=false reason=")
-                         + (session_relay_admission->error ()
-                              ? session_relay_admission->error ()->what ()
-                              : "Bound Session relay source fence was rejected");
-              });
+            if (_state
+                && detail::message_flow_tracer_t (_state->dispatch)
+                     .enabled (message_flow_log_mode_t::detailed)) {
+                report_actor_dispatch_stage_trace_lazy (
+                  _state, message_flow_outcome_t::received, actor_dispatch_kind,
+                  header.message_name, owner.spot_id, actor.actor_id ().value (),
+                  "dispatch_mesh_record.session_admission", [&] {
+                      if (*session_relay_admission)
+                          return std::string ("accepted=true");
+                      return std::string ("accepted=false reason=")
+                             + (session_relay_admission->error ()
+                                  ? session_relay_admission->error ()->what ()
+                                  : "Bound Session relay source fence was rejected");
+                  });
+            }
             if (!*session_relay_admission) {
                 reply_error (
                   framework_exception_t (session_relay_admission->error_kind (),
@@ -15822,7 +15871,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                              record.operation_id.low == 0
                                                ? std::nullopt
                                                : std::make_optional (record.operation_id.low),
-                                             std::move (encoded), std::nullopt};
+                                             std::move (encoded), std::nullopt, record.received_at};
             auto response = dispatcher.dispatch_request (received, header, services);
             const auto reply_parts =
               response ? detail::encode_actor_reply (replies.create_reply_header (
@@ -15915,7 +15964,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         }
         auto relayed = [&] {
             auto relay_metadata = spot_inbound_message_t{.content_type = header.content_type,
-                                                         .values = header.metadata};
+                                                         .values = header.metadata,
+                                                         .received_at = record.received_at};
             if (record.kind == service::record_kind_t::actor_request
                 && !header.correlation_id.empty ()) {
                 // Application correlation remains distinct from the service
@@ -16397,7 +16447,9 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
           topic, std::string (context._state->spot_id));
         return result_t<submission_t>::success (std::nullopt);
     }
-    spot_inbound_message_t inbound;
+    spot_inbound_message_t inbound{.received_at = multicast != nullptr
+                                                    ? multicast->received_at
+                                                    : std::chrono::system_clock::now ()};
     inbound.content_type = std::move (content_type);
     inbound.channel_name = std::move (channel_name);
     if (multicast && multicast->metadata

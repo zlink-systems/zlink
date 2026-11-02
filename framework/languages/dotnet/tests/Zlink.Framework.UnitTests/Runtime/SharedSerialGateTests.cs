@@ -7,6 +7,76 @@ public sealed class SharedSerialGateTests
     private static readonly TimeSpan CompletionTimeout = TimeSpan.FromSeconds(5);
 
     [Fact]
+    public void PendingPublicationRemainsVisibleUntilImportAttachesIt()
+    {
+        var queue = new ZLinkSerialWorkQueue();
+        var pending = new ZLinkSerialWorkItem(mailbox: null);
+        queue.Publish(pending);
+
+        bool ContainsPending() =>
+            queue.AnyPublishedOrQueued(item => ReferenceEquals(item, pending));
+
+        Assert.True(ContainsPending());
+        queue.ImportPublished(item =>
+        {
+            // Close step 3 can inspect admission while the gate imports this
+            // accepted record. It remains pending before attachment too.
+            Assert.True(ContainsPending());
+            queue.Enqueue(item);
+        });
+        Assert.True(ContainsPending());
+        Assert.True(queue.TryDequeue(out var removed));
+        Assert.Same(pending, removed);
+        Assert.False(ContainsPending());
+    }
+
+    [Fact]
+    public void AdoptedPublicationIsNotImportedAgainAfterDequeue()
+    {
+        var queue = new ZLinkSerialWorkQueue();
+        var adopted = new ZLinkSerialWorkItem(mailbox: null);
+        queue.Adopt(adopted);
+        Assert.True(queue.AnyPublishedOrQueued(item => ReferenceEquals(item, adopted)));
+        Assert.True(queue.TryDequeue(out var removed));
+        Assert.Same(adopted, removed);
+
+        queue.ImportPublished();
+
+        Assert.False(queue.TryDequeue(out _));
+        Assert.False(queue.AnyPublishedOrQueued(item => ReferenceEquals(item, adopted)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportPreservesPublicationProgressMadeByTerminalPreparation(bool captured)
+    {
+        var queue = new ZLinkSerialWorkQueue();
+        var terminal = new ZLinkSerialWorkItem(mailbox: null);
+        var held = new ZLinkSerialWorkItem(mailbox: null);
+        if (captured)
+        {
+            queue.Publish(held);
+            queue.ImportPublished();
+            Assert.True(queue.TryDequeue(out var removed));
+            Assert.Same(held, removed);
+        }
+        queue.Publish(terminal);
+
+        queue.ImportPublished(item =>
+        {
+            // Terminal preparation restores accepted relocation records before
+            // attaching the terminal itself.
+            if (ReferenceEquals(item, terminal))
+                queue.Adopt(held);
+            queue.Enqueue(item);
+        });
+
+        Assert.Equal(new[] { held, terminal }, queue.ToArray());
+        Assert.True(queue.AnyPublishedOrQueued(item => ReferenceEquals(item, held)));
+    }
+
+    [Fact]
     public async Task RelocationRequestReturnsWhileSharedGateIsBusy()
     {
         using var errors = new ZLinkRuntimeErrorSink();

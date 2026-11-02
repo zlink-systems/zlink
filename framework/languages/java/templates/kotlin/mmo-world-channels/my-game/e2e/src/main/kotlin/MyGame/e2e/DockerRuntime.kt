@@ -1,7 +1,9 @@
 package MyGame.e2e
 
+import MyGame.Control
 import java.nio.file.Path
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 internal object DockerRuntime {
     private const val PROJECT_ENV = "MY_GAME_DOCKER_PROJECT"
@@ -15,6 +17,26 @@ internal object DockerRuntime {
         val process = ProcessBuilder(listOf("docker") + arguments).redirectErrorStream(true).start()
         val output = process.inputReader().use { it.readText() }
         check(process.waitFor() == 0) { "Docker ${arguments.first()} failed: $output" }
+    }
+
+    // SIGQUIT makes HotSpot print a thread dump to stdout; failures here must not hide the real error.
+    fun threadDump(process: Process) {
+        try {
+            if (enabled) {
+                // The container name is the last argument of `docker start -a -i <container>`.
+                val container = process.info().arguments().get().last()
+                execute("kill", "--signal=QUIT", container)
+            } else if (!isWindows()) {
+                ProcessBuilder("kill", "-3", process.pid().toString())
+                    .start()
+                    .waitFor(Control.THREAD_DUMP_SECONDS, TimeUnit.SECONDS)
+            } else {
+                return
+            }
+        } catch (_: Exception) {
+            return
+        }
+        Thread.sleep(TimeUnit.SECONDS.toMillis(Control.THREAD_DUMP_SECONDS))
     }
 
     fun process(command: List<String>, config: Path): ProcessBuilder {

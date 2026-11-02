@@ -139,7 +139,7 @@ class Nodes(private val root: Path) : AutoCloseable {
 }
 
 private class Node(private val id: String, module: String, config: Path, root: Path, logs: Path) {
-    private val windows = System.getProperty("os.name").startsWith("Windows")
+    private val windows = isWindows()
     private val output = LinkedBlockingQueue<String>()
     private val process =
         DockerRuntime.process(
@@ -204,7 +204,10 @@ private class Node(private val id: String, module: String, config: Path, root: P
         check(process.isAlive) { "$id exited unexpectedly" }
         command(Control.SHUTDOWN)
         waitFor(Control.STOPPED)
-        check(process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS)) { "$id failed to exit" }
+        if (!process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS)) {
+            DockerRuntime.threadDump(process)
+            error("$id failed to exit; thread dump is in $id-stdout.log")
+        }
         check(process.exitValue() == 0) { "$id shutdown exit: ${process.exitValue()}" }
     }
 
@@ -221,3 +224,5 @@ private class Node(private val id: String, module: String, config: Path, root: P
         }
     }
 }
+
+fun isWindows() = System.getProperty("os.name").startsWith("Windows")

@@ -133,6 +133,7 @@ export class ZLinkSpotSubscriptionDispatch {
     readonly parts: readonly Message[];
     readonly routingId: RoutingId | unknown | null;
   }): Promise<void> {
+    const receivedAt = new Date();
     if (message.parts.length === 0) {
       this.options.dispatchErrors?.report({
         surface: ZLinkDispatchErrorSurface.SpotSubscription,
@@ -213,7 +214,8 @@ export class ZLinkSpotSubscriptionDispatch {
                   topic: message.topic,
                   source: subSource,
                   metadata: zlinkMessageMetadata(envelope.header.metadata),
-                  correlationId: envelope.header.correlationId ?? undefined
+                  correlationId: envelope.header.correlationId ?? undefined,
+                  receivedAt
                 });
               } catch (error) {
                 this.options.dispatchErrors?.report({

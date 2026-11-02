@@ -109,6 +109,118 @@ test('channel request and reply stay within the final parts allocation budget', 
   assert.deepEqual(roundtrip(), data);
 });
 
+test('channel header decode avoids framework JSON parsing and a full header copy', async (t) => {
+  if (runAllocationTest(t)) return;
+  const profilePath = require.resolve('@zlink-systems/stream-wire/internal/json');
+  const implementation = require(path.join(path.dirname(profilePath), 'framework-json-v1.js'));
+  const originalFrameworkParse = implementation.parseFrameworkJsonV1;
+  let frameworkParses = 0;
+  t.mock.method(implementation, 'parseFrameworkJsonV1', (...args) => {
+    frameworkParses += 1;
+    return originalFrameworkParse(...args);
+  });
+
+  const jsonPath =
+    require.resolve('../../packages/framework/dist/runtime/messaging/framework-json-v1');
+  const cachedJson = require.cache[jsonPath];
+  delete require.cache[jsonPath];
+  t.after(() => {
+    require.cache[jsonPath] = cachedJson;
+  });
+  const frameworkJson = require(jsonPath);
+  const channelPath =
+    require.resolve('../../packages/framework/dist/runtime/channels/channel-envelope');
+  const cachedChannel = require.cache[channelPath];
+  delete require.cache[channelPath];
+  t.after(() => {
+    require.cache[channelPath] = cachedChannel;
+  });
+  const channel = require(channelPath);
+
+  // Java/C++-style order is part of the unchanged wire contract. The decoder
+  // must not materialize JSON text or run a second full JSON parser.
+  const wire =
+    '{"formatMarker":242,"flowId":"0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d",' +
+    '"flowOrigin":3,"kind":3,"channelName":"orders","messageName":"UpdateOrder",' +
+    '"contentType":"application/json","correlationId":null,"deadline":null,' +
+    '"topic":null,"errorCode":null,"errorMessage":null,"source":null,' +
+    '"metadata":{"tenant":"north"}}';
+  const bytes = Buffer.from(wire);
+  const message = ZLinkBufferMessage.fromOwned(bytes);
+  t.after(() => message.close());
+  const originalJsonParse = JSON.parse;
+  let fullHeaderParses = 0;
+  t.mock.method(JSON, 'parse', function (text, reviver) {
+    if (text === wire) fullHeaderParses += 1;
+    return originalJsonParse.call(this, text, reviver);
+  });
+  const originalBufferToString = Buffer.prototype.toString;
+  let fullHeaderCopies = 0;
+  t.mock.method(Buffer.prototype, 'toString', function (...args) {
+    if (this === bytes && args.length === 0) fullHeaderCopies += 1;
+    return originalBufferToString.apply(this, args);
+  });
+
+  const parseBefore = () => {
+    new LegacyCanonicalHeaderProbe(bytes).consume('{"formatMarker":242,"kind":');
+    return frameworkJson.parseFrameworkJsonV1(bytes.toString(), {
+      onDuplicateProperty() {}
+    });
+  };
+  let baseline;
+  for (let index = 0; index < 1000; index += 1) baseline = parseBefore();
+  assert.equal(baseline.channelName, 'orders');
+  assert.equal(frameworkParses, 1000);
+  assert.equal(fullHeaderParses, 1000);
+  assert.equal(fullHeaderCopies, 1000);
+  const baselineAllocations = await trackedCodecAllocations(
+    ['/internal/framework-json-v1.js', '/node-envelope-codec-cost.test.js'],
+    parseBefore
+  );
+  const baselineTotals = allocationTotals(baselineAllocations);
+  assert.ok(baselineTotals.objects > 0, 'the previous profile scanner must allocate per header');
+
+  frameworkParses = 0;
+  fullHeaderParses = 0;
+  fullHeaderCopies = 0;
+  const decode = () => channel.decodeChannelHeader([message], false);
+  let header;
+  for (let index = 0; index < 1000; index += 1) header = decode();
+  assert.equal(header.channelName, 'orders');
+  assert.equal(header.messageName, 'UpdateOrder');
+  assert.equal(header.flowId, undefined);
+  assert.deepEqual(header.metadata, { tenant: 'north' });
+  assert.equal(frameworkParses, 0);
+  assert.equal(fullHeaderParses, 0);
+  assert.equal(fullHeaderCopies, 0);
+
+  const allocations = await trackedCodecAllocations(
+    [
+      '/runtime/channels/channel-envelope.js',
+      '/internal/framework-json-v1.js',
+      '/node-envelope-codec-cost.test.js'
+    ],
+    decode
+  );
+  const currentTotals = allocationTotals(allocations);
+  t.diagnostic(
+    `1000 calls: before=${baselineTotals.objects} objects/${baselineTotals.bytes} bytes, after=${currentTotals.objects} objects/${currentTotals.bytes} bytes`
+  );
+  assert.ok(currentTotals.objects < baselineTotals.objects, 'header decode must allocate fewer objects');
+  assert.ok(currentTotals.bytes < baselineTotals.bytes, 'header decode must allocate fewer bytes');
+  const profileAllocations = await trackedCodecAllocations(
+    '/internal/framework-json-v1.js',
+    decode
+  );
+  assertAllocationBudget(t, profileAllocations, 0, 0);
+  assert.equal(frameworkParses, 0);
+  assert.equal(fullHeaderParses, 0);
+  assert.equal(fullHeaderCopies, 0);
+  t.diagnostic(
+    `1000 calls: ${frameworkParses} framework parses, ${fullHeaderParses} full JSON parses, ${fullHeaderCopies} full header copies`
+  );
+});
+
 test('correlation validation accepts the full ASCII contract within a near-zero allocation budget', async (t) => {
   if (runAllocationTest(t)) return;
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
@@ -229,6 +341,24 @@ test('reply decode borrows its body once for JSON, registered codecs and raw byt
 // attribution across module boundaries through inlining. Measure in an isolated
 // interpreter process so module-owned allocations have the same meaning on each
 // supported runtime. Product source and the normal runtime are unchanged.
+class LegacyCanonicalHeaderProbe {
+  index = 0;
+  sawNonAscii = false;
+
+  constructor(bytes) {
+    this.bytes = bytes;
+  }
+
+  consume(value) {
+    if (this.index + value.length > this.bytes.length) return false;
+    for (let offset = 0; offset < value.length; offset += 1) {
+      if (this.bytes[this.index + offset] !== value.charCodeAt(offset)) return false;
+    }
+    this.index += value.length;
+    return true;
+  }
+}
+
 function runAllocationTest(t) {
   if (process.execArgv.includes(MODULE_ALLOCATION_FLAG)) return false;
   const result = spawnSync(
@@ -257,6 +387,7 @@ function runAllocationTest(t) {
 // allocations even when the objects are collected before the final snapshot.
 // Sum frames in this module only, excluding descendant Buffer/JSON internals.
 async function trackedCodecAllocations(filename, action) {
+  const filenames = Array.isArray(filename) ? filename : [filename];
   const inspector = require('node:inspector');
   const session = new inspector.Session();
   session.connect();
@@ -283,7 +414,8 @@ async function trackedCodecAllocations(filename, action) {
       const offset = nodes[index + 1] * fields.length;
       const name = snapshot.strings[infos[offset + fields.indexOf('name')]];
       const script = snapshot.strings[infos[offset + fields.indexOf('script_name')]];
-      if (script.replaceAll('\\', '/').endsWith(filename)) {
+      const normalizedScript = script.replaceAll('\\', '/');
+      if (filenames.some((candidate) => normalizedScript.endsWith(candidate))) {
         const entry = allocations.get(name) ?? { objects: 0, bytes: 0 };
         entry.objects += nodes[index + 2];
         entry.bytes += nodes[index + 3];
@@ -528,7 +660,13 @@ function identityJsonValue(_key, value) {
   return value;
 }
 function allocationTotal(allocations) {
-  return [...allocations.values()].reduce((sum, entry) => sum + entry.objects, 0);
+  return allocationTotals(allocations).objects;
+}
+function allocationTotals(allocations) {
+  return [...allocations.values()].reduce(
+    (sum, entry) => ({ objects: sum.objects + entry.objects, bytes: sum.bytes + entry.bytes }),
+    { objects: 0, bytes: 0 }
+  );
 }
 
 test('default JSON encoding adds no unused custom-replacer context', async (t) => {

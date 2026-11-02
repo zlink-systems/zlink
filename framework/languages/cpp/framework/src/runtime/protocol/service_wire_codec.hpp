@@ -1007,6 +1007,8 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
  * frame-integrity guards. */
 application_payload_t decode_application_payload (std::span<const std::uint8_t> bytes,
                                                   bool capture_flow = true);
+std::vector<std::span<const std::byte>>
+decode_application_part_views (std::span<const std::uint8_t> bytes, bool capture_flow = true);
 application_payload_t::multipart_t decode_application_parts (zlink::message_t &&bytes,
                                                              bool capture_flow = true);
 

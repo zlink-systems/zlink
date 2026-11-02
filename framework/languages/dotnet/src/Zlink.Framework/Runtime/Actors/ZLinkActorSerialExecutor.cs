@@ -11,7 +11,7 @@ namespace Zlink.Framework.Runtime.Actors;
 internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
 {
     private readonly ZLinkStateLane _lane = new();
-    private readonly ZLinkSerialExecutionQueue _queue;
+    internal readonly ZLinkSerialExecutionQueue _queue;
     private bool _admissionClosed;
     private int _acceptedWaiters;
     private int _pendingRequests;
@@ -291,6 +291,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
     public sealed class BarrierReservation(Waiter waiter, CancellationTokenSource cancellation)
     {
         internal Task Completion => waiter.Completion;
+        internal Task Released => waiter.Released;
         private int _claimed;
 
         public async ValueTask<Turn> ClaimAsync()
@@ -345,6 +346,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
         private readonly TaskCompletionSource _released = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        internal Task Released => _released.Task;
         private readonly CancellationTokenRegistration _registration;
         private int _accepted;
         internal const int NotAccepted = 0;

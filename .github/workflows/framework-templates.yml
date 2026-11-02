@@ -1,0 +1,501 @@
+name: Framework templates
+
+# Builds every Framework genre template and runs its Docker e2e (#1683). source=public
+# uses the published packages pinned in each template; source=local (manual runs only)
+# builds the Framework packages of this commit at framework_version and links them into
+# a copy of each template (scripts/templates/use-local-packages.py). Pull requests run only
+# the templates they change. Not a required check.
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Framework packages: public (registries) or local (built from this commit)'
+        required: true
+        default: public
+        type: choice
+        options: [public, local]
+      framework_version:
+        description: 'Framework version for source=local (for example 0.32.0)'
+        required: false
+        type: string
+      languages:
+        description: 'Comma list of java, kotlin, dotnet, node, cpp (empty: all)'
+        required: false
+        type: string
+      templates:
+        description: 'Comma list of template names (empty: all)'
+        required: false
+        type: string
+  pull_request:
+    branches: [main]
+    paths:
+      - 'framework/languages/*/templates/**'
+      - 'scripts/templates/**'
+      - '.github/workflows/framework-templates.yml'
+
+# A new commit on the same PR cancels the older run.
+concurrency:
+  group: framework-templates-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  JAVA_VERSION: '25'
+  DOTNET_VERSION: '8.0.x'
+  NODE_VERSION: '22'
+  CONAN_VERSION: '2.32.0'
+  CPP_PLATFORM: linux-x64
+  # GitHub-hosted runners have 4 cores; the self-hosted build PC is shared (framework-cpp.yml).
+  CMAKE_BUILD_PARALLEL_LEVEL: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
+  FRAMEWORK_VERSION: ${{ inputs.framework_version }}
+
+jobs:
+  plan:
+    # Merge queue draft PRs re-trigger pull_request; the original PR already ran these
+    # templates, and the queue needs the hosted runners. Every other job needs plan.
+    if: ${{ !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    name: Plan template matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      cpp_matrix: ${{ steps.plan.outputs.cpp_matrix }}
+      count: ${{ steps.plan.outputs.count }}
+      cpp_count: ${{ steps.plan.outputs.cpp_count }}
+      packages: ${{ steps.plan.outputs.packages }}
+      source: ${{ steps.plan.outputs.source }}
+      # A repository variable holding a JSON label list moves the C++ jobs to the
+      # self-hosted build PC, but only for manual runs: pull request code (including
+      # forks) never runs on the self-hosted build machine.
+      cpp_runner: ${{ toJSON(github.event_name == 'workflow_dispatch' && vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04') }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The merge commit and its base parent give the pull request's changed paths.
+          fetch-depth: 2
+
+      - id: plan
+        shell: bash
+        env:
+          # Pull requests have no inputs and always use the published packages.
+          SOURCE: ${{ inputs.source || 'public' }}
+          LANGUAGES: ${{ inputs.languages }}
+          TEMPLATES: ${{ inputs.templates }}
+        run: |
+          set -euo pipefail
+          case "${SOURCE}" in
+            public) ;;
+            local)
+              [[ "${FRAMEWORK_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+                || { echo "::error::source=local requires framework_version MAJOR.MINOR.PATCH" >&2; exit 1; } ;;
+            *) echo "::error::Invalid source: ${SOURCE}" >&2; exit 1 ;;
+          esac
+          echo "source=${SOURCE}" >>"${GITHUB_OUTPUT}"
+          args=("${LANGUAGES}" "${TEMPLATES}")
+          if [ "${GITHUB_EVENT_NAME}" = pull_request ]; then
+            git diff --name-only HEAD^1 HEAD >"${RUNNER_TEMP}/changed-paths.txt"
+            args+=("${RUNNER_TEMP}/changed-paths.txt")
+          fi
+          plan="$(python3 scripts/templates/plan.py "${args[@]}")"
+          for key in matrix cpp_matrix count cpp_count packages; do
+            echo "${key}=$(jq -c ".${key}" <<<"${plan}")" >>"${GITHUB_OUTPUT}"
+          done
+          jq -r '.matrix.include[], .cpp_matrix.include[] | "\(.lang) \(.template)"' <<<"${plan}"
+
+  # Mirrors the package builds of framework-release.yml (release-node, release-java) and
+  # release-dotnet.yml (release-framework-dotnet) at framework_version, without publishing.
+  packages:
+    if: needs.plan.outputs.source == 'local' && needs.plan.outputs.packages != '[]'
+    name: Local ${{ matrix.package }} packages
+    runs-on: ubuntu-24.04
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
+    env:
+      PACKAGES_DIR: ${{ github.workspace }}/dist/template-packages
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set the Framework version (not committed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for version_file in framework/languages/*/VERSION; do
+            echo "ZLINK_FRAMEWORK_VERSION=${FRAMEWORK_VERSION}" >"${version_file}"
+          done
+          bash scripts/local-package/build-wsl.sh --sync-versions
+
+      - uses: actions/setup-java@v5
+        if: matrix.package == 'java'
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Build the Java Maven file repository
+        if: matrix.package == 'java'
+        working-directory: framework/languages/java
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${PACKAGES_DIR}/maven"
+          # Without MAVEN_REPOSITORY_URL the release repository is GitHub Packages
+          # (GITHUB_REPOSITORY is set); a file URL keeps every module in one local repository.
+          MAVEN_REPOSITORY_URL="file://${PACKAGES_DIR}/maven" \
+            ./gradlew --no-daemon publish -Pzlink.includeSamples=false
+
+      - uses: actions/setup-dotnet@v5
+        if: matrix.package == 'dotnet'
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Build the .NET packages
+        if: matrix.package == 'dotnet'
+        shell: bash
+        env:
+          CI: true
+          ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/.artifacts/wsl
+        run: |
+          set -euo pipefail
+          # nuget.config maps the binding (Zlink) and Zlink.HttpClient to the local source:
+          # the published binding from nuget.org plus the in-repo http-client/connector/contracts.
+          mkdir -p "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget" "${PACKAGES_DIR}/nuget"
+          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
+          curl -sSfL -o "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget/Zlink.${binding_version}.nupkg" \
+            "https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
+          bash scripts/local-package/http-client/build-wsl.sh dotnet
+          for project in framework/languages/dotnet/src/*/*.csproj; do
+            if grep -q '<IsPackable>true</IsPackable>' "${project}"; then
+              dotnet pack "${project}" -c Release -p:PackageOutputPath="${PACKAGES_DIR}/nuget"
+            fi
+          done
+          cp -n "${ZLINK_LOCAL_PACKAGE_ROOT}"/nuget/*.nupkg "${PACKAGES_DIR}/nuget/"
+          ls "${PACKAGES_DIR}/nuget"
+
+      - uses: actions/setup-node@v5
+        if: matrix.package == 'node'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Build the Node package tarballs
+        if: matrix.package == 'node'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The workspace manifest pins http-client to a local tarball (see framework-release.yml).
+          pin="$(node -p "require('./framework/languages/node/package.json').dependencies['@zlink-systems/http-client']")"
+          case "${pin}" in
+            file:*) ;;
+            *) echo "::error::http-client pin is not a local tarball: ${pin}" >&2; exit 1 ;;
+          esac
+          dest="$(cd framework/languages/node && mkdir -p "$(dirname "${pin#file:}")" \
+            && cd "$(dirname "${pin#file:}")" && pwd -P)"
+          npm pack framework/languages/node/packages/http-client --pack-destination "${dest}"
+          test -f "${dest}/$(basename "${pin#file:}")"
+          mkdir -p "${PACKAGES_DIR}/npm"
+          cd framework/languages/node
+          npm ci
+          npm run build
+          for package_dir in \
+            stream-wire \
+            stream-connector \
+            framework \
+            framework-codec-protobuf \
+            framework-codec-msgpack \
+            framework-locations-redis \
+            http-client \
+            nestjs; do
+            npm pack "./packages/${package_dir}" --pack-destination "${PACKAGES_DIR}/npm"
+          done
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: template-packages-${{ matrix.package }}
+          path: dist/template-packages
+          if-no-files-found: error
+
+  # Mirrors the linux-x64 prebuilt-cpp job of framework-release.yml without publishing.
+  packages-cpp:
+    if: needs.plan.outputs.source == 'local' && needs.plan.outputs.cpp_count != '0'
+    name: Local cpp packages
+    runs-on: ${{ fromJSON(needs.plan.outputs.cpp_runner) }}
+    needs: plan
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set the Framework version (not committed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A self-hosted runner keeps RUNNER_TEMP between jobs.
+          WORK="${RUNNER_TEMP}/framework-templates-cpp-packages"
+          echo "WORK=${WORK}" >>"${GITHUB_ENV}"
+          rm -rf "${WORK}"
+          for version_file in framework/languages/*/VERSION; do
+            echo "ZLINK_FRAMEWORK_VERSION=${FRAMEWORK_VERSION}" >"${version_file}"
+          done
+          bash scripts/local-package/build-wsl.sh --sync-versions
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Conan
+        shell: bash
+        # ConanCenter recipes fetch upstream sources (m4 from ftp.gnu.org); fall back to
+        # ConanCenter's backup of the same sha256 when the upstream mirror is unreachable.
+        # The Conan home lives in this job's work directory: other jobs on the shared
+        # self-hosted runner must not see or race on its cache.
+        run: |
+          set -euo pipefail
+          python -m pip install "conan==${CONAN_VERSION}"
+          echo "CONAN_HOME=${WORK}/conan-home" >>"${GITHUB_ENV}"
+          mkdir -p "${WORK}/conan-home"
+          echo 'core.sources:download_urls=["origin", "https://c3i.jfrog.io/artifactory/conan-center-backup-sources/"]' >> "${WORK}/conan-home/global.conf"
+
+      - name: Install Linux build tools
+        id: tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r c_compiler cxx_compiler < <(python3 -c 'import json,sys; e=[e for e in json.load(open("framework/languages/cpp/packaging/prebuilt-platforms.json"))["include"] if e["platform"]==sys.argv[1]]; len(e)==1 or sys.exit("missing platform "+sys.argv[1]); print(e[0]["c_compiler"], e[0]["cxx_compiler"])' "${CPP_PLATFORM}")
+          # Self-hosted runners share one dpkg lock; wait for it instead of failing.
+          sudo apt-get -o DPkg::Lock::Timeout=600 update
+          sudo apt-get -o DPkg::Lock::Timeout=600 install -y "${c_compiler}" "${cxx_compiler}" ninja-build
+          echo "c_compiler=${c_compiler}" >>"${GITHUB_OUTPUT}"
+          echo "cxx_compiler=${cxx_compiler}" >>"${GITHUB_OUTPUT}"
+
+      - name: Fetch Core and build the C++ binding
+        id: inputs
+        shell: bash
+        env:
+          CC: ${{ steps.tools.outputs.c_compiler }}
+          CXX: ${{ steps.tools.outputs.cxx_compiler }}
+        run: |
+          set -euo pipefail
+          core_prefix="$(bash scripts/local-package/core/fetch-release.sh \
+            --platform "${CPP_PLATFORM}" --cache-dir "${WORK}/core")"
+          binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/cpp/VERSION)"
+          binding_build="${WORK}/zlink-cpp-build"
+          binding_prefix="${WORK}/zlink-cpp-${binding_version}"
+          cmake -S bindings/cpp -B "${binding_build}" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${binding_prefix}" \
+            -DZLINK_CPP_CORE_PACKAGE_PREFIX="${core_prefix}" \
+            -DZLINK_CPP_BUILD_TESTS=OFF \
+            -DZLINK_CPP_BUILD_SAMPLES=OFF
+          cmake --build "${binding_build}" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL}"
+          cmake --install "${binding_build}"
+          echo "core_prefix=${core_prefix}" >>"${GITHUB_OUTPUT}"
+          echo "binding_prefix=${binding_prefix}" >>"${GITHUB_OUTPUT}"
+
+      - name: Build and verify the prebuilt archive
+        shell: bash
+        env:
+          CC: ${{ steps.tools.outputs.c_compiler }}
+          CXX: ${{ steps.tools.outputs.cxx_compiler }}
+          ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX: ${{ steps.inputs.outputs.core_prefix }}
+          ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX: ${{ steps.inputs.outputs.binding_prefix }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${WORK}/packages/cpp"
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          bash framework/languages/cpp/scripts/package-prebuilt.sh \
+            --platform "${CPP_PLATFORM}" "${WORK}/packages/cpp"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: template-packages-cpp
+          path: ${{ env.WORK }}/packages
+          if-no-files-found: error
+
+      - name: Remove the work directory
+        if: always()
+        shell: bash
+        run: rm -rf "${WORK}"
+
+  template:
+    # Runs after a failed package language too; templates of that language then fail
+    # at the package download, and the other languages still report.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.count != '0' }}
+    name: ${{ matrix.lang }} ${{ matrix.template }}
+    runs-on: ubuntu-24.04
+    needs: [plan, packages]
+    strategy:
+      fail-fast: false
+      # GitHub-hosted runner concurrency is shared with the merge queue (#2473).
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      TEMPLATE_SOURCE: ${{ needs.plan.outputs.source }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare the work directories
+        shell: bash
+        run: |
+          echo "TEMPLATE_WORK=${RUNNER_TEMP}/framework-templates" >>"${GITHUB_ENV}"
+          echo "PACKAGES_DIR=${RUNNER_TEMP}/framework-templates-packages" >>"${GITHUB_ENV}"
+
+      # Two dozen Java and Kotlin templates resolving the same dependencies from Maven
+      # Central at once got HTTP 429 (merge queue draft #3637); reuse the Gradle cache.
+      - uses: actions/setup-java@v5
+        if: matrix.package == 'java'
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+          cache-dependency-path: |
+            ${{ matrix.path }}/**/*.gradle*
+            ${{ matrix.path }}/gradle/wrapper/gradle-wrapper.properties
+
+      - uses: actions/setup-dotnet@v5
+        if: matrix.package == 'dotnet'
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: actions/setup-node@v5
+        if: matrix.package == 'node'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: actions/download-artifact@v7
+        if: env.TEMPLATE_SOURCE == 'local'
+        with:
+          name: template-packages-${{ matrix.package }}
+          path: ${{ env.PACKAGES_DIR }}
+
+      - name: Build and run the e2e
+        shell: bash
+        env:
+          LANG_NAME: ${{ matrix.lang }}
+          TEMPLATE_NAME: ${{ matrix.template }}
+          TEMPLATE_PATH: ${{ matrix.path }}
+          PACKAGE_NAME: ${{ matrix.package }}
+        run: bash scripts/templates/run-template.sh "${LANG_NAME}" "${TEMPLATE_NAME}" "${TEMPLATE_PATH}" "${PACKAGE_NAME}"
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: template-result-${{ matrix.lang }}-${{ matrix.template }}
+          path: ${{ env.TEMPLATE_WORK }}/result/*.json
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: template-logs-${{ matrix.lang }}-${{ matrix.template }}
+          path: ${{ env.TEMPLATE_WORK }}/${{ matrix.lang }}-${{ matrix.template }}/my-game/.logs/
+          if-no-files-found: ignore
+
+  template-cpp:
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.cpp_count != '0' && needs.packages-cpp.result != 'failure' }}
+    name: ${{ matrix.lang }} ${{ matrix.template }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.cpp_runner) }}
+    needs: [plan, packages-cpp]
+    strategy:
+      fail-fast: false
+      # The self-hosted build PC is shared; two template builds at a time.
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.cpp_matrix) }}
+    env:
+      TEMPLATE_SOURCE: ${{ needs.plan.outputs.source }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # A self-hosted runner keeps RUNNER_TEMP between jobs, so the work directories start empty.
+      - name: Prepare the work directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "TEMPLATE_WORK=${RUNNER_TEMP}/framework-templates" >>"${GITHUB_ENV}"
+          echo "PACKAGES_DIR=${RUNNER_TEMP}/framework-templates-packages" >>"${GITHUB_ENV}"
+          rm -rf "${RUNNER_TEMP}/framework-templates" "${RUNNER_TEMP}/framework-templates-packages"
+
+      - name: Install Linux build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Self-hosted runners share one dpkg lock; wait for it instead of failing.
+          sudo apt-get -o DPkg::Lock::Timeout=600 update
+          sudo apt-get -o DPkg::Lock::Timeout=600 install -y build-essential cmake ninja-build
+
+      - uses: actions/download-artifact@v7
+        if: env.TEMPLATE_SOURCE == 'local'
+        with:
+          name: template-packages-${{ matrix.package }}
+          path: ${{ env.PACKAGES_DIR }}
+
+      - name: Build and run the e2e
+        shell: bash
+        env:
+          LANG_NAME: ${{ matrix.lang }}
+          TEMPLATE_NAME: ${{ matrix.template }}
+          TEMPLATE_PATH: ${{ matrix.path }}
+          PACKAGE_NAME: ${{ matrix.package }}
+        run: bash scripts/templates/run-template.sh "${LANG_NAME}" "${TEMPLATE_NAME}" "${TEMPLATE_PATH}" "${PACKAGE_NAME}"
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: template-result-${{ matrix.lang }}-${{ matrix.template }}
+          path: ${{ env.TEMPLATE_WORK }}/result/*.json
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: template-logs-${{ matrix.lang }}-${{ matrix.template }}
+          path: ${{ env.TEMPLATE_WORK }}/${{ matrix.lang }}-${{ matrix.template }}/my-game/.logs/
+          if-no-files-found: ignore
+
+      # run-e2e.sh removes its compose project on exit; a cancelled job may not get there.
+      # Only this job's projects (named under the copy's .logs/docker-*) are removed, since
+      # other jobs on a shared runner use the same container label with their own project.
+      - name: Remove the template copy and its Docker leftovers
+        if: always()
+        shell: bash
+        run: |
+          for logs in "${TEMPLATE_WORK}"/*/my-game/.logs/docker-*; do
+            [ -d "${logs}" ] || continue
+            project="${logs##*/docker-}"
+            containers="$(docker ps -aq --filter "label=my-game.e2e=${project}")"
+            [ -z "${containers}" ] || docker rm -f ${containers} || true
+            docker compose -p "${project}" down --volumes --remove-orphans || true
+            docker image rm "${project}-node" "${project}-runner" 2>/dev/null || true
+          done
+          rm -rf "${TEMPLATE_WORK}" "${PACKAGES_DIR}"
+
+  summary:
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    name: Template summary
+    runs-on: ubuntu-24.04
+    needs: [plan, template, template-cpp]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: template-result-*
+          path: results
+          merge-multiple: true
+
+      - name: Write the results table
+        shell: bash
+        env:
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+          CPP_MATRIX: ${{ needs.plan.outputs.cpp_matrix }}
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          python3 scripts/templates/summary.py results "${MATRIX}" "${CPP_MATRIX}" | tee -a "${GITHUB_STEP_SUMMARY}"
