@@ -14,7 +14,14 @@ internal sealed class ZLinkDescriptorPublicationUnconfirmedException(Exception c
         deadline.CancelAfter(timeout);
         try
         {
-            return await write(deadline.Token).ConfigureAwait(false);
+            // The provider may ignore cancellation; end observation before any caller
+            // can apply a late Store result to coordinator state.
+            var result = await write(deadline.Token)
+                .AsTask()
+                .WaitAsync(deadline.Token)
+                .ConfigureAwait(false);
+            deadline.Token.ThrowIfCancellationRequested();
+            return result;
         }
         catch (Exception error)
             when (ZLinkLocationStoreFailure.IsIndeterminate(error, cancellationToken))
