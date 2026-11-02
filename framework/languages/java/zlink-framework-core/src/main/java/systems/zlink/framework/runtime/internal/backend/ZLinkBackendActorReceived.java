@@ -3,12 +3,16 @@ package systems.zlink.framework.runtime.internal.backend;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 public final class ZLinkBackendActorReceived implements AutoCloseable {
+    private final Instant receivedAt;
+
     /**
      * Re-routes one arrival that reached the owner Spot after its relocation cut finished. The mesh
      * node owns the relocation forward table, so the Spot runtime hands the surviving
@@ -57,10 +61,38 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
                 flags,
                 message,
                 hasMore,
+                acceptedJournalRecord,
+                contentType,
+                Clock.systemUTC());
+    }
+
+    public ZLinkBackendActorReceived(
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            Optional<Long> requestSeq,
+            long requestId,
+            int flags,
+            Message message,
+            boolean hasMore,
+            byte[] acceptedJournalRecord,
+            String contentType,
+            Clock clock) {
+        this(
+                actor,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestSeq,
+                requestId,
+                flags,
+                message,
+                hasMore,
                 () -> acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord,
                 acceptedJournalRecord != null && acceptedJournalRecord.length > 0,
                 contentType,
-                () -> {});
+                () -> {},
+                null,
+                Objects.requireNonNull(clock, "clock").instant());
         this.acceptedJournalRecord =
                 acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord;
     }
@@ -91,7 +123,8 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
                 acceptedJournalRecordAvailable,
                 contentType,
                 terminalRelease,
-                null);
+                null,
+                Clock.systemUTC().instant());
     }
 
     private ZLinkBackendActorReceived(
@@ -107,7 +140,9 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
             boolean acceptedJournalRecordAvailable,
             String contentType,
             Runnable terminalRelease,
-            RelocationRedirect relocationRedirect) {
+            RelocationRedirect relocationRedirect,
+            Instant receivedAt) {
+        this.receivedAt = Objects.requireNonNull(receivedAt, "receivedAt");
         this.actor = Objects.requireNonNull(actor, "actor");
         this.sourceNodeRid = Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
         this.sourceSessionRid = sourceSessionRid;
@@ -204,7 +239,8 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
                 true,
                 contentType,
                 terminalRelease,
-                relocationRedirect);
+                relocationRedirect,
+                Clock.systemUTC().instant());
     }
 
     public ZLinkBackendActorReceived(
@@ -274,6 +310,28 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
 
     public String contentType() {
         return contentType;
+    }
+
+    public Instant receivedAt() {
+        return receivedAt;
+    }
+
+    public ZLinkBackendActorReceived copy() {
+        return new ZLinkBackendActorReceived(
+                actor,
+                sourceNodeRid,
+                sourceSessionRid,
+                requestSeq,
+                requestId,
+                flags,
+                Message.from(message),
+                hasMore,
+                acceptedJournalRecordAvailable ? this::acceptedJournalRecord : () -> new byte[0],
+                acceptedJournalRecordAvailable,
+                contentType,
+                () -> {},
+                relocationRedirect,
+                receivedAt);
     }
 
     /** Post-cut re-route hook installed by the mesh ingress, or {@code null}. */

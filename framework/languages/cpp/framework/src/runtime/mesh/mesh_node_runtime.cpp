@@ -3517,6 +3517,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
   bool await_remote_admission,
   std::optional<bound_session_relay_source_t> bound_session_source)
 {
+    const auto received_at = std::chrono::system_clock::now ();
     try {
         spot_node_runtime_t spot_runtime (_state->spot_state);
         const auto local_routing_id = co_await routing_id_async ();
@@ -3572,7 +3573,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
                                                  : header.correlation_id,
                   follow_target.route.spot_id, follow_target.route.node_rid);
             }
-            spot_inbound_message_t metadata;
+            spot_inbound_message_t metadata{.received_at = received_at};
             metadata.content_type = header.content_type;
             metadata.values = header.metadata;
             if (header.kind == runtime::messaging::message_kind_t::request

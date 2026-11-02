@@ -19,6 +19,7 @@ public interface IZLinkMessageContext
     string? ContentType { get; }
     ZLinkMessageMetadata Metadata { get; }
     string? CorrelationId { get; }
+    DateTimeOffset ReceivedAt { get; }
 }
 
 public sealed class ZLinkRouteMessageContext : IZLinkMessageContext
@@ -29,6 +30,7 @@ public sealed class ZLinkRouteMessageContext : IZLinkMessageContext
     public string? ContentType { get; }
     public ZLinkMessageMetadata Metadata { get; }
     public string? CorrelationId { get; }
+    public DateTimeOffset ReceivedAt { get; }
     public RoutingId SourceNodeRid { get; }
 }
 
@@ -40,6 +42,7 @@ public sealed class ZLinkPublishMessageContext : IZLinkMessageContext
     public string? ContentType { get; }
     public ZLinkMessageMetadata Metadata { get; }
     public string? CorrelationId { get; }
+    public DateTimeOffset ReceivedAt { get; }
     public string Topic { get; }
     public string? Source { get; }
 }

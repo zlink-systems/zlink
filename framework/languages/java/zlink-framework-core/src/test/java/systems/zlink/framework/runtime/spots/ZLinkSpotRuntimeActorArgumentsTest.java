@@ -81,6 +81,11 @@ final class ZLinkSpotRuntimeActorArgumentsTest {
             public Optional<String> correlationId() {
                 return Optional.empty();
             }
+
+            @Override
+            public java.time.Instant receivedAt() {
+                return java.time.Instant.EPOCH;
+            }
         };
     }
 

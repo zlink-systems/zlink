@@ -652,6 +652,9 @@ void fanout_location_runtime_t::pump ()
             auto application_permit =
               std::make_shared<application_job_queue_t::permit_t> (std::move (*reserved));
             auto [status, received] = subscriber.owner->try_receive (now);
+            const auto received_at = status == fanout_receive_status_t::application && received
+                                       ? std::chrono::system_clock::now ()
+                                       : std::chrono::system_clock::time_point{};
             if (status == fanout_receive_status_t::no_data)
                 break;
             budget.account (received ? received->payload.payload_bytes ().size () : 0);
@@ -663,7 +666,7 @@ void fanout_location_runtime_t::pump ()
             try {
                 application_permit->mark_queued ();
                 const auto message = zlink::message_t::from (received->payload.payload_bytes ());
-                detail::inbound_message_context_t inbound;
+                detail::inbound_message_context_t inbound{.message = {.received_at = received_at}};
                 inbound.before_application_handler = [permit = application_permit] () mutable {
                     if (!permit)
                         return;

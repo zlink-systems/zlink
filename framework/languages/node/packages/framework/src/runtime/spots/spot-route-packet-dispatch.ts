@@ -79,9 +79,10 @@ export class ZLinkSpotRoutePacketDispatch {
   constructor(private readonly options: ZLinkSpotRoutePacketDispatchOptions) {}
 
   async dispatch(received: BackendReceived): Promise<boolean> {
+    const receivedAt = new Date();
     const directEnvelope = decodeSpotDirectEnvelope(received.parts);
     if (directEnvelope !== undefined) {
-      await this.dispatchSpotDirectEnvelope(received, directEnvelope);
+      await this.dispatchSpotDirectEnvelope(received, directEnvelope, receivedAt);
       return true;
     }
     let envelope: ReturnType<typeof decodeChannelEnvelope>;
@@ -148,7 +149,8 @@ export class ZLinkSpotRoutePacketDispatch {
       contentType: envelope.header.contentType,
       packetName: envelope.packetName!,
       metadata: zlinkMessageMetadata(envelope.header.metadata),
-      correlationId: envelope.header.correlationId ?? undefined
+      correlationId: envelope.header.correlationId ?? undefined,
+      receivedAt
     };
     try {
       let response: unknown;
@@ -245,7 +247,8 @@ export class ZLinkSpotRoutePacketDispatch {
 
   private async dispatchSpotDirectEnvelope(
     received: BackendReceived,
-    envelope: ZLinkSpotDirectEnvelope
+    envelope: ZLinkSpotDirectEnvelope,
+    receivedAt: Date
   ): Promise<void> {
     const replyable =
       envelope.kind === ZLinkChannelMessageKind.Request && hasReplyToken(received.replyToken);
@@ -296,7 +299,8 @@ export class ZLinkSpotRoutePacketDispatch {
               channelName: envelope.channelName,
               packetName: envelope.packetName!,
               metadata: zlinkMessageMetadata(envelope.metadata),
-              correlationId: undefined
+              correlationId: undefined,
+              receivedAt
             };
             releaseApplicationJobPermitBeforeHandler();
             response = await handler.handle(spot, envelope.payload, handlerContext);

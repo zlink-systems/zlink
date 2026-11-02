@@ -3,6 +3,8 @@ package systems.zlink.framework.runtime.internal.backend;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -10,6 +12,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 public final class ZLinkBackendReceived implements AutoCloseable {
+    private final Instant receivedAt;
     private final ZLinkBackendRequestResult result;
     private final int failureCode;
     private final Optional<RoutingId> routingId;
@@ -56,6 +59,32 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             String contentType) {
         this(
                 result,
+                routingId,
+                spotId,
+                requestSeq,
+                applicationMetadata,
+                acceptedJournalRecord,
+                parts,
+                reply,
+                closeAction,
+                contentType,
+                Clock.systemUTC());
+    }
+
+    public ZLinkBackendReceived(
+            ZLinkBackendRequestResult result,
+            Optional<RoutingId> routingId,
+            Optional<String> spotId,
+            Optional<Long> requestSeq,
+            byte[] applicationMetadata,
+            byte[] acceptedJournalRecord,
+            List<Message> parts,
+            Consumer<List<Message>> reply,
+            Runnable closeAction,
+            String contentType,
+            Clock clock) {
+        this(
+                result,
                 0,
                 routingId,
                 spotId,
@@ -66,7 +95,8 @@ public final class ZLinkBackendReceived implements AutoCloseable {
                 parts,
                 reply,
                 closeAction,
-                contentType);
+                contentType,
+                Objects.requireNonNull(clock, "clock").instant());
         this.acceptedJournalRecord =
                 acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord;
     }
@@ -83,7 +113,9 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             List<Message> parts,
             Consumer<List<Message>> reply,
             Runnable closeAction,
-            String contentType) {
+            String contentType,
+            Instant receivedAt) {
+        this.receivedAt = Objects.requireNonNull(receivedAt, "receivedAt");
         this.result = result == null ? ZLinkBackendRequestResult.OK : result;
         this.failureCode = Math.max(0, failureCode);
         this.routingId = routingId == null ? Optional.empty() : routingId;
@@ -125,11 +157,16 @@ public final class ZLinkBackendReceived implements AutoCloseable {
                 parts,
                 reply,
                 closeAction,
-                contentType);
+                contentType,
+                Clock.systemUTC().instant());
     }
 
     public ZLinkBackendRequestResult result() {
         return result;
+    }
+
+    public Instant receivedAt() {
+        return receivedAt;
     }
 
     /** The fine framework failure code from the reply header (0 if absent). */
@@ -345,7 +382,8 @@ public final class ZLinkBackendReceived implements AutoCloseable {
                 parts,
                 null,
                 () -> {},
-                null);
+                null,
+                Clock.systemUTC().instant());
     }
 
     public byte[] applicationMetadata() {

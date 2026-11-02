@@ -75,6 +75,11 @@ nullable [ChannelName](02-glossary.ko.md#channelname), PacketName, ContentType, 
 Metadata와 UTF-8 bytes 그대로 저장하는 nullable CorrelationId를 제공한다. CorrelationId는 send에서 null이고
 request에서 non-null이다.
 
+`receivedAt`은 Framework가 message 제출을 수락한 UTC wall-clock 시각이다. 원격 message에서는
+Framework가 packet을 받아들인 직후, Actor·Spot serial executor에 넣기 전에 기록한다. 로컬
+제출에서는 Framework가 제출을 수락한 시각을 기록한다. 이 값은 monotonic clock이 아니며,
+이후 executor queue에서 기다린 시간에 따라 바뀌지 않는다.
+
 MeshName은 RouteMesh와 Spot·Actor dispatch에서
 non-null이며 ClientServer·STREAM에서는 null이다.
 

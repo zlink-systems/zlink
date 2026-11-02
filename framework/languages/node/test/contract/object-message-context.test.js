@@ -161,6 +161,7 @@ test('Spot Actor dispatch supplies containing Spot and unified MessageContext on
     contentType: 'application/json',
     metadata: new Map([['trace', '1']]),
     correlationId: 'corr-7',
+    receivedAt: new Date('2026-11-02T00:00:00.000Z'),
     connectionAborted: new AbortController().signal,
     routerChannelId: 'legacy',
     reply: { compress() {} }
@@ -177,7 +178,7 @@ test('Spot Actor dispatch supplies containing Spot and unified MessageContext on
     assert.equal(call.actor, actor);
     assert.deepEqual(
       Object.keys(call.context).sort(),
-      ['channelName', 'contentType', 'correlationId', 'meshName', 'metadata', 'packetName']
+      ['channelName', 'contentType', 'correlationId', 'meshName', 'metadata', 'packetName', 'receivedAt']
     );
     assert.equal(call.context.meshName, 'play');
     assert.equal(call.context.correlationId, 'corr-7');
