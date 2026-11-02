@@ -106,6 +106,12 @@ result_t<void> spot_route_internal_dispatcher_t::dispatch_send (
   std::function<void ()> transfer_owner_reservation,
   std::size_t transferred_owner_byte_cost) const
 {
+    if (header.message_name == spot_actor_leave_route_command_t::packet_name)
+        return dispatch_actor_leave_async (received, std::move (transfer_owner_reservation),
+                                           transferred_owner_byte_cost)
+          .result ()
+          .value ();
+
     (void) services;
     auto body = runtime::messaging::envelope_codec_t{}.decode_body (received.parts);
     if (!body) {
@@ -127,36 +133,6 @@ result_t<void> spot_route_internal_dispatcher_t::dispatch_send (
                   // terminal Actor Join outcome; there is no source reply leg.
               });
             return result_t<void>::success ();
-        }
-        if (header.message_name == spot_actor_leave_route_command_t::packet_name) {
-            const auto command =
-              _serializers->get<spot_actor_leave_route_command_t> ().deserialize (
-                detail::encoded_payload_from_raw (body.value ()));
-            if (command.transfer_id.empty ()
-                || command.actor_node_rid != _runtime.node_rid ().value ()
-                || command.actor_type.empty () || command.actor_id.empty ()
-                || command.actor_generation == 0 || command.source_spot_id.empty ()
-                || command.target_spot_id.empty () || command.target_node_rid.empty ()
-                || received.source_node_rid.to_string () != command.target_node_rid
-                || command.target_node_generation == 0
-                || command.target_authority_owner_generation == 0
-                || command.target_owner_lease_generation == 0) {
-                return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                                "remote Actor leave command shape is invalid");
-            }
-            const auto source_actor = ::zlink::framework::detail::actor_ref_access_t::make (
-              node_rid_t::from_string (command.actor_node_rid), command.actor_type,
-              command.actor_id, command.actor_generation);
-            auto runtime = _runtime;
-            return runtime.submit_remote_actor_leave (
-              command.transfer_id, source_actor, spot_id_t (command.source_spot_id),
-              command.source_spot_generation, spot_id_t (command.target_spot_id),
-              runtime::protocol::actor_route_fence_t{
-                command.actor_id, command.actor_generation,
-                zlink::routing_id_t::from (command.target_node_rid).to_bytes (),
-                command.target_node_generation, command.target_authority_owner_generation,
-                command.target_owner_lease_generation},
-              std::move (transfer_owner_reservation), transferred_owner_byte_cost);
         }
         auto request = _serializers->get<actor_bound_session_route_request_t> ().deserialize (
           detail::encoded_payload_from_raw (body.value ()));
@@ -181,6 +157,61 @@ result_t<void> spot_route_internal_dispatcher_t::dispatch_send (
                                         std::string ("actor route send decode failed: ")
                                           + error.what ());
     }
+}
+
+task_t<result_t<void>> spot_route_internal_dispatcher_t::dispatch_actor_leave_async (
+  route_received_packet_t received,
+  std::function<void ()> transfer_owner_reservation,
+  std::size_t transferred_owner_byte_cost) const
+{
+    return [] (spot_node_runtime_t runtime, serializer_registry_t *serializers,
+               route_received_packet_t received, std::function<void ()> transfer_owner_reservation,
+               std::size_t transferred_owner_byte_cost) -> task_t<result_t<void>> {
+        auto body = runtime::messaging::envelope_codec_t{}.decode_body (received.parts);
+        if (!body)
+            co_return result_t<void>::failure (body.error_kind (),
+                                               body.error () ? body.error ()->what ()
+                                                             : "actor route send body missing");
+        try {
+            const auto command = serializers->get<spot_actor_leave_route_command_t> ().deserialize (
+              detail::encoded_payload_from_raw (body.value ()));
+            if (command.transfer_id.empty ()
+                || command.actor_node_rid != runtime.node_rid ().value ()
+                || command.actor_type.empty () || command.actor_id.empty ()
+                || command.actor_generation == 0 || command.source_spot_id.empty ()
+                || command.target_spot_id.empty () || command.target_node_rid.empty ()
+                || received.source_node_rid.to_string () != command.target_node_rid
+                || command.target_node_generation == 0
+                || command.target_authority_owner_generation == 0
+                || command.target_owner_lease_generation == 0) {
+                co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                                   "remote Actor leave command shape is invalid");
+            }
+            const auto source_actor = ::zlink::framework::detail::actor_ref_access_t::make (
+              node_rid_t::from_string (command.actor_node_rid), command.actor_type,
+              command.actor_id, command.actor_generation);
+            const auto target_fence = runtime::protocol::actor_route_fence_t{
+              command.actor_id,
+              command.actor_generation,
+              zlink::routing_id_t::from (command.target_node_rid).to_bytes (),
+              command.target_node_generation,
+              command.target_authority_owner_generation,
+              command.target_owner_lease_generation};
+            co_return co_await runtime.submit_remote_actor_leave_async (
+              command.transfer_id, source_actor, spot_id_t (command.source_spot_id),
+              command.source_spot_generation, spot_id_t (command.target_spot_id), target_fence,
+              std::move (transfer_owner_reservation), transferred_owner_byte_cost);
+        }
+        catch (const framework_exception_t &error) {
+            co_return detail::result_access_t::failure<void> (error);
+        }
+        catch (const std::exception &error) {
+            co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                               std::string ("actor route send decode failed: ")
+                                                 + error.what ());
+        }
+    }(_runtime, _serializers, std::move (received), std::move (transfer_owner_reservation),
+                                                        transferred_owner_byte_cost);
 }
 
 result_t<void> spot_route_internal_dispatcher_t::bind_actor_session_route (

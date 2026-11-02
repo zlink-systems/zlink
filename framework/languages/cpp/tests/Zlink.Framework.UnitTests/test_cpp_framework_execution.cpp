@@ -7812,7 +7812,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                 return spot_node_runtime_t (spot_state).commit_relocation_materialization (objects);
             },
             [spot_state = state->spot_state] (const std::vector<stateful::object_ref_t> &objects) {
-                spot_node_runtime_t (spot_state).abort_relocation_materialization (objects);
+                return spot_node_runtime_t (spot_state)
+                  .abort_relocation_materialization_async (objects);
             });
       };
     configure_materialization (source, source_state);

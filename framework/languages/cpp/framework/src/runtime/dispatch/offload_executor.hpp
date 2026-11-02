@@ -89,16 +89,12 @@ class offload_executor_t
     // Threads this executor still owns: running workers and returned workers
     // that the next worker start or drain joins.
     std::size_t owned_thread_count () const;
-#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
     static const offload_executor_t *current_worker_executor () noexcept;
-#endif
 
   private:
     friend struct offload_executor_test_access_t;
 
-#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
     static thread_local const offload_executor_t *_current_worker_executor;
-#endif
     using work_t = std::variant<std::function<void ()>, std::function<void (std::stop_token)>>;
     struct work_item_t
     {

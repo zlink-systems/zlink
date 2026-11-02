@@ -2180,10 +2180,23 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                         host._dispatch_options);
                       if (!decoded_header)
                           return;
-                      if (spot_runtime.dispatch_mesh_record (owner, record, parts,
-                                                             decoded_header.value (),
-                                                             *host._services, *host._serializers)
-                          || !decoded_header.value ()) {
+                      std::function<void ()> direct_terminal;
+                      if (record.kind == host::record_kind_t::node_send) {
+                          // Native receives already own their work; this transfers only
+                          // the existing terminal callbacks, without an application job.
+                          auto terminal = std::make_shared<application_dispatch_terminal_owner_t> (
+                            nullptr, complete_stateful_dispatch, release_mailbox_reservation,
+                            handler_entry_t{});
+                          stateful_guard.dismiss ();
+                          release_guard.dismiss ();
+                          if (retain_mailbox_reservation)
+                              retain_mailbox_reservation ();
+                          direct_terminal = [terminal] { terminal->settle (); };
+                      }
+                      const auto handled = spot_runtime.dispatch_mesh_record (
+                        owner, record, parts, decoded_header.value (), *host._services,
+                        *host._serializers, direct_terminal);
+                      if (handled || !decoded_header.value ()) {
                           return;
                       }
                       detail::mesh_record_dispatcher_t dispatcher (
@@ -2993,8 +3006,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [weak_registration = std::weak_ptr (registration)] (
                 const std::vector<stateful::object_ref_t> &targets) {
                   const auto registration = detail::lock_runtime_owner (weak_registration);
-                  detail::spot_node_runtime_t (registration->spot_state)
-                    .abort_relocation_materialization (targets);
+                  return detail::spot_node_runtime_t (registration->spot_state)
+                    .abort_relocation_materialization_async (targets);
               });
         }
         _published_mesh_nodes.clear ();

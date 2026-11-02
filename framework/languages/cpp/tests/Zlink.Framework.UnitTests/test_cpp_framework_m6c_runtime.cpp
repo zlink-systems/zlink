@@ -4800,7 +4800,11 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
               co_return co_await restore_release.task ();
           co_return true;
       },
-      [] (const auto &) { return true; }, [&] (const auto &) { ++aborts; });
+      [] (const auto &) { return true; },
+      [&] (const auto &) -> f::task_t<void> {
+          ++aborts;
+          co_return;
+      });
     mesh::raw_mesh_node_owner_t source (f::test::runtime_failure_options (
       mesh::raw_mesh_node_options_t{descriptor ("boundary-source")}));
     mesh::raw_mesh_node_owner_t session (f::test::runtime_failure_options (
@@ -6149,7 +6153,7 @@ void test_application_relocation_remote_production_path (test_context_t &test,
               release.get ();
               return true;
           },
-          [] (const auto &) {});
+          [] (const auto &) -> framework::task_t<void> { co_return; });
     }
     source.connect_peer (target.status ().routing_id (), target.status ().local_endpoint ());
     source.connect_peer (session_owner.status ().routing_id (),
@@ -6871,7 +6875,8 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
                   .commit_relocation_materialization (objects);
             },
             [spot_state] (const std::vector<object_ref_t> &objects) {
-                detail::spot_node_runtime_t (spot_state).abort_relocation_materialization (objects);
+                return detail::spot_node_runtime_t (spot_state)
+                  .abort_relocation_materialization_async (objects);
             });
       };
     configure_materialization (source, source_state->spot_state);
@@ -7966,7 +7971,10 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
           lifecycle_saw_closed_dispatch = claim_error == stateful_error_t::moving && !claimed;
           return lifecycle_committed && lifecycle_saw_closed_dispatch;
       },
-      [&] (const std::vector<object_ref_t> &) { relocation_aborted = true; });
+      [&] (const std::vector<object_ref_t> &) -> zlink::framework::task_t<void> {
+          relocation_aborted = true;
+          co_return;
+      });
     const relocation_restore_identity_t restore_identity{"restore-byte-root", 1,
                                                          digest_with (0x61)};
     const frozen_object_state_t frozen{
@@ -8051,7 +8059,7 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
           ++aggregate_commit_count;
           return true;
       },
-      [] (const std::vector<object_ref_t> &) {});
+      [] (const std::vector<object_ref_t> &) -> zlink::framework::task_t<void> { co_return; });
     std::vector<frozen_object_state_t> aggregate_frozen{
       {.owner = {.kind = object_kind_t::user_spot,
                  .key = "progressive-aggregate-spot",

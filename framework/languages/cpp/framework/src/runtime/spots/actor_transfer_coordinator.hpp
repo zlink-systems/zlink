@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace zlink::framework::runtime
@@ -212,6 +213,34 @@ struct actor_transfer_packet_admission_t
 class actor_transfer_coordinator_t
 {
   public:
+    using backlog_result_t = std::shared_ptr<std::vector<handoff_packet_t>>;
+    using begin_commit_result_t =
+      std::pair<std::optional<pending_actor_admission_t>, backlog_result_t>;
+    using remove_message_follow_result_t =
+      std::pair<std::optional<removed_actor_message_follow_t>, bool>;
+
+    // Task values carry the owner turn's decision. The backlog holder carries
+    // packet storage without copying packets when a task copies its result.
+    task_t<bool> message_follow_targets_node_async (
+      std::string actor_key,
+      zlink::routing_id_t node,
+      runtime::protocol::actor_route_fence_t source_fence = {}) const;
+    task_t<remove_message_follow_result_t>
+    remove_message_follow_async (std::string actor_key,
+                                 runtime::protocol::actor_route_fence_t source_fence,
+                                 runtime::protocol::actor_route_fence_t target_fence);
+    task_t<bool> matches_source_remote_transfer_async (std::string actor_key,
+                                                       std::string transfer_id) const;
+    task_t<std::optional<pending_actor_admission_t>>
+    admission_async (std::string transfer_id) const;
+    task_t<begin_commit_result_t> begin_commit_async (std::string transfer_id,
+                                                      actor_ref_t source_actor,
+                                                      spot_id_t target_spot_id);
+    task_t<backlog_result_t> complete_commit_and_take_backlog_async (std::string transfer_id,
+                                                                     actor_ref_t source_actor,
+                                                                     spot_id_t target_spot_id);
+    task_t<backlog_result_t> fail_commit_async (std::string transfer_id, bool reconcile);
+
     task_t<bool> try_seal_maintenance_inventory ();
     task_t<void> end_maintenance_inventory ();
     // The reservation may carry the transfer ID that the deferred join will
@@ -401,6 +430,29 @@ class actor_transfer_coordinator_t
     std::string next_transfer_id (const std::string &node_rid);
 
   private:
+    std::optional<actor_message_follow_target_t> message_follow_target_on_lane (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t &source_fence) const;
+    bool message_follow_targets_node_on_lane (
+      const std::string &actor_key,
+      const zlink::routing_id_t &node,
+      const runtime::protocol::actor_route_fence_t &source_fence) const;
+    bool matches_source_remote_transfer_on_lane (const std::string &actor_key,
+                                                 const std::string &transfer_id) const;
+    std::optional<pending_actor_admission_t>
+    admission_on_lane (const std::string &transfer_id) const;
+    remove_message_follow_result_t
+    remove_message_follow_on_lane (const std::string &actor_key,
+                                   const runtime::protocol::actor_route_fence_t &source_fence,
+                                   const runtime::protocol::actor_route_fence_t &target_fence);
+    begin_commit_result_t begin_commit_on_lane (const std::string &transfer_id,
+                                                const actor_ref_t &source_actor,
+                                                const spot_id_t &target_spot_id);
+    backlog_result_t complete_commit_and_take_backlog_on_lane (const std::string &transfer_id,
+                                                               const actor_ref_t &source_actor,
+                                                               const spot_id_t &target_spot_id);
+    backlog_result_t fail_commit_on_lane (const std::string &transfer_id, bool reconcile);
+
     struct move_state_t
     {
         actor_move_phase_t phase;
@@ -465,6 +517,7 @@ class actor_transfer_coordinator_t
     void erase_move_on_lane (const std::string &actor_key);
 
     bool blocks_dispatch_on_lane (const std::string &actor_key) const;
+    bool has_message_follow_route_on_lane (const std::string &actor_key) const;
     bool matches_source_reservation_on_lane (const std::string &actor_key,
                                              const std::string &transfer_id) const;
 

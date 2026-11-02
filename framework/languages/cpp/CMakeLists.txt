@@ -2292,6 +2292,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_enable_coverage(test_cpp_framework_state_lane)
+  # Observe the production W entry without adding a runtime test hook.
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+      AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
+    target_compile_definitions(test_cpp_framework_state_lane PRIVATE
+      ZLINK_FRAMEWORK_TEST_WRAP_FAIL_COMMIT)
+    target_link_options(test_cpp_framework_state_lane PRIVATE
+      "LINKER:--wrap=_ZN5zlink9framework6detail28actor_transfer_coordinator_t11fail_commitERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEb")
+  endif()
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_state_lane
     COMMAND test_cpp_framework_state_lane

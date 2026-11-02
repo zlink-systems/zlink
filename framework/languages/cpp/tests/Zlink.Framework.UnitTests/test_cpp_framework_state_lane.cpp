@@ -2,6 +2,7 @@
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/task_result.hpp"
 #include "runtime/execution/serial_application_record.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/foundation/operation_registry.hpp"
@@ -34,6 +35,10 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#if defined(__linux__)
+#include <sched.h>
+#include <unistd.h>
+#endif
 
 namespace zlink::framework::runtime
 {
@@ -46,6 +51,38 @@ struct state_lane_test_access_t
     }
 };
 } // namespace zlink::framework::runtime
+
+#ifdef ZLINK_FRAMEWORK_TEST_WRAP_FAIL_COMMIT
+namespace zlink::framework::test
+{
+std::atomic<bool> w9_worker_entered{false};
+}
+using w9_backlog_t = std::vector<zlink::framework::detail::handoff_packet_t>;
+extern "C" w9_backlog_t w9_real_fail_commit (
+  zlink::framework::detail::actor_transfer_coordinator_t *,
+  const std::string &,
+  bool) asm ("__real__ZN5zlink9framework6detail28actor_transfer_coordinator_t11fail_commitERKNSt7__"
+             "cxx1112basic_stringIcSt11char_traitsIcESaIcEEEb");
+extern "C" w9_backlog_t w9_wrap_fail_commit (
+  zlink::framework::detail::actor_transfer_coordinator_t *,
+  const std::string &,
+  bool) asm ("__wrap__ZN5zlink9framework6detail28actor_transfer_coordinator_t11fail_commitERKNSt7__"
+             "cxx1112basic_stringIcSt11char_traitsIcESaIcEEEb");
+extern "C" w9_backlog_t
+w9_wrap_fail_commit (zlink::framework::detail::actor_transfer_coordinator_t *coordinator,
+                     const std::string &handoff,
+                     bool reconcile)
+{
+    bool on_worker = zlink::framework::runtime::state_lane_t::current () != nullptr;
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+    on_worker =
+      on_worker && zlink::framework::runtime::offload_executor_t::current_worker_executor ();
+#endif
+    if (on_worker)
+        zlink::framework::test::w9_worker_entered.store (true, std::memory_order_release);
+    return w9_real_fail_commit (coordinator, handoff, reconcile);
+}
+#endif
 
 namespace
 {
@@ -88,6 +125,136 @@ static_assert (std::is_same_v<decltype (std::declval<state_lane_t &> ().run (voi
 static_assert (std::is_same_v<decltype (std::declval<state_lane_t &> ().run (reference_work_t{})),
                               std::future<int &>>);
 
+#if defined(__linux__)
+// Fix the overlap through the existing admission callback, rather than posting
+// synthetic work to the coordinator lane. The production discard turn must
+// yield its worker so that an independent infrastructure publication can run.
+TEST (ZLinkStateLaneDeathTest, ActorJoinRecoveryDiscardDoesNotStarveSingleWorker)
+{
+    ASSERT_EXIT (
+      ([] {
+          using namespace zlink::framework;
+          using namespace std::chrono_literals;
+#ifdef ZLINK_FRAMEWORK_TEST_WRAP_FAIL_COMMIT
+          test::w9_worker_entered.store (false, std::memory_order_release);
+#endif
+          cpu_set_t available;
+          CPU_ZERO (&available);
+          if (sched_getaffinity (getpid (), sizeof (available), &available) != 0)
+              std::_Exit (10);
+          cpu_set_t one;
+          CPU_ZERO (&one);
+          for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+              if (CPU_ISSET (cpu, &available)) {
+                  CPU_SET (cpu, &one);
+                  break;
+              }
+          }
+          if (sched_setaffinity (getpid (), sizeof (one), &one) != 0)
+              std::_Exit (11);
+          const auto executor = runtime::infrastructure_executor ();
+          if (executor->live_worker_count () != 1)
+              std::_Exit (12);
+          auto node = test::runtime_failure_fixture<detail::spot_node_builder_state_t> ("w9-node");
+          auto coordinator = node->actor_transfer_coordinator;
+          if (&node->lane.executor () != executor.get ())
+              std::_Exit (22);
+          const auto actor = detail::actor_ref_access_t::make (
+            node_rid_t::from_string (zlink::routing_id_t::from ("source").to_string ()), "member",
+            "member", 1);
+          const auto deadline = std::chrono::steady_clock::now () + 5s;
+          if (!coordinator->try_add_admission (
+                "handoff", detail::pending_actor_admission_t{.actor_key = "member:member",
+                                                             .source_actor = actor,
+                                                             .source_spot_id = spot_id_t ("source"),
+                                                             .target_spot_id = spot_id_t ("target"),
+                                                             .deadline = deadline}))
+              std::_Exit (13);
+          node->actor_join_relocation_recoveries.emplace (
+            "member:member", detail::spot_node_builder_state_t::actor_join_relocation_recovery_t{
+                               .handoff_id = "handoff",
+                               .source_spot_id = spot_id_t ("source"),
+                               .target_spot_id = spot_id_t ("target"),
+                               .source_actor = actor});
+          std::promise<void> coordinator_entered, progress;
+          auto entered = coordinator_entered.get_future ();
+          auto progressed = progress.get_future ().share ();
+          std::thread admission ([&] {
+              (void) coordinator->admit_dispatch_packet ("other:actor", nullptr, true, {}, [&] {
+                  coordinator_entered.set_value ();
+                  progressed.wait ();
+                  return true;
+              });
+          });
+          if (entered.wait_until (deadline) != std::future_status::ready)
+              std::_Exit (14);
+          std::promise<void> node_entered, release_node;
+          auto node_running = node_entered.get_future ();
+          auto node_released = release_node.get_future ().share ();
+          if (!node->lane.try_post ([&] {
+                  node_entered.set_value ();
+                  node_released.wait ();
+              }))
+              std::_Exit (15);
+          if (node_running.wait_until (deadline) != std::future_status::ready)
+              std::_Exit (16);
+          std::promise<void> finished;
+          auto done = finished.get_future ();
+          std::thread discard ([&] {
+              detail::spot_node_runtime_t (node).discard_actor_join_recovery (
+                "member",
+                {runtime::stateful::object_kind_t::actor, "member", 1, 1, "mesh", "node"});
+              finished.set_value ();
+          });
+          while (runtime::state_lane_test_access_t::pending_work (node->lane) == 0) {
+              if (std::chrono::steady_clock::now () >= deadline)
+                  std::_Exit (17);
+              std::this_thread::yield ();
+          }
+          bool recovery_visible_before_settlement = false;
+          if (!executor->try_submit_internal ([&] {
+                  recovery_visible_before_settlement =
+                    node->lane
+                      .run ([&] {
+                          return node->actor_join_relocation_recoveries.contains ("member:member");
+                      })
+                      .get ();
+                  progress.set_value ();
+              }))
+              std::_Exit (18);
+          release_node.set_value ();
+          if (done.wait_until (deadline) != std::future_status::ready) {
+#ifdef ZLINK_FRAMEWORK_TEST_WRAP_FAIL_COMMIT
+              if (!test::w9_worker_entered.load (std::memory_order_acquire)) {
+                  std::fprintf (stderr,
+                                "W9 inconclusive: production worker site was not observed\n");
+                  std::_Exit (21);
+              }
+#endif
+
+              std::fprintf (stderr, "W9 starvation: recovery discard queued on node; "
+                                    "coordinator admission held; sole-worker progress blocked\n");
+              std::_Exit (19);
+          }
+          discard.join ();
+          admission.join ();
+#ifdef ZLINK_FRAMEWORK_TEST_WRAP_FAIL_COMMIT
+          if (test::w9_worker_entered.load (std::memory_order_acquire))
+              std::_Exit (23);
+#endif
+          if (!recovery_visible_before_settlement
+              || !node->actor_join_relocation_recoveries.empty ()
+              || coordinator->admission ("handoff"))
+              std::_Exit (20);
+          node.reset ();
+          coordinator.reset ();
+          executor->drain ();
+          std::_Exit (0);
+      }) (),
+      ::testing::ExitedWithCode (0), "");
+}
+#endif
+
 TEST (ZLinkStateLane, MaintenanceInventoryAwaitPreservesSealAndReacquisition)
 {
     using namespace zlink::framework;
@@ -116,6 +283,58 @@ TEST (ZLinkStateLane, MaintenanceInventoryAwaitPreservesSealAndReacquisition)
         co_await objects.end_maintenance_inventory ();
     };
     exercise ().result ().value ();
+}
+
+TEST (ZLinkStateLane, VoidContinuationKeepsReadyCompletionOnCallerStack)
+{
+    using namespace zlink::framework;
+    const auto caller = std::this_thread::get_id ();
+    bool called = false;
+    auto next = runtime::continue_task<int> (task_t<void> (result_t<void>::success ()), [&] {
+        called = true;
+        EXPECT_EQ (caller, std::this_thread::get_id ());
+        return task_t<int> (result_t<int>::success (42));
+    });
+    EXPECT_TRUE (called);
+    ASSERT_TRUE (next.await_ready ());
+    EXPECT_EQ (42, next.result ().value ());
+}
+
+TEST (ZLinkStateLane, VoidContinuationPreservesReadyAndPendingSourceFailure)
+{
+    using namespace zlink::framework;
+    for (const bool ready : {false, true}) {
+        for (const bool succeeds : {false, true}) {
+            SCOPED_TRACE (::testing::Message () << "ready=" << ready << " succeeds=" << succeeds);
+            task_completion_source_t<void> source;
+            const auto terminal = succeeds
+                                    ? result_t<void>::success ()
+                                    : result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                               "void source failed");
+            if (ready)
+                source.complete (terminal);
+            int called = 0;
+            auto next = runtime::continue_task<int> (source.task (), [&] {
+                ++called;
+                return task_t<int> (result_t<int>::success (42));
+            });
+            if (!ready) {
+                EXPECT_FALSE (next.await_ready ());
+                EXPECT_EQ (0, called);
+                source.complete (terminal);
+            }
+            const auto completed = next.result ();
+            EXPECT_EQ (succeeds ? 1 : 0, called);
+            ASSERT_EQ (succeeds, static_cast<bool> (completed));
+            if (succeeds)
+                EXPECT_EQ (42, completed.value ());
+            else {
+                EXPECT_EQ (framework_error_kind_t::unavailable, completed.error_kind ());
+                ASSERT_NE (nullptr, completed.error ());
+                EXPECT_STREQ ("void source failed", completed.error ()->what ());
+            }
+        }
+    }
 }
 
 TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
@@ -1581,6 +1800,57 @@ TEST (ZLinkStateLane, AnAvailableLaneDoesNotWaitForUnrelatedExecutorWork)
     EXPECT_EQ (std::future_status::ready, ready);
     EXPECT_EQ (42, result.get ());
     EXPECT_EQ (nullptr, state_lane_t::current ());
+}
+
+TEST (ZLinkStateLane, ContendedRunSyncRejectsLaneAndTargetExecutorWorkersBeforeEnqueue)
+{
+    using namespace std::chrono_literals;
+    for (const bool same_executor : {true, false}) {
+        SCOPED_TRACE (::testing::Message () << "same_executor=" << same_executor);
+        offload_executor_t executor (1);
+        offload_executor_t other_executor (1);
+        auto &worker_executor = same_executor ? executor : other_executor;
+        state_lane_t lane (executor);
+        state_lane_t caller_lane (worker_executor);
+        std::promise<void> entered, release;
+        auto released = release.get_future ().share ();
+        std::thread owner ([&] {
+            lane
+              .run ([&] {
+                  entered.set_value ();
+                  released.wait ();
+              })
+              .get ();
+        });
+        entered.get_future ().wait ();
+        std::promise<bool> checked;
+        auto result = checked.get_future ();
+        std::atomic<bool> ran{false};
+        scope_exit_t cleanup ([&] {
+            release.set_value ();
+            owner.join ();
+            executor.drain ();
+            other_executor.drain ();
+        });
+        ASSERT_TRUE (worker_executor.try_submit_internal ([&] {
+            bool rejected = false;
+            try {
+                const auto attempt = [&] { lane.run_sync ([&] { ran.store (true); }); };
+                if (same_executor)
+                    attempt ();
+                else
+                    caller_lane.run_sync (attempt);
+            }
+            catch (const std::logic_error &) {
+                rejected = true;
+            }
+            checked.set_value (rejected);
+        }));
+        ASSERT_EQ (std::future_status::ready, result.wait_for (5s));
+        EXPECT_TRUE (result.get ());
+        EXPECT_FALSE (ran.load ());
+        EXPECT_EQ (0u, zlink::framework::runtime::state_lane_test_access_t::pending_work (lane));
+    }
 }
 
 TEST (ZLinkStateLane, ConcurrentSubmissionsKeepTheirPlaceBehindTheCurrentTurn)

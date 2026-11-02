@@ -28,6 +28,10 @@ class spot_route_internal_dispatcher_t final : public route_internal_packet_disp
                                   service_provider_t &services,
                                   std::function<void ()> transfer_owner_reservation,
                                   std::size_t transferred_owner_byte_cost) const;
+    task_t<result_t<void>>
+    dispatch_actor_leave_async (route_received_packet_t received,
+                                std::function<void ()> transfer_owner_reservation,
+                                std::size_t transferred_owner_byte_cost) const;
     result_t<zlink::message_t>
     dispatch_request (const route_received_packet_t &received,
                       const runtime::messaging::envelope_header_t &header,

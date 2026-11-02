@@ -282,8 +282,10 @@ class state_lane_t
         return result;
     }
 
-    // The caller executes its own synchronous work in FIFO order. Only a
-    // contended entry waits for the existing drain to grant its turn.
+    // The caller executes its own synchronous work in FIFO order. A contended
+    // external caller may wait for its turn. Workers holding a state lane or
+    // using this executor must chain run_task instead (execution gate section
+    // 10, serial executor 6.5).
     template <typename Work>
     auto run_sync (Work &&work) -> std::invoke_result_t<std::decay_t<Work> &>
     {
@@ -315,6 +317,11 @@ class state_lane_t
             }
         };
         if (!schedule_drain (true, invoke_work)) {
+            const auto worker = offload_executor_t::current_worker_executor ();
+            if (worker && (worker == &_executor || current () != nullptr)
+                && !_closed.load (std::memory_order_acquire))
+                throw std::logic_error (
+                  "a state lane worker must chain run_task instead of waiting for another lane");
             auto grant = std::make_shared<std::promise<void>> ();
             auto granted = grant->get_future ();
             if (!enqueue ({}, [grant] (std::exception_ptr error) {

@@ -2092,6 +2092,14 @@ class spot_node_runtime_t
                                              std::function<void ()> completed = {});
     std::optional<bool> validate_actor_join_relocation_prepare (
       const runtime::protocol::relocation_prepare_t &prepare) const;
+    task_t<bool>
+    consume_actor_join_recovery_async (runtime::stateful::frozen_object_state_t &frozen,
+                                       runtime::stateful::object_ref_t target,
+                                       runtime::protocol::relocation_prepare_t prepare);
+    task_t<void> discard_actor_join_recovery_async (std::string stable_type,
+                                                    runtime::stateful::object_ref_t target);
+    task_t<void>
+    abort_relocation_materialization_async (std::vector<runtime::stateful::object_ref_t> targets);
     bool consume_actor_join_recovery (runtime::stateful::frozen_object_state_t &frozen,
                                       const runtime::stateful::object_ref_t &target,
                                       const runtime::protocol::relocation_prepare_t &prepare);
@@ -2280,6 +2288,15 @@ class spot_node_runtime_t
                                const runtime::protocol::actor_route_fence_t &target_fence,
                                std::function<void ()> transfer_owner_reservation = {},
                                std::size_t transferred_owner_byte_cost = 0);
+    task_t<result_t<void>>
+    submit_remote_actor_leave_async (std::string transfer_id,
+                                     actor_ref_t source_actor,
+                                     spot_id_t source_spot_id,
+                                     std::uint64_t source_spot_generation,
+                                     spot_id_t target_spot_id,
+                                     runtime::protocol::actor_route_fence_t target_fence,
+                                     std::function<void ()> transfer_owner_reservation = {},
+                                     std::size_t transferred_owner_byte_cost = 0);
     void fail_remote_actor_transfer (
       const actor_ref_t &actor_ref,
       bool reconcile,
