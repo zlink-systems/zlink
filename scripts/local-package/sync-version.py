@@ -1176,6 +1176,9 @@ def synchronize(
     for relative in (
         "framework/languages/dotnet/contract/packages/Zlink.Framework.package.txt",
         "framework/languages/dotnet/contract/packages/Zlink.Framework.AspNetCore.package.txt",
+        # PACKAGE_TARGET_FRAMEWORK가 net10.0이면 verify_packaged_contract.sh가 이 폴더와 비교한다.
+        "framework/languages/dotnet/contract/packages/net10.0/Zlink.Framework.package.txt",
+        "framework/languages/dotnet/contract/packages/net10.0/Zlink.Framework.AspNetCore.package.txt",
     ):
         sync.regex(
             relative,
