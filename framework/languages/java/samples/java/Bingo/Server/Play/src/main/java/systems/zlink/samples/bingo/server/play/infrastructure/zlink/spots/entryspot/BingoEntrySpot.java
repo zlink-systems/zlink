@@ -3,6 +3,8 @@ package systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.entry
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
@@ -16,6 +18,7 @@ import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 
 public final class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
@@ -72,6 +75,34 @@ public final class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
     }
 
     public CompletionStage<Messages.ObserveBingoEventsRes> observeEvents(
+            PlayerActor actor, Messages.ObserveBingoEventsReq request) {
+        return context.outbound()
+                .requestToSpot(
+                        request.getRoomId(), Messages.GetBingoObservationReq.getDefaultInstance())
+                .submit(Messages.GetBingoObservationRes.class)
+                .handle(
+                        (observation, error) -> {
+                            if (error != null) {
+                                Throwable cause =
+                                        error instanceof CompletionException
+                                                ? error.getCause()
+                                                : error;
+                                if (cause instanceof ZLinkFrameworkException framework
+                                        && framework.kind() == ZLinkFrameworkErrorKind.NOT_FOUND)
+                                    return CompletableFuture.completedFuture(
+                                            BingoMessages.observeBingoEventsRes(false));
+                                return CompletableFuture
+                                        .<Messages.ObserveBingoEventsRes>failedFuture(cause);
+                            }
+                            if ("Finished".equals(observation.getState().getStatus()))
+                                return CompletableFuture.completedFuture(
+                                        BingoMessages.observeBingoEventsRes(false));
+                            return createObserver(actor, request);
+                        })
+                .thenCompose(stage -> stage);
+    }
+
+    private CompletionStage<Messages.ObserveBingoEventsRes> createObserver(
             PlayerActor actor, Messages.ObserveBingoEventsReq request) {
         String observerSpotId = "observe:" + request.getRoomId() + ":" + actor.actorId();
         BingoRoomModels.BingoRoomSettings settings =

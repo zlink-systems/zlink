@@ -13,6 +13,7 @@
 #include <map>
 #include <optional>
 #include <stdexcept>
+#include <system_error>
 #include <vector>
 
 namespace zlink::samples::bingo
@@ -202,7 +203,8 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
             bingo_observation_state_notify_t notification;
             *notification.mutable_state () = snapshot.state ();
             actor.push (notification);
-            if (snapshot.has_reward ())
+            if (snapshot.state ().status () != bingo_room_status_t::finished
+                && snapshot.has_reward ())
                 co_await on_reward_acquired (snapshot.reward ());
             else
                 _context->relocation_ready ().defer ();
@@ -234,7 +236,8 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
             actors[actor.actor_id] = &actor;
             const auto joined = _game.join (
               actor.actor_id, display_name, record.wins (), record.losses ());
-            send_to_players (make_message (joined.player_joined), actor.actor_id);
+            co_await send_player_joined_to_players (make_message (joined.player_joined),
+                                                    actor.actor_id);
             if (joined.game_started) {
                 const auto started = make_game_started_message (joined.player_joined.state);
                 send_to_players (started, actor.actor_id);
@@ -339,6 +342,28 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
             }
             actor->push (notify);
         }
+    }
+
+    template <typename TNotify>
+    task_t<void> send_player_joined_to_players (TNotify notify,
+                                                const std::string &excluded_actor_id)
+    {
+        for (auto &[actor_id, actor] : actors) {
+            if (actor_id == excluded_actor_id)
+                continue;
+            try {
+                co_await actor->push_async (notify);
+            }
+            catch (const framework_exception_t &error) {
+                std::cerr << "bingo-player-joined-notify-failed room=" << _context->spot_id ()
+                          << " recipient=" << actor_id << " error=" << error.what () << '\n';
+            }
+            catch (const std::system_error &error) {
+                std::cerr << "bingo-player-joined-notify-failed room=" << _context->spot_id ()
+                          << " recipient=" << actor_id << " error=" << error.what () << '\n';
+            }
+        }
+        co_return;
     }
 
     task_t<void> on_reward_acquired (const bingo_reward_acquired_event_t &event);
