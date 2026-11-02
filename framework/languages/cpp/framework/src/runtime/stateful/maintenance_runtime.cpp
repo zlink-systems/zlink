@@ -300,17 +300,20 @@ class maintenance_runtime_t::relocation_metric_operation_t
                                                          : message_flow_result_t::failed;
             runtime::flow_context_t::scope_t flow_scope (_flow_context);
             detail::message_flow_tracer_t flow (*_dispatch);
-            flow.trace (message_flow_outcome_t::completed, result, [&] {
-                return message_flow_event_t{.outcome = message_flow_outcome_t::completed,
-                                            .surface = dispatch_error_surface_t::actor_relocation,
-                                            .message_kind = dispatch_message_kind_t::control,
-                                            .actor_id = _actor_id,
-                                            .flow_id = _flow_context->flow_id,
-                                            .flow_origin = _flow_context->origin,
-                                            .detail_stage = "source_terminal",
-                                            .detail_result = outcome,
-                                            .mesh_name = _mesh_name};
-            });
+            if (flow.enabled_for (message_flow_outcome_t::completed, result)) {
+                flow.trace (message_flow_outcome_t::completed, result, [&] {
+                    return message_flow_event_t{.outcome = message_flow_outcome_t::completed,
+                                                .surface =
+                                                  dispatch_error_surface_t::actor_relocation,
+                                                .message_kind = dispatch_message_kind_t::control,
+                                                .actor_id = _actor_id,
+                                                .flow_id = _flow_context->flow_id,
+                                                .flow_origin = _flow_context->origin,
+                                                .detail_stage = "source_terminal",
+                                                .detail_result = outcome,
+                                                .mesh_name = _mesh_name};
+                });
+            }
         }
     }
 
