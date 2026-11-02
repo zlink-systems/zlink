@@ -136,8 +136,8 @@ samples for PAIR, PUB/SUB, DEALER/ROUTER, request/reply, STREAM, and monitoring.
 Installation procedures and each language's five-minute example are on the
 [Installation](https://docs.zlink.systems/install/) page and in the
 [Bindings guide](https://docs.zlink.systems/bindings/guide/). The formal contracts are
-the [Core specification](https://docs.zlink.systems/spec/) and the
-[common Framework specification](https://docs.zlink.systems/common/spec/server/).
+the [Core specification](core/doc/spec/README.en.md) and the
+[common Framework specification](framework/doc/framework/common/spec/server/README.en.md).
 
 ## Building from source
 
