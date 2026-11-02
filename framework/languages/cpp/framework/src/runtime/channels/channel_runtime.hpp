@@ -9,6 +9,7 @@
 #include <zlink/Contracts/Core/context.hpp>
 
 #include "runtime/channels/channel_pending_requests.hpp"
+#include "runtime/foundation/operation_registry.hpp"
 #include "runtime/channels/channel_runtime_bundle.hpp"
 #include "runtime/channels/route_channel_registration.hpp"
 #include "runtime/channels/route_channel_runtime.hpp"
@@ -62,40 +63,6 @@ class listener_status_registry_t;
 
 namespace zlink::framework::detail
 {
-
-class route_client_runtime_t
-{
-  public:
-    template <typename TRequest, typename TReply>
-    static task_t<TReply> request_to_spot_address (const route_client_t &client,
-                                                   runtime::spot_address_t address,
-                                                   TRequest request,
-                                                   std::chrono::milliseconds timeout)
-    {
-        if (client._serializers == nullptr) {
-            co_return result_t<TReply>::failure (framework_error_kind_t::protocol_error,
-                                                 "route client has no serializer registry");
-        }
-        auto request_value = std::make_shared<TRequest> (std::move (request));
-        auto reply = co_await route_client_t::submit_spot_request_reply_message_erased (
-          client._state, std::move (address.mesh_name), std::move (address.node_rid),
-          std::move (address.spot_id), address.spot_generation, detail::message_name<TRequest> (),
-          std::type_index (typeid (TRequest)),
-          [request_value] (serializer_registry_t &serializers) {
-              return serializers.template get<TRequest> ().serialize_with_content_type (
-                *request_value);
-          },
-          timeout, {});
-        try {
-            co_return result_t<TReply>::success (
-              client._serializers->template get<TReply> ().deserialize (
-                detail::encoded_payload_from_raw (reply)));
-        }
-        catch (const framework_exception_t &error) {
-            co_return detail::result_access_t::failure<TReply> (error);
-        }
-    }
-};
 
 result_t<void> validate_channel_native_reply (const runtime::messaging::message_parts_t &parts);
 
@@ -196,6 +163,8 @@ class channel_runtime_state_t
     std::map<std::string, channel_snapshot_t> channels;
 
     mutable runtime::state_lane_t lane;
+    std::shared_ptr<runtime::foundation::operation_registry_t> resolver_operations{
+      runtime::foundation::operation_registry_t::create_scheduled (lane)};
     std::chrono::milliseconds default_request_timeout{
       runtime::configuration::default_request_timeout};
     std::size_t pending = 0;

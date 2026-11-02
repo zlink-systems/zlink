@@ -43,7 +43,6 @@ class channel_runtime_t;
 class channel_outbound_exchange_t;
 class channel_runtime_manager_t;
 class route_client_state_t;
-class route_client_runtime_t;
 class route_channel_builder_state_t;
 void connect_route_channel_peer (route_channel_builder_t &builder,
                                  zlink::routing_id_t peer_rid,
@@ -776,9 +775,10 @@ class spot_request_call_t : public channel_request_call_t
 
     spot_request_call_t (std::string packet_name,
                          serializer_registry_t *serializers,
-                         submit_fn_t submit,
+                         receiver_submit_fn_t submit,
                          std::shared_ptr<detail::spot_activation_intent_t> intent) :
-        channel_request_call_t (std::move (packet_name), serializers, std::move (submit)),
+        channel_request_call_t (
+          detail::request_projection_t{}, std::move (packet_name), serializers, std::move (submit)),
         _intent (std::move (intent))
     {
     }
@@ -933,22 +933,21 @@ class route_client_t
           detail::message_name<TRequest> (), _serializers,
           [state, target = std::move (target), intent,
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
-                           const channel_request_call_t::metadata_map_t &metadata) mutable
-          -> request_task_t<zlink::message_t> {
-              return submit_spot_id_request_reply_message_erased (
+                           const channel_request_call_t::metadata_map_t &metadata,
+                           detail::request_receiver_t<zlink::message_t> receiver) mutable {
+              (void) submit_spot_id_request_reply_message_erased (
                 state, target, *intent, packet_name, std::type_index (typeid (TRequest)),
                 [request_value] (serializer_registry_t &serializers) {
                     return serializers.template get<TRequest> ().serialize_with_content_type (
                       *request_value);
                 },
-                timeout, metadata);
+                timeout, metadata, std::move (receiver));
           },
           intent);
     }
 
   private:
     friend class zlink_builder_t;
-    friend class detail::route_client_runtime_t;
     explicit route_client_t (std::shared_ptr<detail::route_client_state_t> state,
                              serializer_registry_t &serializers);
 
@@ -1010,7 +1009,7 @@ class route_client_t
       std::chrono::milliseconds timeout,
       std::map<std::string, std::string> metadata);
 
-    static request_task_t<zlink::message_t> submit_spot_request_reply_message_erased (
+    static void submit_spot_request_reply_message_erased (
       const std::shared_ptr<detail::route_client_state_t> &state,
       std::string router_channel_id,
       zlink::routing_id_t target_node_rid,
@@ -1019,8 +1018,9 @@ class route_client_t
       std::string packet_name,
       std::type_index request_type,
       payload_encoder_t encode_payload,
-      std::chrono::milliseconds timeout,
-      std::map<std::string, std::string> metadata);
+      std::chrono::steady_clock::time_point deadline,
+      std::map<std::string, std::string> metadata,
+      detail::request_receiver_t<zlink::message_t> receiver);
 
     static task_t<void>
     submit_spot_id_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
@@ -1031,7 +1031,7 @@ class route_client_t
                                 payload_encoder_t encode_payload,
                                 route_send_call_t::metadata_map_t metadata);
 
-    static request_task_t<zlink::message_t> submit_spot_id_request_reply_message_erased (
+    static task_t<void> submit_spot_id_request_reply_message_erased (
       const std::shared_ptr<detail::route_client_state_t> &state,
       spot_id_t target,
       detail::spot_activation_intent_t intent,
@@ -1039,7 +1039,8 @@ class route_client_t
       std::type_index request_type,
       payload_encoder_t encode_payload,
       std::chrono::milliseconds timeout,
-      std::map<std::string, std::string> metadata);
+      std::map<std::string, std::string> metadata,
+      detail::request_receiver_t<zlink::message_t> receiver);
 
     std::shared_ptr<detail::route_client_state_t> _state;
     serializer_registry_t *_serializers = nullptr;

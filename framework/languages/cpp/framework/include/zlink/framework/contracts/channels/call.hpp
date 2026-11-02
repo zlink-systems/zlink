@@ -263,6 +263,7 @@ class channel_request_call_t
 
   private:
     friend class route_client_t;
+    friend class spot_request_call_t;
     using receiver_submit_fn_t = std::function<void (const std::string &,
                                                      std::chrono::milliseconds,
                                                      const metadata_map_t &,
