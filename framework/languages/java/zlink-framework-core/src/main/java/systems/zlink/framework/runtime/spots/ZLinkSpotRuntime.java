@@ -7357,6 +7357,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return dispatchErrors.flow().captureEnabled();
     }
 
+    ZLinkMessageFlowTracer relocationFlow() {
+        return dispatchErrors.flow();
+    }
+
     boolean dispatchErrorsEnabled() {
         return dispatchErrors.errorsEnabled();
     }

@@ -65,6 +65,12 @@ struct player_actor_t : framework::actor_t
     {
         actor_context->bound_session ().send (notify).async ();
     }
+
+    template <typename TNotify> task_t<void> push_async (const TNotify &notify) const
+    {
+        co_await actor_context->bound_session ().send (notify).async ();
+        co_return;
+    }
 };
 
 } // namespace zlink::samples::bingo

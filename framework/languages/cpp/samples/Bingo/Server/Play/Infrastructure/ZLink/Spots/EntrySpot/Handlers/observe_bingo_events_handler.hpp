@@ -9,6 +9,27 @@ namespace zlink::samples::bingo
 inline task_t<observe_bingo_events_res_t> bingo_entry_spot_t::observe_bingo_events (
   player_actor_t &actor, message_context_t &, const observe_bingo_events_req_t &request)
 {
+    get_bingo_observation_res_t observation;
+    try {
+        observation = co_await _context
+                        .request_to_spot (spot_id_t (request.room_id ()),
+                                          get_bingo_observation_req_t{})
+                        .async<get_bingo_observation_res_t> ();
+    }
+    catch (const framework_exception_t &error) {
+        if (error.kind () == framework_error_kind_t::not_found) {
+            observe_bingo_events_res_t response;
+            response.set_subscribed (false);
+            co_return response;
+        }
+        throw;
+    }
+    if (observation.state ().status () == bingo_room_status_t::finished) {
+        observe_bingo_events_res_t response;
+        response.set_subscribed (false);
+        co_return response;
+    }
+
     const auto display_name = actor.display_name.empty () ? actor.actor_id : actor.display_name;
     const auto observer_id = observer_room_id (request.room_id (), actor.actor_id);
     bingo_room_create_req_t payload;
