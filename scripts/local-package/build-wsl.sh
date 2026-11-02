@@ -22,8 +22,8 @@ is a prerequisite. There is no local-core bypass.
 
 Options:
   --core-version VERSION       Core release version (default: VERSION)
-  --sync-versions              Sync managed Core/binding/Framework values and exit
-  --verify-versions            Verify managed Core/binding/Framework values and exit
+  --sync-versions              Sync managed Core/binding/Framework/template values and exit
+  --verify-versions            Verify managed Core/binding/Framework/template values and exit
   --cache-key                  Print working-tree cache key and tool version id
 
 Clean inputs use one immutable cache entry per requested binding under a key that
