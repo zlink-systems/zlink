@@ -56,6 +56,61 @@ public sealed partial class UnhandledDispatchPolicyTests
     }
 
     [Fact]
+    public async Task SpotSubscription_Context_KeepsAcceptedTimeAcrossDrainWait()
+    {
+        var clock = new ControllableTimeProvider();
+        var acceptedAt = clock.GetUtcNow();
+        var registry = new ZLinkSpotSubscriptionRegistry();
+        var spot = new CapturingSpot();
+        registry.Add("events", "events", typeof(TestSubscriptionHandler));
+        registry.Bind(new TestSubscriptionSpot(), spot, ["events"]);
+        var header = new ZLinkEnvelopeHeader(
+            ZLinkMessageKind.Publish,
+            "play",
+            nameof(TestSubscriptionEvent),
+            ZLinkEnvelopeCodec.DefaultContentType,
+            "received-at-correlation",
+            null,
+            "events",
+            null,
+            null,
+            "source-rid"
+        );
+        spot.NextSubscriptionMessage = new ZLinkBackendSubscribeMessage(
+            "events",
+            "events",
+            ZLinkEnvelopeCodec.EncodeParts(
+                header,
+                new TestSubscriptionEvent("payload"),
+                typeof(TestSubscriptionEvent),
+                null
+            ),
+            timeProvider: clock
+        );
+        clock.Advance(TimeSpan.FromSeconds(10));
+        var options = new ZLinkDispatchOptionsModel();
+        var reporter = new ZLinkDispatchErrorReporter(options);
+        var logger = new CapturingLogger<ZLinkSpotSubscriptionRegistry>();
+        DateTimeOffset? handlerReceivedAt = null;
+
+        await registry.DrainAsync(
+            spot,
+            null,
+            reporter,
+            logger,
+            (_, _, context, _) =>
+            {
+                handlerReceivedAt = context.ReceivedAt;
+                return ValueTask.CompletedTask;
+            },
+            CancellationToken.None
+        );
+
+        Assert.Equal(acceptedAt, handlerReceivedAt);
+        Assert.Equal(TimeSpan.Zero, handlerReceivedAt!.Value.Offset);
+    }
+
+    [Fact]
     public async Task SpotSubscription_Fanout_Instances_Keep_One_Flow_And_Owner_Skip_Uses_The_Same_Identity()
     {
         using var observer = new CapturingMessageFlowObserver();
@@ -1134,6 +1189,8 @@ public sealed partial class UnhandledDispatchPolicyTests
 
         public Func<TopicMessage, bool>? SubscribeHandler { get; set; }
 
+        public ZLinkBackendSubscribeMessage? NextSubscriptionMessage { get; set; }
+
         public int? LastJoinResultCode { get; private set; }
 
         public RoutingId RoutingId => RoutingId.From("spot");
@@ -1154,6 +1211,11 @@ public sealed partial class UnhandledDispatchPolicyTests
 
         public ZLinkBackendSubscribeMessage? Subscribe(RecvFlags flags)
         {
+            if (NextSubscriptionMessage is { } next)
+            {
+                NextSubscriptionMessage = null;
+                return next;
+            }
             if (SubscribeHandler is null)
                 return null;
             var topicMessage = new TopicMessage();

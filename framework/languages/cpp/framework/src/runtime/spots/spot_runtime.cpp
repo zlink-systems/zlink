@@ -6465,13 +6465,12 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
             co_await emit_actor_transfer_marker_async ("handoff_replay_enqueued", actor_ref,
                                                        transfer_id, *location);
         }
-        spot_inbound_message_t metadata;
-        if (packet.application_record && packet.application_record->invocation ())
-            metadata = std::move (packet.application_record->invocation ()->second);
-        else {
-            metadata.content_type = std::move (packet.content_type);
-            metadata.values = std::move (packet.metadata);
-        }
+        auto *invocation =
+          packet.application_record ? packet.application_record->invocation () : nullptr;
+        spot_inbound_message_t metadata =
+          invocation ? std::move (invocation->second)
+                     : spot_inbound_message_t{.content_type = std::move (packet.content_type),
+                                              .values = std::move (packet.metadata)};
         const auto terminal_route =
           packet.is_request ? handoff_terminal_route (metadata.values) : std::nullopt;
         const auto replay_operation =
@@ -13768,6 +13767,7 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
   std::function<void ()> *accepted_turn_terminal,
   std::shared_ptr<const instance_spot_retained_message_t> retained_message)
 {
+    const auto received_at = std::chrono::system_clock::now ();
     if (accepted_turn_terminal)
         *accepted_turn_terminal = {};
     /* Instance Spot cold activation carries the first application message
@@ -13847,7 +13847,8 @@ task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (
               spot_inbound_message_t{.content_type = std::move (content_type),
                                      .values = std::move (metadata),
                                      .mesh_name = state->mesh_name,
-                                     .correlation_id = std::move (correlation_id)},
+                                     .correlation_id = std::move (correlation_id),
+                                     .received_at = received_at},
               true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire, {}, {}, 0,
               {}, {}, retained_message);
         }
@@ -15318,7 +15319,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                              record.operation_id.low == 0
                                                ? std::nullopt
                                                : std::make_optional (record.operation_id.low),
-                                             std::move (encoded), std::nullopt};
+                                             std::move (encoded), std::nullopt, record.received_at};
             const auto dispatched =
               transfer_actor_leave_owner_reservation
                 ? dispatcher.dispatch_send (received, header, services, deferred_terminal,
@@ -15348,7 +15349,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                              record.operation_id.low == 0
                                                ? std::nullopt
                                                : std::make_optional (record.operation_id.low),
-                                             std::move (encoded), std::nullopt};
+                                             std::move (encoded), std::nullopt, record.received_at};
             detail::channel_reply_writer_t replies;
             if (deferred_terminal) {
                 const auto async_dispatched = dispatcher.dispatch_request_async (
@@ -15507,7 +15508,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                       header.message_name, {}, std::type_index (typeid (void)),
                       target->instance.get (), nullptr, services, serializers, body.value (),
                       spot_inbound_message_t{.content_type = header.content_type,
-                                             .values = header.metadata},
+                                             .values = header.metadata,
+                                             .received_at = record.received_at},
                       true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
                       [target] { target->release (); }, record.release_mailbox_reservation,
                       record.transferred_owner_byte_cost, {}, {}, {}, record.application_record,
@@ -15822,7 +15824,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                              record.operation_id.low == 0
                                                ? std::nullopt
                                                : std::make_optional (record.operation_id.low),
-                                             std::move (encoded), std::nullopt};
+                                             std::move (encoded), std::nullopt, record.received_at};
             auto response = dispatcher.dispatch_request (received, header, services);
             const auto reply_parts =
               response ? detail::encode_actor_reply (replies.create_reply_header (
@@ -15915,7 +15917,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         }
         auto relayed = [&] {
             auto relay_metadata = spot_inbound_message_t{.content_type = header.content_type,
-                                                         .values = header.metadata};
+                                                         .values = header.metadata,
+                                                         .received_at = record.received_at};
             if (record.kind == service::record_kind_t::actor_request
                 && !header.correlation_id.empty ()) {
                 // Application correlation remains distinct from the service
@@ -16397,7 +16400,9 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
           topic, std::string (context._state->spot_id));
         return result_t<submission_t>::success (std::nullopt);
     }
-    spot_inbound_message_t inbound;
+    spot_inbound_message_t inbound{.received_at = multicast != nullptr
+                                                    ? multicast->received_at
+                                                    : std::chrono::system_clock::now ()};
     inbound.content_type = std::move (content_type);
     inbound.channel_name = std::move (channel_name);
     if (multicast && multicast->metadata

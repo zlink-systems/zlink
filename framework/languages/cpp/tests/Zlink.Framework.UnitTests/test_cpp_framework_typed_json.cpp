@@ -50,6 +50,21 @@ struct golden_dto
     std::optional<std::string> nullable;
     std::map<std::string, int> labels;
 };
+struct required_presence_dto
+{
+    std::string code;
+    std::optional<std::string> access_token;
+    std::int32_t account_id;
+    std::int32_t attempts = 5;
+};
+template <> struct zlink::json::dto_traits<required_presence_dto>
+{
+    static constexpr auto fields = std::tuple{
+      zlink::json::field ("code", &required_presence_dto::code),
+      zlink::json::field ("accessToken", &required_presence_dto::access_token),
+      zlink::json::field ("accountId", &required_presence_dto::account_id),
+      zlink::json::field ("attempts", &required_presence_dto::attempts, zlink::json::defaulted)};
+};
 template <> struct zlink::json::dto_traits<golden_dto>
 {
     static constexpr auto fields =
@@ -80,6 +95,23 @@ void verify_goldens ()
     for (const auto &item : fixture.at ("invalid")) {
         const auto text = item.at ("jsonUtf8").get<std::string> ();
         assert (!p::try_decode<golden_dto> (text.begin (), text.end ()));
+    }
+}
+void verify_required_presence ()
+{
+    namespace p = zlink::detail::json_profile;
+    std::ifstream input (ZLINK_REQUIRED_PRESENCE_GOLDEN_PATH);
+    assert (input);
+    std::string line;
+    while (std::getline (input, line)) {
+        const auto separator = line.find ('\t');
+        assert (separator != std::string::npos);
+        const auto expected = line.substr (0, separator) == "valid";
+        const auto text = line.substr (separator + 1);
+        auto value = p::try_decode<required_presence_dto> (text.begin (), text.end ());
+        assert (value.has_value () == expected);
+        if (value)
+            assert (value->attempts == (text.find ("\"attempts\"") == std::string::npos ? 5 : 12));
     }
 }
 struct tree_leaf
@@ -354,6 +386,7 @@ int main ()
     verify_field_masks ();
     verify_float_round_trips ();
     verify_goldens ();
+    verify_required_presence ();
     verify_boundaries ();
     namespace p = zlink::detail::json_profile;
     dto d{INT64_MIN,    UINT64_MAX,       state::Closed,

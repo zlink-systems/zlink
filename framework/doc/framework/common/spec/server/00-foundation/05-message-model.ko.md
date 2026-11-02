@@ -75,6 +75,11 @@ nullable [ChannelName](02-glossary.ko.md#channelname), PacketName, ContentType, 
 Metadata와 UTF-8 bytes 그대로 저장하는 nullable CorrelationId를 제공한다. CorrelationId는 send에서 null이고
 request에서 non-null이다.
 
+`receivedAt`은 Framework가 message 제출을 수락한 UTC wall-clock 시각이다. 원격 message에서는
+Framework가 packet을 받아들인 직후, Actor·Spot serial executor에 넣기 전에 기록한다. 로컬
+제출에서는 Framework가 제출을 수락한 시각을 기록한다. 이 값은 monotonic clock이 아니며,
+이후 executor queue에서 기다린 시간에 따라 바뀌지 않는다.
+
 MeshName은 RouteMesh와 Spot·Actor dispatch에서
 non-null이며 ClientServer·STREAM에서는 null이다.
 
@@ -139,7 +144,9 @@ public codec 계약이다.
 - Property 순서와 의미 없는 whitespace는 의미가 없다.
 - 중복 property와 누락된 required property는 거부한다.
 - 알 수 없는 property는 무시한다.
-- `null`은 계약이 nullable로 선언한 값에만 허용한다.
+- `null`은 계약이 nullable로 선언한 값에만 허용한다. Application DTO property는 기본값이 없으면
+  required다. Nullable property도 누락되면 거부하지만 명시한 `null`은 허용한다. 누락을 허용하려면
+  DTO에 기본값을 선언한다.
 - Signed·unsigned 64-bit integer는 범위를 확인한 뒤 leading zero 없는 10진 문자열로 표현한다.
 - 32-bit 이하 integer는 fraction이 없는 JSON number로 표현한다.
 - Floating-point 값은 finite JSON number만 허용한다.
@@ -147,11 +154,27 @@ public codec 계약이다.
 - Date, decimal, UUID와 언어별 custom type은 암묵적으로 변환하지 않고 계약이 정한 string
   또는 DTO로 표현한다.
 
+| 언어 표현 | Required | 누락 허용 |
+|---|---|---|
+| C++ `dto_traits` | 선언한 field. `std::optional<T>`도 nullable일 뿐 required 판정은 바꾸지 않는다 | DTO의 기본 생성 값이 기본값인 field를 `zlink::json::field(..., zlink::json::defaulted)`로 표시한다 |
+| C# | 기본값이 없는 생성자 parameter | 기본값을 선언한 생성자 parameter |
+| Java record | 모든 component | `@ZLinkJsonOptional`로 표시한 component |
+| Kotlin | 기본값이 없는 primary-constructor property | 기본값을 선언한 property |
+| TypeScript | `?`가 없는 property. definite-assignment `!`도 required다 | `?`가 있는 property |
+
+Required 여부와 nullable 여부는 독립적이다. 기본값이 있는 non-nullable property는 누락될 때
+기본값을 사용하고 명시적 `null`은 거부한다. 기본값이 없는 nullable property는 `null`을 허용하고
+누락은 거부한다.
+
+Java record의 선택 component가 누락되면 primitive component는 Java 기본값을 사용하고 reference
+component는 `null`을 사용한다.
+
 특정 Framework DTO가 더 엄격한 property 집합을 정의하면 그 DTO 계약이 우선한다. 예를 들어
 [§4](#4-global-object-reference-json)의 global object reference는 unknown property를 거부한다.
 
 Property·enum 이름, unknown·required property 처리, nullable 조건, 숫자와 byte 표현을 바꾸면
-기존 payload의 언어 간 decoding 결과가 달라지므로 breaking contract change다. Actor·Spot
+기존 payload의 언어 간 decoding 결과가 달라지므로 breaking contract change다. Required 판정의
+기본값을 정하는 이 개정도 이전 payload의 decoding 결과를 바꾸는 breaking change다. Actor·Spot
 relocation adapter가 반환하는 opaque state bytes에는 이 profile을 적용하지 않는다.
 
 ## 6. Application metadata

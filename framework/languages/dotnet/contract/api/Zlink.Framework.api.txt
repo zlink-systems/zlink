@@ -233,6 +233,7 @@ assembly Zlink.Framework
     property System.String? MeshName { get; } [nullability=read:nullable,write:unknown]
     property Zlink.Framework.Contracts.Streams.ZLinkMessageMetadata Metadata { get; } [nullability=read:not-null,write:unknown]
     property System.String PacketName { get; } [nullability=read:not-null,write:unknown]
+    property System.DateTimeOffset ReceivedAt { get; } [nullability=read:not-null,write:unknown]
     property System.String? Source { get; } [nullability=read:nullable,write:unknown]
     property System.String Topic { get; } [nullability=read:not-null,write:unknown]
   type readonly-struct Zlink.Framework.Contracts.Channels.ZLinkRequest<TReply>
@@ -250,6 +251,7 @@ assembly Zlink.Framework
     property System.String? MeshName { get; } [nullability=read:nullable,write:unknown]
     property Zlink.Framework.Contracts.Streams.ZLinkMessageMetadata Metadata { get; } [nullability=read:not-null,write:unknown]
     property System.String PacketName { get; } [nullability=read:not-null,write:unknown]
+    property System.DateTimeOffset ReceivedAt { get; } [nullability=read:not-null,write:unknown]
     property Systems.Zlink.RoutingId SourceNodeRid { get; } [nullability=read:not-null,write:unknown]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkActorFactoryBuilder<TActor>
     generic TActor variance=invariant nullable=unspecified
@@ -924,6 +926,7 @@ assembly Zlink.Framework
     property System.String? MeshName { get; } [nullability=read:nullable,write:unknown]
     property Zlink.Framework.Contracts.Streams.ZLinkMessageMetadata Metadata { get; } [nullability=read:not-null,write:unknown]
     property System.String PacketName { get; } [nullability=read:not-null,write:unknown]
+    property System.DateTimeOffset ReceivedAt { get; } [nullability=read:not-null,write:unknown]
   type interface Zlink.Framework.Contracts.Handlers.IZLinkRequestHandler<TRequest, TResponse>
     generic TRequest variance=in nullable=unspecified
     generic TResponse variance=invariant nullable=unspecified

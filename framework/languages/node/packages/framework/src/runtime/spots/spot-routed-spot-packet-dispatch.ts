@@ -109,6 +109,7 @@ export class ZLinkRoutedSpotPacketDispatch {
     context: ZLinkRoutedSpotPacketContext,
     returnResponse: boolean
   ): Promise<unknown> {
+    const receivedAt = new Date();
     const activation = this.options.resolveActivation(spotId);
     if (activation === undefined) {
       this.reportMissing(spotId, packetName, context, returnResponse);
@@ -210,7 +211,8 @@ export class ZLinkRoutedSpotPacketDispatch {
             channelName: context.channelName,
             contentType: context.contentType,
             packetName: packetName!,
-            metadata: zlinkMessageMetadata({})
+            metadata: zlinkMessageMetadata({}),
+            receivedAt
           };
           releaseApplicationJobPermitBeforeHandler();
           response = await handler.handle(current.spot, payload, handlerContext);
