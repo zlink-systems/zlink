@@ -2480,32 +2480,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_definitions(test_cpp_framework_spot_close_conformance PRIVATE
     ZLINK_TEST_CHECK_CORE_CONTEXTS
     ZLINK_SPOT_CLOSE_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/spot-close-v1.json")
-  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_spot_close_conformance)
-  if(TARGET zlink_framework_cpp_stage_native_runtime)
-    add_dependencies(test_cpp_framework_spot_close_conformance
-      zlink_framework_cpp_stage_native_runtime)
-  endif()
-  # Apply the existing limit to each independent GoogleTest case, so unrelated
-  # cases cannot consume the next case's execution budget under CPU load.
-  include(GoogleTest)
-  gtest_discover_tests(test_cpp_framework_spot_close_conformance
-    TEST_PREFIX "test_cpp_framework_spot_close_conformance."
-    NO_PRETTY_VALUES
-    DISCOVERY_MODE PRE_TEST)
-  file(GENERATE
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/spot_close_test_properties.cmake"
-    CONTENT [=[
-if(NOT DEFINED test_cpp_framework_spot_close_conformance_TESTS)
-  set(test_cpp_framework_spot_close_conformance_TESTS
-    test_cpp_framework_spot_close_conformance_NOT_BUILT)
-endif()
-set_tests_properties(${test_cpp_framework_spot_close_conformance_TESTS} PROPERTIES
-  LABELS "framework-unit;framework-regression;spot;unit"
-  TIMEOUT 120
-  RESOURCE_LOCK zlink_cpp_heavy_runtime)
-]=])
-  set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/spot_close_test_properties.cmake")
+  # Split the cases into GoogleTest shards, so unrelated cases cannot consume
+  # the next case's execution budget under CPU load.
+  set(spot_close_shards 8)
+  math(EXPR spot_close_last_shard "${spot_close_shards} - 1")
+  foreach(shard RANGE ${spot_close_last_shard})
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_spot_close_conformance_shard_${shard}
+      COMMAND test_cpp_framework_spot_close_conformance
+      ENVIRONMENT
+        GTEST_TOTAL_SHARDS=${spot_close_shards}
+        GTEST_SHARD_INDEX=${shard}
+      LABELS "framework-unit;framework-regression;spot"
+      TIMEOUT 120
+      PROPERTIES
+        RESOURCE_LOCK zlink_cpp_heavy_runtime)
+  endforeach()
   find_program(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE NAMES valgrind)
   if(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE)
     zlink_framework_cpp_add_test(
