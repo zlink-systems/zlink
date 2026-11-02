@@ -1928,14 +1928,16 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                                   ? transition.error ()->what ()
                                                   : "bound Session route registration failed");
             }
-            actor_gateway.trace_bound_session_send_stage (
-              actor.actor_id ().value (), "session_owner_route_publish",
-              [&] {
-                  return "session_rid=" + session_rid.to_hex ()
-                         + " binding_generation=" + std::to_string (binding.binding_generation)
-                         + " replaced=" + (transition.value ().changed ? "true" : "false");
-              },
-              &session_rid);
+            if (actor_gateway.trace_bound_session_send_stage_enabled ()) {
+                actor_gateway.trace_bound_session_send_stage (
+                  actor.actor_id ().value (), "session_owner_route_publish",
+                  [&] {
+                      return "session_rid=" + session_rid.to_hex ()
+                             + " binding_generation=" + std::to_string (binding.binding_generation)
+                             + " replaced=" + (transition.value ().changed ? "true" : "false");
+                  },
+                  &session_rid);
+            }
             if (transition.value ().changed && transition.value ().previous
                 && transition.value ().previous->session_rid
                 && transition.value ().previous->node_generation != 0
@@ -2053,45 +2055,57 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                  binding, session_rid, session_binding_retirement_timeout));
                     continue;
                 }
-                actor_gateway.trace_bound_session_send_stage (
-                  binding.actor.key, "session_owner_route_tombstone",
-                  [&] {
-                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
-                             + " binding_generation=" + std::to_string (binding.binding_generation);
-                  },
-                  &session_rid);
+                if (actor_gateway.trace_bound_session_send_stage_enabled ()) {
+                    actor_gateway.trace_bound_session_send_stage (
+                      binding.actor.key, "session_owner_route_tombstone",
+                      [&] {
+                          return retire_connection_details ()
+                                 + " session_rid=" + session_rid.to_hex () + " binding_generation="
+                                 + std::to_string (binding.binding_generation);
+                      },
+                      &session_rid);
+                }
             }
             catch (const std::exception &error) {
-                actor_gateway.trace_bound_session_send_stage (
-                  binding.actor.key, "session_owner_route_tombstone_failed",
-                  [&] {
-                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
-                             + " binding_generation=" + std::to_string (binding.binding_generation)
-                             + " error=" + error.what ();
-                  },
-                  &session_rid);
+                if (actor_gateway.trace_bound_session_send_stage_enabled ()) {
+                    actor_gateway.trace_bound_session_send_stage (
+                      binding.actor.key, "session_owner_route_tombstone_failed",
+                      [&] {
+                          return retire_connection_details ()
+                                 + " session_rid=" + session_rid.to_hex () + " binding_generation="
+                                 + std::to_string (binding.binding_generation)
+                                 + " error=" + error.what ();
+                      },
+                      &session_rid);
+                }
             }
         }
         for (auto &[binding, retirement] : remote_retirements) {
             try {
                 co_await retirement;
-                actor_gateway.trace_bound_session_send_stage (
-                  binding.actor.key, "session_owner_route_tombstone",
-                  [&] {
-                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
-                             + " binding_generation=" + std::to_string (binding.binding_generation);
-                  },
-                  &session_rid);
+                if (actor_gateway.trace_bound_session_send_stage_enabled ()) {
+                    actor_gateway.trace_bound_session_send_stage (
+                      binding.actor.key, "session_owner_route_tombstone",
+                      [&] {
+                          return retire_connection_details ()
+                                 + " session_rid=" + session_rid.to_hex () + " binding_generation="
+                                 + std::to_string (binding.binding_generation);
+                      },
+                      &session_rid);
+                }
             }
             catch (const std::exception &error) {
-                actor_gateway.trace_bound_session_send_stage (
-                  binding.actor.key, "session_owner_route_tombstone_failed",
-                  [&] {
-                      return retire_connection_details () + " session_rid=" + session_rid.to_hex ()
-                             + " binding_generation=" + std::to_string (binding.binding_generation)
-                             + " error=" + error.what ();
-                  },
-                  &session_rid);
+                if (actor_gateway.trace_bound_session_send_stage_enabled ()) {
+                    actor_gateway.trace_bound_session_send_stage (
+                      binding.actor.key, "session_owner_route_tombstone_failed",
+                      [&] {
+                          return retire_connection_details ()
+                                 + " session_rid=" + session_rid.to_hex () + " binding_generation="
+                                 + std::to_string (binding.binding_generation)
+                                 + " error=" + error.what ();
+                      },
+                      &session_rid);
+                }
             }
         }
         co_return;
