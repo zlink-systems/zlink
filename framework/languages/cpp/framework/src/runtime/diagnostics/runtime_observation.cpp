@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include "runtime/diagnostics/runtime_observation.hpp"
 
 #include "runtime/dispatch/offload_executor.hpp"
@@ -19,8 +21,9 @@ runtime::offload_executor_t &runtime_observation_dispatcher ()
     constexpr unsigned minimum_worker_count = 2;
     constexpr std::size_t maximum_worker_count = 8;
     constexpr auto worker_idle_timeout = std::chrono::seconds (30);
-    const auto hardware = std::max (minimum_worker_count, std::thread::hardware_concurrency ());
-    const auto maximum = std::min<std::size_t> (maximum_worker_count, hardware);
+    const auto processors =
+      std::max (minimum_worker_count, ::zlink::framework::runtime::available_processor_count ());
+    const auto maximum = std::min<std::size_t> (maximum_worker_count, processors);
     static runtime::offload_executor_t dispatcher (minimum_worker_count, maximum,
                                                    worker_idle_timeout, "zlink-observation");
     return dispatcher;

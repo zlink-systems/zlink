@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include "runtime/diagnostics/mesh_trace.hpp"
 
 #include "runtime/mesh/mesh_node_host_service.hpp"
@@ -753,7 +755,8 @@ mesh_node_host_service_t::mesh_node_host_service_t (
     _dispatch_options (std::move (dispatch_options)),
     _application_dispatch (std::make_shared<offload_executor_t> (
       _registrations.size () + 1,
-      _registrations.size () + std::max<std::size_t> (2, std::thread::hardware_concurrency ()),
+      _registrations.size ()
+        + std::max<std::size_t> (2, ::zlink::framework::runtime::available_processor_count ()),
       std::chrono::milliseconds (100),
       "zlink-mesh-app")),
     _application_jobs (

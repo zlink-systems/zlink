@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include "stream_runtime.hpp"
 #include "stream_header_encoder.hpp"
 
@@ -137,7 +139,7 @@ void ensure_stream_dispatch_executor ()
     std::lock_guard lock (stream_dispatch_executor_mutex ());
     if (!stream_dispatch_executor_ref ()) {
         stream_dispatch_executor_ref () = std::make_shared<runtime::offload_executor_t> (
-          0, std::max<std::size_t> (1, std::thread::hardware_concurrency ()),
+          0, std::max<std::size_t> (1, ::zlink::framework::runtime::available_processor_count ()),
           std::chrono::milliseconds (100), "zlink-stream-ex");
     }
 }

@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include "runtime/http/http_host_service.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/http/http_request_pipeline.hpp"
@@ -97,18 +99,20 @@ class http_host_service_t::listener_t
         _stop (&stop),
         _active_connections (0),
         _active_requests (0),
-        _handler_executor (0,
-                           std::max<std::size_t> (1,
-                                                  handler_worker_count == 0
-                                                    ? std::thread::hardware_concurrency ()
-                                                    : handler_worker_count),
-                           worker_idle_timeout,
-                           "zlink-http-hdl"),
-        _connection_workers (0,
-                             std::max<std::size_t> (minimum_connection_worker_count,
-                                                    std::thread::hardware_concurrency ()),
-                             worker_idle_timeout,
-                             "zlink-http-conn"),
+        _handler_executor (
+          0,
+          std::max<std::size_t> (1,
+                                 handler_worker_count == 0
+                                   ? ::zlink::framework::runtime::available_processor_count ()
+                                   : handler_worker_count),
+          worker_idle_timeout,
+          "zlink-http-hdl"),
+        _connection_workers (
+          0,
+          std::max<std::size_t> (minimum_connection_worker_count,
+                                 ::zlink::framework::runtime::available_processor_count ()),
+          worker_idle_timeout,
+          "zlink-http-conn"),
         _acceptor (_io),
         _accept_retry_timer (_io)
     {

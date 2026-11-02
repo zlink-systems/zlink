@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "runtime/utils/available_processor_count.hpp"
+
 #include <zlink/framework.hpp>
 #include "runtime/handlers/handler_registry_runtime.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
@@ -459,7 +461,7 @@ int main ()
     // Keep an earlier application job active so invocation submission cannot reuse it.
     auto worker_started = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     auto release_worker = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
-    const bool hold_worker = std::thread::hardware_concurrency () > 1;
+    const bool hold_worker = zlink::framework::runtime::available_processor_count () > 1;
     if (hold_worker) {
         executor->submit ([worker_started, release_worker] {
             worker_started->complete (zlink::framework::result_t<void>::success ());

@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "../utils/available_processor_count.hpp"
+
 #include "runtime/dispatch/offload_executor.hpp"
 
 #include <algorithm>
@@ -22,7 +24,7 @@ std::shared_ptr<offload_executor_t> infrastructure_executor ()
     auto executor = shared.lock ();
     if (!executor) {
         executor = std::make_shared<offload_executor_t> (
-          std::max (1u, std::thread::hardware_concurrency ()), "zlink-infra");
+          std::max (1u, ::zlink::framework::runtime::available_processor_count ()), "zlink-infra");
         shared = executor;
     }
     return executor;

@@ -1250,6 +1250,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     opentelemetry-cpp::metrics
     Threads::Threads
     nlohmann_json::nlohmann_json)
+  add_executable(test_cpp_framework_available_processor_count
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_available_processor_count.cpp)
+  target_compile_features(test_cpp_framework_available_processor_count PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_available_processor_count PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_link_libraries(test_cpp_framework_available_processor_count PRIVATE
+    zlink::framework_provider_abstractions Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_available_processor_count
+    COMMAND test_cpp_framework_available_processor_count
+    LABELS "framework-unit;execution;resource"
+    TIMEOUT 30)
+
   add_executable(bench_cpp_framework_registry_requests
     tests/Zlink.Framework.UnitTests/bench_cpp_framework_registry_requests.cpp
     tests/support/allocation_counter.cpp

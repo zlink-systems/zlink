@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+
 #pragma once
+
+#include "../utils/available_processor_count.hpp"
 
 #include "runtime/dispatch/application_job_queue.hpp"
 
@@ -13,11 +16,6 @@
 #include <optional>
 #include <sstream>
 #include <string>
-#include <thread>
-
-#if defined(__linux__)
-#include <sched.h>
-#endif
 
 namespace zlink::framework::runtime
 {
@@ -172,30 +170,13 @@ inline std::optional<std::uint32_t> read_quota_processors () noexcept
 #endif
     return std::nullopt;
 }
-
-inline std::optional<std::uint32_t> affinity_processors () noexcept
-{
-#if defined(__linux__)
-    cpu_set_t set;
-    CPU_ZERO (&set);
-    if (sched_getaffinity (0, sizeof (set), &set) == 0) {
-        const auto count = CPU_COUNT (&set);
-        if (count > 0)
-            return static_cast<std::uint32_t> (count);
-    }
-#endif
-    return std::nullopt;
-}
-
 } // namespace application_job_queue_capacity_detail
 
 inline application_job_queue_processor_limits_t detect_application_job_queue_processor_limits (
   std::optional<std::uint32_t> executor_max_concurrency = std::nullopt)
 {
-    const auto logical = std::thread::hardware_concurrency ();
-    return {logical == 0 ? std::nullopt : std::optional<std::uint32_t> (logical),
-            application_job_queue_capacity_detail::affinity_processors (),
-            application_job_queue_capacity_detail::read_cpuset_count (),
+    const auto logical = ::zlink::framework::runtime::available_processor_count ();
+    return {logical, std::nullopt, application_job_queue_capacity_detail::read_cpuset_count (),
             application_job_queue_capacity_detail::read_quota_processors (),
             executor_max_concurrency};
 }
