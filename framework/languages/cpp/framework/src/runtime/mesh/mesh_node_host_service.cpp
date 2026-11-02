@@ -2021,12 +2021,14 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
 
     void run () override
     {
+        std::optional<zlink::poll_event_flag_t> readiness;
         while (!host._stop.load (std::memory_order_acquire))
-            rotate ();
+            readiness = rotate (readiness);
         supply.close ();
     }
 
-    void rotate ()
+    std::optional<zlink::poll_event_flag_t>
+    rotate (std::optional<zlink::poll_event_flag_t> readiness)
     {
         auto &application_permit = *receive_permit;
         auto &mailbox = node->native_node ().transport ().mailbox ();
@@ -2194,7 +2196,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                                                           host._application_dispatch.get ());
                   });
               },
-              accept_application_receive, next_application_receive))
+              accept_application_receive, next_application_receive, readiness))
             .result ()
             .value ();
         auto ready = mailbox.take_application_receive_turn ();
@@ -2234,14 +2236,16 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                 next_activity = activity.second;
             }
         }
+        readiness.reset ();
         // A pump may consume the wake for supply delivered after this turn's
         // take. Recheck its owner state before waiting for the next rotation.
         if (!local_pending && !ready && !host._stop.load (std::memory_order_acquire)
             && !supply.has_supply ()) {
-            (void) node->native_node ().wait_for_dispatch_activity (
+            readiness = node->native_node ().wait_for_dispatch_activity (
               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
         }
         mesh::service_mailbox_t::notify_application_ready (ready);
+        return readiness;
     }
 
     struct pending_management_t

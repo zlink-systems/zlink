@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include <variant>
 
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
@@ -51,16 +52,27 @@ class message_parts_t
 {
   public:
     message_parts_t () = default;
+    message_parts_t (const message_parts_t &other);
+    message_parts_t &operator= (const message_parts_t &other);
+    message_parts_t (message_parts_t &&) noexcept = default;
+    message_parts_t &operator= (message_parts_t &&) noexcept = default;
+    static message_parts_t borrow (const std::vector<zlink::message_t> &parts);
+    static message_parts_t borrow (std::span<const std::span<const std::byte>> parts);
+    std::span<const std::byte> part_bytes (std::size_t index) const;
     message_parts_t (zlink::message_t header, zlink::message_t body);
     explicit message_parts_t (std::vector<zlink::message_t> parts);
 
-    std::size_t size () const noexcept { return _parts.size (); }
+    std::size_t size () const noexcept;
     const zlink::message_t &operator[] (std::size_t index) const;
-    const std::vector<zlink::message_t> &items () const noexcept { return _parts; }
-    std::vector<zlink::message_t> take_items () && noexcept { return std::move (_parts); }
+    const std::vector<zlink::message_t> &items () const;
+    std::vector<zlink::message_t> take_items () &&;
 
   private:
-    std::vector<zlink::message_t> _parts;
+    friend class envelope_codec_t;
+    std::variant<std::vector<zlink::message_t>,
+                 const std::vector<zlink::message_t> *,
+                 std::span<const std::span<const std::byte>>>
+      _parts;
 };
 
 class envelope_codec_t
@@ -102,6 +114,11 @@ class envelope_codec_t
     decode_header (const message_parts_t &parts,
                    bool capture_flow = true,
                    std::optional<envelope_header_t> *rejection_context = nullptr) const;
+    result_t<envelope_header_t>
+    decode_header (std::span<const std::byte> bytes,
+                   bool capture_flow = true,
+                   std::optional<envelope_header_t> *rejection_context = nullptr) const;
+    result_t<encoded_payload_t> decode_body_view (const message_parts_t &parts) const;
     result_t<zlink::message_t> decode_body (const message_parts_t &parts) const;
 
   private:
