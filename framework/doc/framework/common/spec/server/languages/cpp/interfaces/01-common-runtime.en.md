@@ -399,7 +399,7 @@ template <> struct zlink::json::dto_traits<player_state_t>
 {
     static constexpr auto fields = std::tuple{
       zlink::json::field ("playerId", &player_state_t::player_id),
-      zlink::json::field ("score", &player_state_t::score),
+      zlink::json::field ("score", &player_state_t::score, zlink::json::defaulted),
       zlink::json::field ("nickname", &player_state_t::nickname),
       zlink::json::field ("status", &player_state_t::status)};
 };
@@ -416,8 +416,15 @@ template <> struct zlink::json::enum_traits<player_status_t>
   directly in that DTO. Immutable DTOs aren't supported, and base-class traits aren't combined automatically.
   Only members declared in `dto_traits<T>::fields` are wire properties, and declaration order has no meaning.
   Wire property names must be unique.
-- Every declared property is required; a missing property is rejected. Only a `std::optional<U>` field is
-  nullable: `null` reads as empty, and an empty value is written as `null`.
+| C++ field declaration | Missing-property handling |
+|---|---|
+| `field(name, member)` | Required; omission is rejected |
+| `field(name, member, zlink::json::defaulted)` | Optional; uses the default-constructed member value |
+
+- A field is required by default, and a missing field is rejected. Mark a field whose value in a
+  default-constructed DTO is its default with `zlink::json::field(..., zlink::json::defaulted)`; omission
+  uses that value. `std::optional<U>` declares nullability only and does not change requiredness. Explicit
+  `null` on a nullable field reads as empty, and an empty value is written as `null`.
 - Field types are `bool`, 8- to 64-bit signed and unsigned integers, `float` and `double`, `std::string`,
   `std::vector<std::byte>` (base64), `std::vector<U>`, `std::map<std::string, U>`, `std::optional<U>`, a DTO with
   `dto_traits`, and an enum with `enum_traits`. Other types aren't supported. The wire form of integers,

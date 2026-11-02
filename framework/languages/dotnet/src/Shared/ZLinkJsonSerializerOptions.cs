@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -45,15 +46,68 @@ internal static class ZLinkJsonSerializerOptions
         options.Converters.Add(new RoutingIdJsonConverter());
 #endif
         var resolver = new DefaultJsonTypeInfoResolver();
-        resolver.Modifiers.Add(RequireDeclaredNullability);
+        resolver.Modifiers.Add(ApplyApplicationDtoMetadata);
         options.TypeInfoResolver = resolver;
         return options;
     }
 
-    private static void RequireDeclaredNullability(JsonTypeInfo typeInfo)
+    private static void ApplyApplicationDtoMetadata(JsonTypeInfo typeInfo)
     {
         if (typeInfo.Kind != JsonTypeInfoKind.Object)
             return;
+        ApplyConstructorRequiredness(typeInfo);
+        RequireDeclaredNullability(typeInfo);
+    }
+
+    private static void ApplyConstructorRequiredness(JsonTypeInfo typeInfo)
+    {
+        if (Nullable.GetUnderlyingType(typeInfo.Type) is not null)
+            return;
+
+        var constructors = typeInfo.Type.GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public
+        );
+        var constructor = constructors.FirstOrDefault(candidate =>
+            candidate.IsDefined(typeof(JsonConstructorAttribute), inherit: false)
+        );
+        if (constructor is null)
+        {
+            if (constructors.Any(candidate => candidate.GetParameters().Length == 0))
+                return;
+            var publicParameterized = constructors.Where(candidate =>
+                candidate.GetParameters().Length > 0
+            );
+            constructor =
+                publicParameterized.Take(2).Count() == 1 ? publicParameterized.First() : null;
+        }
+        if (constructor is null)
+            return;
+
+        foreach (var parameter in constructor.GetParameters())
+        {
+            if (parameter.Name is null)
+                continue;
+            var property = typeInfo.Properties.FirstOrDefault(candidate =>
+                string.Equals(
+                    candidate.AttributeProvider switch
+                    {
+                        PropertyInfo reflected => reflected.Name,
+                        FieldInfo reflected => reflected.Name,
+                        _ => candidate.Name,
+                    },
+                    parameter.Name,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            );
+            if (property is null)
+                continue;
+            property.Set ??= static (_, _) => { };
+            property.IsRequired = !parameter.HasDefaultValue;
+        }
+    }
+
+    private static void RequireDeclaredNullability(JsonTypeInfo typeInfo)
+    {
 #if NET6_0_OR_GREATER
         var nullability = new System.Reflection.NullabilityInfoContext();
 #endif
