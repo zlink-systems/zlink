@@ -22,6 +22,7 @@
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/execution/serial_handler_participant.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/host/bound_session_bind.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
@@ -6124,6 +6125,313 @@ int command_38_rebind_is_owned_only_by_new_connection ()
              : 2;
 }
 
+using zlink::framework::actor_context_t;
+using zlink::framework::actor_session_binding_identity_t;
+using zlink::framework::actor_t;
+using zlink::framework::task_t;
+
+struct duplicate_bind_test_observation_t
+{
+    std::atomic_int callback_calls{0};
+    std::atomic_bool callback_in_actor_turn{false};
+    const zlink::framework::runtime::serial_execution_queue_t *expected_serial_queue = nullptr;
+    std::optional<actor_session_binding_identity_t> current;
+    std::optional<actor_session_binding_identity_t> incoming;
+};
+
+class duplicate_bind_test_actor_t : public actor_t
+{
+  public:
+    duplicate_bind_test_actor_t (actor_context_t context,
+                                 std::shared_ptr<duplicate_bind_test_observation_t> observation) :
+        _context (std::move (context)), _observation (std::move (observation))
+    {
+    }
+
+    actor_context_t &context () noexcept override { return _context; }
+    const actor_context_t &context () const noexcept override { return _context; }
+
+  protected:
+    std::shared_ptr<duplicate_bind_test_observation_t> _observation;
+    actor_context_t _context;
+};
+
+class callback_duplicate_bind_test_actor_t final : public duplicate_bind_test_actor_t
+{
+  public:
+    using callback_t =
+      std::function<task_t<std::optional<std::string>> (const actor_session_binding_identity_t &,
+                                                        const actor_session_binding_identity_t &,
+                                                        std::stop_token)>;
+
+    callback_duplicate_bind_test_actor_t (
+      actor_context_t context,
+      std::shared_ptr<duplicate_bind_test_observation_t> observation,
+      callback_t callback) :
+        duplicate_bind_test_actor_t (std::move (context), std::move (observation)),
+        _callback (std::move (callback))
+    {
+    }
+
+    task_t<std::optional<std::string>>
+    on_duplicate_bind (const actor_session_binding_identity_t &current,
+                       const actor_session_binding_identity_t &incoming,
+                       std::stop_token cancellation) override
+    {
+        _observation->callback_calls.fetch_add (1, std::memory_order_acq_rel);
+        _observation->current = current;
+        _observation->incoming = incoming;
+        const auto serial_turn = zlink::framework::detail::capture_current_serial_turn ();
+        _observation->callback_in_actor_turn.store (
+          zlink::framework::runtime::current_actor_execution.actor_key
+              == "player:duplicate-bind-actor"
+            && zlink::framework::runtime::current_actor_execution.spot_id
+                 == std::optional<std::string> ("duplicate-bind-spot")
+            && serial_turn && serial_turn->belongs_to (_observation->expected_serial_queue),
+          std::memory_order_release);
+        return _callback (current, incoming, cancellation);
+    }
+
+  private:
+    callback_t _callback;
+};
+
+task_t<std::optional<std::string>>
+wait_for_duplicate_bind_decision (task_t<std::optional<std::string>> decision,
+                                  std::stop_token cancellation,
+                                  std::shared_ptr<std::promise<void>> cancelled,
+                                  std::shared_ptr<std::promise<void>> completed)
+{
+    std::stop_callback stop (cancellation, [cancelled] { cancelled->set_value (); });
+    auto result = co_await decision;
+    completed->set_value ();
+    co_return result;
+}
+
+int duplicate_bind_callback_policy ()
+{
+    zlink::framework::completion_owner_t completion_owner;
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    namespace protocol = zlink::framework::runtime::protocol;
+    enum class case_t
+    {
+        accept,
+        accept_empty,
+        reject,
+        timeout,
+        no_callback
+    };
+
+    const auto run_case = [] (case_t test_case) -> int {
+        auto gateway_state = std::make_shared<actor_gateway_state_t> ();
+        actor_gateway_runtime_t gateway (gateway_state);
+        const auto actor = test_actor_ref ("actor-owner", "player", "duplicate-bind-actor", 7);
+        const auto wire_actor = actor_ref_access_t::with_actor_type (actor, std::string{});
+        auto observation = std::make_shared<duplicate_bind_test_observation_t> ();
+        std::shared_ptr<duplicate_bind_test_actor_t> actor_instance;
+        auto actor_context = gateway.actor_context (actor);
+        auto release_decision =
+          std::make_shared<task_completion_source_t<std::optional<std::string>>> ();
+        auto cancelled = std::make_shared<std::promise<void>> ();
+        auto cancelled_result = cancelled->get_future ();
+        auto callback_completed = std::make_shared<std::promise<void>> ();
+        auto callback_completed_result = callback_completed->get_future ();
+        if (test_case == case_t::no_callback) {
+            actor_instance = std::make_shared<duplicate_bind_test_actor_t> (
+              std::move (actor_context), observation);
+        } else {
+            callback_duplicate_bind_test_actor_t::callback_t callback;
+            if (test_case == case_t::accept || test_case == case_t::accept_empty) {
+                callback = [test_case] (const auto &, const auto &, std::stop_token) {
+                    return task_t<std::optional<std::string>> (
+                      result_t<std::optional<std::string>>::success (
+                        test_case == case_t::accept_empty
+                          ? std::optional<std::string> (std::string{})
+                          : std::nullopt));
+                };
+            } else if (test_case == case_t::reject) {
+                callback = [] (const auto &, const auto &, std::stop_token) {
+                    return task_t<std::optional<std::string>> (
+                      result_t<std::optional<std::string>>::success (
+                        std::make_optional (std::string ("already signed in"))));
+                };
+            } else {
+                callback = [release_decision, cancelled, callback_completed] (
+                             const auto &, const auto &, std::stop_token cancellation_token) {
+                    return wait_for_duplicate_bind_decision (
+                      release_decision->task (), cancellation_token, cancelled, callback_completed);
+                };
+            }
+            actor_instance = std::make_shared<callback_duplicate_bind_test_actor_t> (
+              std::move (actor_context), observation, std::move (callback));
+        }
+
+        const auto spot_name = spot_id_t ("duplicate-bind-spot");
+        auto spot_context = std::make_shared<spot_context_state_t> ();
+        spot_context->spot_id = spot_name;
+        spot_context->spot_name = std::string (spot_name);
+        spot_context->spot_instance = std::make_shared<int> (1);
+        spot_context->execution_mode = user_spot_execution_mode_t::per_actor;
+        spot_context->serial_executor =
+          std::make_shared<runtime::offload_executor_t> (1, "duplicate-bind-actor");
+        spot_context->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+          *spot_context->serial_executor, runtime::serial_execution_queue_options_t{},
+          runtime::serial_execution_queue_t::error_handler_t{},
+          runtime::serial_lane_policy_t::per_actor_spot ());
+        observation->expected_serial_queue = spot_context->serial_queue.get ();
+        auto spot_state =
+          test::runtime_failure_fixture<spot_node_builder_state_t> ("duplicate-bind-owner");
+        spot_node_builder_state_t::actor_factory_registration_t factory;
+        factory.actor_type = std::type_index (typeid (duplicate_bind_test_actor_t));
+        factory.as_actor = [] (void *instance) {
+            return static_cast<actor_t *> (static_cast<duplicate_bind_test_actor_t *> (instance));
+        };
+        const std::string actor_key = "player:duplicate-bind-actor";
+        spot_state->actor_factories.emplace ("player", std::move (factory));
+        spot_state->actor_types_by_id.emplace ("duplicate-bind-actor", "player");
+        spot_state->actor_instances.emplace (actor_key, actor_instance);
+        spot_state->actor_spot_ids.emplace (actor_key, spot_name);
+        spot_state->spot_contexts_by_id.emplace (std::string (spot_name),
+                                                 spot_context_access_t::create (spot_context));
+
+        const auto previous_owner = zlink::routing_id_t::from ("previous-session-owner");
+        const auto previous_session = zlink::routing_id_t::from ("previous-session");
+        const actor_bound_session_route_t previous_route{previous_owner,
+                                                         previous_session,
+                                                         actor.object_generation (),
+                                                         5,
+                                                         13,
+                                                         17,
+                                                         19,
+                                                         0,
+                                                         0,
+                                                         false,
+                                                         "previous-owner",
+                                                         23};
+        const auto no_op_sink = [] (std::string, stream_codec_t, const zlink::message_t &) {
+            return task_t<void> (result_t<void>::success ());
+        };
+        if (!gateway.replace_session_route (actor, no_op_sink, previous_route))
+            return 1;
+
+        zlink_builder_t builder = test::runtime_failure_builder ();
+        builder.stream ("duplicate-bind").bind ("tcp://127.0.0.1:0");
+        auto stream_runtime = stream_runtime_t::from (builder);
+        std::mutex delay_mutex;
+        delay_owner_t delays (delay_mutex);
+        const auto incoming_owner = zlink::routing_id_t::from ("incoming-session-owner");
+        const auto incoming_session = zlink::routing_id_t::from ("incoming-session");
+        const location_owner_token_t incoming_owner_token{"incoming-owner", 29};
+        const protocol::bound_session_bind_t bind{
+          1,
+          protocol::actor_route_fence_t{
+            std::string (actor.actor_id ().value ()), actor.object_generation (),
+            zlink::routing_id_t::from (std::string (actor.node_rid ().value ())).to_bytes (), 11,
+            13, 17},
+          incoming_session.to_bytes (),
+          {protocol::bound_session_binding_state_t::active, 20}};
+        bool terminal_submitted = false;
+        std::optional<std::tuple<std::uint32_t, std::uint32_t,
+                                 std::optional<protocol::stream_bind_reply_tail_t>>>
+          terminal;
+        auto submit_terminal_reply = [&] (std::uint32_t result, std::uint32_t failure_code,
+                                          std::optional<protocol::stream_bind_reply_tail_t> tail) {
+            terminal_submitted = true;
+            terminal.emplace (result, failure_code, std::move (tail));
+            return true;
+        };
+        auto pending = apply_bound_session_bind_async (
+          gateway.weak_state (), {}, spot_state, std::move (stream_runtime), wire_actor, bind,
+          incoming_owner, 9, incoming_owner_token, std::move (submit_terminal_reply), delays,
+          std::chrono::milliseconds (25));
+        if (test_case == case_t::timeout
+            && cancelled_result.wait_for (std::chrono::milliseconds (500))
+                 != std::future_status::ready)
+            return 2;
+        auto result = finite_task_result (std::move (pending), std::chrono::milliseconds (500));
+        if (!result || !*result)
+            return 3;
+        const auto &bind_result = result->value ();
+        const auto current_route = gateway.bound_session_route_async (actor).result ().value ();
+        const auto route_is_incoming = current_route && current_route->session_rid
+                                       && *current_route->session_rid == incoming_session
+                                       && current_route->binding_generation == 20;
+        const bool route_is_previous = current_route && current_route->session_rid
+                                       && *current_route->session_rid == previous_session
+                                       && current_route->binding_generation == 19;
+        if (test_case == case_t::reject) {
+            return bind_result.terminal_result
+                         == static_cast<std::uint32_t> (protocol::request_terminal_result::rejected)
+                       && bind_result.reply_tail && bind_result.reply_tail->rejection_message
+                       && *bind_result.reply_tail->rejection_message == "already signed in"
+                       && bind_result.error == runtime::stateful::stateful_error_t::conflict
+                       && !terminal_submitted && route_is_previous
+                       && observation->callback_calls.load (std::memory_order_acquire) == 1
+                       && observation->callback_in_actor_turn.load (std::memory_order_acquire)
+                     ? 0
+                     : 4;
+        }
+        if (test_case == case_t::timeout) {
+            release_decision->complete (
+              result_t<std::optional<std::string>>::success (std::nullopt));
+            if (callback_completed_result.wait_for (std::chrono::milliseconds (500))
+                != std::future_status::ready)
+                return 5;
+            const auto after_late_accept =
+              gateway.bound_session_route_async (actor).result ().value ();
+            return bind_result.terminal_result
+                         == static_cast<std::uint32_t> (protocol::request_terminal_result::timedOut)
+                       && bind_result.error == runtime::stateful::stateful_error_t::unavailable
+                       && !terminal_submitted && route_is_previous && after_late_accept
+                       && after_late_accept->session_rid
+                       && *after_late_accept->session_rid == previous_session
+                       && observation->callback_calls.load (std::memory_order_acquire) == 1
+                       && observation->callback_in_actor_turn.load (std::memory_order_acquire)
+                     ? 0
+                     : 6;
+        }
+        const auto accepted_by_callback =
+          test_case == case_t::accept || test_case == case_t::accept_empty;
+        const auto callback_state_matches =
+          accepted_by_callback
+            ? observation->callback_calls.load (std::memory_order_acquire) == 1
+                && observation->current
+                && *observation->current
+                     == actor_session_binding_identity_t{node_rid_t::from_string (
+                                                           previous_owner.to_string ()),
+                                                         5, 19}
+                && observation->incoming
+                && *observation->incoming
+                     == actor_session_binding_identity_t{node_rid_t::from_string (
+                                                           incoming_owner.to_string ()),
+                                                         9, 20}
+                && observation->callback_in_actor_turn.load (std::memory_order_acquire)
+            : observation->callback_calls.load (std::memory_order_acquire) == 0;
+        return bind_result.error == runtime::stateful::stateful_error_t::none && route_is_incoming
+                   && terminal_submitted && terminal
+                   && std::get<0> (*terminal)
+                        == static_cast<std::uint32_t> (protocol::request_terminal_result::ok)
+                   && std::get<1> (*terminal)
+                        == static_cast<std::uint32_t> (protocol::framework_error_code::none)
+                   && std::get<2> (*terminal) && std::get<2> (*terminal)->binding_generation == 20
+                   && std::get<2> (*terminal)->authority_owner_generation == 13
+                   && bind_result.replacement
+                   && bind_result.replacement->retired_session.retired_binding_generation == 19
+                   && callback_state_matches
+                 ? 0
+                 : 7;
+    };
+
+    for (const auto test_case : {case_t::accept, case_t::accept_empty, case_t::reject,
+                                 case_t::timeout, case_t::no_callback}) {
+        if (const auto result = run_case (test_case); result != 0)
+            return result;
+    }
+    return 0;
+}
+
 int late_lower_generation_bind_and_record_are_rejected ()
 {
     using namespace zlink::framework;
@@ -8860,6 +9168,8 @@ int main (int argc, char **argv)
         return actor_terminal_sdk_controlled_counter_projection ();
     if (argc == 2 && std::string_view (argv[1]) == "--binding-state-owner")
         return binding_context_uses_gateway_state_lane ();
+    if (argc == 2 && std::string_view (argv[1]) == "--duplicate-bind-policy")
+        return duplicate_bind_callback_policy ();
     if (argc == 1 && binding_context_uses_gateway_state_lane () != 0)
         return 1;
     if (const auto framing = actor_reply_framing_vectors (); framing != 0)

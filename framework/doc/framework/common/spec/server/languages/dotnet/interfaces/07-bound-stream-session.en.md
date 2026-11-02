@@ -4,6 +4,10 @@
 
 ## 1. Bound STREAM Session
 
+[ZLinkSessionBindingIdentity, defined in Actor interface §1](06-actors.en.md#1-actor), exposes the binding
+identity from §4 as a read-only value. The Actor's `OnDuplicateBindAsync` receives the current and
+incoming values in this form.
+
 The surface from an Actor to a client only provides one-way send and
 disconnect.
 

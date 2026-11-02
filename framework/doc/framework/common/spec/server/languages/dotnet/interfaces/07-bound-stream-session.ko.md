@@ -4,6 +4,10 @@
 
 ## 1. Bound STREAM session
 
+[Actor interface §1](06-actors.ko.md#1-actor)에서 정의한 `ZLinkSessionBindingIdentity`는 §4의 binding
+identity를 읽기 전용 값으로 제공한다. Actor의 `OnDuplicateBindAsync`는 current와 incoming 값을 이
+형식으로 받는다.
+
 Actor에서 client로 보내는 표면은 one-way send와 disconnect만 제공한다.
 
 ```csharp

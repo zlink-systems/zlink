@@ -260,7 +260,7 @@ sequenceDiagram
     S->>A: [send] command 24 actorSend · session sequence를 붙여 relay
     A->>S: [send] command 36 boundSessionSend · Actor→session push
     S-->>C: push 전달
-    Note over A: 같은 Actor를 다른 session이 bind하면<br/>이전 session owner node에 command 51 boundSessionReplaced를 보낸다
+    Note over A: 다른 session의 중복 bind가 §6에서 받아들여지면<br/>이전 session owner node에 command 51 boundSessionReplaced를 보낸다
     C-xS: connection 종료
     S->>A: disconnect 통지 · current binding generation의 tombstone (command 38 transition)
 ```

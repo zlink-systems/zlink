@@ -488,7 +488,7 @@ public sealed class ActorBoundSessionRelayTests
     }
 
     [Fact]
-    public void Same_Physical_Session_Requires_The_Exact_Owner_Identity()
+    public void Same_Physical_Session_Uses_Routing_Identity_And_Not_The_Owner_Lease()
     {
         var nodeRid = RoutingId.From("session-node");
         var sessionRid = RoutingId.From("session-rid");
@@ -501,46 +501,28 @@ public sealed class ActorBoundSessionRelayTests
             SessionOwnerLeaseGeneration: 13
         );
 
-        Assert.True(binding.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, "owner-a", 13));
+        Assert.True(binding.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid));
         Assert.False(
-            binding.IsSamePhysicalSessionOwner(
-                RoutingId.From("other-node"),
-                11,
-                sessionRid,
-                "owner-a",
-                13
-            )
+            binding.IsSamePhysicalSessionOwner(RoutingId.From("other-node"), 11, sessionRid)
         );
-        Assert.False(binding.IsSamePhysicalSessionOwner(nodeRid, 12, sessionRid, "owner-a", 13));
+        Assert.False(binding.IsSamePhysicalSessionOwner(nodeRid, 12, sessionRid));
         Assert.False(
-            binding.IsSamePhysicalSessionOwner(
-                nodeRid,
-                11,
-                RoutingId.From("other-session"),
-                "owner-a",
-                13
-            )
+            binding.IsSamePhysicalSessionOwner(nodeRid, 11, RoutingId.From("other-session"))
         );
-        Assert.False(binding.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, "owner-b", 13));
-        Assert.False(binding.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, "owner-a", 14));
 
-        // Session-Actor binding §4: an identity without descriptor values is not guessed
-        // from the node RID and lifecycle generation.
+        // Session-Actor binding §4: OwnerId and OwnerLeaseGeneration fence commands 42, 51, and 54;
+        // the physical Session comparison uses the Node RID, lifecycle generation, and SessionRid.
         var legacyIdentity = binding with
         {
             SessionOwnerId = "",
             SessionOwnerLeaseGeneration = 0,
         };
-        Assert.False(
-            legacyIdentity.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, nodeRid.ToHex(), 11)
-        );
+        Assert.True(legacyIdentity.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid));
         Assert.False(
             (binding with { SessionNodeRid = null }).IsSamePhysicalSessionOwner(
                 nodeRid,
                 11,
-                sessionRid,
-                "owner-a",
-                13
+                sessionRid
             )
         );
     }

@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.actors.ZLinkStoreActorDirectory;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -31,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 final class ZLinkFrameworkActorSubsystem {
     private final ZLinkActorRuntime actors;
@@ -333,7 +335,35 @@ final class ZLinkFrameworkActorSubsystem {
                 .forEach(
                         node ->
                                 node.setRemoteSessionBindingOwner(
-                                        actors::applyRemoteSessionBinding));
+                                        new ZLinkInternalSpotNode.RemoteSessionBindingOwner() {
+                                            @Override
+                                            public CompletionStage<Boolean> apply(
+                                                    ZLinkInternalSpotNode ownerNode,
+                                                    ZLinkBackendActorRef actor,
+                                                    Function<
+                                                                    ZLinkInternalSpotNode
+                                                                            .RemoteSessionBindingTransition,
+                                                                    CompletionStage<Boolean>>
+                                                            transition) {
+                                                return actors.applyRemoteSessionBindingAsync(
+                                                        ownerNode, actor, transition);
+                                            }
+
+                                            @Override
+                                            public CompletionStage<Boolean> restoreRelocated(
+                                                    ZLinkInternalSpotNode ownerNode,
+                                                    ZLinkBackendActorRef actor,
+                                                    Function<
+                                                                    ZLinkInternalSpotNode
+                                                                            .RemoteSessionBindingTransition,
+                                                                    CompletionStage<Boolean>>
+                                                            transition) {
+                                                return actors
+                                                        .restoreRelocatedRemoteSessionBindingAsync(
+                                                                ownerNode, actor, transition);
+                                            }
+                                        },
+                                        registration.sessionReplacementCallbackTimeout()));
         // Canonical service-wire actorJoin(28) is decoded by the raw mesh
         // boundary, while admission remains in the Spot runtime so it shares
         // the S3 Location Store fence/type resolution with routed joins.

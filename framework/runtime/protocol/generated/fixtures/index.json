@@ -5325,6 +5325,49 @@
         "commandId": null
       },
       "hex": "5a4c41550100000000007d0002000d03000a02000704636861740173076f776e65722d610000000000000005046d61696e016e000000000000000100000000000100000043000c61637469766174696f6e2d3120d71bdc8539d184b7ea5a91006b49bee290fcd6a5811bb2061a29c5a09ec9399e000000af000000000000000100000000000000003093720e00"
+    },
+    {
+      "name": "stream-bind-rejected-reply-message",
+      "operation": "conditional-union",
+      "rule": "streamBind-rejected-message",
+      "expect": "accept",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "reply",
+        "commandId": 20
+      },
+      "framesHex": [
+        "5a4d011400000000000000004d0000006a0000000f0028ec9db4ebafb820ec97b0eab2b0eb909c20ec84b8ec8598ec9db420ec9e88ec8ab5eb8b88eb8ba42e"
+      ],
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "context": {
+        "originalOperationKind": "streamBind"
+      }
+    },
+    {
+      "name": "stream-bind-rejected-reply-message-required",
+      "operation": "conditional-union",
+      "rule": "streamBind-rejected-message-required",
+      "expect": "reject",
+      "surface": {
+        "format": "command",
+        "type": null,
+        "command": "reply",
+        "commandId": 20
+      },
+      "framesHex": [
+        "5a4d011400000000000000004d0000006a0000000f"
+      ],
+      "directions": [
+        "decode"
+      ],
+      "context": {
+        "originalOperationKind": "streamBind"
+      }
     }
   ]
 }

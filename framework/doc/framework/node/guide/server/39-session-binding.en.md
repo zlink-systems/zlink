@@ -121,6 +121,51 @@ covers that boundary.
 - What gets bound — [Actor](22-actor.en.md)
 - What happens during a move — [Relocation](37-relocation.en.md)
 
+## 6. The Actor Decides Whether to Replace a Session
+
+When a new session binds an Actor whose current binding belongs to another session, the framework
+calls `onDuplicateBind(current, incoming, signal)` in the Actor's order. The two arguments are
+read-only values identified by session-owner node, its lifecycle generation, and binding generation. The callback accepts by
+returning `undefined` or an empty string, and rejects with a non-empty returned string as its message.
+
+An Entry Spot account Actor can reject a new connection to keep the existing login session.
+
+```typescript
+class EntryAccountActor {
+  onDuplicateBind(
+    current: ZLinkSessionBindingIdentity,
+    incoming: ZLinkSessionBindingIdentity,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    return Promise.resolve("An account session is already active.");
+  }
+}
+```
+
+A User Spot game Actor can allow replacement based on application state.
+
+```typescript
+class MatchActor {
+  private matchFinished = false;
+
+  onDuplicateBind(
+    current: ZLinkSessionBindingIdentity,
+    incoming: ZLinkSessionBindingIdentity,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    return Promise.resolve(
+      this.matchFinished ? "This match no longer accepts a connection." : undefined,
+    );
+  }
+}
+```
+
+Without a callback, the framework accepts the new session as before. Rejection or a callback that
+doesn't finish within its timeout keeps the current binding and ends only the incoming bind with an
+error. The framework doesn't close the incoming connection or send command 51. Acceptance registers
+the new session as current and applies the existing replacement procedure to the previous
+connection. [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection) owns the callback timeout setting.
+
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

@@ -59,7 +59,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
             RoutingId,
             ulong,
             ServiceWireCodec.BoundSessionBind38,
-            Action,
+            Action<RequestResult, uint, string?>,
             CancellationToken,
             ValueTask
         > handler

@@ -62,7 +62,7 @@ public sealed partial class StatefulServiceRuntimeTests
                         ZLinkFrameworkErrorKind.Unavailable,
                         "The bind lost its ingress lifecycle."
                     );
-                reply();
+                reply(RequestResult.Ok, 0, null);
                 return ValueTask.CompletedTask;
             }
         );
@@ -399,7 +399,7 @@ public sealed partial class StatefulServiceRuntimeTests
                             "terminal rejection"
                         )
                     );
-                reply();
+                reply(RequestResult.Ok, 0, null);
                 return ValueTask.CompletedTask;
             }
         );
