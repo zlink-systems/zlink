@@ -1,6 +1,9 @@
 # The SHA belongs to the previous release asset. Replace it with the digest
 # of the published source archive before submitting this recipe.
 sources:
+  "1.22.0":
+    url: "https://github.com/zlink-systems/zlink/releases/download/cpp/v1.22.0/zlink-cpp-1.22.0.tar.gz"
+    sha256: "ff1ae72e26866245a3be61391475655be4099db6c19a9a1294df37a01027da57"
   "1.21.0":
     url: "https://github.com/zlink-systems/zlink/releases/download/cpp/v1.21.0/zlink-cpp-1.21.0.tar.gz"
     sha256: "feadd9fbb30d0c7bab254cb07aaa183ba6f656e0f27427ee699a4592ba237769"
