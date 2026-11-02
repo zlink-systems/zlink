@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
@@ -74,7 +73,7 @@ public sealed class MeshLivenessPhysicalCloseTests
         {
             // Observe after the existing control-submit worker has run. Its
             // asynchronous Core admission may remain pending under backpressure.
-            var scheduler = Field<ConcurrentExclusiveSchedulerPair>(node, "_routedSubmitScheduler");
+            var scheduler = node._routedSubmitScheduler;
             await Task.Factory.StartNew(
                 () => Assert.True(peer.Admitted),
                 CancellationToken.None,
@@ -137,14 +136,5 @@ public sealed class MeshLivenessPhysicalCloseTests
     }
 
     private static void Tick(ZLinkManagedMeshNode node, long now) =>
-        typeof(ZLinkManagedMeshNode)
-            .GetMethod("ProcessInfrastructure", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(node, [now]);
-
-    private static T Field<T>(object owner, string name) =>
-        (T)
-            owner
-                .GetType()
-                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(owner)!;
+        node.ProcessInfrastructure(now);
 }

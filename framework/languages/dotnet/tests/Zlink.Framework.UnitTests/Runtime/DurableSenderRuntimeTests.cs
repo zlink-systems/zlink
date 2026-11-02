@@ -107,21 +107,8 @@ public sealed partial class StatefulServiceRuntimeTests
         {
             // Hold cleanup outside the state turn until the durable owner has
             // published its terminal. Retirement itself must already be visible.
-            typeof(ZLinkManagedMeshNode)
-                .GetEvent(
-                    "PeerConnectionIntentRemoved",
-                    System.Reflection.BindingFlags.Instance
-                        | System.Reflection.BindingFlags.NonPublic
-                )!
-                .GetAddMethod(nonPublic: true)!
-                .Invoke(
-                    source,
-                    [
-                        new Func<RoutingId, Action?>(_ =>
-                            () => completionReady.Task.WaitAsync(timeout).GetAwaiter().GetResult()
-                        ),
-                    ]
-                );
+            source.PeerConnectionIntentRemoved += _ =>
+                () => completionReady.Task.WaitAsync(timeout).GetAwaiter().GetResult();
         }
         var terminalBeforeRouteLoss = removeExpectationFirst && !ownerDisconnects;
         if (removeExpectationFirst)

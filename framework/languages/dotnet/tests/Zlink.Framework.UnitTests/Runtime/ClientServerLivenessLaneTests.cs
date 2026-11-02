@@ -1,4 +1,3 @@
-using System.Reflection;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
@@ -240,9 +239,13 @@ public sealed class ClientServerLivenessLaneTests
             failures
         );
 
-        typeof(ZLinkChannelReceiveLoop)
-            .GetMethod("ReplyClientServerControl", BindingFlags.Static | BindingFlags.NonPublic)!
-            .Invoke(null, [router, received, identity, failures, CancellationToken.None]);
+        ZLinkChannelReceiveLoop.ReplyClientServerControl(
+            router,
+            received,
+            identity,
+            failures,
+            CancellationToken.None
+        );
 
         Assert.Equal(1, identity.ReceivedLivenessProbeCount);
         if (disconnectBeforeAck)
@@ -286,42 +289,27 @@ public sealed class ClientServerLivenessLaneTests
         );
         var failures = new AuditRuntimeFailureReporter();
         using var stop = new CancellationTokenSource();
-        var connectionType = typeof(ZLinkClientServerClientRuntime).GetNestedType(
-            "Connection",
-            BindingFlags.NonPublic
-        )!;
         // Only Framework state is inspected. Binding calls, request/reply and completion
         // draining all use public APIs; no production hook or binding reflection is needed.
-        var connection = Activator.CreateInstance(
-            connectionType,
-            BindingFlags.Instance | BindingFlags.NonPublic,
-            binder: null,
-            args:
-            [
-                "work",
-                endpoint,
-                null,
-                barrier,
-                stop.Token,
-                (Action<object, string>)((_, _) => { }),
-                (Action<bool>)(_ => { }),
-                time,
-                failures,
-                new ZLinkRuntimeTaskRunner(failures, stop.Token),
-                deadlines,
-            ],
-            culture: null
-        )!;
-        FieldInfo Field(string name) =>
-            connectionType.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
-        MethodInfo Method(string name) =>
-            connectionType.GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var lane = (ZLinkStateLane)Field("_lane").GetValue(connection)!;
-        var requests = (List<Task>)Field("_requestTasks").GetValue(connection)!;
+        var connection = new ZLinkClientServerClientRuntime.Connection(
+            "work",
+            endpoint,
+            null,
+            barrier,
+            stop.Token,
+            (_, _) => { },
+            _ => { },
+            time,
+            failures,
+            new ZLinkRuntimeTaskRunner(failures, stop.Token),
+            deadlines
+        );
+        var lane = connection._lane;
+        var requests = connection._requestTasks;
         using var admissionStop = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
-        Field("_admissionStop").SetValue(connection, admissionStop);
+        connection._admissionStop = admissionStop;
         const uint maximumMessageBytes = 4096;
-        Field("_normalizedEffectiveMaxMessageBytes").SetValue(connection, maximumMessageBytes);
+        connection._normalizedEffectiveMaxMessageBytes = maximumMessageBytes;
         var admission = new ZLinkClientServerControlProtocol.Admission(
             "work",
             RoutingId.From("probe-server"),
@@ -336,24 +324,21 @@ public sealed class ClientServerLivenessLaneTests
         try
         {
             using var reply = ZLinkClientServerControlProtocol.EncodeAdmission(admission);
-            Assert.True(
-                (bool)Method("ApplyAdmission").Invoke(connection, [new[] { reply }, 1UL, 0UL])!
-            );
+            Assert.True(connection.ApplyAdmission([reply], 1UL, 0UL));
             var first = await lane.RunAsync(() => requests.ToArray());
             await Task.WhenAll(first);
-            Assert.Equal(1L, Field("_livenessAckCount").GetValue(connection));
+            Assert.Equal(1L, connection.LivenessAckCount);
             if (afterAdmission)
             {
                 // Advance only the monotonic clock, then run the timer's state transition.
                 // No elapsed-time wait or scheduling race is needed to reach the next probe.
                 time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval);
                 await lane.RunAsync(() =>
-                    Method("ProgressLivenessUnderState")
-                        .Invoke(connection, [admissionStop.Token, TimeSpan.Zero])
+                    connection.ProgressLivenessUnderState(admissionStop.Token, out _)
                 );
                 var next = await lane.RunAsync(() => requests.ToArray());
                 await Task.WhenAll(next);
-                Assert.Equal(2L, Field("_livenessAckCount").GetValue(connection));
+                Assert.Equal(2L, connection.LivenessAckCount);
             }
             Assert.Equal(afterAdmission ? 2 : 1, barrier.CompletedReplies);
             Assert.Empty(failures.Failures);
@@ -371,7 +356,7 @@ public sealed class ClientServerLivenessLaneTests
                 }
                 catch (Exception) when (request.IsFaulted || request.IsCanceled) { }
             }
-            if (Field("_livenessTask").GetValue(connection) is Task liveness)
+            if (connection._livenessTask is Task liveness)
             {
                 try
                 {

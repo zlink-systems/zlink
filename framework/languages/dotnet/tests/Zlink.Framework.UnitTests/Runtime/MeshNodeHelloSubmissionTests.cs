@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.UnitTests;
@@ -39,9 +38,7 @@ public sealed class MeshNodeHelloSubmissionTests
         {
             // Management has collected the first HELLO, but has not created its submission.
             if (Interlocked.Exchange(ref injected, 1) == 0)
-                Invoke(
-                    node,
-                    "ProcessAdmission",
+                node.ProcessAdmission(
                     peerRid,
                     node.ObservePeerRoute(peerRid).SelectedGeneration,
                     ServiceWireConstants.Command.Hello,
@@ -112,11 +109,7 @@ public sealed class MeshNodeHelloSubmissionTests
         Assert.Equal(0UL, monitor.Status().PeerAdmitted);
         Assert.Equal(0UL, node.ObservePeerRoute(peerRid).ReadyGeneration);
         Assert.False(
-            await Field<ZLinkStateLane>(node, "_lane")
-                .RunAsync(() =>
-                    Field<ZLinkMeshChannelSelection>(node, "_channelSelection")
-                        .TrySelect(MeshName, out _)
-                )
+            await node._lane.RunAsync(() => node._channelSelection.TrySelect(MeshName, out _))
         );
         using (var payload = Message.From("not-ready"u8))
         {
@@ -195,9 +188,7 @@ public sealed class MeshNodeHelloSubmissionTests
         );
         var generation = node.ObservePeerRoute(peerRid).SelectedGeneration;
         for (var duplicate = 0; duplicate < 2; duplicate++)
-            Invoke(
-                node,
-                "ProcessAdmission",
+            node.ProcessAdmission(
                 peerRid,
                 generation,
                 ServiceWireConstants.Command.Admit,
@@ -208,15 +199,11 @@ public sealed class MeshNodeHelloSubmissionTests
         Assert.Equal(1U, node.Status().AdmittedPeerCount);
         Assert.Equal(1UL, monitor.Status().PeerAdmitted);
         Assert.Equal(generation, node.ObservePeerRoute(peerRid).ReadyGeneration);
-        await Field<ZLinkStateLane>(node, "_lane")
-            .RunAsync(() =>
-            {
-                Assert.True(
-                    Field<ZLinkMeshChannelSelection>(node, "_channelSelection")
-                        .TrySelect(MeshName, out var selected)
-                );
-                Assert.Equal(peerRid, selected);
-            });
+        await node._lane.RunAsync(() =>
+        {
+            Assert.True(node._channelSelection.TrySelect(MeshName, out var selected));
+            Assert.Equal(peerRid, selected);
+        });
         for (var period = 0; period < 2; period++)
         {
             time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval);
@@ -238,16 +225,11 @@ public sealed class MeshNodeHelloSubmissionTests
             MeshName,
             deadlineTimeProvider: time
         );
-        var lane = Field<ZLinkStateLane>(node, "_inboundOperationLane");
+        var lane = node._inboundOperationLane;
         await lane.RunAsync(() =>
         {
             if (pending)
-                typeof(ZLinkManagedMeshNode)
-                    .GetField(
-                        "_admissionActivityTicks",
-                        BindingFlags.Instance | BindingFlags.NonPublic
-                    )!
-                    .SetValue(node, time.GetTimestamp());
+                node._admissionActivityTicks = time.GetTimestamp();
             time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval - TimeSpan.FromTicks(1));
             // Re-entering this lane throws. Every completed rotation therefore
             // proves that management made zero inbound-operation lane calls.
@@ -392,20 +374,11 @@ public sealed class MeshNodeHelloSubmissionTests
         Assert.True(
             ZLinkServiceWireCodec.TryDecodeRouteAdmission(admitBytes, out _, out var admit, out _)
         );
-        var generation = await Field<ZLinkStateLane>(node, "_lane")
-            .RunAsync(() =>
-                Field<ZLinkMeshSelectedRoutes>(node, "_selectedRoutes").GenerationOf(peerRid)
-            );
-        Assert.NotEqual(0UL, generation);
-        Invoke(
-            node,
-            "ProcessAdmission",
-            peerRid,
-            generation,
-            ServiceWireConstants.Command.Admit,
-            admit,
-            null
+        var generation = await node._lane.RunAsync(() =>
+            node._selectedRoutes.GenerationOf(peerRid)
         );
+        Assert.NotEqual(0UL, generation);
+        node.ProcessAdmission(peerRid, generation, ServiceWireConstants.Command.Admit, admit, null);
         Assert.Equal(1U, node.Status().AdmittedPeerCount);
         await CompleteSubmissions(node);
         var update = ReceiveAdmission(peer, poller);
@@ -454,25 +427,22 @@ public sealed class MeshNodeHelloSubmissionTests
             // Submissions cannot finish while the scheduler is held. The first
             // HELLO is still queued; only a newer descriptor adds an UPDATE.
             // Observe in the admission turn before liveness can queue a probe.
-            await Field<ZLinkStateLane>(node, "_lane")
-                .RunAsync(async ValueTask () =>
-                {
-                    var generation = Field<ZLinkMeshSelectedRoutes>(node, "_selectedRoutes")
-                        .GenerationOf(peerRid);
-                    Assert.NotEqual(0UL, generation);
-                    Invoke(
-                        node,
-                        "ProcessAdmissionCore",
-                        peerRid,
-                        generation,
-                        ServiceWireConstants.Command.Admit,
-                        admit,
-                        null
-                    );
-                    var count = await Field<ZLinkStateLane>(node, "_inboundOperationLane")
-                        .RunAsync(() => Field<HashSet<Task>>(node, "_inboundOperations").Count);
-                    Assert.Equal(changeDescriptor ? 2 : 1, count);
-                });
+            await node._lane.RunAsync(async ValueTask () =>
+            {
+                var generation = node._selectedRoutes.GenerationOf(peerRid);
+                Assert.NotEqual(0UL, generation);
+                node.ProcessAdmissionCore(
+                    peerRid,
+                    generation,
+                    ServiceWireConstants.Command.Admit,
+                    admit,
+                    null
+                );
+                var count = await node._inboundOperationLane.RunAsync(() =>
+                    node._inboundOperations.Count
+                );
+                Assert.Equal(changeDescriptor ? 2 : 1, count);
+            });
             Assert.Equal(1U, node.Status().AdmittedPeerCount);
         }
         finally
@@ -555,14 +525,11 @@ public sealed class MeshNodeHelloSubmissionTests
                     out _
                 )
             );
-            var generation = await Field<ZLinkStateLane>(node, "_lane")
-                .RunAsync(() =>
-                    Field<ZLinkMeshSelectedRoutes>(node, "_selectedRoutes").GenerationOf(peerRid)
-                );
+            var generation = await node._lane.RunAsync(() =>
+                node._selectedRoutes.GenerationOf(peerRid)
+            );
             void Admit() =>
-                Invoke(
-                    node,
-                    "ProcessAdmission",
+                node.ProcessAdmission(
                     peerRid,
                     generation,
                     ServiceWireConstants.Command.Admit,
@@ -592,7 +559,7 @@ public sealed class MeshNodeHelloSubmissionTests
         }
         else
             node.RemovePeerConnection(intent);
-        Assert.Equal(-1, Field<long>(node, "_admissionActivityTicks"));
+        Assert.Equal(-1, node._admissionActivityTicks);
         for (var period = 0; period < periods; period++)
         {
             time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval);
@@ -605,13 +572,7 @@ public sealed class MeshNodeHelloSubmissionTests
     }
 
     private static TimeSpan ReadWaitDeadline(ZLinkManagedMeshNode node) =>
-        (TimeSpan)
-            typeof(ZLinkManagedMeshNode)
-                .GetMethod(
-                    "ReadOperationWaitDeadline",
-                    BindingFlags.Instance | BindingFlags.NonPublic
-                )!
-                .Invoke(node, null)!;
+        node.ReadOperationWaitDeadline();
 
     private static void AssertNoHello(IRouterSocket peer)
     {
@@ -631,29 +592,15 @@ public sealed class MeshNodeHelloSubmissionTests
     }
 
     private static void ManagementTurn(ZLinkManagedMeshNode node) =>
-        Invoke(node, "ProcessInfrastructure", Stopwatch.GetTimestamp());
+        node.ProcessInfrastructure(Stopwatch.GetTimestamp());
 
     private static async Task CompleteSubmissions(ZLinkManagedMeshNode node)
     {
-        var tasks = await Field<ZLinkStateLane>(node, "_inboundOperationLane")
-            .RunAsync(() => Field<HashSet<Task>>(node, "_inboundOperations").ToArray());
+        var tasks = await node._inboundOperationLane.RunAsync(() =>
+            node._inboundOperations.ToArray()
+        );
         await Task.WhenAll(tasks).WaitAsync(ObservationTimeout);
     }
-
-    private static T Field<T>(ZLinkManagedMeshNode node, string name) =>
-        (T)
-            typeof(ZLinkManagedMeshNode)
-                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(node)!;
-
-    private static void Invoke(
-        ZLinkManagedMeshNode node,
-        string name,
-        params object?[] arguments
-    ) =>
-        typeof(ZLinkManagedMeshNode)
-            .GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(node, arguments);
 
     private static (
         ServiceWireConstants.Command Command,
@@ -734,7 +681,7 @@ public sealed class MeshNodeHelloSubmissionTests
             }
             return false;
         });
-        Invoke(node, "SignalReceiveOwner");
+        node.SignalReceiveOwner();
         try
         {
             await ownerHeld.Task.WaitAsync(ObservationTimeout);

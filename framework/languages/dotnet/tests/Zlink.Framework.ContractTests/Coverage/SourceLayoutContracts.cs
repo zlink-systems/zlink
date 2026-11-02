@@ -11,36 +11,7 @@ namespace Zlink.Framework.ContractTests.Coverage;
 
 public sealed class SourceLayoutContracts
 {
-    // 이 목록은 private 접근 시험을 공개 동작 관찰로 옮길 때 줄어들기만 해야 합니다.
-    private static readonly string[] LegacyNonPublicReflectionFiles =
-    [
-        "Zlink.Framework.UnitTests/Runtime/ClientServerClientAckTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/ClientServerLivenessLaneTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/DurableSenderRuntimeTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/EntrySpotActorDispatchTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/EnvelopeHeaderCacheHotPathTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/LogicalMulticastSubmitTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/MeshChannelSelectionHotPathTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/MeshLivenessDisconnectContractTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/MeshLivenessPhysicalCloseTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/MeshMailboxReadinessTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/MeshMonitorHotPathTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/MeshNodeHelloSubmissionTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/MeshNodeLifecycleStateTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/MeshNodeShutdownSealTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/MeshPermitHandoffTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/RawPortCloseFailureTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/RelocationBehaviorConformanceTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/RelocationSourceRestoreTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/RelocationTargetShutdownTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/SameNodeActorJoinTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/SerialExecutorTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/ServiceRuntimeFoundationTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/ServiceWireSessionRelocationCodecTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/SessionActorCoordinatorTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/SessionFailureClassificationTests.cs",
-        "Zlink.Framework.UnitTests/Runtime/SubmitAdmissionRuntimeTests.cs",
-    ];
+    private static readonly string[] LegacyNonPublicReflectionFiles = [];
 
     private static readonly string[] RemovedRuntimeMethods =
     [
