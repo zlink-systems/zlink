@@ -595,6 +595,8 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
           zlink::framework::owner_lease_release_result_t>> ();
     }
 
+    auto release_started () { return _release_started.task (); }
+
     void complete_pending_release ()
     {
         _pending_release->complete (
@@ -680,6 +682,7 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
     release_owner_lease (zlink::framework::location_owner_token_t token) override
     {
         _release_calls.fetch_add (1);
+        _release_started.complete (zlink::framework::result_t<void>::success ());
         if (_block_releases) {
             return _pending_release->task ();
         }
@@ -707,6 +710,7 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
     std::shared_ptr<
       zlink::framework::task_completion_source_t<zlink::framework::owner_lease_release_result_t>>
       _pending_release;
+    zlink::framework::task_completion_source_t<void> _release_started;
     std::atomic_int _claim_calls = 0;
     std::atomic_int _release_calls = 0;
     std::atomic_int _read_calls = 0;
@@ -739,17 +743,25 @@ TEST (ZLinkFrameworkLocationRuntime, BoundsNonCooperativeOwnerCleanup)
     startup_owner_lease_repository_t store;
     store.set_claim_mode (startup_owner_lease_repository_t::claim_mode_t::succeed);
     store.block_owner_lease_releases ();
-    const auto renew_timeout = std::chrono::milliseconds (20);
-    location_runtime_t runtime (
-      store,
-      location_options_t{.owner_lease_renew_interval = std::chrono::seconds (1),
-                         .owner_lease_ttl = std::chrono::seconds (15),
-                         .owner_lease_renew_timeout = renew_timeout},
-      "owner-a");
-    runtime.start (zlink::routing_id_t::from ("node-a"));
+    const auto cleanup_timeout = std::chrono::milliseconds (20);
+    location_runtime_t runtime (store, location_options_t{}, "owner-a");
+    // Prepare the lease with the normal startup deadline, without a heartbeat.
+    // The cleanup under test keeps its separate 20ms absolute deadline.
+    runtime.renew_owner_lease_once ();
+    ASSERT_TRUE (runtime.current_owner_token ().has_value ());
+    auto release_started = store.release_started ();
 
-    auto cleanup = std::async (std::launch::async, [&] { return runtime.cleanup_owner (); });
-    const auto status = cleanup.wait_for (renew_timeout + std::chrono::seconds (1));
+    auto cleanup = std::async (std::launch::async, [&] {
+        return runtime.cleanup_owner (std::chrono::steady_clock::now () + cleanup_timeout);
+    });
+    const auto started = release_started.result_for (std::chrono::seconds (1));
+    if (!started) {
+        store.complete_pending_release ();
+        EXPECT_FALSE (cleanup.get ());
+        FAIL () << "owner lease release did not start";
+    }
+    ASSERT_TRUE (*started);
+    const auto status = cleanup.wait_for (cleanup_timeout + std::chrono::seconds (1));
     EXPECT_EQ (std::future_status::timeout, status);
     store.complete_pending_release ();
     EXPECT_FALSE (cleanup.get ());
