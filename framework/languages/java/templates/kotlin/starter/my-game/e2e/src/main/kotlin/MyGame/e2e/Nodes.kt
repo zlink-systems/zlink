@@ -93,7 +93,7 @@ private class Node(val id: String, config: Path, root: Path, logs: Path) {
     }
 }
 
-private fun isWindows() = System.getProperty("os.name").startsWith("Windows")
+fun isWindows() = System.getProperty("os.name").startsWith("Windows")
 
 class Nodes(private val root: Path) : AutoCloseable {
     private val runId = UUID.randomUUID().toString()
