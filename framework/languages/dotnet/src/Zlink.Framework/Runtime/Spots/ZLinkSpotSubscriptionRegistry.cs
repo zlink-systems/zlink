@@ -275,7 +275,8 @@ internal sealed class ZLinkSpotSubscriptionRegistry
             metadata: null,
             header.CorrelationId,
             message.Topic,
-            header.Source
+            header.Source,
+            message.ReceivedAt
         );
         foreach (var descriptor in descriptors)
         {

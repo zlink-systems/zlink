@@ -60,6 +60,25 @@ namespace zlink::framework::runtime
 
 namespace
 {
+bool requires_location_owner_state (const mesh::service_mailbox_record_t &record)
+{
+    if (record.application) {
+        return !detail::is_node_or_channel_record_kind (record.application->record.kind);
+    }
+    if (record.parts.empty ())
+        return true;
+    const auto header = protocol::decode_header (protocol::message_bytes (record.parts.front ()));
+    switch (header.kind) {
+        case protocol::command::nodeSend:
+        case protocol::command::nodeRequest:
+        case protocol::command::channelSend:
+        case protocol::command::channelRequest:
+            return false;
+        default:
+            return true;
+    }
+}
+
 bool is_application_request (host::record_kind_t kind)
 {
     using kind_t = host::record_kind_t;
@@ -2021,12 +2040,14 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
 
     void run () override
     {
+        std::optional<zlink::poll_event_flag_t> readiness;
         while (!host._stop.load (std::memory_order_acquire))
-            rotate ();
+            readiness = rotate (readiness);
         supply.close ();
     }
 
-    void rotate ()
+    std::optional<zlink::poll_event_flag_t>
+    rotate (std::optional<zlink::poll_event_flag_t> readiness)
     {
         auto &application_permit = *receive_permit;
         auto &mailbox = node->native_node ().transport ().mailbox ();
@@ -2073,6 +2094,8 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
             node->dispatch_ready (
               [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
                    std::vector<zlink::message_t> parts, application_job_queue_t::permit_t permit) {
+                  auto accepted_record = record;
+                  accepted_record.received_at = std::chrono::system_clock::now ();
                   trace_mesh_application ("callback", record, parts.size ());
                   detail::spot_node_runtime_t spot_runtime (registration->spot_state);
                   const bool transfer_dispatch =
@@ -2134,7 +2157,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                                   return;
                               }
                               handled = spot_runtime.dispatch_mesh_record (
-                                owner, record, parts, header.value (), *host._services,
+                                owner, accepted_record, parts, header.value (), *host._services,
                                 *host._serializers, {}, nullptr,
                                 handler_entry_t (record.before_application_handler,
                                                  std::move (permit)));
@@ -2155,8 +2178,8 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                       mailbox_record.domain = mesh::service_mailbox_domain_t::application;
                       mailbox_record.before_application_handler = record.before_application_handler;
                       mailbox_record.application_permit.emplace (std::move (permit));
-                      mailbox_record.application.emplace (
-                        host::local_application_dispatch_t{owner, record, std::move (parts)});
+                      mailbox_record.application.emplace (host::local_application_dispatch_t{
+                        owner, accepted_record, std::move (parts)});
                       const auto accepted =
                         node->native_node ().transport ().mailbox ().try_enqueue (
                           std::move (mailbox_record));
@@ -2194,7 +2217,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                           direct_terminal = [terminal] { terminal->settle (); };
                       }
                       const auto handled = spot_runtime.dispatch_mesh_record (
-                        owner, record, parts, decoded_header.value (), *host._services,
+                        owner, accepted_record, parts, decoded_header.value (), *host._services,
                         *host._serializers, direct_terminal);
                       if (handled || !decoded_header.value ()) {
                           return;
@@ -2202,12 +2225,12 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                       detail::mesh_record_dispatcher_t dispatcher (
                         *host._services, *host._serializers, registration->handlers, *host._filters,
                         host._dispatch_options, {}, registration);
-                      auto pending = dispatcher.dispatch (record, std::move (parts),
+                      auto pending = dispatcher.dispatch (accepted_record, std::move (parts),
                                                           std::move (*decoded_header.value ()), {},
                                                           host._application_dispatch.get ());
                   });
               },
-              accept_application_receive, next_application_receive))
+              accept_application_receive, next_application_receive, readiness))
             .result ()
             .value ();
         auto ready = mailbox.take_application_receive_turn ();
@@ -2247,14 +2270,16 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                 next_activity = activity.second;
             }
         }
+        readiness.reset ();
         // A pump may consume the wake for supply delivered after this turn's
         // take. Recheck its owner state before waiting for the next rotation.
         if (!local_pending && !ready && !host._stop.load (std::memory_order_acquire)
             && !supply.has_supply ()) {
-            (void) node->native_node ().wait_for_dispatch_activity (
+            readiness = node->native_node ().wait_for_dispatch_activity (
               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
         }
         mesh::service_mailbox_t::notify_application_ready (ready);
+        return readiness;
     }
 
     struct pending_management_t
@@ -3182,7 +3207,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [this, node, receive_permit] (mesh::service_mailbox_record_t &record) {
                   std::lock_guard lock (_dispatch_gate_mutex);
                   if (!_accept_application_dispatch.load (std::memory_order_relaxed)
-                      || !_location_runtime || !_location_runtime->owner_lease_usable ()) {
+                      || (requires_location_owner_state (record)
+                          && (!_location_runtime || !_location_runtime->owner_lease_usable ()))) {
                       if (record.before_application_handler
                           || (record.application_permit && *record.application_permit)) {
                           record.before_application_handler = {};

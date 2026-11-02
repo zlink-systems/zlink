@@ -241,6 +241,16 @@ export class TableViewHandler implements ZLinkSpotActorSendHandler<Room, Player,
 - STREAM session handler는 `ZLinkMessage`를 받고 `decode(type)`로 형식을 정하므로 이 규칙의
   대상이 아니다.
 
+기본 JSON schema는 [공통 메시지 계약 §5](../../../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)의 required 판정을 따른다.
+기본 codec은 constructor를 호출하지 않는다.
+
+| TypeScript property | 누락 처리 |
+|---|---|
+| `?`가 없는 property. definite-assignment `!` 포함 | required; 누락 거부 |
+| `?`가 있는 property | 선택; 구조적 값에서 property가 빠진 상태로 전달 |
+
+Property 기본값을 적용해야 하면 handler가 받은 구조적 값에서 application이 처리한다.
+
 ## 3. Location peer와 Logical Multicast
 
 ```ts

@@ -13,7 +13,18 @@ JSON만 사용하는 application은 codec API를 호출하지 않는다. 선택 
 `IZLinkCodecRegistryBuilder.Use(...)`에 extension instance 하나를 등록한다. `IZLinkCodecRegistrar`,
 `IZLinkMessageSerializer`와 `ZLinkEncodedPayload`는 custom codec provider가 구현할 때만 사용하는 SPI다.
 
-## 2. Codec 등록 API와 provider SPI
+## 2. Application DTO의 기본 JSON
+
+기본 JSON codec은 [공통 메시지 계약 §5](../../../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)의 required 판정을 따른다. C#에서는 기본값이 없는 생성자 parameter가 required다. 기본값을 선언한 parameter는 누락될 수 있다.
+
+Nullable 여부와 required 여부는 별개다. Nullable parameter에 명시한 `null`은 허용하지만, required nullable parameter의 누락은 거부한다.
+
+| C# 생성자 parameter | 누락 처리 |
+|---|---|
+| `string? accountId` | required. 명시적 `null` 허용 |
+| `string? accessToken = null` | 선택. 누락하면 `null` |
+
+## 3. Codec 등록 API와 provider SPI
 
 `IZLinkCodecRegistrar`는 business payload serializer만 등록한다. STREAM header의 codec 값은
 Stream Connector가 소유하는 `IZlinkStreamCodecRegistration`으로 선언한다. 이 분리로 HTTP client가

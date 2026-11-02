@@ -267,7 +267,7 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
               detail::encoded_payload_from_raw (body.value ()));
             auto runtime = _runtime;
             auto actor_ref = actor_ref_from_spot_route (request);
-            spot_inbound_message_t metadata;
+            spot_inbound_message_t metadata{.received_at = received.received_at};
             metadata.content_type = request.content_type;
             metadata.values = request.metadata;
             metadata.values["__zlink.messageFollowHopCount"] =

@@ -114,7 +114,8 @@ internal abstract partial class ZLinkSpotActivation
         _actorDispatchSubmitter = new ZLinkSpotActorDispatchSubmitter(
             _runtime,
             _serial,
-            _dispatcher.ActorPackets
+            _dispatcher.ActorPackets,
+            runtime.Registration.TimeProvider
         );
     }
 

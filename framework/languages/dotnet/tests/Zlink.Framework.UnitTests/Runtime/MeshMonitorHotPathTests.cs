@@ -1,4 +1,3 @@
-using System.Reflection;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
 
@@ -46,10 +45,7 @@ public sealed class MeshMonitorHotPathTests
         using var early = node.OpenMonitor(MeshMonitorEventMask.MessageSubmitted);
         node.PublishDraining();
         using var late = node.OpenMonitor(MeshMonitorEventMask.MessageSubmitted);
-        var lane = (ZLinkStateLane)
-            typeof(ZLinkManagedMeshNode)
-                .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(node)!;
+        var lane = node._lane;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _ = lane.RunAsync(async () =>
@@ -62,30 +58,7 @@ public sealed class MeshMonitorHotPathTests
         try
         {
             publication = Task.Run(() =>
-                typeof(ZLinkManagedMeshNode)
-                    .GetMethod(
-                        "Publish",
-                        BindingFlags.Instance | BindingFlags.NonPublic,
-                        [
-                            typeof(MeshMonitorEventKind),
-                            typeof(RoutingId),
-                            typeof(string),
-                            typeof(MeshOperationId),
-                            typeof(int),
-                            typeof(int),
-                        ]
-                    )!
-                    .Invoke(
-                        node,
-                        [
-                            MeshMonitorEventKind.MessageSubmitted,
-                            default(RoutingId),
-                            "worker",
-                            default(MeshOperationId),
-                            0,
-                            0,
-                        ]
-                    )
+                node.Publish(MeshMonitorEventKind.MessageSubmitted, channelName: "worker")
             );
             await publication.WaitAsync(TimeSpan.FromSeconds(3));
 

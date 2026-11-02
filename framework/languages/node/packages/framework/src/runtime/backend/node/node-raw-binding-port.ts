@@ -42,6 +42,13 @@ import type {
   ZLinkRawRouterRoute,
   ZLinkRawSocketPort
 } from '../raw-binding-port';
+
+interface ZLinkNodeRawRouterSocketOptions {
+  readonly sendHighWaterMark?: number;
+  readonly receiveHighWaterMark?: number;
+  readonly receiveTimeoutMs?: number;
+}
+
 export type {
   ZLinkRawBindingPort,
   ZLinkRawDealerPort,
@@ -57,14 +64,14 @@ export type {
 export class ZLinkNodeRawBindingPort implements ZLinkRawBindingPort {
   constructor(
     private readonly sharedContext?: Context,
-    private readonly routerReceiveTimeoutMs?: number
+    private readonly routerSocketOptions?: ZLinkNodeRawRouterSocketOptions
   ) {}
 
   createHost(): ZLinkRawHostPort {
     return new NodeRawHostPort(
       this.sharedContext ?? createContext(),
       this.sharedContext === undefined,
-      this.routerReceiveTimeoutMs
+      this.routerSocketOptions
     );
   }
 }
@@ -76,13 +83,13 @@ class NodeRawHostPort implements ZLinkRawHostPort {
   constructor(
     private readonly context: Context,
     private readonly ownsContext: boolean,
-    private readonly routerReceiveTimeoutMs?: number
+    private readonly routerSocketOptions?: ZLinkNodeRawRouterSocketOptions
   ) {}
 
   createRouter(): ZLinkRawRouterPort {
     this.requireOpen();
     return this.own(
-      new NodeRawRouterPort(createRouterSocket(this.context), this.routerReceiveTimeoutMs)
+      new NodeRawRouterPort(createRouterSocket(this.context), this.routerSocketOptions)
     );
   }
 
@@ -281,13 +288,19 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     disconnectSocketPeer(this.socket, this.preparedRoutingId(routingId));
   }
 
-  constructor(socket: RouterSocket, receiveTimeoutMs?: number) {
+  constructor(socket: RouterSocket, options?: ZLinkNodeRawRouterSocketOptions) {
     super(socket, true);
     socket.options.handover = true;
     socket.options.mandatory = true;
     socket.options.probe = true;
-    if (receiveTimeoutMs !== undefined) {
-      socket.options.recvTimeout = receiveTimeoutMs;
+    if (options?.sendHighWaterMark !== undefined) {
+      socket.options.sendHwm = BigInt(options.sendHighWaterMark);
+    }
+    if (options?.receiveHighWaterMark !== undefined) {
+      socket.options.recvHwm = BigInt(options.receiveHighWaterMark);
+    }
+    if (options?.receiveTimeoutMs !== undefined) {
+      socket.options.recvTimeout = options.receiveTimeoutMs;
     }
   }
 

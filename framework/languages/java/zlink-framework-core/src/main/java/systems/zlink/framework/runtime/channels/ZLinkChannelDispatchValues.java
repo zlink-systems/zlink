@@ -7,6 +7,7 @@ import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -52,6 +53,11 @@ final class DefaultHandlerFilterContext implements ZLinkHandlerFilterContext {
     }
 
     @Override
+    public Instant receivedAt() {
+        return message.receivedAt();
+    }
+
+    @Override
     public ZLinkHandlerDispatchKind dispatchKind() {
         return dispatchKind;
     }
@@ -69,6 +75,7 @@ abstract class ChannelHandlerContextBase implements ZLinkMessageContext {
     private final String packetName;
     private final String contentType;
     private final Map<String, String> metadata;
+    private final Instant receivedAt;
 
     ChannelHandlerContextBase(String channelName, String packetName, String contentType) {
         this(null, channelName, packetName, contentType, Map.of());
@@ -88,11 +95,22 @@ abstract class ChannelHandlerContextBase implements ZLinkMessageContext {
             String packetName,
             String contentType,
             Map<String, String> metadata) {
+        this(meshName, channelName, packetName, contentType, metadata, Instant.now());
+    }
+
+    ChannelHandlerContextBase(
+            String meshName,
+            String channelName,
+            String packetName,
+            String contentType,
+            Map<String, String> metadata,
+            Instant receivedAt) {
         this.meshName = meshName;
         this.channelName = channelName;
         this.packetName = packetName;
         this.contentType = contentType;
         this.metadata = Map.copyOf(metadata);
+        this.receivedAt = Objects.requireNonNull(receivedAt, "receivedAt");
     }
 
     @Override
@@ -123,6 +141,11 @@ abstract class ChannelHandlerContextBase implements ZLinkMessageContext {
     @Override
     public final Optional<String> correlationId() {
         return Optional.empty();
+    }
+
+    @Override
+    public final Instant receivedAt() {
+        return receivedAt;
     }
 
     private static Optional<String> presentText(String value) {

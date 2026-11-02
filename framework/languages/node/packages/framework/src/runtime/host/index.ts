@@ -3412,7 +3412,8 @@ export class ZLinkFrameworkRuntimeHost
         contentType: envelope.header.contentType,
         sourceNodeRid: String(record.sourceNodeRid ?? '') as RoutingId,
         metadata: zlinkMessageMetadata(envelope.header.metadata),
-        correlationId: envelope.header.correlationId ?? undefined
+        correlationId: envelope.header.correlationId ?? undefined,
+        receivedAt: record.receivedAt ?? new Date()
       };
       try {
         const dispatch = async () => {

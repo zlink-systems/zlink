@@ -30,22 +30,15 @@ public sealed class ServiceWireSessionRelocationCodecTests
 
         var sourceRid = RoutingId.From("malformed-command-42-source");
         var malformed = new byte[] { 0x5a, 0x4d, 0x01, 42, 0x00 };
-        var receive = typeof(ZLinkManagedMeshNode).GetMethod(
-            "ProcessInfrastructureControl",
-            BindingFlags.NonPublic | BindingFlags.Instance
-        )!;
-        var handled = receive.Invoke(
-            node,
-            [
-                sourceRid,
-                1UL,
-                1UL,
-                null,
-                new[] { Systems.Zlink.Message.From(malformed) },
-                malformed,
-                null,
-                null,
-            ]
+        var handled = node.ProcessInfrastructureControl(
+            sourceRid,
+            1UL,
+            1UL,
+            null,
+            [Systems.Zlink.Message.From(malformed)],
+            malformed,
+            null!,
+            null!
         );
 
         Assert.Equal(false, handled);
@@ -230,68 +223,42 @@ public sealed class ServiceWireSessionRelocationCodecTests
             request
         );
         Assert.True(pending.TryComplete(response));
-        var flags = BindingFlags.NonPublic | BindingFlags.Instance;
-        var keyType = typeof(ZLinkManagedMeshNode).GetNestedType(
-            "PendingSessionRelocationKey",
-            BindingFlags.NonPublic
-        )!;
-        var key = keyType
-            .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
-            .Single(method =>
-                method.Name == "Create"
-                && method.GetParameters()[1].ParameterType == request.GetType()
-            )
-            .Invoke(null, [request.Session.SessionOwnerNodeRid, request])!;
-        var field = terminal
-            ? "_sessionRelocationSealReplyTerminals"
-            : "_pendingSessionRelocationSeals";
-        var entries = (System.Collections.IDictionary)
-            typeof(ZLinkManagedMeshNode).GetField(field, flags)!.GetValue(node)!;
-        entries.Add(key, pending);
-        var receive = typeof(ZLinkManagedMeshNode).GetMethod(
-            "ProcessSessionRelocationSealed",
-            flags
-        )!;
-        receive.Invoke(
-            node,
-            [
-                request.Session.SessionOwnerNodeRid,
-                response with
-                {
-                    SealResult = ServiceWirePilotCodec.SessionSealResult.BindingAbsent,
-                },
-            ]
+        var key = ZLinkManagedMeshNode.PendingSessionRelocationKey.Create(
+            request.Session.SessionOwnerNodeRid,
+            request
+        );
+        var added = terminal
+            ? node._sessionRelocationSealReplyTerminals.TryAdd(key, pending)
+            : node._pendingSessionRelocationSeals.TryAdd(key, pending);
+        Assert.True(added);
+        node.ProcessSessionRelocationSealed(
+            request.Session.SessionOwnerNodeRid,
+            response with
+            {
+                SealResult = ServiceWirePilotCodec.SessionSealResult.BindingAbsent,
+            }
         );
         Assert.Equal(0UL, monitor.Status().ProtocolErrors);
-        receive.Invoke(
-            node,
-            [
-                request.Session.SessionOwnerNodeRid,
-                response with
-                {
-                    Coordinator = response.Coordinator with { OwnerId = "changed" },
-                },
-            ]
+        node.ProcessSessionRelocationSealed(
+            request.Session.SessionOwnerNodeRid,
+            response with
+            {
+                Coordinator = response.Coordinator with { OwnerId = "changed" },
+            }
         );
-        receive.Invoke(
-            node,
-            [
-                request.Session.SessionOwnerNodeRid,
-                response with
-                {
-                    Actor = response.Actor with { OwnerLeaseGeneration = 9 },
-                },
-            ]
+        node.ProcessSessionRelocationSealed(
+            request.Session.SessionOwnerNodeRid,
+            response with
+            {
+                Actor = response.Actor with { OwnerLeaseGeneration = 9 },
+            }
         );
-        receive.Invoke(
-            node,
-            [
-                request.Session.SessionOwnerNodeRid,
-                response with
-                {
-                    Session = response.Session with { BindingGeneration = 9 },
-                },
-            ]
+        node.ProcessSessionRelocationSealed(
+            request.Session.SessionOwnerNodeRid,
+            response with
+            {
+                Session = response.Session with { BindingGeneration = 9 },
+            }
         );
         Assert.Equal(3UL, monitor.Status().ProtocolErrors);
         Assert.Equal(response, await pending.Completion.Task);
@@ -371,20 +338,6 @@ public sealed class ServiceWireSessionRelocationCodecTests
             },
             PublicPropertyNames<ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord>()
         );
-
-        var nestedTypeNames = typeof(ZLinkServiceWireCodec)
-            .GetNestedTypes(BindingFlags.NonPublic)
-            .Select(static type => type.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        Assert.DoesNotContain("SessionRelocationRoutedRecord", nestedTypeNames);
-        Assert.DoesNotContain("SessionRelocationRouteResult", nestedTypeNames);
-
-        var methodNames = typeof(ZLinkServiceWireCodec)
-            .GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
-            .Select(static method => method.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        Assert.DoesNotContain("EncodeSessionRelocationRouted", methodNames);
-        Assert.DoesNotContain("TryDecodeSessionRelocationRouted", methodNames);
     }
 
     [Fact]

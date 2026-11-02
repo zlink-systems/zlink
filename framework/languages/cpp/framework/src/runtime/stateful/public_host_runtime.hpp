@@ -832,6 +832,16 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                  const std::vector<zlink::message_t> &parts);
     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
                                                  std::vector<zlink::message_t> &&parts);
+    task_t<zlink::submit_result_t>
+    request_to_node (const zlink::routing_id_t &target,
+                     std::vector<zlink::message_t> parts,
+                     std::chrono::milliseconds timeout,
+                     foundation::operation_registry_t::callback_t completion,
+                     std::shared_ptr<task_completion_source_t<void>> admitted = {});
+    result_t<receive_record_t> decode_operation_record (call_id_t operation,
+                                                        operation_kind_t kind,
+                                                        foundation::operation_terminal_t terminal,
+                                                        const zlink::message_t &payload) const;
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
                                                     std::vector<zlink::message_t> parts,
                                                     pending_operation_t &operation,
@@ -845,14 +855,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     // The coroutine owns both callbacks; a caller may discard the task.
     task_t<std::size_t> dispatch_ready (mesh::service_mailbox_t::application_dispatch_t dispatch,
                                         bool accept_application_receive = true,
-                                        std::function<bool ()> next_application_receive = {});
+                                        std::function<bool ()> next_application_receive = {},
+                                        std::optional<zlink::poll_event_flag_t> readiness = {});
     using application_owner_result_t = std::variant<bool, task_t<bool>>;
     application_owner_result_t
     dispatch_application_owner (std::string owner,
                                 const mesh::service_mailbox_t::application_dispatch_t dispatch,
                                 std::function<void ()> started,
                                 std::function<void ()> rejected);
-    bool wait_for_dispatch_activity (
+    std::optional<zlink::poll_event_flag_t> wait_for_dispatch_activity (
       std::chrono::milliseconds timeout,
       bool accept_application_receive,
       std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept;

@@ -9,7 +9,7 @@ namespace Zlink.Framework.Runtime.Host;
 internal sealed class ZLinkActorBoundSessionCoordinator
 {
     private readonly ZLinkActorBoundSessionRegistry _boundSessions;
-    private readonly ZLinkSessionActorBindingTable _sessionBindings;
+    internal readonly ZLinkSessionActorBindingTable _sessionBindings;
     private readonly ZLinkRemoteRelayFrameAssembler _remoteFrames;
     private readonly ZLinkBoundedRemoteRequestAdmission _remoteRequestAdmission = new();
     private readonly Dictionary<RemoteRequestKey, PendingRemoteRequest> _pendingRemoteRequests =

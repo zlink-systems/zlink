@@ -2,13 +2,19 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.ZLinkMessageContext;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 
-record ZLinkSpotActorSendHandlerContext(String packet, String content, Map<String, String> metadata)
+record ZLinkSpotActorSendHandlerContext(
+        String packet, String content, Map<String, String> metadata, Instant receivedAt)
         implements ZLinkMessageContext {
     ZLinkSpotActorSendHandlerContext(String packet, Map<String, String> metadata) {
-        this(packet, null, metadata);
+        this(packet, null, metadata, Instant.now());
+    }
+
+    ZLinkSpotActorSendHandlerContext(String packet, String content, Map<String, String> metadata) {
+        this(packet, content, metadata, Instant.now());
     }
 
     ZLinkSpotActorSendHandlerContext {
@@ -42,10 +48,15 @@ record ZLinkSpotActorSendHandlerContext(String packet, String content, Map<Strin
 }
 
 record ZLinkSpotActorRequestHandlerContext(
-        String packet, String content, Map<String, String> metadata)
+        String packet, String content, Map<String, String> metadata, Instant receivedAt)
         implements ZLinkMessageContext {
     ZLinkSpotActorRequestHandlerContext(String packet, Map<String, String> metadata) {
-        this(packet, null, metadata);
+        this(packet, null, metadata, Instant.now());
+    }
+
+    ZLinkSpotActorRequestHandlerContext(
+            String packet, String content, Map<String, String> metadata) {
+        this(packet, content, metadata, Instant.now());
     }
 
     ZLinkSpotActorRequestHandlerContext {
