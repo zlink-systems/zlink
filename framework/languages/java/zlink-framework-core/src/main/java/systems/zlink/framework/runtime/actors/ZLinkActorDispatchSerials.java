@@ -790,7 +790,20 @@ final class ZLinkActorDispatchSerials {
                                                                             .Quiescence
                                                                             .APPLICATION))
                                     .toList())
-                    .thenCompose(ignored -> setup.activation().executeLifecycle(cleanup))
+                    .thenCompose(
+                            ignored ->
+                                    setup.activation()
+                                            .executeLifecycle(
+                                                    () -> {
+                                                        try (var actorTurn =
+                                                                systems.zlink.framework.runtime
+                                                                        .internal.handlers
+                                                                        .ZLinkSuspendInvocationContext
+                                                                        .enterActorDispatch(
+                                                                                actorId)) {
+                                                            return cleanup.get();
+                                                        }
+                                                    }))
                     .whenComplete(
                             (ignored, error) -> completeTeardown(actorId, setup, previous, error));
         } catch (RuntimeException failure) {

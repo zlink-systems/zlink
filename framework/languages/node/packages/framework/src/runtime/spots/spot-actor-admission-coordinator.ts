@@ -255,7 +255,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
       : this.options.actorResolver(actorId);
   }
 
-  private async commitTransferredActorTransaction(
+  async commitTransferredActorTransaction(
     activation: ZLinkSpotActivation,
     actor: ZLinkActor,
     backlog: readonly ZLinkActorHandoffPacket[],

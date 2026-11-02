@@ -318,6 +318,7 @@ class spot_node_builder_state_t
         std::function<void (void *, const zlink::message_t &, serializer_registry_t &)>
           deserialize_instance;
         std::function<std::shared_ptr<void> (actor_context_t)> create_context_instance;
+        std::function<actor_t *(void *)> as_actor;
         actor_join_completion_callback_t on_join_completed;
         std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture;
         std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore;
@@ -1906,6 +1907,10 @@ class spot_node_runtime_t
     std::optional<std::string> spot_name_for (spot_id_t spot_id) const;
     std::optional<spot_route_t> resolve_spot (spot_id_t spot_id) const;
     std::optional<spot_id_t> actor_spot (const actor_ref_t &actor_ref) const;
+    task_t<result_t<bool>>
+    run_actor_turn (actor_ref_t actor_ref,
+                    std::function<task_t<result_t<bool>> (actor_t &, std::stop_token)> work,
+                    std::stop_token cancellation = {});
     task_t<result_t<bool>> destroy_actor (actor_ref_t actor_ref);
     task_t<result_t<bool>> release_local_actor_async (actor_ref_t actor);
     void record_actor_spot (const actor_ref_t &actor_ref, spot_id_t spot_id);
@@ -2092,15 +2097,18 @@ class spot_node_runtime_t
                                              std::function<void ()> completed = {});
     std::optional<bool> validate_actor_join_relocation_prepare (
       const runtime::protocol::relocation_prepare_t &prepare) const;
-    bool consume_actor_join_recovery (runtime::stateful::frozen_object_state_t &frozen,
-                                      const runtime::stateful::object_ref_t &target,
-                                      const runtime::protocol::relocation_prepare_t &prepare);
-    /* Undo a consume_actor_join_recovery that a later staging step rejected.
+    task_t<bool>
+    consume_actor_join_recovery_async (runtime::stateful::frozen_object_state_t &frozen,
+                                       runtime::stateful::object_ref_t target,
+                                       runtime::protocol::relocation_prepare_t prepare);
+    /* Undo a consume_actor_join_recovery_async that a later staging step rejected.
      * Keyed on the wire stable type rather than the local actor-type index:
      * an Actor that has never been created on this node has no index entry
      * yet, which is exactly the case that leaks (15 §4.2). */
-    void discard_actor_join_recovery (const std::string &stable_type,
-                                      const runtime::stateful::object_ref_t &target) noexcept;
+    task_t<void> discard_actor_join_recovery_async (std::string stable_type,
+                                                    runtime::stateful::object_ref_t target);
+    task_t<void>
+    abort_relocation_materialization_async (std::vector<runtime::stateful::object_ref_t> targets);
     std::optional<runtime::actor_authority_payload_t>
     actor_relocation_authority (const runtime::stateful::object_ref_t &target) const;
     // handoff_backlog holds the in-flight packets the source preserved while the
@@ -2180,9 +2188,6 @@ class spot_node_runtime_t
                                                      std::uint64_t target_node_generation,
                                                      std::uint64_t target_owner_lease_generation);
     task_t<bool> activate_session_relocation_route (const std::string &transfer_id);
-    bool remove_actor_message_follow (const actor_ref_t &actor_ref,
-                                      const runtime::protocol::actor_route_fence_t &source_fence,
-                                      const runtime::protocol::actor_route_fence_t &target_fence);
     std::string next_actor_transfer_id ();
     // Transfer ID stamped on a still-reserved deferred join, so the remote
     // join reuses the correlation already carried by preserved handoff
@@ -2266,20 +2271,18 @@ class spot_node_runtime_t
     commit_relocation_materialization (const std::vector<runtime::stateful::object_ref_t> &targets);
     task_t<void>
     retire_relocation_source (const std::vector<runtime::stateful::object_ref_t> &sources);
-    void abort_relocation_materialization (
-      const std::vector<runtime::stateful::object_ref_t> &targets) noexcept;
     task_t<result_t<remote_actor_transfer_t>> transfer_actor_out (const actor_ref_t &actor_ref,
                                                                   std::string transfer_id = {},
                                                                   bool capture_state = true);
-    result_t<void>
-    submit_remote_actor_leave (const std::string &transfer_id,
-                               const actor_ref_t &source_actor,
-                               const spot_id_t &source_spot_id,
-                               std::uint64_t source_spot_generation,
-                               const spot_id_t &target_spot_id,
-                               const runtime::protocol::actor_route_fence_t &target_fence,
-                               std::function<void ()> transfer_owner_reservation = {},
-                               std::size_t transferred_owner_byte_cost = 0);
+    task_t<result_t<void>>
+    submit_remote_actor_leave_async (std::string transfer_id,
+                                     actor_ref_t source_actor,
+                                     spot_id_t source_spot_id,
+                                     std::uint64_t source_spot_generation,
+                                     spot_id_t target_spot_id,
+                                     runtime::protocol::actor_route_fence_t target_fence,
+                                     std::function<void ()> transfer_owner_reservation = {},
+                                     std::size_t transferred_owner_byte_cost = 0);
     void fail_remote_actor_transfer (
       const actor_ref_t &actor_ref,
       bool reconcile,

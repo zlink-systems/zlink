@@ -2,6 +2,12 @@
 # APPLE_EXPORT: __ZNK5zlink*
 # APPLE_EXPORT: __ZZN5zlink*
 # APPLE_EXPORT: __ZZNK5zlink*
+# Ref-qualified member functions (`&`, `&&`, `const &`, `const &&`) mangle as
+# N R/O / N K R/O; GNU ld matches them through zlink::*, ld64 needs the prefixes.
+# APPLE_EXPORT: __ZNR5zlink*
+# APPLE_EXPORT: __ZNO5zlink*
+# APPLE_EXPORT: __ZNKR5zlink*
+# APPLE_EXPORT: __ZNKO5zlink*
 # APPLE_EXPORT: __ZTVN5zlink*
 # APPLE_EXPORT: __ZTIN5zlink*
 # APPLE_EXPORT: __ZTSN5zlink*

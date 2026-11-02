@@ -8,7 +8,7 @@ const {
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
 const {
   ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkSpotSerialTurnExecutor
 } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');

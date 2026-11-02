@@ -198,10 +198,11 @@ final class ServiceWireCodec {
   record ActorControlDataDisconnected(ActorLifecycleKind lifecycleKind, ActorMembershipSnapshot current) implements ActorControlData {}
   record ActorControlDataDestroyed(ActorLifecycleKind lifecycleKind, ActorMembershipSnapshot previous) implements ActorControlData {}
   record RelocationControlData(RelocationPhase phase, RelocationRole role, RelocationId relocation, RelocationObjectIdentity object, RequestTerminalResult terminalResult, FrameworkErrorCode failureCode) {}
-  sealed interface RequestSpecificTail permits RequestSpecificTailActorLookupOk, RequestSpecificTailActorJoinOk, RequestSpecificTailStreamBindOk, RequestSpecificTailUserSpotCreateOk, RequestSpecificTailUserSpotCloseOk, RequestSpecificTailActorCreateOk, RequestSpecificTailOtherwise {}
+  sealed interface RequestSpecificTail permits RequestSpecificTailActorLookupOk, RequestSpecificTailActorJoinOk, RequestSpecificTailStreamBindOk, RequestSpecificTailStreamBindRejected, RequestSpecificTailUserSpotCreateOk, RequestSpecificTailUserSpotCloseOk, RequestSpecificTailActorCreateOk, RequestSpecificTailOtherwise {}
   record RequestSpecificTailActorLookupOk(ActorRef actor, Text8 spotId, NonzeroU64 spotGeneration, NonzeroU64 membershipEpoch, NonzeroU64 authorityOwnerGeneration) implements RequestSpecificTail {}
   record RequestSpecificTailActorJoinOk(ActorJoinReplyTail join) implements RequestSpecificTail {}
   record RequestSpecificTailStreamBindOk(NonzeroU64 bindingGeneration, NonzeroU64 authorityOwnerGeneration) implements RequestSpecificTail {}
+  record RequestSpecificTailStreamBindRejected(Text16 rejectionMessage) implements RequestSpecificTail {}
   record RequestSpecificTailUserSpotCreateOk(UserSpotCreateResult createResult, SpotRef spot) implements RequestSpecificTail {}
   record RequestSpecificTailUserSpotCloseOk(Bool8 closed) implements RequestSpecificTail {}
   record RequestSpecificTailActorCreateOk(ActorCreateTerminal creation) implements RequestSpecificTail {}
@@ -1889,6 +1890,10 @@ final class ServiceWireCodec {
       NonzeroU64 authorityOwnerGeneration = decodeNonzeroU64(selected, c, flags);
        return new RequestSpecificTailStreamBindOk(bindingGeneration, authorityOwnerGeneration);
     }
+    else if(originalOperationKind==MeshOperationKind.STREAM_BIND && terminalResult==RequestTerminalResult.REJECTED) {
+      Text16 rejectionMessage = decodeText16(selected, c, flags);
+       return new RequestSpecificTailStreamBindRejected(rejectionMessage);
+    }
     else if(originalOperationKind==MeshOperationKind.USER_SPOT_CREATE && terminalResult==RequestTerminalResult.OK) {
       UserSpotCreateResult createResult = decodeUserSpotCreateResult(selected, c, flags);
       SpotRef spot = decodeSpotRef(selected, c, flags);
@@ -1930,6 +1935,12 @@ final class ServiceWireCodec {
       require(external1==RequestTerminalResult.OK,"request-specific-tail discriminator agreement");
       encodeNonzeroU64(item.bindingGeneration(), w, c, flags);
       encodeNonzeroU64(item.authorityOwnerGeneration(), w, c, flags);
+      return;
+    }
+    if(value instanceof RequestSpecificTailStreamBindRejected item){
+      require(external0==MeshOperationKind.STREAM_BIND,"request-specific-tail discriminator agreement");
+      require(external1==RequestTerminalResult.REJECTED,"request-specific-tail discriminator agreement");
+      encodeText16(item.rejectionMessage(), w, c, flags);
       return;
     }
     if(value instanceof RequestSpecificTailUserSpotCreateOk item){

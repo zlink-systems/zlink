@@ -1465,8 +1465,8 @@ try {
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "raw mesh request registry is closed");
     }
-    auto admitted = start->admitted->task ();
-    return await_request_admission (std::move (admitted));
+    auto admission = start->admitted->task ();
+    return await_request_admission (std::move (admission));
 }
 catch (...) {
     return task_t<bool> (detail::current_exception_result<bool> ());

@@ -1983,6 +1983,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-contract;framework-actor;framework-monitoring"
     TIER contract
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_duplicate_bind_policy
+    COMMAND test_cpp_framework_actor_gateway --duplicate-bind-policy
+    LABELS "framework-unit;framework-contract;framework-actor;stream"
+    TIER contract
+    TIMEOUT 30)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   foreach(termination_case physical logical disconnect-then-shutdown)

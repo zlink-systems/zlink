@@ -33,6 +33,56 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkLocationRuntimeRecoveryTest {
     @Test
+    void descriptorPublicationDeadlineEndsOnlyTheWaitAndNextRenewalCanRepublish() throws Exception {
+        var storeWrite = new CompletableFuture<Void>();
+        var writes = new AtomicInteger();
+        var clock = new java.util.concurrent.atomic.AtomicLong(1L);
+        var scheduler = new ZLinkLocationFirstHeartbeatTest.RecordingScheduler();
+        var timeout = Duration.ofMillis(50);
+        try (var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(
+                                new ZLinkLocationStoreTestAdapter() {}),
+                        "publication-owner",
+                        Duration.ofSeconds(15),
+                        Duration.ofSeconds(1),
+                        timeout,
+                        Duration.ZERO,
+                        clock::get,
+                        scheduler)) {
+            var scheduled = scheduler.nextTask();
+            var publication =
+                    runtime.writeDescriptor(
+                                    () -> {
+                                        writes.incrementAndGet();
+                                        return storeWrite;
+                                    })
+                            .toCompletableFuture();
+            assertFalse(publication.isDone(), "publication is an asynchronous continuation");
+            var deadline = scheduled.get(1, TimeUnit.SECONDS);
+            assertEquals(timeout.toNanos(), deadline.getDelay(TimeUnit.NANOSECONDS));
+            clock.addAndGet(timeout.toNanos());
+            deadline.run();
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> publication.get(1, TimeUnit.SECONDS));
+            assertTrue(failure.getCause() instanceof java.util.concurrent.TimeoutException);
+            assertFalse(storeWrite.isDone(), "the deadline ends the caller wait only");
+            runtime.writeDescriptor(
+                            () -> {
+                                writes.incrementAndGet();
+                                return CompletableFuture.completedFuture(null);
+                            })
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS);
+            storeWrite.complete(null);
+            assertTrue(publication.isCompletedExceptionally());
+            assertEquals(2, writes.get(), "late completion must not submit another publication");
+        }
+    }
+
+    @Test
     void heartbeatSnapshotKeepsItsOwnerWhenMetricsRestartTheRuntime() throws Exception {
         var generations = new AtomicInteger();
         var submittedGeneration = new java.util.concurrent.atomic.AtomicLong();

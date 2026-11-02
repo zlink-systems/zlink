@@ -295,7 +295,23 @@ public final class ZLinkServiceM6BWireCodec {
             int terminalResult,
             int failureCode,
             long bindingGeneration,
-            long authorityOwnerGeneration) {}
+            long authorityOwnerGeneration,
+            String rejectionMessage) {
+        public BoundSessionBindReply(
+                long correlation,
+                int terminalResult,
+                int failureCode,
+                long bindingGeneration,
+                long authorityOwnerGeneration) {
+            this(
+                    correlation,
+                    terminalResult,
+                    failureCode,
+                    bindingGeneration,
+                    authorityOwnerGeneration,
+                    "");
+        }
+    }
 
     public byte[] encodeBoundSessionBindReply(BoundSessionBindReply reply, boolean active) {
         Writer writer =
@@ -303,6 +319,10 @@ public final class ZLinkServiceM6BWireCodec {
         if (active && reply.terminalResult() == 0) {
             writer.nonzero(reply.bindingGeneration(), "bindingGeneration");
             writer.nonzero(reply.authorityOwnerGeneration(), "authorityOwnerGeneration");
+        } else if (active
+                && reply.terminalResult()
+                        == systems.zlink.contracts.sockets.RequestResult.REJECTED.value()) {
+            writer.text16(reply.rejectionMessage(), "rejectionMessage");
         }
         return writer.toByteArray();
     }
@@ -318,8 +338,13 @@ public final class ZLinkServiceM6BWireCodec {
         long binding = active && terminal == 0 ? reader.nonzeroU64("bindingGeneration") : 0;
         long authority =
                 active && terminal == 0 ? reader.nonzeroU64("authorityOwnerGeneration") : 0;
+        String rejectionMessage =
+                active && terminal == systems.zlink.contracts.sockets.RequestResult.REJECTED.value()
+                        ? reader.text16("rejectionMessage")
+                        : "";
         reader.end();
-        return new BoundSessionBindReply(correlation, terminal, failure, binding, authority);
+        return new BoundSessionBindReply(
+                correlation, terminal, failure, binding, authority, rejectionMessage);
     }
 
     public BoundSessionBind decodeBoundSessionBindHeader(byte[] frame) {

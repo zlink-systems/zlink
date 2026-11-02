@@ -13,6 +13,20 @@ ActorId는 Location Store transaction domain 전체에서 유일한 logical ID�
 ActorId만 받고 current authority를 resolve한다. `ActorRef`는 지정한 incarnation을 변경하거나 session에
 bind할 때 사용하는 immutable location snapshot이다.
 
+`OnDuplicateBindAsync`는 `null` 또는 빈 문자열이면 받아들이고, 비어 있지 않은 문자열이면 그 내용을 거부
+메시지로 반환한다. 기본 구현은
+`null`을 반환하므로 override하지 않으면 기존처럼 새 Session을 받아들인다. 제한 시간이 끝나면 Framework가
+`CancellationToken`을 취소한다.
+
+`ZLinkSessionBindingIdentity`는 중복 bind callback에 전달하는 읽기 전용 identity다.
+
+```csharp
+public readonly record struct ZLinkSessionBindingIdentity(
+ RoutingId SessionOwnerNodeRid,
+ ulong SessionOwnerNodeGeneration,
+ ulong BindingGeneration);
+```
+
 ```csharp
 public readonly record struct ActorRef(
  string ActorId,
@@ -24,6 +38,13 @@ public interface IZLinkActor
 {
  IZLinkActorContext Context { get; }
  void Configure() { }
+ ValueTask<string?> OnDuplicateBindAsync(
+ ZLinkSessionBindingIdentity current,
+ ZLinkSessionBindingIdentity incoming,
+ CancellationToken cancellationToken)
+ {
+ return ValueTask.FromResult<string?>(null);
+ }
  ValueTask OnJoinCompletedAsync(
  ZLinkActorJoinCompletion completion,
  CancellationToken cancellationToken)

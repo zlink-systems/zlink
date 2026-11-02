@@ -207,7 +207,7 @@ export class RawServiceMeshRuntime {
   private readonly releaseOperations: () => void;
 
   private readonly operations: OperationRegistry<RawServiceRequestResult, number>;
-  private readonly expectedPeers = new Map<
+  readonly expectedPeers = new Map<
     string,
     {
       readonly meshName: string;
@@ -224,7 +224,7 @@ export class RawServiceMeshRuntime {
    * The last observed Core selected route of each RID (Core ROUTER §10.1):
    * RID -> route generation. Only `observeSelectedRoutes` replaces it.
    */
-  private selectedRoutes = new Map<string, bigint>();
+  selectedRoutes = new Map<string, bigint>();
   private connectionAttempts: readonly ConnectionAttempt[] = [];
   private readonly bindingPort: ZLinkRawBindingPort;
   private readonly applicationJobQueue: ApplicationJobQueuePort;
@@ -234,7 +234,7 @@ export class RawServiceMeshRuntime {
   private receiveAcquisition?: Promise<ApplicationJobPermitPort>;
   private receivePermit?: ApplicationJobPermitPort;
   private receiveRotation?: ApplicationJobReceiveRotationPort;
-  private readonly controlSends = new Map<string, ControlSendState>();
+  readonly controlSends = new Map<string, ControlSendState>();
   private infrastructureFailure?: { readonly error: unknown };
   private readonly onReceiveReady?: () => void;
   private readonly infrastructureTaskRunner?: RawServiceMeshRuntimeOptions['infrastructureTaskRunner'];
@@ -245,7 +245,7 @@ export class RawServiceMeshRuntime {
   private readonly resolveAdvertisedEndpoint?: RawServiceMeshRuntimeOptions['resolveAdvertisedEndpoint'];
   private descriptor: ServiceNodeDescriptor;
   private host?: ZLinkRawHostPort;
-  private router?: ZLinkRawRouterPort;
+  router?: ZLinkRawRouterPort;
   private nextCorrelation = 1n;
   private serviceIngress?: RawServiceIngressHandler;
   private serviceIngressAccepts?: (command: number) => boolean;
@@ -1192,7 +1192,7 @@ export class RawServiceMeshRuntime {
     }
   }
 
-  private reportProtocolError(
+  reportProtocolError(
     received: import('../backend/node/node-raw-binding-port').ZLinkRawReceivedRecord
   ): void {
     const request = received.requestSeq !== undefined;
@@ -1221,7 +1221,7 @@ export class RawServiceMeshRuntime {
     return true;
   }
 
-  private processReceived(
+  processReceived(
     received: ZLinkRawReceivedRecord,
     nowMs: number,
     applicationJobOwner: ApplicationIngressRecordOwner
@@ -1923,7 +1923,7 @@ export class RawServiceMeshRuntime {
     return Buffer.isBuffer(payload) ? decodeApplicationPayload(payload) : payload;
   }
 
-  private admitPeer(
+  admitPeer(
     descriptor: ServiceNodeDescriptor,
     connectionId: string | bigint,
     nowMs: number,
@@ -2025,10 +2025,7 @@ export class RawServiceMeshRuntime {
     return this.router;
   }
 
-  private async sendControl(
-    targetNodeRoutingId: string,
-    parts: readonly Uint8Array[]
-  ): Promise<boolean> {
+  async sendControl(targetNodeRoutingId: string, parts: readonly Uint8Array[]): Promise<boolean> {
     return this.startControlSend(targetNodeRoutingId, decodeHeader(parts[0]!).command, () =>
       this.submitControl(targetNodeRoutingId, parts)
     );
@@ -2048,7 +2045,7 @@ export class RawServiceMeshRuntime {
     );
   }
 
-  private startControlSend(
+  startControlSend(
     target: string,
     command: number,
     attempt: () => boolean | Promise<boolean>,
