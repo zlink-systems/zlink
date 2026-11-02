@@ -300,7 +300,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         assertEquals(11, canonicalCount);
         assertEquals(12, malformedCount);
         JsonNode operationCases = fixtureIndex().path("operationCases");
-        assertEquals(98, operationCases.size());
+        assertEquals(100, operationCases.size());
         Map<String, Set<String>> boundaryPairs = new HashMap<>();
         for (JsonNode operationCase : operationCases) {
             String operation = operationCase.path("operation").asText();
@@ -369,6 +369,10 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         }
         JsonNode surface = operationCase.path("surface");
         ServiceWireCodec.DecoderContext context = context(operationCase);
+        ServiceWireCodec.DecoderContext seedContext =
+                operationCase.path("operation").asText().equals("negotiated-bound")
+                        ? CONTEXT
+                        : context;
         switch (surface.path("format").asText()) {
             case "type" -> {
                 byte[] bytes = operationBytes(operationCase);
@@ -388,7 +392,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                                                         operationCase
                                                                 .path("encodeInputHex")
                                                                 .asText()),
-                                        CONTEXT);
+                                        seedContext);
                         if (!operationCase
                                 .path("encodeMutation")
                                 .asText()
@@ -401,7 +405,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                                 new ServiceWireCodec.SavedWorkVector(
                                         List.of(vector.items().get(0), vector.items().get(0)));
                     } else {
-                        value = decodeType(type, bytes, CONTEXT);
+                        value = decodeType(type, bytes, seedContext);
                     }
                     assertArrayEquals(bytes, encodeType(type, value, context));
                 }
@@ -414,7 +418,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                     assertFramesEqual(
                             frames,
                             ServiceWireCodec.encodeCommandFrames(
-                                    ServiceWireCodec.decodeCommand(frames, CONTEXT), context));
+                                    ServiceWireCodec.decodeCommand(frames, seedContext), context));
                 }
             }
             case "semantic" ->
@@ -561,7 +565,13 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                         ? values.path("effectiveCompleteMessageBytesMinusActualEnvelopeOverhead")
                                 .asLong()
                         : missing ? null : 4_294_966_774L;
-        return new ServiceWireCodec.DecoderContext(null, null, null, messageBytes, payloadBytes);
+        ServiceWireCodec.MeshOperationKind operationKind =
+                values.has("originalOperationKind")
+                        ? ServiceWireCodec.MeshOperationKind.valueOf(
+                                enumName(values.path("originalOperationKind").asText()))
+                        : null;
+        return new ServiceWireCodec.DecoderContext(
+                operationKind, null, null, messageBytes, payloadBytes);
     }
 
     private static byte[] operationBytes(JsonNode operationCase) throws Exception {

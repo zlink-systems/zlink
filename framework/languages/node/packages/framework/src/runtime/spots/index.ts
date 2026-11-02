@@ -1684,6 +1684,30 @@ export class DefaultZLinkSpotManager {
     return this.admitRoutedActorPacketPrefix(owner.spotId, actorId, records);
   }
 
+  /** Runs an owner-side lifecycle decision in the Actor's existing execution gate. */
+  executeActorTurn<T>(
+    meshName: string,
+    spotId: RoutingId | undefined,
+    actorId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    if (spotId === undefined) {
+      if (this.options.executeEntryActor === undefined) {
+        throw new ZLinkConfigurationException(
+          `Entry Spot Actor '${actorId}' has no execution gate for MeshNode '${meshName}'.`
+        );
+      }
+      return this.options.executeEntryActor(meshName, actorId, operation);
+    }
+    const activation = this.resolveApplicationActivation(spotId, meshName);
+    if (activation === undefined) {
+      throw new ZLinkConfigurationException(
+        `Actor '${actorId}' has no active Spot execution gate for '${String(spotId)}'.`
+      );
+    }
+    return activation.executeActor(actorId, operation);
+  }
+
   async dispatchRoutedSpotSend(
     spotId: RoutingId,
     packetName: string | undefined,

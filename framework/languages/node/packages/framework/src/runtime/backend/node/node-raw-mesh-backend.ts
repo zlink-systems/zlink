@@ -2560,6 +2560,9 @@ function completionRecord(
     kindData: 'kindData' in result ? (result.kindData ?? null) : null,
     terminalResult: result.terminalResult,
     failureErrno: result.failureCode,
+    ...('failureMessage' in result && result.failureMessage !== undefined
+      ? { failureMessage: result.failureMessage }
+      : {}),
     parts:
       payload === undefined
         ? []
@@ -2809,9 +2812,9 @@ function decodeStatefulRecord(
       });
       return accepted ? SubmitResult.Ok : SubmitResult.InvalidState;
     },
-    replyFailure(terminalResult, failureCode) {
+    replyFailure(terminalResult, failureCode, tail) {
       if (stateful.reply === undefined) return SubmitResult.InvalidState;
-      return stateful.reply(terminalResult, failureCode)
+      return stateful.reply(terminalResult, failureCode, undefined, tail)
         ? SubmitResult.Ok
         : SubmitResult.InvalidState;
     }

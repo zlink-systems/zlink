@@ -584,6 +584,24 @@ outcome operation_case (const nlohmann::json &item, std::string_view direction)
     const auto context = maximum_codec_context ();
     if (item.at ("operation") == "negotiated-bound")
         return negotiated_case (item, direction, frames.front ());
+    if (surface.at ("format") == "command"
+        && surface.at ("commandId").get<std::uint8_t> () == 20) {
+        const auto operationKind = item.at ("context").at ("originalOperationKind");
+        if (operationKind != "streamBind")
+            return {false, codec::error_code::header};
+        const auto kind = codec::mesh_operation_kind_t::streamBind;
+        const auto decoded = codec::decode_reply_20_frames (frames, kind, operation_context (item));
+        if (!decoded)
+            return {false, decoded.error};
+        if (direction == "decode")
+            return {true, codec::error_code::ok};
+        const auto encoded = codec::encode_reply_20_frames (
+          decoded.value, kind, operation_context (item));
+        if (!encoded)
+            return {false, encoded.error};
+        return {encoded.value == frames,
+                encoded.value == frames ? codec::error_code::ok : codec::error_code::constraint};
+    }
     if (direction == "encode" && item.contains ("encodeInputHex")) {
         auto seed = codec::decode_saved_work_vector (
           from_hex (item.at ("encodeInputHex").get<std::string> ()), context);
@@ -749,7 +767,7 @@ int main ()
             }
         }
     }
-    if (index.at ("version") != 4 || acceptedCases != 34 || rejectedCases != 64
+    if (index.at ("version") != 4 || acceptedCases != 35 || rejectedCases != 65
         || boundaryPairs.size () != 25) {
         std::cerr << "fixture catalog v4 coverage mismatch: accept=" << acceptedCases
                   << ", reject=" << rejectedCases << ", boundary-pairs=" << boundaryPairs.size ()

@@ -5398,7 +5398,7 @@ function writeRelocationControlData(input: RelocationControlData, writer: Writer
 export function decodeRelocationControlData(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationControlData { const reader = new Reader(bytes); const value = readRelocationControlData(reader, context, {}, 0); reader.done("relocation-control-data"); return value; }
 export function encodeRelocationControlData(value: RelocationControlData, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationControlData(value, writer, context, {}, 0); return writer.result(); }
 
-export type RequestSpecificTail = { readonly originalOperationKind: "actorLookup"; readonly terminalResult: "ok"; readonly actor: ActorRef; readonly spotId: Text8; readonly spotGeneration: NonzeroU64; readonly membershipEpoch: NonzeroU64; readonly authorityOwnerGeneration: NonzeroU64 } | { readonly originalOperationKind: "actorJoin"; readonly terminalResult: "ok"; readonly join: ActorJoinReplyTail } | { readonly originalOperationKind: "streamBind"; readonly terminalResult: "ok"; readonly bindingGeneration: NonzeroU64; readonly authorityOwnerGeneration: NonzeroU64 } | { readonly originalOperationKind: "userSpotCreate"; readonly terminalResult: "ok"; readonly createResult: UserSpotCreateResult; readonly spot: SpotRef } | { readonly originalOperationKind: "userSpotClose"; readonly terminalResult: "ok"; readonly closed: Bool8 } | { readonly originalOperationKind: "actorCreate"; readonly terminalResult: "ok"; readonly creation: ActorCreateTerminal } | { readonly originalOperationKind: MeshOperationKind; readonly terminalResult: RequestTerminalResult };
+export type RequestSpecificTail = { readonly originalOperationKind: "actorLookup"; readonly terminalResult: "ok"; readonly actor: ActorRef; readonly spotId: Text8; readonly spotGeneration: NonzeroU64; readonly membershipEpoch: NonzeroU64; readonly authorityOwnerGeneration: NonzeroU64 } | { readonly originalOperationKind: "actorJoin"; readonly terminalResult: "ok"; readonly join: ActorJoinReplyTail } | { readonly originalOperationKind: "streamBind"; readonly terminalResult: "ok"; readonly bindingGeneration: NonzeroU64; readonly authorityOwnerGeneration: NonzeroU64 } | { readonly originalOperationKind: "streamBind"; readonly terminalResult: "rejected"; readonly rejectionMessage: Text16 } | { readonly originalOperationKind: "userSpotCreate"; readonly terminalResult: "ok"; readonly createResult: UserSpotCreateResult; readonly spot: SpotRef } | { readonly originalOperationKind: "userSpotClose"; readonly terminalResult: "ok"; readonly closed: Bool8 } | { readonly originalOperationKind: "actorCreate"; readonly terminalResult: "ok"; readonly creation: ActorCreateTerminal } | { readonly originalOperationKind: MeshOperationKind; readonly terminalResult: RequestTerminalResult };
 
 function readRequestSpecificTail(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RequestSpecificTail {
   void context; void enclosing; void flags;
@@ -5433,6 +5433,10 @@ function readRequestSpecificTail(reader: Reader, context: ServiceWireDecoderCont
     value["authorityOwnerGeneration"] = readNonzeroU64(body, context, value, flags);
 
 
+  } else if (same(value["originalOperationKind"], "streamBind") && same(value["terminalResult"], "rejected")) {
+    value["rejectionMessage"] = readText16(body, context, value, flags);
+
+
   } else if (same(value["originalOperationKind"], "userSpotCreate") && same(value["terminalResult"], "ok")) {
     value["createResult"] = readUserSpotCreateResult(body, context, value, flags);
 
@@ -5462,7 +5466,7 @@ function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, co
 
   const body = writer;
   if (same(value["originalOperationKind"], "actorLookup") && same(value["terminalResult"], "ok")) {
-    if (value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
+    if (value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["rejectionMessage"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["actor"] === undefined) fail("actor required");
 
 
@@ -5484,13 +5488,13 @@ function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, co
 
     writeNonzeroU64(numeric(value["authorityOwnerGeneration"]), body, context, value, flags);
   } else if (same(value["originalOperationKind"], "actorJoin") && same(value["terminalResult"], "ok")) {
-    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["bindingGeneration"] !== undefined || value["rejectionMessage"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["join"] === undefined) fail("join required");
 
 
     writeActorJoinReplyTail(value["join"], body, context, value, flags);
   } else if (same(value["originalOperationKind"], "streamBind") && same(value["terminalResult"], "ok")) {
-    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["join"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["join"] !== undefined || value["rejectionMessage"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["bindingGeneration"] === undefined) fail("bindingGeneration required");
 
 
@@ -5499,8 +5503,14 @@ function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, co
 
 
     writeNonzeroU64(numeric(value["authorityOwnerGeneration"]), body, context, value, flags);
+  } else if (same(value["originalOperationKind"], "streamBind") && same(value["terminalResult"], "rejected")) {
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
+    if (value["rejectionMessage"] === undefined) fail("rejectionMessage required");
+
+
+    writeText16(value["rejectionMessage"], body, context, value, flags);
   } else if (same(value["originalOperationKind"], "userSpotCreate") && same(value["terminalResult"], "ok")) {
-    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["rejectionMessage"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["createResult"] === undefined) fail("createResult required");
 
 
@@ -5510,19 +5520,19 @@ function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, co
 
     writeSpotRef(value["spot"], body, context, value, flags);
   } else if (same(value["originalOperationKind"], "userSpotClose") && same(value["terminalResult"], "ok")) {
-    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["rejectionMessage"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["closed"] === undefined) fail("closed required");
 
 
     writeBool8(value["closed"], body, context, value, flags);
   } else if (same(value["originalOperationKind"], "actorCreate") && same(value["terminalResult"], "ok")) {
-    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined) fail("request-specific-tail discriminator agreement");
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["rejectionMessage"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined) fail("request-specific-tail discriminator agreement");
     if (value["creation"] === undefined) fail("creation required");
 
 
     writeActorCreateTerminal(value["creation"], body, context, value, flags);
   } else {
-    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
+    if (value["actor"] !== undefined || value["spotId"] !== undefined || value["spotGeneration"] !== undefined || value["membershipEpoch"] !== undefined || value["authorityOwnerGeneration"] !== undefined || value["join"] !== undefined || value["bindingGeneration"] !== undefined || value["rejectionMessage"] !== undefined || value["createResult"] !== undefined || value["spot"] !== undefined || value["closed"] !== undefined || value["creation"] !== undefined) fail("request-specific-tail discriminator agreement");
 
   }
 

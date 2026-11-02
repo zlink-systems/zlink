@@ -194,7 +194,9 @@ for (const phase of ['request', 'submit']) {
 
 test('STREAM actor bind stops on a received failure envelope or malformed reply', async () => {
   for (const [reply, expectedKind] of [
-    [a => [encodeStatefulReply(a.record.correlation, RequestResult.Rejected, 15)],
+    [a => [encodeStatefulReply(a.record.correlation, RequestResult.Rejected, 15, {
+      kind: 'streamBindRejected', rejectionMessage: 'duplicate Session binding rejected'
+    })],
       framework.ZLinkFrameworkErrorKind.Rejected],
     [() => [Buffer.from('invalid reply')], framework.ZLinkFrameworkErrorKind.ProtocolError]
   ]) {

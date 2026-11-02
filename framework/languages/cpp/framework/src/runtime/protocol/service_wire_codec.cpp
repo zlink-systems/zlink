@@ -3536,11 +3536,17 @@ std::vector<std::uint8_t> encode_stream_bind_reply (std::uint64_t correlation,
 {
     auto bytes = encode_reply_header (correlation, terminal_result, failure_code);
     if (terminal_result == 0) {
-        if (!binding || binding->binding_generation == 0
+        if (!binding || binding->rejection_message || binding->binding_generation == 0
             || binding->authority_owner_generation == 0)
             throw service_wire_error_t ("stream bind success requires accepted binding fence");
         append_u64 (bytes, binding->binding_generation);
         append_u64 (bytes, binding->authority_owner_generation);
+    } else if (terminal_result == static_cast<std::uint32_t> (request_terminal_result::rejected)) {
+        if (!binding || !binding->rejection_message || binding->binding_generation != 0
+            || binding->authority_owner_generation != 0)
+            throw service_wire_error_t ("stream bind rejection requires a content message");
+        append_text16 (bytes, *binding->rejection_message, "stream bind rejection message",
+                       0xffffu);
     } else if (binding) {
         throw service_wire_error_t ("stream bind failure cannot contain a success tail");
     }
@@ -3557,6 +3563,10 @@ stream_bind_reply_t decode_stream_bind_reply (std::span<const std::uint8_t> byte
         if (generation == 0 || authority == 0)
             throw service_wire_error_t ("stream bind success fence must be nonzero");
         reply.binding = stream_bind_reply_tail_t{generation, authority};
+    } else if (reply.header.terminal_result
+               == static_cast<std::uint32_t> (request_terminal_result::rejected)) {
+        reply.binding = stream_bind_reply_tail_t{
+          0, 0, read_text16 (bytes, offset, "stream bind rejection message", 0xffffu)};
     }
     if (offset != bytes.size ())
         throw service_wire_error_t ("stream bind reply has unexpected tail bytes");

@@ -667,8 +667,9 @@ struct reply_header_t
 
 struct stream_bind_reply_tail_t
 {
-    std::uint64_t binding_generation;
-    std::uint64_t authority_owner_generation;
+    std::uint64_t binding_generation = 0;
+    std::uint64_t authority_owner_generation = 0;
+    std::optional<std::string> rejection_message;
     friend bool operator== (const stream_bind_reply_tail_t &,
                             const stream_bind_reply_tail_t &) = default;
 };

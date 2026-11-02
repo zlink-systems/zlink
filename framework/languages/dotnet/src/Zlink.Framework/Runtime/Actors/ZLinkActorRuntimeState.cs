@@ -1969,18 +1969,14 @@ internal readonly record struct ZLinkActorBoundSession(
     internal bool IsSamePhysicalSessionOwner(
         RoutingId sessionNodeRid,
         ulong sessionOwnerNodeGeneration,
-        RoutingId sessionRid,
-        string sessionOwnerId,
-        ulong sessionOwnerLeaseGeneration
+        RoutingId sessionRid
     )
     {
         if (SessionNodeRid is not { } previousNodeRid)
             return false;
         return previousNodeRid == sessionNodeRid
             && SessionOwnerNodeGeneration == sessionOwnerNodeGeneration
-            && SessionRid == sessionRid
-            && string.Equals(SessionOwnerId, sessionOwnerId, StringComparison.Ordinal)
-            && SessionOwnerLeaseGeneration == sessionOwnerLeaseGeneration;
+            && SessionRid == sessionRid;
     }
 }
 

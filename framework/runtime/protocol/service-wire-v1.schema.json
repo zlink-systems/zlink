@@ -5509,6 +5509,18 @@
         },
         {
           "when": {
+            "originalOperationKind": "streamBind",
+            "terminalResult": "rejected"
+          },
+          "fields": [
+            {
+              "name": "rejectionMessage",
+              "$ref": "nonempty-text16"
+            }
+          ]
+        },
+        {
+          "when": {
             "originalOperationKind": "userSpotCreate",
             "terminalResult": "ok"
           },
