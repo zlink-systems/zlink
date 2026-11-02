@@ -14269,10 +14269,10 @@ task_t<void> run_actor_handler_turn_task (
   TTarget target,
   std::function<task_t<result_t<bool>> (actor_t &, std::stop_token)> work,
   std::stop_token cancellation,
-  std::shared_ptr<std::optional<result_t<bool>>> outcome)
+  std::shared_ptr<std::optional<result_t<bool>>> outcome,
+  std::string actor_key)
 {
-    runtime::actor_execution_scope_t actor_scope (actor_key (target.actor_ref),
-                                                  target.context->spot_id);
+    runtime::actor_execution_scope_t actor_scope (std::move (actor_key), target.context->spot_id);
     try {
         outcome->emplace (co_await work (*target.actor, cancellation));
     }
@@ -14339,8 +14339,9 @@ task_t<result_t<bool>> spot_node_runtime_t::run_actor_turn (
           "actor-handler-turn",
           [target = std::move (*target), work = std::move (work), cancellation,
            outcome] () mutable -> task_t<void> {
+              auto key = actor_key (target.actor_ref);
               return run_actor_handler_turn_task (std::move (target), std::move (work),
-                                                  cancellation, outcome);
+                                                  cancellation, outcome, std::move (key));
           });
     }
     catch (...) {
