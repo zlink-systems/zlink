@@ -2,8 +2,10 @@ package systems.zlink.framework.runtime.locations;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -29,6 +31,94 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkLocationRuntimeAdmissionRecoveryTest {
+    @Test
+    void stopCancelsRecoveryPublicationAndLateStoreCompletionDoesNotContinue() throws Exception {
+        var store = new ZLinkInMemoryLocationStore(Clock.fixed(Instant.EPOCH, ZoneOffset.UTC));
+        var scheduler = new ZLinkLocationFirstHeartbeatTest.RecordingScheduler();
+        var descriptorWrite = new CompletableFuture<Void>();
+        var descriptorRequested = new CompletableFuture<Void>();
+        var publications = new AtomicInteger();
+        var timeout = Duration.ofMillis(500);
+        try (var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "recovery-stop",
+                        Duration.ofSeconds(15),
+                        Duration.ofSeconds(1),
+                        timeout,
+                        Duration.ZERO,
+                        () -> 0L,
+                        scheduler)) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            runtime.setOwnerLeaseRecoveryListener(
+                    ignored -> {
+                        publications.incrementAndGet();
+                        return runtime.writeDescriptor(
+                                        () -> {
+                                            descriptorRequested.complete(null);
+                                            return descriptorWrite;
+                                        })
+                                .thenRun(publications::incrementAndGet);
+                    });
+            var publication = runtime.publishWithStartupOwnerLease().toCompletableFuture();
+            descriptorRequested.get(1, TimeUnit.SECONDS);
+            assertFalse(publication.isDone());
+            runtime.stop().toCompletableFuture().get(timeout.toNanos(), TimeUnit.NANOSECONDS);
+            try {
+                assertTrue(publication.isDone(), "stop cancels the recovery publication wait");
+            } finally {
+                descriptorWrite.complete(null);
+            }
+            assertTrue(publication.isCompletedExceptionally());
+            assertEquals(1, publications.get(), "a late Store completion must not publish again");
+        }
+    }
+
+    @Test
+    void recoveryPublicationTimeoutReleasesSingleFlightForTheNextRenewal() throws Exception {
+        var store = new ZLinkInMemoryLocationStore(Clock.fixed(Instant.EPOCH, ZoneOffset.UTC));
+        var scheduler = new ZLinkLocationFirstHeartbeatTest.RecordingScheduler();
+        var storePublication = new CompletableFuture<Void>();
+        var publications = new AtomicInteger();
+        var clock = new AtomicLong(1L);
+        var timeout = Duration.ofMillis(50);
+        try (var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "recovery-timeout",
+                        Duration.ofSeconds(15),
+                        Duration.ofSeconds(1),
+                        timeout,
+                        Duration.ZERO,
+                        clock::get,
+                        scheduler)) {
+            runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
+            runtime.setOwnerLeaseRecoveryListener(
+                    ignored ->
+                            publications.incrementAndGet() == 1
+                                    ? runtime.writeDescriptor(() -> storePublication)
+                                    : CompletableFuture.completedFuture(null));
+            var scheduled = scheduler.nextTask();
+            var publication = runtime.publishWithStartupOwnerLease().toCompletableFuture();
+            assertFalse(publication.isDone());
+            var deadline = scheduled.get(1, TimeUnit.SECONDS);
+            assertEquals(timeout.toNanos(), deadline.getDelay(TimeUnit.NANOSECONDS));
+            clock.addAndGet(timeout.toNanos());
+            deadline.run();
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () -> publication.get(1, TimeUnit.SECONDS));
+            assertTrue(failure.getCause() instanceof java.util.concurrent.TimeoutException);
+            assertTrue(runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            assertEquals(2, publications.get());
+            storePublication.complete(null);
+            assertEquals(2, publications.get());
+        } finally {
+            storePublication.complete(null);
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void renewalsJoinTheStartupOrRenewalPublicationAlreadyInFlight(boolean startupPublication)

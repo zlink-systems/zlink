@@ -103,8 +103,9 @@ export class ZLinkAutoConnectReconciler {
   async tick(signal?: AbortSignal): Promise<void> {
     try {
       await this.publishLocal(signal);
+      signal?.throwIfAborted();
     } catch {
-      await this.recordStoreFailure();
+      await this.recordStoreFailure(signal);
       return;
     }
 
@@ -125,8 +126,9 @@ export class ZLinkAutoConnectReconciler {
         },
         signal
       );
+      signal?.throwIfAborted();
     } catch {
-      await this.recordStoreFailure();
+      await this.recordStoreFailure(signal);
       return;
     }
 
@@ -147,11 +149,11 @@ export class ZLinkAutoConnectReconciler {
       try {
         const republished = await this.publishLocal(signal);
         if (!republished) {
-          await this.recordStoreFailure();
+          await this.recordStoreFailure(signal);
           return;
         }
       } catch {
-        await this.recordStoreFailure();
+        await this.recordStoreFailure(signal);
         return;
       }
     }
@@ -324,6 +326,7 @@ export class ZLinkAutoConnectReconciler {
   }
 
   private async publishLocal(signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted();
     const prepared = await this.lane.run(() => this.preparePublishLocalCore());
     if (prepared === undefined) return await this.lane.run(() => this.localPublished);
     const claimed = await this.runtime.writePeer(
@@ -332,12 +335,16 @@ export class ZLinkAutoConnectReconciler {
       signal
     );
     if (claimed.status === ZLinkLocationWriteStatus.Stored) {
-      return await this.lane.run(() => this.completePublishClaimCore(claimed.generation));
+      return await this.lane.run(() => {
+        signal?.throwIfAborted();
+        return this.completePublishClaimCore(claimed.generation);
+      });
     }
 
-    const renewal = await this.lane.run(() =>
-      this.preparePublishRenewalCore(prepared.row, claimed.status)
-    );
+    const renewal = await this.lane.run(() => {
+      signal?.throwIfAborted();
+      return this.preparePublishRenewalCore(prepared.row, claimed.status);
+    });
     if (renewal !== undefined) {
       const renewed = await this.runtime.writePeer(
         {
@@ -348,6 +355,7 @@ export class ZLinkAutoConnectReconciler {
         signal
       );
       return await this.lane.run(() => {
+        signal?.throwIfAborted();
         this.localPublished = renewed.status === ZLinkLocationWriteStatus.Stored;
         return this.localPublished;
       });
@@ -397,8 +405,10 @@ export class ZLinkAutoConnectReconciler {
       : undefined;
   }
 
-  private async recordStoreFailure(): Promise<void> {
-    const retryTargets = await this.lane.run(() => this.beginStoreFailureCore());
+  private async recordStoreFailure(signal?: AbortSignal): Promise<void> {
+    const retryTargets = await this.lane.run(() =>
+      signal?.aborted === true ? undefined : this.beginStoreFailureCore()
+    );
     if (retryTargets === undefined) return;
     for (const [key, target] of retryTargets) {
       await this.connectTarget(target, async () => {
