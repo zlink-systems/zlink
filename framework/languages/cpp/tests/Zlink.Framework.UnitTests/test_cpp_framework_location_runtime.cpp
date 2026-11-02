@@ -300,7 +300,19 @@ class held_coordinator_read_store_t final : public in_memory_location_repository
         }
         if (!hold_capacity)
             return listed.task ();
-        return zlink::framework::task_t<page_t> (zlink::framework::result_t<page_t>::success ({}));
+        zlink::framework::mesh_node_descriptor_t peer;
+        peer.mesh_name = "ordered-mesh";
+        peer.rid = zlink::routing_id_t::from ("snapshot-peer");
+        peer.endpoint = "inproc://snapshot-peer";
+        peer.owner_id = "snapshot-owner";
+        peer.lifecycle_generation = 1;
+        peer.descriptor_revision = 1;
+        peer.lease_generation = 1;
+        peer.state = zlink::framework::framework_runtime_state_t::serving;
+        page_t page;
+        page.items.push_back (std::move (peer));
+        return zlink::framework::task_t<page_t> (
+          zlink::framework::result_t<page_t>::success (std::move (page)));
     }
 
     zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
@@ -408,9 +420,9 @@ void check_auto_connect_stop_cancels_pending_read (bool hold_capacity, bool expi
     const auto rounds = expire_first ? 2u : 1u;
     EXPECT_EQ (rounds, store->reads.load ());
     EXPECT_EQ (hold_capacity ? rounds : 0u, store->refreshes.load ());
-    EXPECT_EQ (0u, store->lease_reads.load ());
+    EXPECT_EQ (hold_capacity ? rounds : 0u, store->lease_reads.load ());
     EXPECT_EQ (expire_first ? 1u : 0u, publications.load ());
-    EXPECT_EQ (0u, connections.load ());
+    EXPECT_EQ (hold_capacity && expire_first ? 1u : 0u, connections.load ());
     EXPECT_FALSE (reader->cached_request_source (
       "ordered-mesh", zlink::routing_id_t::from ("late-peer").to_bytes (), 1));
     EXPECT_NO_THROW (failures->rethrow_if_failed ());
@@ -432,7 +444,8 @@ TEST (ZLinkFrameworkLocationRuntime, AutoConnectListTimeoutFailsTickAndAllowsNex
     check_auto_connect_stop_cancels_pending_read (false, true);
 }
 
-TEST (ZLinkFrameworkLocationRuntime, AutoConnectCapacityTimeoutFailsTickAndAllowsNextPoll)
+TEST (ZLinkFrameworkLocationRuntime,
+      AutoConnectCapacityTimeoutFailsTickAndReconcilesPolledSnapshotBeforeNextPoll)
 {
     check_auto_connect_stop_cancels_pending_read (true, true);
 }

@@ -409,6 +409,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                     if (stopped.stop_requested ())
                         co_return;
                     auto descriptors = std::move (polled.value ());
+                    snapshots.emplace_back (&loop, std::move (descriptors));
                     if (loop.local_rid) {
                         const auto refreshed = co_await observe_until (
                           _store->refresh_capacity_metrics (loop.mesh_name, *loop.local_rid),
@@ -417,7 +418,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                             co_return;
                         refreshed.value ();
                     }
-                    snapshots.emplace_back (&loop, std::move (descriptors));
                 }
                 catch (const std::exception &error) {
                     handle_loop_failure (loop, "tick", error.what ());
