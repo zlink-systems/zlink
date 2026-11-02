@@ -37,6 +37,25 @@ int main ()
         assert (completed.load (std::memory_order_acquire));
         assert (observed.expired ());
     }
+    {
+        zlink::framework::completion_owner_t owner;
+        auto dispatcher = detail::borrow_completion_dispatcher ();
+        std::latch delivered (1);
+        std::atomic_uint transition_count{0};
+        std::thread notification ([&] {
+            const auto notification_resource = std::this_thread::get_id ();
+            detail::dispatch_completion (
+              [&, notification_resource] {
+                  if (notification_resource != std::this_thread::get_id ())
+                      transition_count.fetch_add (1, std::memory_order_relaxed);
+                  delivered.count_down ();
+              },
+              false, nullptr, dispatcher);
+        });
+        notification.join ();
+        delivered.wait ();
+        assert (transition_count.load (std::memory_order_relaxed) == 1);
+    }
 
     {
         zlink::framework::completion_owner_t first;

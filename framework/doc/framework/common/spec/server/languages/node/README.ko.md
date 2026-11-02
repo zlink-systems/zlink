@@ -24,6 +24,14 @@ Node.js public interface는 **일반 handler에 취소 인자를 자동으로 �
 중단할 수 있어야 하는 request 대기·연결·종료 같은 장기 작업은 Node 관례에 따라 optional
 `AbortSignal`을 사용한다. 정확한 적용 대상은 인터페이스 시그니처가 고정한다.
 
+## Messaging hot path 전환 수 계측
+
+[Messaging hot path §3](../../01-execution/08-messaging-hot-path.ko.md)는 binding 완료 알림부터 caller continuation의 첫 instruction까지 Framework가 만드는 전환을 최대 1회로 제한한다. Node는 이 구간을 하나의 event loop에서 실행하므로 실행 자원 전환은 0회다. contract 시험은 완료 알림과 Promise continuation의 `worker_threads.threadId`를 비교한다. microtask 게시와 깨우기는 전환 수에 더하지 않는다.
+
+| 구간 | 상한 | 계측 지점 | 시험 식별자 |
+|---|---:|---|---|
+| binding 완료 알림 → caller continuation 첫 instruction | 1회 이하 | 시험 전용 `threadId` 비교 [node-completion-callback-cost.test.js:14](../../../../../../../languages/node/test/contract/node-completion-callback-cost.test.js#L14); [mesh-completion-table.ts:292](../../../../../../../languages/node/packages/framework/src/runtime/backend/mesh-completion-table.ts#L292) | `contract:node-completion-callback-cost.test.js#messaging hot path completion transition count is zero on the event loop` (기대 0회) |
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [언어별 interface 목차](../README.ko.md) | [스펙 목차](../../README.ko.md)
