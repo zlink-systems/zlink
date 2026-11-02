@@ -3845,6 +3845,34 @@ for (const transition of ['Reserve', 'Commit', 'Abort']) {
 
 }
 
+test('ownerSweepReleasesEndedLifecycleReservation', async () => {
+  const fixture = await creationDescriptorFixture();
+  await fixture.republish({ lifecycleGeneration: '2' });
+  assert.equal((await fixture.repository.listMeshNodes('play')).items[0]
+    .populationCapacity.actors.reserved, 1);
+  assert.equal(await fixture.repository.removeAllByOwner(fixture.request.target.owner), 1n);
+  const key = authorityKeys.encodeAuthorityKey('actor', fixture.request.key.globalId);
+  assert.equal((await fixture.repository.readAuthority(key)).kind, 'missing');
+  const after = (await fixture.repository.listMeshNodes('play')).items;
+  assert.equal(after.length, 1);
+  assert.equal(after[0].lifecycleGeneration, 2n);
+  assert.equal(after[0].populationCapacity.actors.reserved, 0);
+  assert.equal(await fixture.repository.removeAllByOwner(fixture.request.target.owner), 0n);
+});
+
+test('ownerSweepRetainsReservationWhenLeaseChangesDuringEndedRelease', async () => {
+  const fixture = await creationDescriptorFixture();
+  const owner = fixture.request.target.owner;
+  await fixture.republish({ lifecycleGeneration: '2' });
+  fixture.beforeWrite(async () => {
+    assert.equal(await fixture.repository.releaseOwnerLease(owner), 'released');
+    assert.equal((await fixture.repository.claimOwnerLease(owner.ownerId, 30_000)).kind, 'claimed');
+  });
+  assert.equal(await fixture.repository.removeAllByOwner(owner), 0n);
+  const key = authorityKeys.encodeAuthorityKey('actor', fixture.request.key.globalId);
+  assert.equal((await fixture.repository.readAuthority(key)).kind, 'snapshot');
+});
+
 test('previousLifecycleCommitIsRejected', async () => {
   const fixture = await creationDescriptorFixture();
   fixture.beforeWrite(() => fixture.republish({ lifecycleGeneration: '2' }));
