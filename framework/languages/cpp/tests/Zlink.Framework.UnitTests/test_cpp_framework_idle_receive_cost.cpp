@@ -34,25 +34,29 @@ void observed (std::size_t &counter, boundary_t boundary = boundary_t::none)
     changed.notify_one ();
 }
 }
-extern "C" fw::task_t<std::size_t>
-real_dispatch (fw::detail::mesh_node_runtime_t *self,
-               dispatch_t callback,
-               bool accept,
-               std::function<bool ()>
-                 next) __asm__ ("__real__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
-                                "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
-                                "16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_"
-                                "23application_job_queue_t8permit_tEEEbS3_IFbvEE");
-extern "C" fw::task_t<std::size_t>
-wrap_dispatch (fw::detail::mesh_node_runtime_t *self,
-               dispatch_t callback,
-               bool accept,
-               std::function<bool ()>
-                 next) __asm__ ("__wrap__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
-                                "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
-                                "16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_"
-                                "23application_job_queue_t8permit_tEEEbS3_IFbvEE");
-extern "C" bool real_wait (
+extern "C" fw::task_t<std::size_t> real_dispatch (
+  fw::detail::mesh_node_runtime_t *self,
+  dispatch_t callback,
+  bool accept,
+  std::function<bool ()> next,
+  std::optional<zlink::poll_event_flag_t>
+    readiness) __asm__ ("__real__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
+                        "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
+                        "16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_"
+                        "23application_job_queue_t8permit_tEEEbS3_IFbvEESt8optionalINS_17poll_"
+                        "event_flag_tEE");
+extern "C" fw::task_t<std::size_t> wrap_dispatch (
+  fw::detail::mesh_node_runtime_t *self,
+  dispatch_t callback,
+  bool accept,
+  std::function<bool ()> next,
+  std::optional<zlink::poll_event_flag_t>
+    readiness) __asm__ ("__wrap__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
+                        "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
+                        "16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_"
+                        "23application_job_queue_t8permit_tEEEbS3_IFbvEESt8optionalINS_17poll_"
+                        "event_flag_tEE");
+extern "C" std::optional<zlink::poll_event_flag_t> real_wait (
   fw::runtime::host::public_host_runtime_t *self,
   std::chrono::milliseconds timeout,
   bool accept,
@@ -60,7 +64,7 @@ extern "C" bool real_wait (
     next) __asm__ ("__real__ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_"
                    "dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_"
                    "10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE");
-extern "C" bool wrap_wait (
+extern "C" std::optional<zlink::poll_event_flag_t> wrap_wait (
   fw::runtime::host::public_host_runtime_t *self,
   std::chrono::milliseconds timeout,
   bool accept,
@@ -72,18 +76,20 @@ extern "C" bool wrap_wait (
 extern "C" fw::task_t<std::size_t> wrap_dispatch (fw::detail::mesh_node_runtime_t *self,
                                                   dispatch_t callback,
                                                   bool accept,
-                                                  std::function<bool ()> next)
+                                                  std::function<bool ()> next,
+                                                  std::optional<zlink::poll_event_flag_t> readiness)
 {
-    auto result = real_dispatch (self, std::move (callback), accept, std::move (next));
+    auto result = real_dispatch (self, std::move (callback), accept, std::move (next), readiness);
     last_empty = result.await_ready () && result.result ().value () == 0;
     if (last_empty)
         observed (empty_receives);
     return result;
 }
-extern "C" bool wrap_wait (fw::runtime::host::public_host_runtime_t *self,
-                           std::chrono::milliseconds timeout,
-                           bool accept,
-                           deadline_t next)
+extern "C" std::optional<zlink::poll_event_flag_t>
+wrap_wait (fw::runtime::host::public_host_runtime_t *self,
+           std::chrono::milliseconds timeout,
+           bool accept,
+           deadline_t next)
 {
     if (last_empty)
         observed (empty_waits, boundary_t::wait);

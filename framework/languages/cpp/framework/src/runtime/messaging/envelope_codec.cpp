@@ -22,23 +22,89 @@ namespace zlink::framework::runtime::messaging
 
 message_parts_t::message_parts_t (zlink::message_t header, zlink::message_t body)
 {
-    constexpr std::size_t envelope_part_count = 2;
-    _parts.reserve (envelope_part_count);
-    _parts.push_back (std::move (header));
-    _parts.push_back (std::move (body));
+    auto &parts = std::get<std::vector<zlink::message_t>> (_parts);
+    parts.reserve (2);
+    parts.push_back (std::move (header));
+    parts.push_back (std::move (body));
 }
 
 message_parts_t::message_parts_t (std::vector<zlink::message_t> parts) : _parts (std::move (parts))
 {
 }
 
-const zlink::message_t &message_parts_t::operator[] (std::size_t index) const
+message_parts_t::message_parts_t (const message_parts_t &other)
 {
-    if (index >= _parts.size ()) {
+    if (!std::holds_alternative<std::span<const std::span<const std::byte>>> (other._parts)) {
+        _parts = other.items ();
+        return;
+    }
+    auto &parts = std::get<std::vector<zlink::message_t>> (_parts);
+    parts.reserve (other.size ());
+    for (std::size_t index = 0; index < other.size (); ++index)
+        parts.push_back (zlink::message_t::from (other.part_bytes (index)));
+}
+
+message_parts_t &message_parts_t::operator= (const message_parts_t &other)
+{
+    if (this != &other)
+        *this = message_parts_t (other);
+    return *this;
+}
+
+message_parts_t message_parts_t::borrow (const std::vector<zlink::message_t> &parts)
+{
+    message_parts_t result;
+    result._parts = &parts;
+    return result;
+}
+
+message_parts_t message_parts_t::borrow (std::span<const std::span<const std::byte>> parts)
+{
+    message_parts_t result;
+    result._parts = parts;
+    return result;
+}
+
+std::size_t message_parts_t::size () const noexcept
+{
+    return std::visit (
+      [] (const auto &parts) {
+          if constexpr (std::is_pointer_v<std::decay_t<decltype (parts)>>)
+              return parts->size ();
+          else
+              return parts.size ();
+      },
+      _parts);
+}
+
+const std::vector<zlink::message_t> &message_parts_t::items () const
+{
+    if (const auto *parts = std::get_if<const std::vector<zlink::message_t> *> (&_parts))
+        return **parts;
+    return std::get<std::vector<zlink::message_t>> (_parts);
+}
+
+std::vector<zlink::message_t> message_parts_t::take_items () &&
+{
+    if (auto *parts = std::get_if<std::vector<zlink::message_t>> (&_parts))
+        return std::move (*parts);
+    return std::move (message_parts_t (*this)).take_items ();
+}
+
+std::span<const std::byte> message_parts_t::part_bytes (std::size_t index) const
+{
+    if (index >= size ())
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "ZLink envelope part is missing");
-    }
-    return _parts[index];
+    if (const auto *parts = std::get_if<std::span<const std::span<const std::byte>>> (&_parts))
+        return (*parts)[index];
+    return items ()[index].bytes ();
+}
+
+const zlink::message_t &message_parts_t::operator[] (std::size_t index) const
+{
+    (void) part_bytes (index);
+    return items ()[index];
 }
 
 message_parts_t envelope_codec_t::encode_raw_body_parts (const envelope_header_t &header,
@@ -1021,10 +1087,17 @@ envelope_codec_t::decode_header (const zlink::message_t &message,
                                  bool capture_flow,
                                  std::optional<envelope_header_t> *rejection_context) const
 {
+    return decode_header (message.bytes (), capture_flow, rejection_context);
+}
+
+result_t<envelope_header_t>
+envelope_codec_t::decode_header (std::span<const std::byte> bytes,
+                                 bool capture_flow,
+                                 std::optional<envelope_header_t> *rejection_context) const
+{
     if (rejection_context)
         rejection_context->reset ();
     try {
-        const auto bytes = message.bytes ();
         {
             header_sax_t canonical (capture_flow);
             if (canonical.read_canonical (
@@ -1053,15 +1126,25 @@ envelope_codec_t::decode_header (const message_parts_t &parts,
         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
                                                      "ZLink envelope header part is missing");
     }
-    return decode_header (parts[0], capture_flow, rejection_context);
+    return decode_header (parts.part_bytes (0), capture_flow, rejection_context);
+}
+
+result_t<encoded_payload_t> envelope_codec_t::decode_body_view (const message_parts_t &parts) const
+{
+    if (parts.size () < 2)
+        return result_t<encoded_payload_t>::failure (framework_error_kind_t::protocol_error,
+                                                     "ZLink envelope body part is missing");
+    return result_t<encoded_payload_t>::success (
+      detail::encoded_payload_from_raw (parts.part_bytes (1)));
 }
 
 result_t<zlink::message_t> envelope_codec_t::decode_body (const message_parts_t &parts) const
 {
-    if (parts.size () < 2) {
-        return result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
-                                                    "ZLink envelope body part is missing");
-    }
+    const auto view = decode_body_view (parts);
+    if (!view)
+        return detail::result_access_t::failure<zlink::message_t> (view.exception ());
+    if (std::holds_alternative<std::span<const std::span<const std::byte>>> (parts._parts))
+        return result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (view.value ()));
     return result_t<zlink::message_t>::success (parts[1].copy ());
 }
 
