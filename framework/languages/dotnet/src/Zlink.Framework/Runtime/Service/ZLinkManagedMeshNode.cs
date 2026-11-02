@@ -1577,12 +1577,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var sharedReady = pending.Ready;
             publishReady = ready =>
             {
-                if (
-                    !sharedReady.TrySetResult(ready)
-                    && (
-                        !sharedReady.Task.IsCompletedSuccessfully
-                        || sharedReady.Task.Result != ready
-                    )
+                if (sharedReady.TrySetResult(ready))
+                    TraceRelocationStage(
+                        prepare,
+                        ZLinkMessageFlowOutcome.ReplyReceived,
+                        "relay_ready_received"
+                    );
+                else if (
+                    !sharedReady.Task.IsCompletedSuccessfully
+                    || sharedReady.Task.Result != ready
                 )
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.ProtocolError,
@@ -1707,11 +1710,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                     var relayReady = await pending
                                         .Ready.Task.WaitAsync(attemptToken)
                                         .ConfigureAwait(false);
-                                    TraceRelocationStage(
-                                        prepare,
-                                        ZLinkMessageFlowOutcome.ReplyReceived,
-                                        "relay_ready_received"
-                                    );
                                     return relayReady;
                                 },
                                 operation.Token,

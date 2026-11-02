@@ -274,10 +274,12 @@ public final class Nodes implements AutoCloseable {
                 else if (!windows())
                     new ProcessBuilder("kill", "-3", Long.toString(process.pid()))
                             .start()
-                            .waitFor(3, TimeUnit.SECONDS);
+                            .waitFor(Control.THREAD_DUMP_SECONDS, TimeUnit.SECONDS);
+                else return;
             } catch (Exception ignored) {
+                return;
             }
-            Thread.sleep(3000);
+            Thread.sleep(TimeUnit.SECONDS.toMillis(Control.THREAD_DUMP_SECONDS));
         }
 
         void cleanup() throws Exception {

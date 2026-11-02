@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using Zlink.Framework.Contracts.Dispatch;
 using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.Runtime.Diagnostics;
@@ -472,22 +473,35 @@ internal static class ZLinkRuntimeMetrics
     public static ZLinkRelocationMetricOperation CreateRelocation(
         string meshName,
         ZLinkRelocationMetricObjectKind objectKind,
-        ZLinkRelocationMetricPolicy policy
+        ZLinkRelocationMetricPolicy policy,
+        ZLinkMessageFlowTracer? flow = null,
+        string? actorId = null
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
-        if (
+        var flowContext =
+            objectKind == ZLinkRelocationMetricObjectKind.Actor && flow?.CaptureEnabled == true
+                ? ZLinkFlowContext.Current
+                : null;
+        var traceTerminal =
+            flowContext is not null
+            && flow?.Enabled(ZLinkMessageFlowOutcome.Completed, ZLinkMessageFlowResult.Failed)
+                == true;
+        var metricsDisabled =
             !RelocationStarted.Enabled
             && !RelocationCompleted.Enabled
             && !RelocationDuration.Enabled
-            && !RelocationBytes.Enabled
-        )
+            && !RelocationBytes.Enabled;
+        if (!traceTerminal && metricsDisabled)
             return ZLinkRelocationMetricOperation.Disabled;
 
         return new ZLinkRelocationMetricOperation(
             meshName,
             RelocationObjectKind(objectKind),
-            RelocationPolicy(policy)
+            RelocationPolicy(policy),
+            flow,
+            flowContext,
+            actorId
         );
     }
 
@@ -1420,6 +1434,9 @@ internal static class ZLinkRuntimeMetrics
 
         private int _state;
         private long _startedTimestamp;
+        private readonly ZLinkMessageFlowTracer? _flow;
+        private readonly ZLinkFlowValue? _flowContext;
+        private readonly string? _actorId;
 
         private ZLinkRelocationMetricOperation()
         {
@@ -1429,10 +1446,23 @@ internal static class ZLinkRuntimeMetrics
         }
 
         internal ZLinkRelocationMetricOperation(string meshName, string objectKind, string policy)
+            : this(meshName, objectKind, policy, null, null, null) { }
+
+        internal ZLinkRelocationMetricOperation(
+            string meshName,
+            string objectKind,
+            string policy,
+            ZLinkMessageFlowTracer? flow,
+            ZLinkFlowValue? flowContext,
+            string? actorId
+        )
         {
             MeshName = meshName;
             ObjectKind = objectKind;
             Policy = policy;
+            _flow = flow;
+            _flowContext = flowContext;
+            _actorId = actorId;
         }
 
         private string MeshName { get; }
@@ -1482,6 +1512,35 @@ internal static class ZLinkRuntimeMetrics
             if (Interlocked.CompareExchange(ref _state, Completed, Started) != Started)
                 return;
             CompleteRelocation(this, outcome);
+            TraceTerminal(outcome);
+        }
+
+        private void TraceTerminal(ZLinkRelocationMetricOutcome outcome)
+        {
+            if (_flow is null || _flowContext is not { } flowContext)
+                return;
+            var result =
+                outcome == ZLinkRelocationMetricOutcome.Shutdown ? ZLinkMessageFlowResult.Shutdown
+                : outcome == ZLinkRelocationMetricOutcome.Completed
+                    ? ZLinkMessageFlowResult.Succeeded
+                : ZLinkMessageFlowResult.Failed;
+            if (!_flow.Enabled(ZLinkMessageFlowOutcome.Completed, result))
+                return;
+            _flow.Trace(
+                new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.Completed,
+                    ZLinkDispatchErrorSurface.ActorRelocation,
+                    ZLinkDispatchMessageKind.Control,
+                    ActorId: _actorId,
+                    MeshName: MeshName,
+                    Result: result
+                )
+                {
+                    FlowId = flowContext.FlowId,
+                    FlowOrigin = flowContext.Origin,
+                    Detail = $"source_relocation_{RelocationOutcome(outcome)}",
+                }
+            );
         }
 
         internal void RecordBytes(long byteCount)

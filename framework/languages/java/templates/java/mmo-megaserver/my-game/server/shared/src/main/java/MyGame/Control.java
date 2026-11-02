@@ -17,4 +17,5 @@ public final class Control {
     public static final Duration MESSAGE_FOLLOW = Duration.ofSeconds(30);
     public static final Duration SAFE_OBSERVATION = MESSAGE_FOLLOW.plus(HOST_DEADLINE);
     public static final long PROCESS_SECONDS = 35;
+    public static final long THREAD_DUMP_SECONDS = 3;
 }
