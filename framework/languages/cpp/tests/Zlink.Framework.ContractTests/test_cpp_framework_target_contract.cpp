@@ -341,7 +341,8 @@ int main ()
 
     /* IMP-CP-05 — automatic RouteMesh discovery uses MeshNode descriptors. */
     gate.require (
-      location_auto_connect.find ("poll_mesh_sources (loop.mesh_name)") != std::string::npos
+      location_auto_connect.find ("poll_mesh_sources (loop.mesh_name, deadline, stopped)")
+          != std::string::npos
         && live_location_reader.find ("_store->list_mesh_nodes (mesh_name, page)")
              != std::string::npos,
       "IMP-CP-05", "RouteMesh discovery bypasses the shared MeshNode descriptor catalog");
@@ -828,7 +829,7 @@ int main ()
 
     /* IMP-CP-06 — recovery connects new targets immediately and defers missing-target removal by owner lease TTL. */
     const auto complete_recovery_snapshot =
-      location_auto_connect.find ("co_await _live_store->poll_mesh_sources (loop.mesh_name)");
+      location_auto_connect.find ("auto polled = co_await observe_until (");
     const auto recovery_owner_check =
       location_auto_connect.find ("owner_lease_usable ()", complete_recovery_snapshot);
     const auto recovery_republish = location_auto_connect.find (
@@ -839,6 +840,9 @@ int main ()
       location_auto_connect.find ("auto desired = select_endpoint_winners", recovery_invalidation);
     gate.require (
       complete_recovery_snapshot != std::string::npos
+        && location_auto_connect.find ("poll_mesh_sources (loop.mesh_name, deadline, stopped)",
+                                       complete_recovery_snapshot)
+             < recovery_owner_check
         && location_auto_connect.find ("co_await republish_after_store_recovery (intent)")
              != std::string::npos
         && live_location_reader.find ("} while (page.continuation_token);") != std::string::npos

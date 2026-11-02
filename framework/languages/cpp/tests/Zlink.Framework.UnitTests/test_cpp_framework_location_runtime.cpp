@@ -29,12 +29,28 @@ namespace zlink::framework::runtime
 {
 struct location_auto_connect_test_access_t
 {
+    static bool has_tick_failure (const location_auto_connect_host_service_t &service)
+    {
+        return service._loops.front ().failure_started_at.has_value ();
+    }
+
+    static auto hold_loop_completion (location_auto_connect_host_service_t &service,
+                                      location_runtime_t &runtime)
+    {
+        service._runtime = &runtime;
+        service._loop_finished = std::make_shared<task_completion_source_t<void>> ();
+        return service._loop_finished;
+    }
+
     static void add_test_loop (location_auto_connect_host_service_t &service,
                                std::function<void (std::string)> connected,
-                               std::function<void ()> disconnected)
+                               std::function<void ()> disconnected,
+                               bool refresh_capacity = false)
     {
         service.add_loop (
-          "ordered-mesh", std::nullopt, {}, std::nullopt, false,
+          "ordered-mesh",
+          refresh_capacity ? std::optional{zlink::routing_id_t::from ("local")} : std::nullopt, {},
+          std::nullopt, false,
           [connected] (const auto &target) { connected (target.node_rid.to_string ()); },
           [disconnected] (const auto &) { disconnected (); });
     }
@@ -257,6 +273,193 @@ TEST (ZLinkFrameworkLocationRuntime, AutoConnectStopCancelsPendingPublication)
     EXPECT_EQ (1u, publications.load ());
     EXPECT_FALSE (service.descriptors_published ().result ().value ());
     runtime->stop ();
+}
+
+class held_coordinator_read_store_t final : public in_memory_location_repository_t
+{
+  public:
+    using page_t = zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>;
+    bool hold_capacity = false;
+    zlink::framework::task_completion_source_t<page_t> listed;
+    zlink::framework::task_completion_source_t<void> refreshed;
+    std::promise<void> entered;
+    std::promise<void> second_entered;
+    std::atomic<unsigned> reads = 0;
+    std::atomic<unsigned> lease_reads = 0;
+    std::atomic<unsigned> refreshes = 0;
+
+    zlink::framework::task_t<page_t>
+    list_mesh_nodes (std::string, zlink::framework::location_page_request_t = {}) override
+    {
+        const auto round = ++reads;
+        if (!hold_capacity) {
+            if (round == 1)
+                entered.set_value ();
+            if (round == 2)
+                second_entered.set_value ();
+        }
+        if (!hold_capacity)
+            return listed.task ();
+        return zlink::framework::task_t<page_t> (zlink::framework::result_t<page_t>::success ({}));
+    }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
+    read_owner_lease (std::string owner) override
+    {
+        using namespace zlink::framework;
+        ++lease_reads;
+        const auto now = std::chrono::system_clock::now ();
+        return task_t<owner_lease_read_result_t> (result_t<owner_lease_read_result_t>::success (
+          owner_lease_found_t{{std::move (owner), 1}, now + std::chrono::hours (1), now}));
+    }
+
+    zlink::framework::task_t<void> refresh_capacity_metrics (std::string,
+                                                             zlink::routing_id_t) override
+    {
+        const auto round = ++refreshes;
+        if (round == 1)
+            entered.set_value ();
+        if (round == 2)
+            second_entered.set_value ();
+        return refreshed.task ();
+    }
+
+    void release ()
+    {
+        page_t page;
+        zlink::framework::mesh_node_descriptor_t peer;
+        peer.mesh_name = "ordered-mesh";
+        peer.rid = zlink::routing_id_t::from ("late-peer");
+        peer.owner_id = "late-owner";
+        peer.lifecycle_generation = 1;
+        peer.lease_generation = 1;
+        page.items.push_back (std::move (peer));
+        listed.complete (zlink::framework::result_t<page_t>::success (std::move (page)));
+        refreshed.complete (zlink::framework::result_t<void>::success ());
+    }
+};
+
+void check_auto_connect_stop_cancels_pending_read (bool hold_capacity, bool expire_first = false)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    auto store = std::make_shared<held_coordinator_read_store_t> ();
+    store->hold_capacity = hold_capacity;
+    location_options_t options;
+    options.owner_lease_renew_timeout = std::chrono::milliseconds (200);
+    options.owner_lease_renew_interval = std::chrono::hours (1);
+    options.owner_lease_ttl = std::chrono::hours (3);
+    options.polling_interval = std::chrono::hours (1);
+    auto runtime = std::make_shared<location_runtime_t> (*store, options);
+    runtime->start (zlink::routing_id_t::from ("read-stop"));
+    auto builder = test::runtime_failure_builder ();
+    service_collection_t services;
+    services.add_factory<location_repository_t> (
+      [store] (service_provider_t &) {
+          return std::static_pointer_cast<location_repository_t> (store);
+      },
+      service_lifetime_t::singleton);
+    auto reader = std::make_shared<live_location_reader_t> (*store, options);
+    services.add_factory<live_location_reader_t> (
+      [reader] (service_provider_t &) { return reader; }, service_lifetime_t::singleton);
+    services.add_factory<location_runtime_t> ([runtime] (service_provider_t &) { return runtime; },
+                                              service_lifetime_t::singleton);
+    auto provider = services.build_provider ();
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    auto failures = std::make_shared<runtime_failure_collector_t> ();
+    std::atomic<unsigned> publications = 0;
+    std::atomic<unsigned> connections = 0;
+    std::promise<void> published;
+    auto publication_entered = published.get_future ();
+    std::atomic<bool> tick_failed = false;
+    location_auto_connect_host_service_t service (
+      failures, builder.message_bus (), {}, handlers, serializers,
+      [] { return framework_runtime_state_t::serving; }, {}, {}, {}, {},
+      [&] (location_write_intent_t, std::stop_token,
+           std::chrono::steady_clock::time_point) -> task_t<bool> {
+          tick_failed = location_auto_connect_test_access_t::has_tick_failure (service);
+          if (++publications == 1)
+              published.set_value ();
+          co_return true;
+      });
+    location_auto_connect_test_access_t::add_test_loop (
+      service, [&] (std::string) { ++connections; }, [] {}, hold_capacity);
+    auto entered = store->entered.get_future ();
+    service.start (provider).result ().value ();
+    const auto read_started = entered.wait_for (options.owner_lease_renew_timeout);
+    if (expire_first) {
+        EXPECT_EQ (std::future_status::ready,
+                   publication_entered.wait_for (2 * options.owner_lease_renew_timeout));
+        EXPECT_TRUE (tick_failed.load ());
+        auto second_read = store->second_entered.get_future ();
+        runtime->peer_reconcile_requester () ({});
+        EXPECT_EQ (std::future_status::ready,
+                   second_read.wait_for (options.owner_lease_renew_timeout));
+    }
+    const auto before_stop = std::chrono::steady_clock::now ();
+    auto stopped = std::async (std::launch::async, [&] { service.stop (); });
+    const auto stop_status = stopped.wait_until (before_stop + options.owner_lease_renew_timeout);
+    // The provider stays pending until the stop bound has been measured, including on RED.
+    store->release ();
+    stopped.get ();
+    EXPECT_EQ (std::future_status::ready, read_started);
+    EXPECT_EQ (std::future_status::ready, stop_status);
+    const auto rounds = expire_first ? 2u : 1u;
+    EXPECT_EQ (rounds, store->reads.load ());
+    EXPECT_EQ (hold_capacity ? rounds : 0u, store->refreshes.load ());
+    EXPECT_EQ (0u, store->lease_reads.load ());
+    EXPECT_EQ (expire_first ? 1u : 0u, publications.load ());
+    EXPECT_EQ (0u, connections.load ());
+    EXPECT_FALSE (reader->cached_request_source (
+      "ordered-mesh", zlink::routing_id_t::from ("late-peer").to_bytes (), 1));
+    EXPECT_NO_THROW (failures->rethrow_if_failed ());
+    runtime->stop ();
+}
+
+TEST (ZLinkFrameworkLocationRuntime, AutoConnectStopCancelsPendingListAndIgnoresLateCompletion)
+{
+    check_auto_connect_stop_cancels_pending_read (false);
+}
+
+TEST (ZLinkFrameworkLocationRuntime, AutoConnectStopCancelsPendingCapacityRefresh)
+{
+    check_auto_connect_stop_cancels_pending_read (true);
+}
+
+TEST (ZLinkFrameworkLocationRuntime, AutoConnectListTimeoutFailsTickAndAllowsNextPoll)
+{
+    check_auto_connect_stop_cancels_pending_read (false, true);
+}
+
+TEST (ZLinkFrameworkLocationRuntime, AutoConnectCapacityTimeoutFailsTickAndAllowsNextPoll)
+{
+    check_auto_connect_stop_cancels_pending_read (true, true);
+}
+
+TEST (ZLinkFrameworkLocationRuntime, AutoConnectStopReportsLoopCompletionTimeout)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    auto store = std::make_shared<in_memory_location_repository_t> ();
+    location_options_t options;
+    options.owner_lease_renew_timeout = std::chrono::milliseconds (200);
+    location_runtime_t runtime (*store, options);
+    auto builder = test::runtime_failure_builder ();
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    auto failures = std::make_shared<runtime_failure_collector_t> ();
+    location_auto_connect_host_service_t service (
+      failures, builder.message_bus (), {}, handlers, serializers,
+      [] { return framework_runtime_state_t::serving; });
+    // Isolate the final wait from Store cancellation; there is no running coroutine.
+    auto finished = location_auto_connect_test_access_t::hold_loop_completion (service, runtime);
+    auto stopped = std::async (std::launch::async, [&] { service.stop (); });
+    const auto stop_status = stopped.wait_for (2 * options.owner_lease_renew_timeout);
+    finished->complete (result_t<void>::success ());
+    stopped.get ();
+    EXPECT_EQ (std::future_status::ready, stop_status);
+    EXPECT_THROW (failures->rethrow_if_failed (), framework_exception_t);
 }
 
 class ordered_coordinator_store_t final : public in_memory_location_repository_t

@@ -294,7 +294,17 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         if (_runtime)
             _runtime->wake_owner_lease_observers ();
         if (_loop_finished)
-            _runtime_failures->capture ([&] { _loop_finished->task ().result ().value (); });
+            _runtime_failures->capture ([&] {
+                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+                  std::max (std::chrono::steady_clock::duration::zero (),
+                            deadline - std::chrono::steady_clock::now ()));
+                const auto finished =
+                  detail::observe_task_result_for (_loop_finished->task (), remaining, {});
+                if (!finished)
+                    throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                                 "Location coordinator stop timed out");
+                finished->value ();
+            });
         if (_client_server
             && _runtime_failures->capture ([&] { _client_server->stop (deadline); })) {
             _client_server_started = false;
@@ -391,13 +401,23 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         while (!stopped.stop_requested ()) {
             for (auto &loop : _loops) {
                 try {
-                    auto descriptors = co_await _live_store->poll_mesh_sources (loop.mesh_name);
+                    const auto deadline = std::chrono::steady_clock::now ()
+                                          + _runtime->options ().owner_lease_renew_timeout;
+                    auto polled = co_await observe_until (
+                      _live_store->poll_mesh_sources (loop.mesh_name, deadline, stopped), deadline,
+                      stopped);
                     if (stopped.stop_requested ())
                         co_return;
+                    auto descriptors = std::move (polled.value ());
+                    if (loop.local_rid) {
+                        const auto refreshed = co_await observe_until (
+                          _store->refresh_capacity_metrics (loop.mesh_name, *loop.local_rid),
+                          deadline, stopped);
+                        if (stopped.stop_requested ())
+                            co_return;
+                        refreshed.value ();
+                    }
                     snapshots.emplace_back (&loop, std::move (descriptors));
-                    if (loop.local_rid)
-                        (void) co_await _store->refresh_capacity_metrics (loop.mesh_name,
-                                                                          *loop.local_rid);
                 }
                 catch (const std::exception &error) {
                     handle_loop_failure (loop, "tick", error.what ());
