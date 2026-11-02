@@ -377,6 +377,46 @@ bool verify_timer_handler_activation_lifetime ()
            && timer_activation_dependency_t::destroyed.load () == 2;
 }
 
+bool verify_throwing_timer_callback_preserves_default_policy ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    serializer_registry_t serializers;
+    auto state = std::make_shared<spot_context_state_t> ();
+    state->spot_instance = std::make_shared<int> (1);
+    state->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
+    state->channel_runtime->serializers = &serializers;
+
+    auto timer_state = std::make_shared<timer_state_t> ();
+    timer_state->name = "throwing-callback";
+    timer_state->handler_type = std::type_index (typeid (int));
+    auto handler_instance = std::make_shared<int> (1);
+    timer_state->handler_instance = handler_instance;
+    timer_state->handler_invoker = [] (void *, void *, serializer_registry_t &,
+                                       const timer_tick_t &) -> task_t<zlink::message_t> {
+        throw std::runtime_error ("timer callback failed");
+        co_return zlink::message_t{};
+    };
+
+    auto timer = timer_test_access_t::create (timer_state);
+    timer_runtime_t runtime (state);
+    const auto first = runtime.dispatch_fire_count_async (timer, 1).result ();
+    const auto first_failures = runtime.failure_events (timer);
+    if (first || first.error_kind () != framework_error_kind_t::internal_failure
+        || timer.is_disposed () || first_failures.size () != 1 || first_failures[0].stopped
+        || first_failures[0].message != "timer callback failed") {
+        return false;
+    }
+
+    const auto second = runtime.dispatch_fire_count_async (timer, 1).result ();
+    const auto second_failures = runtime.failure_events (timer);
+    return !second && second.error_kind () == framework_error_kind_t::internal_failure
+           && !timer.is_disposed () && second_failures.size () == 2
+           && second_failures[1].delivery_index == first_failures[0].delivery_index + 1;
+}
+
 struct timer_cleanup_probe_t
 {
     std::atomic_int stop_calls{0};
@@ -11697,6 +11737,9 @@ bool verify_bulk_deferred_actor_joins ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--throwing-timer-callback-default-policy")
+        return verify_throwing_timer_callback_preserves_default_policy () ? EXIT_SUCCESS
+                                                                          : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--session-control-priority")
         return verify_session_control_lifecycle_priority () ? 0 : 1;
     if (argc == 2 && std::string_view (argv[1]) == "--fanout-state-owner")
@@ -12312,6 +12355,10 @@ int main (int argc, char **argv)
 
     if (!verify_timer_handler_activation_lifetime ()) {
         return 40;
+    }
+    if (!verify_throwing_timer_callback_preserves_default_policy ()) {
+        std::cerr << "throwing timer callback changed the default exception policy\n";
+        return 137;
     }
     if (!verify_timer_cancel_generation_contract ()) {
         return 114;
