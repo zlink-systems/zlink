@@ -152,11 +152,23 @@ jobs:
         if: ${{ !inputs.skip_tests && (steps.linux-vcpkg-cache.outputs.cache-hit != 'true') }}
         run: |
           set -euo pipefail
-          "${VCPKG_ROOT}/vcpkg" install \
-            opentelemetry-cpp:x64-linux \
-            'redis-plus-plus[async-std]:x64-linux' \
-            --x-install-root="${VCPKG_INSTALLED_DIR}" \
-            --clean-after-build
+          # Self-hosted runners and local builds share VCPKG_ROOT. vcpkg gives up on its
+          # buildtrees lock after about a second, so wait while another vcpkg holds it;
+          # any other failure still fails the step.
+          log="${RUNNER_TEMP}/vcpkg-install.log"
+          for attempt in $(seq 1 60); do
+            if "${VCPKG_ROOT}/vcpkg" install \
+              opentelemetry-cpp:x64-linux \
+              'redis-plus-plus[async-std]:x64-linux' \
+              --x-install-root="${VCPKG_INSTALLED_DIR}" \
+              --clean-after-build 2>&1 | tee "${log}"; then
+              exit 0
+            fi
+            grep -q 'failed to take lock' "${log}" || exit 1
+            echo "vcpkg lock held by another build; waiting (${attempt}/60)"
+            sleep 30
+          done
+          exit 1
 
       - name: Build the checkout Core package
         if: ${{ !inputs.skip_tests }}
