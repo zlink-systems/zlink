@@ -103,15 +103,10 @@ public sealed class ReceiveClaimCostTests(Xunit.Abstractions.ITestOutputHelper o
         {
             completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
             // A background GC can add per-thread allocation-counter noise to this sample.
-            var collections = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
+            var collections = PerCallAllocation.CollectionCounts();
             source.Publish();
             var measured = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            var currentCollections = (
-                GC.CollectionCount(0),
-                GC.CollectionCount(1),
-                GC.CollectionCount(2)
-            );
-            if (collections == currentCollections)
+            if (PerCallAllocation.CollectionCountsUnchanged(collections))
             {
                 actualSamples.Add(measured.Actual);
                 baselineSamples.Add(measured.Baseline);
