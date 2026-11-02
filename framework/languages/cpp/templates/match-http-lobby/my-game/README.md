@@ -97,7 +97,7 @@ Validated against the published Framework 0.31.0 packages.
 
 The default C++ typed serializer emits a signed 64-bit `sequence` as a JSON number, although the message model requires a decimal string ([#1694](https://github.com/zlink-systems/zlink/issues/1694)). The wire golden check passes three common samples; the five samples containing 64-bit fields remain blocked.
 
-This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.31.0 adds a typed Session reply API (#1785), and the template has not switched to it.
+This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.30.2 added a typed Session reply through `reply_packet` (#1785), and the template has not switched to it.
 
 ## Deployment sequence
 

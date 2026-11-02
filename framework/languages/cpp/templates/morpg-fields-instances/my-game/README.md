@@ -101,7 +101,7 @@ Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenar
 
 Validated against the published Framework 0.31.0 packages.
 
-This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.31.0 adds a typed Session reply API (#1785), and the template has not switched to it.
+This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Framework 0.30.2 added a typed Session reply through `reply_packet` (#1785), and the template has not switched to it.
 
 Each selected scenario uses a fresh world. Instance capacity is one Dungeon per node, so a replacement must accept a fresh Dungeon while the surviving node holds the relocated Dungeon. Placement remains a Framework decision.
 
