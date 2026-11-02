@@ -36,6 +36,21 @@ scripts/local-package/build-wsl.sh --verify-versions
 버전 파일을 변경한 뒤에는 위의 `--sync-versions`를 명시적으로 실행한다.
 Framework package 자체 version과 언어별 sample pin도 같은 동기화 대상이다.
 
+### 장르 템플릿의 고정 버전
+
+장르 템플릿은 공개 package만 쓰므로([템플릿 제작 규칙](../../framework/templates/TEMPLATE-AUTHORING.ko.md))
+템플릿이 고정한 Framework·binding version은 Framework `VERSION`과 따로 움직인다.
+언어마다 `framework/languages/<language>/templates/TEMPLATE_VERSIONS`가 소유한다
+(`ZLINK_TEMPLATE_FRAMEWORK_VERSION`, binding을 고정하는 .NET·Java·Node는
+`ZLINK_TEMPLATE_BINDING_VERSION`. Java 파일이 Java·Kotlin 템플릿을 함께 소유한다).
+`--sync-versions`가 이 값을 템플릿의 package 설정과 README·AGENTS의 version 문장에 쓰고,
+`--verify-versions`가 어긋난 템플릿을 찾는다. 이 검사는 git tag를 읽지 않는다.
+
+공개 package를 게시한 뒤 이 파일의 값만 고치고 `--sync-versions`를 실행한다.
+binding 고정값이 그 Framework 공개판이 요구한 binding과 같은지는
+`scripts/templates/check-template-bindings.py`가 `framework-<language>/v<version>` tag로
+확인한다. tag가 없으면 실패하므로 `git fetch --tags`가 필요하다.
+
 ## 전체 빌드
 
 ```bash
