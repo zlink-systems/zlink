@@ -183,7 +183,9 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         throw error;
       }
       await actor.push(new BingoObservationStateNotify({ state: observation.state }));
-      if (observation.reward != null) await this.announceReward(observation.reward);
+      if (observation.state.status !== BingoRoomStatus.Finished && observation.reward != null) {
+        await this.announceReward(observation.reward);
+      }
       console.error(
         `bingo observer joined spot=${this.context.spotId} actor=${actorId} room=${request.roomId}`
       );
@@ -406,17 +408,28 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     isHost: boolean,
     state: BingoRoomSnapshot
   ): Promise<void> {
-    await this.pushPlayers(
-      this.playerActors().filter((entry) => entry !== actorId),
-      new DeliverPlayerJoinedMsg({
-        notification: new PlayerJoinedNotify({
-          roomId: this.roomId,
-          actorId,
-          displayName,
-          seat,
-          isHost,
-          state
-        })
+    const recipients = this.playerActors().filter((entry) => entry !== actorId);
+    const payload = new DeliverPlayerJoinedMsg({
+      notification: new PlayerJoinedNotify({
+        roomId: this.roomId,
+        actorId,
+        displayName,
+        seat,
+        isHost,
+        state
+      })
+    });
+    await Promise.all(
+      recipients.map(async (recipient) => {
+        try {
+          await this.notifyActor(recipient, payload);
+        } catch (error) {
+          if (!(error instanceof ZLinkFrameworkException)) throw error;
+          console.error(
+            `bingo-player-joined-notify-failed room=${this.roomId} recipient=${recipient}`,
+            error
+          );
+        }
       })
     );
   }

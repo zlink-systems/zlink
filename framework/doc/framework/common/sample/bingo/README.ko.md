@@ -404,12 +404,17 @@ Framework가 binding route를 갱신한다.
 4. API가 같은 `RoomId`로 Room User Spot을 만들거나 찾고 `Ready`가 될 때까지 기다린다.
 5. Player Actor handler가 deferred join을 등록하고 `WaitingForPlayers` projection을 응답한다. Handler가
    반환된 뒤 join이 실행되므로 `MatchBingoRes`만으로 join 완료를 판정하지 않는다.
-6. Observer가 해당 `RoomId`의 관찰 room을 준비하고 deferred join이 등록됐다는
-   `Subscribed = true` 응답을 받는다. 실제 관찰 경로는 이후 reward publish를 client push로 받는지
-   확인해 검증한다.
+6. Observer 요청은 Game room 상태를 먼저 확인한다. room이 이미 `Finished`이거나 존재하지 않으면
+   관찰 room을 만들지 않고 `Subscribed = false`를 반환한다. 그 외에는 관찰 room과 deferred join을
+   준비한 뒤 `Subscribed = true`를 반환한다. 실제 관찰 경로는 이후 reward publish를 client push로
+   받는지 확인해 검증한다.
 7. `player-2`가 같은 과정을 실행하면 Redis가 같은 reservation을 반환한다.
 8. 두 번째 Actor join이 끝나면 room은 `Running`으로 바뀌고 두 player에게
    `BingoGameStartedNotify`를 보낸다. 이 알림이 game 시작의 authoritative completion이다.
+
+기존 player에게 보내는 `PlayerJoinedNotify`는 입장 알림이다. 전송이 실패하면 Room은 수신자와
+오류를 기록하고 다른 수신자에게 알림을 계속 보낸다. 이 실패는 새 player의 room 입장 결과를
+바꾸지 않는다.
 
 Room owner 조회와 remote join은 Location Store가 처리한다. Reservation Redis는 어느 Play node가
 room을 소유하는지 결정하지 않는다. Concurrent `GetOrCreate` caller는 하나의 `Creating` authority가
@@ -439,10 +444,14 @@ Card 검증, draw deck, mark와 winner 판정은 domain module이 소유한다. 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe.html" title="Reward 관찰" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/sample-bingo-reward-observe.html" target="_blank">↗ 크게 보기</a></p>
 
-Game room은 종료 결과를 먼저 확정하고 player push를 제출한 뒤 `bingo.room.reward` topic에
+Game room은 종료 결과와 reward 정산을 먼저 확정하고 player push를 제출한 뒤 `bingo.room.reward` topic에
 `BingoRewardAcquiredEvent`를 publish한다. 각 Play node의 관찰용 local `BingoRoom`은 같은 topic을
 구독한다. Event의 `RoomId`가 자신의 `ObservedRoomId`와 일치하는 room만 observer Actor에게 typed
 message를 보내고, Actor가 bound session으로 notify한다.
+
+관찰을 시작할 때 Game room 상태가 이미 `Finished`이거나 room이 없으면 `Subscribed = false`를
+반환한다. 종료 결과는 확정됐으므로 늦게 도착한 observer에게 종료 snapshot이나 reward를 보상
+전달하지 않는다. 종료 전에 구독한 observer는 reward publish를 통해 알림을 받는다.
 
 관찰 room은 player membership, card, timer와 winner 판정에 참여하지 않는다. Reward 수신만을 위한
 별도 Spot type도 만들지 않는다. Publish의 정상 완료는 source runtime이 작업을 시작했다는 뜻이며,
@@ -454,7 +463,9 @@ subscriber handler 실행이나 target별 수락을 보장하지 않는다. Clie
 STREAM connection이 끊기면 Framework가 current binding snapshot의 각 exact identity에 disconnect를
 자동 제출한다. Current Spot의 disconnect callback은 push가 불가능한 domain 상태만 반영한다.
 Session callback이 Actor를 순회하거나 binding을 직접 제거하지 않는다. Disconnect는 Actor를 destroy하거나
-room membership을 바꾸지 않는다. 이 경계는 [Session Actor dispatch §4.1](../../spec/server/04-session/02-session-actor-binding.ko.md)을 따른다.
+room membership을 바꾸지 않는다. Game room의 `Finished` 전환은 결과와 reward 정산을 확정하는
+경계다. 이후 도착한 observer 요청은 `Subscribed = false`를 받고 reward 보상을 받지 않는다.
+이 경계는 [Session Actor dispatch §4.1](../../spec/server/04-session/02-session-actor-binding.ko.md)을 따른다.
 
 Game 종료 뒤 player Actor cleanup은 별도 순서로 실행한다.
 
