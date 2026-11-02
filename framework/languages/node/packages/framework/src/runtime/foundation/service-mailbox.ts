@@ -9,6 +9,7 @@ export interface ServiceMailboxDispatchOwner {
 }
 
 export interface ServiceMailboxRecord {
+  receivedAt?: Date;
   readonly sourcePreparationOwner?: ServiceMailboxDispatchOwner;
   readonly ingress?: RawServiceIngressRecord;
   readonly owner: string;
@@ -82,7 +83,10 @@ export class ServiceMailbox {
   private nextRelocationSerial = 1n;
   private closed = false;
 
-  constructor(private readonly onReady?: (domain: ServiceMailboxDomain) => void) {
+  constructor(
+    private readonly onReady?: (domain: ServiceMailboxDomain) => void,
+    private readonly receivedAtClock: () => Date = () => new Date()
+  ) {
     // Host ApplicationJobQueue permits own ordinary-record admission. The
     // Framework-owned payload lifetime does not retain Core HWM credit. A
     // second mailbox cap would reject already-admitted work before the shared
@@ -105,6 +109,7 @@ export class ServiceMailbox {
     const target = this.domain(record.domain);
     const bytes = retainedBytes(record);
     if (this.closed) return false;
+    record.receivedAt ??= this.receivedAtClock();
     if (record.domain === 'application') {
       if (this.relocatedOwners.has(record.owner)) return false;
       const relocation = this.relocationSeals.get(record.owner);

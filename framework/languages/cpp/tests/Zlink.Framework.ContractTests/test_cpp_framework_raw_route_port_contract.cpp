@@ -160,7 +160,8 @@ void verify_request_submission_stages ()
         assert (stages.admission);
         auto source = std::make_shared<
           zlink::framework::task_completion_source_t<backend::raw_request_completion_t>> ();
-        backend::observe_request_completion (std::move (stages), source);
+        backend::observe_request_completion (
+          std::move (stages), [source] (auto result) { source->complete (std::move (result)); });
         auto completion = source->task ();
         const auto &observed = completion.result ().value ();
         if (expected_error == 0) {

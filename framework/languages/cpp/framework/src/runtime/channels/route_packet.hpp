@@ -6,6 +6,7 @@
 #include <zlink/Contracts/Core/routing_id.hpp>
 
 #include <cstdint>
+#include <chrono>
 #include <optional>
 
 namespace zlink::framework::detail
@@ -17,6 +18,7 @@ struct route_received_packet_t
     std::optional<std::uint64_t> request_seq;
     runtime::messaging::message_parts_t parts;
     std::optional<zlink::routing_id_t> source_session_rid;
+    std::chrono::system_clock::time_point received_at = std::chrono::system_clock::now ();
 };
 
 struct route_dispatch_reply_t

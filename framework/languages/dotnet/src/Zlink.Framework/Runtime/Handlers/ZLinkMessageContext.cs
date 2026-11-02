@@ -6,7 +6,9 @@ internal sealed class ZLinkMessageContext(
     string packetName,
     string? contentType,
     ZLinkMessageMetadata? metadata,
-    string? correlationId
+    string? correlationId,
+    DateTimeOffset? receivedAt = null,
+    TimeProvider? timeProvider = null
 ) : IZLinkMessageContext
 {
     public string? MeshName { get; } = meshName;
@@ -20,4 +22,7 @@ internal sealed class ZLinkMessageContext(
     public ZLinkMessageMetadata Metadata { get; } = metadata ?? ZLinkMessageMetadata.Empty;
 
     public string? CorrelationId { get; } = correlationId;
+
+    public DateTimeOffset ReceivedAt { get; } =
+        (receivedAt ?? (timeProvider ?? TimeProvider.System).GetUtcNow()).ToUniversalTime();
 }

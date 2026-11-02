@@ -240,6 +240,7 @@ struct receive_record_t
     std::function<void ()> before_application_handler;
     std::shared_ptr<serial_application_record_t> application_record;
     std::optional<std::chrono::steady_clock::time_point> operation_deadline;
+    std::chrono::system_clock::time_point received_at = std::chrono::system_clock::now ();
 };
 
 struct ready_record_t

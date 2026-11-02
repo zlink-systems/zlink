@@ -25,19 +25,41 @@ public sealed class MessageContextContractTests
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .ToDictionary(static property => property.Name, StringComparer.Ordinal);
 
-        Assert.Equal(6, properties.Count);
+        Assert.Equal(7, properties.Count);
         Assert.Equal(typeof(string), properties["MeshName"].PropertyType);
         Assert.Equal(typeof(string), properties["ChannelName"].PropertyType);
         Assert.Equal(typeof(string), properties["PacketName"].PropertyType);
         Assert.Equal(typeof(string), properties["ContentType"].PropertyType);
         Assert.Equal(typeof(ZLinkMessageMetadata), properties["Metadata"].PropertyType);
         Assert.Equal(typeof(string), properties["CorrelationId"].PropertyType);
+        Assert.Equal(typeof(DateTimeOffset), properties["ReceivedAt"].PropertyType);
         Assert.All(properties.Values, static property => Assert.Null(property.SetMethod));
 
         Assert.DoesNotContain(
             typeof(IZLinkMessageContext).Assembly.GetTypes(),
             static type => RemovedContextTypeNames.Contains(type.Name)
         );
+    }
+
+    [Fact]
+    public void MessageContext_UsesInjectedUtcClockAndKeepsTheAcceptedValue()
+    {
+        var clock = new ControllableTimeProvider();
+        var acceptedAt = clock.GetUtcNow();
+        var context = new ZLinkMessageContext(
+            "mesh-a",
+            "channel-a",
+            "packet-a",
+            "application/json",
+            ZLinkMessageMetadata.Empty,
+            null,
+            timeProvider: clock
+        );
+
+        clock.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(acceptedAt, context.ReceivedAt);
+        Assert.Equal(TimeSpan.Zero, context.ReceivedAt.Offset);
     }
 
     [Fact]

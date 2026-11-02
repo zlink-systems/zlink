@@ -54,6 +54,7 @@ public sealed class HandlerContracts
                 nameof(IZLinkMessageContext.MeshName),
                 nameof(IZLinkMessageContext.Metadata),
                 nameof(IZLinkMessageContext.PacketName),
+                nameof(IZLinkMessageContext.ReceivedAt),
             },
             publicProperties
         );

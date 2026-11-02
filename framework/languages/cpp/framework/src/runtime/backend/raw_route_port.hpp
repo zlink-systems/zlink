@@ -130,6 +130,12 @@ class raw_route_port_t
     {
         _request_receive_source = std::move (source);
     }
+    void request (const raw_bytes_t &target_routing_id,
+                  raw_message_t parts,
+                  std::chrono::milliseconds timeout,
+                  std::function<void (result_t<raw_request_completion_t>)> completion,
+                  runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+                  std::shared_ptr<task_completion_source_t<void>> admitted = {});
     task_t<raw_request_completion_t>
     request (const raw_bytes_t &target_routing_id,
              raw_message_t parts,
