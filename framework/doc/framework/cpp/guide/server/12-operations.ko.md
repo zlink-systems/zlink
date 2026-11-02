@@ -47,21 +47,26 @@ framework는 메트릭 계기와 host 종료 시의 drain 절차를 제공한다
 
 ## 2. 런타임 메트릭
 
-framework는 `"zlink.framework"` 하나를 정식 meter 이름으로 삼아
-모든 계기를 방출한다. application은 이 정식 meter 이름을 수집 파이프라인에 등록한다.
+Framework의 계기와 message-flow 기록은 언어별 collector에 연결한다. Application이
+각 언어의 provider와 exporter를 구성하며, Framework는 내장 scrape server를 두지 않는다.
 
 ```cpp
-// C++은 언어 표준 메트릭 파이프라인이 없으므로 monitoring 표면에서 직접 읽어
-// 쓰는 exporter에 넘긴다. 계기 이름은 다른 언어와 같다.
-auto status = runtime.status ();
-// status의 inbound_dispatch 값을 앱의 exporter로 내보낸다.
+auto sdk = std::make_shared<opentelemetry::sdk::metrics::MeterProvider>();
+// SDK에 application 소유 reader와 exporter를 구성한다.
+app.use_metric_provider(
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider>(sdk));
+app.logging().use_file("zlink.log");
+auto &options = app.add_zlink_framework();
+options.configure_dispatch().message_flow(
+    zlink::framework::message_flow_log_mode_t::normal);
 ```
 
-- zlink 전용 메트릭 API는 없다. 각 언어의 표준 메트릭 API가 그대로 표면이다.
-  OTel 없이 수집하려면 `MeterListener`에서 meter 이름 `"zlink.framework"`를 직접 구독한다.
-- 어떤 listener도 붙지 않으면 계기 갱신은 최소 비용의 비활성 경로로 끝난다. 계기를
-  등록만 해 두고 켜지 않아도 messaging 성능에 영향이 없다.
-- 대시보드와 exporter 선택은 application 몫이다. framework는 내장 scrape 서버를 두지 않는다.
+언어별 수집 이름은 다음과 같다.
+
+C++은 `app_t::use_metric_provider(...)`로 metric provider를 연결하고, message-flow 기록은 application이
+구성한 logger로 보낸다. C++에는 OpenTelemetry `Tracer` source가 없다.
+
+대시보드와 exporter 선택은 application 몫이다.
 
 계기 카탈로그는 다음 표가 MeshNode, object·STREAM, location·fanout의 측정값과 단위를 정리한다.
 세부 라벨·단위·종류는 [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)와
