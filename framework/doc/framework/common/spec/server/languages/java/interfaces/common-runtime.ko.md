@@ -294,6 +294,31 @@ Public exception은 재시도 여부를 제공하지 않는다.
 역직렬화하지 않으며, 첫 값이 그 type과 다르면 `TYPE_MISMATCH`로 끝난다. 첫 호출이 실패했다면
 그 실패를 다시 전달한다.
 
+기본 JSON DTO는 [공통 메시지 계약 §5](../../../00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)의 required 규칙을 따른다.
+Java record component는 기본적으로 required며, Framework의 `@ZLinkJsonOptional`로 선택 처리한다.
+`@JsonProperty`로 wire 이름을 정해도 required 판정은 바뀌지 않는다.
+선택 component가 누락되면 primitive는 Java 기본값을 사용하고 reference는 `null`을 받는다.
+Kotlin primary-constructor property는 기본값이 없으면 required이고, 기본값을 선언하면 누락될 수 있다.
+Required nullable property는 명시적 `null`을 허용하고 누락은 거부한다.
+
+| JVM DTO 선언 | Required 판정 |
+|---|---|
+| Java record component | 기본 required; 선택 component는 `@ZLinkJsonOptional` |
+| Kotlin constructor property | 기본값이 없으면 required; `= ...` 기본값이 있으면 선택 |
+
+```java
+package systems.zlink.framework;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Target(ElementType.RECORD_COMPONENT)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface ZLinkJsonOptional {}
+```
+
 ```java
 public final class systems.zlink.framework.ZLinkEncodedPayload {
  public static systems.zlink.framework.ZLinkEncodedPayload from(byte[]);

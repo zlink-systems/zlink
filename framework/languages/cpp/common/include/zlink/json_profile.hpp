@@ -436,6 +436,19 @@ template <typename T> struct dto_layout
     static constexpr std::size_t count = std::tuple_size_v<decltype (fields)>;
     static constexpr auto names = std::apply (
       [] (auto... field) { return std::array<std::string_view, count>{field.name...}; }, fields);
+    static constexpr auto required_masks = [] {
+        std::array<std::uint64_t, (count + field_mask_bits - 1) / field_mask_bits> masks{};
+        std::apply (
+          [&] (auto... field) {
+              std::size_t index = 0;
+              ((masks[index / field_mask_bits] |=
+                field.is_defaulted ? 0 : (std::uint64_t{1} << (index % field_mask_bits)),
+                ++index),
+               ...);
+          },
+          fields);
+        return masks;
+    }();
     static constexpr auto order = [] {
         std::array<std::size_t, count> indices{};
         for (std::size_t i = 0; i < count; ++i)
@@ -683,13 +696,9 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
     template <typename T> static bool finish (typed_sax &in, frame &parent)
     {
         if constexpr (has_dto<T>) {
-            constexpr auto count = dto_layout<T>::count;
-            for (std::size_t index = 0; index < count; index += field_mask_bits) {
-                const auto remaining = count - index;
-                const auto required = remaining >= field_mask_bits
-                                        ? ~std::uint64_t{0}
-                                        : (std::uint64_t{1} << remaining) - 1;
-                if (parent.seen_word (index / field_mask_bits) != required)
+            constexpr auto required = dto_layout<T>::required_masks;
+            for (std::size_t index = 0; index < required.size (); ++index) {
+                if ((parent.seen_word (index) & required[index]) != required[index])
                     return in.reject ("missing required property");
             }
         }
