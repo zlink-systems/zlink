@@ -18,9 +18,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private readonly IZLinkSocketConfig _socketConfig;
     private readonly TimeProvider _time;
     private readonly CancellationToken _stopToken;
-    private readonly ZLinkStateLane _lane = new();
-    private readonly ZLinkRequestDeadlineIndex _requestDeadlines;
-    private readonly Dictionary<string, Connection> _connections = new(StringComparer.Ordinal);
+    internal readonly ZLinkStateLane _lane = new();
+    internal readonly ZLinkRequestDeadlineIndex _requestDeadlines;
+    internal readonly Dictionary<string, Connection> _connections = new(StringComparer.Ordinal);
     private readonly List<(Task Task, Connection? Connection)> _retired = [];
     private ZLinkWeightedSelectionPlan<ReadyTarget, string>? _readySelectionPlan;
     private long _readySelectionPlanBuildCount;
@@ -749,7 +749,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
     private void SignalStateChanged() => StateChanged?.Invoke();
 
-    private sealed record ReadyTarget(
+    internal sealed record ReadyTarget(
         IDealerSocket Socket,
         uint AdmittedMaximumMessageBytes,
         RoutingId SelectionServerRid,
@@ -849,38 +849,38 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         ZLinkOneWaySubmitStatus Status
     );
 
-    private sealed class Connection : IAsyncDisposable
+    internal sealed class Connection : IAsyncDisposable
     {
         private readonly string _channelName;
         private readonly string _endpoint;
         private TimeSpan _admissionTimeout;
         private readonly CancellationToken _stopToken;
-        private uint _normalizedEffectiveMaxMessageBytes;
-        private readonly ZLinkStateLane _lane = new();
+        internal uint _normalizedEffectiveMaxMessageBytes;
+        internal readonly ZLinkStateLane _lane = new();
         private readonly ZLinkRequestDeadlineIndex _requestDeadlines;
         private readonly object _socketLifecycleGate = new();
         private IZLinkBackendSocketMonitor _monitor = null!;
-        private IZLinkBackendSocketPoller _receivePoller = null!;
+        internal IZLinkBackendSocketPoller _receivePoller = null!;
         private ZLinkClientServerServerDescriptor? _expected;
         private bool IsDisposing => Volatile.Read(ref _disposeTask) is not null;
-        private Task? _disposeTask;
+        internal Task? _disposeTask;
         private bool _admissionStarted;
-        private bool _admissionCompleted;
-        private bool _ready;
+        internal bool _admissionCompleted;
+        internal bool _ready;
         private bool _rejected;
-        private int _weight;
-        private string _diagnostics = "configured";
-        private ZLinkClientServerControlProtocol.Admission? _admittedDescriptor;
-        private CancellationTokenSource _admissionStop = null!;
-        private readonly List<Task> _requestTasks = [];
-        private Task? _livenessTask;
+        internal int _weight;
+        internal string _diagnostics = "configured";
+        internal ZLinkClientServerControlProtocol.Admission? _admittedDescriptor;
+        internal CancellationTokenSource _admissionStop = null!;
+        internal readonly List<Task> _requestTasks = [];
+        internal Task? _livenessTask;
 
         // The monitor loop and the control receive loop each close the handle they receive on
         // when they return. Disposal stops them through _receiveStop only after the request
         // and liveness work that also uses the DEALER has ended.
         private readonly ZLinkReceiveSocketOwner _monitorOwner;
         private readonly ZLinkReceiveSocketOwner _socketOwner;
-        private readonly CancellationTokenSource _receiveStop = new();
+        internal readonly CancellationTokenSource _receiveStop = new();
         private readonly ZLinkRuntimeTaskRunner _taskRunner;
         private readonly Action<Connection, string> _onAdmitted;
         private readonly Action<bool> _onStateChanged;
@@ -1391,7 +1391,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
         }
 
-        private bool ApplyAdmission(
+        internal bool ApplyAdmission(
             IReadOnlyList<Message> reply,
             ulong physicalGeneration,
             ulong attempt
@@ -1506,7 +1506,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         }
 
         // The socket owner closes only after the control source has left the poller.
-        private async ValueTask RunControlLoop()
+        internal async ValueTask RunControlLoop()
         {
             var cancellationToken = _receiveStop.Token;
             using var received = Received.Create();
@@ -1625,7 +1625,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
         }
 
-        private bool ProgressLivenessUnderState(
+        internal bool ProgressLivenessUnderState(
             CancellationToken cancellationToken,
             out TimeSpan delay
         )
@@ -1664,7 +1664,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             return false;
         }
 
-        private async Task RequestLivenessProbeAsync(
+        internal async Task RequestLivenessProbeAsync(
             ulong probeId,
             ulong physicalGeneration,
             ZLinkServiceLiveness admission,
@@ -1736,7 +1736,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             Interlocked.Increment(ref _livenessAckCount);
         }
 
-        private void PublishReadyTargetUnderLock()
+        internal void PublishReadyTargetUnderLock()
         {
             var current = Volatile.Read(ref _readyTarget);
             if (!_ready || IsDisposing || _weight <= 0)
@@ -1856,7 +1856,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             });
         }
 
-        private void RegisterRequestTask(Task task)
+        internal void RegisterRequestTask(Task task)
         {
             _requestTasks.RemoveAll(static candidate =>
                 candidate.IsCompletedSuccessfully || candidate.IsCanceled
@@ -1864,7 +1864,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _requestTasks.Add(task);
         }
 
-        private void StartControlAck(Message message)
+        internal void StartControlAck(Message message)
         {
             if (
                 !_lane.TryPost(() =>
@@ -1899,7 +1899,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 message.Dispose();
         }
 
-        private async Task ObserveControlAckAsync(Task send, CancellationToken cancellationToken)
+        internal async Task ObserveControlAckAsync(Task send, CancellationToken cancellationToken)
         {
             try
             {
@@ -1951,7 +1951,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
         }
 
-        private static void ReplyOwned(Received received, Message message)
+        internal static void ReplyOwned(Received received, Message message)
         {
             try
             {

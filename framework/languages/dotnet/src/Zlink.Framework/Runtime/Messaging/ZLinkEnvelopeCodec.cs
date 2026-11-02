@@ -134,7 +134,7 @@ internal static class ZLinkEnvelopeCodec
     private const int MaximumCorrelationIdBytes = 64;
     private const string JsonContentType = "application/json";
     private const int MaximumSimpleHeaderCacheEntries = 4096;
-    private static readonly ZLinkStateLane CacheLane = new();
+    internal static readonly ZLinkStateLane CacheLane = new();
     private static ImmutableDictionary<SimpleHeaderKey, HeaderPlan> SimpleHeaderCache =
         ImmutableDictionary<SimpleHeaderKey, HeaderPlan>.Empty;
     private static readonly Queue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();

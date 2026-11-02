@@ -58,7 +58,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
 {
     internal const ulong InitialTargetAttemptGeneration = 1;
     private static readonly TimeSpan TargetAbortRetention = TimeSpan.FromMinutes(5);
-    private readonly ConcurrentDictionary<AttemptKey, AttemptSlot> _targetAttempts = new();
+    internal readonly ConcurrentDictionary<AttemptKey, AttemptSlot> _targetAttempts = new();
     private int _targetAttemptAdmissionSealed;
 
     internal string[] SnapshotPendingAttemptNames() =>
@@ -1647,7 +1647,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         return waiting;
     }
 
-    private async ValueTask SweepCompletedTargetAbortsAsync()
+    internal async ValueTask SweepCompletedTargetAbortsAsync()
     {
         var cutoff = Stopwatch.GetElapsedTime(0) - TargetAbortRetention;
         foreach (var pair in _targetAttempts)
@@ -3224,7 +3224,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         Volatile.Write(ref _targetAttemptAdmissionSealed, 0);
     }
 
-    private AttemptSlotLease AcquireTargetAttempt(AttemptKey key)
+    internal AttemptSlotLease AcquireTargetAttempt(AttemptKey key)
     {
         while (true)
         {
@@ -3420,13 +3420,13 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             inner
         );
 
-    private readonly record struct AttemptKey(
+    internal readonly record struct AttemptKey(
         ulong RelocationHigh,
         ulong RelocationLow,
         ulong AttemptGeneration
     );
 
-    private readonly struct AttemptSlotLease : IDisposable
+    internal readonly struct AttemptSlotLease : IDisposable
     {
         private readonly ZLinkStandaloneActorRelocationRuntime _owner;
         private readonly AttemptKey _key;
@@ -3446,10 +3446,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         public void Dispose() => _owner.ReleaseTargetAttempt(_key, Slot);
     }
 
-    private sealed class AttemptSlot
+    internal sealed class AttemptSlot
     {
-        private readonly ZLinkStateLane _lane = new();
-        private readonly ZLinkRelocationAttemptLeaseState _leases = new();
+        internal readonly ZLinkStateLane _lane = new();
+        internal readonly ZLinkRelocationAttemptLeaseState _leases = new();
         private RoutedJoinPreparationIdentity? _routedJoinPreparation;
         private TargetStage? _stage;
         private TargetAbort? _abort;
@@ -3522,7 +3522,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         string HandoffId
     );
 
-    private sealed class TargetAbort(TargetStage stage)
+    internal sealed class TargetAbort(TargetStage stage)
     {
         private int _completed;
         private readonly TaskCompletionSource<Task> _terminal = new(
@@ -3539,7 +3539,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         internal void ObserveTerminal(Task cleanup) => _terminal.TrySetResult(cleanup);
     }
 
-    private sealed class TargetStage(
+    internal sealed class TargetStage(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         RoutingId sourceNodeRid,
         ZLinkRelocationEnvelope envelope,
@@ -3816,7 +3816,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         }
     }
 
-    private enum TargetReadySubmissionPhase
+    internal enum TargetReadySubmissionPhase
     {
         None = 0,
         Pending = 1,
@@ -3832,7 +3832,7 @@ internal sealed class ZLinkRelocationAttemptLeaseState
         TaskCreationOptions.RunContinuationsAsynchronously
     );
     private int _users;
-    private bool _closing;
+    internal bool _closing;
 
     internal Task Quiesced => _quiesced.Task;
 

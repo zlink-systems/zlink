@@ -364,14 +364,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionOwnerId: "session-owner",
                 sessionOwnerLeaseGeneration: 1
             );
-            var coordinator = (ZLinkActorBoundSessionCoordinator)
-                typeof(ZLinkFrameworkRuntime)
-                    .GetField(
-                        "_actorBoundSessionCoordinator",
-                        System.Reflection.BindingFlags.Instance
-                            | System.Reflection.BindingFlags.NonPublic
-                    )!
-                    .GetValue(runtime)!;
+            var coordinator = runtime._actorBoundSessionCoordinator;
             var submitted = 0;
             // Admission succeeds, but the remote owner never supplies a callback reply.
             coordinator.RemoteFrameRelayAsync = (_, _, _, _, _, _, _, _, _, _, _, _, _, _) =>
