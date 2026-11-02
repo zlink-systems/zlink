@@ -198,6 +198,15 @@ jobs:
             --core-prefix \
             "${ZLINK_LOCAL_PACKAGE_ROOT}/install/zlink-core/${core_version}"
 
+      - name: Give this runner its own sccache server
+        if: ${{ !inputs.skip_tests }}
+        run: |
+          set -euo pipefail
+          # Self-hosted WSL runners share one user, so the default port would
+          # share one server that dies when the job that started it ends.
+          port="$((4300 + $(printf %s "${RUNNER_NAME}" | cksum | cut -d' ' -f1) % 1000))"
+          echo "SCCACHE_SERVER_PORT=${port}" >> "${GITHUB_ENV}"
+
       - name: Setup sccache
         if: ${{ !inputs.skip_tests }}
         uses: mozilla-actions/sccache-action@v0.0.9
