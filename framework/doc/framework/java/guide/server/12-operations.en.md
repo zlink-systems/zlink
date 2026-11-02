@@ -50,23 +50,25 @@ Terms that appear for the first time:
 
 ## 2. Runtime Metrics
 
-The framework emits every instrument through one `System.Diagnostics.Metrics.Meter` named
-`"zlink.framework"`. The app registers this canonical meter name in its collection pipeline.
+The Framework connects its instruments and message-flow records to each language's
+collector. The application configures the providers and exporters; the Framework doesn't
+include a scrape server.
 
 ```java
-// Wire the zlink instruments into whatever registry the app uses, such as Micrometer.
-// "zlink.framework" is the canonical meter name the Framework emits instruments through.
-Metrics.addRegistry(prometheusRegistry);
+// The Spring Boot starter connects the application's MeterRegistry to Framework metrics.
+@EnableZLinkFramework
+@SpringBootApplication
+class Application {}
 ```
 
-- There's no zlink-specific metrics API. The framework uses each language's standard metrics
-  API directly. To collect without OTel, subscribe directly to the meter name `"zlink.framework"`
-  from a `MeterListener`.
-- If no listener is attached at all, an instrument update ends on a minimal-cost inactive
-  path. Registering an instrument without turning it on has no effect on messaging
-  performance.
-- Choosing a dashboard and exporter is the app's job. The framework doesn't bundle a scrape
-  server.
+Collection names per language:
+
+The Java/Kotlin Spring Boot starter connects the application's Micrometer `MeterRegistry` to
+the `zlink.*` instruments. Message-flow records use SLF4J category
+`systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer`; there is no OTel
+`Tracer`.
+
+Choosing a dashboard and exporter is the app's job.
 
 The catalog below lists the measurements and units for MeshNode, object/STREAM, and
 location/fanout instruments. For detailed labels, units, and kinds, see

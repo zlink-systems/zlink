@@ -386,8 +386,16 @@ Payload에서 label을 만들지 않는다. 개별 Actor·Spot·message 흐름�
 
 ## 11. 수집 경계
 
-각 언어는 표준 meter 또는 registry를 사용한다. Public API는 exporter, reader,
-storage와 histogram bucket을 구성하지 않는다.
+언어마다 metric provider에 연결하는 이름과 message-flow 기록을 내보내는 방식이 다르다.
+
+| 언어 | Metric 수집 이름 | Trace source / message-flow log |
+|---|---|---|
+| .NET | `System.Diagnostics.Metrics.Meter` 이름 `zlink.framework` | `System.Diagnostics.ActivitySource` 이름 `Zlink.Framework` |
+| C++ | OpenTelemetry `MeterProvider`의 meter 이름 `zlink.framework` | OpenTelemetry `Tracer`는 없다. Framework logger category `zlink.framework.dispatch`에 structured log를 기록한다. |
+| Java / Kotlin | Spring Boot starter가 Micrometer `MeterRegistry`에 계기별 `zlink.*` 이름을 등록한다. 공통 Meter 이름은 없다. | OpenTelemetry `Tracer`는 없다. SLF4J logger category `systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer`에 기록한다. |
+| Node.js | OpenTelemetry meter 이름 `zlink.framework` | OpenTelemetry `Tracer` 이름 `@zlink-systems/framework` |
+
+Public API는 exporter, reader, storage와 histogram bucket을 구성하지 않는다.
 
 - **Metric을 끈 경로는 payload를 복사하거나 per-message label dictionary를 만들지
   않는다.**
