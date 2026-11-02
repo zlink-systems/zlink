@@ -15,7 +15,7 @@ const {
 const { DefaultZLinkSpotManager } = require('../../packages/framework/dist/runtime/spots');
 const {
   ZLinkSpotNodeRuntimeManager
-} = require('../../packages/framework/dist/runtime/spots/spot-node-runtime-manager');
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkChannelRequestDispatcher,
   ZLinkRoutePacketDispatcher
@@ -247,7 +247,7 @@ for (const request of [true, false]) {
 }
 
 test('Spot Actor relay preserves the typed host admission rejection', async () => {
-  const { ZLinkFrameworkRuntimeHost } = require('../../packages/framework/dist/runtime/host');
+  const { ZLinkFrameworkRuntimeHost } = require('../../packages/framework/dist/internal');
   const {
     ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
   } = require('../../packages/framework/dist/runtime/actors/actor-packet-relay-wire');

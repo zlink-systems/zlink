@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   ZLinkActorSerialExecutor
-} = require('../../packages/framework/dist/runtime/actors/actor-mailbox');
+} = require('../../packages/framework/dist/internal');
 const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration

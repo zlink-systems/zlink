@@ -1,7 +1,7 @@
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const { encodeServiceRelocationEnvelope } = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
 const { ZLinkNativeFallbackBoundSession } = require('../../packages/framework/dist/runtime/streams/native-fallback-bound-session');
 const { ZLinkSubmitStatus } = require('../../packages/framework/dist/runtime/messaging/submission-result');
