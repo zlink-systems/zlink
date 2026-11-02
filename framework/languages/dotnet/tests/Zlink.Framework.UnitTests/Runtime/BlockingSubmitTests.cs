@@ -228,6 +228,7 @@ public sealed class BlockingSubmitTests
     public async Task DispatchedHandler_RejectsBlockingCallsBeforeSubmission()
     {
         await using var peers = await Peers.StartAsync();
+        peers.Probe.ReleaseRequest = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var send = peers.Client.SendToChannel("work", new SendMessage("after-handler"));
         var request = peers.Client.RequestToChannel("work", new RequestMessage("after-handler"));
         var checks = 0;
@@ -244,20 +245,36 @@ public sealed class BlockingSubmitTests
             Interlocked.Increment(ref checks);
         };
 
-        var reply = await peers
-            .Client.RequestToChannel("work", new RequestMessage("in-handler"))
-            .Async<ReplyMessage>();
+        try
+        {
+            var continuation = Task.Run(async () =>
+            {
+                var reply = await peers
+                    .Client.RequestToChannel("work", new RequestMessage("in-handler"))
+                    .Async<ReplyMessage>();
+                peers.Probe.InHandler = null;
+                Assert.False(peers.Probe.SendEntered.Task.IsCompleted);
+                // A thread-pool continuation outside the runtime must be able to block.
+                send.Submit();
+                return reply;
+            });
 
-        Assert.Equal("in-handler", reply.Value);
-        Assert.Equal(2, checks);
-        Assert.False(peers.Probe.SendEntered.Task.IsCompleted);
-        Assert.Equal(1, peers.Probe.Requests);
-        peers.Probe.InHandler = null;
-        // Reusing rejected builders proves that rejection did not claim admission.
-        send.Submit();
-        peers.Probe.ReleaseSend.TrySetResult();
-        Assert.Equal("after-handler", request.Submit<ReplyMessage>().Value);
-        Assert.Equal(2, peers.Probe.Requests);
+            await peers.Probe.RequestReady.Task;
+            Assert.False(continuation.IsCompleted);
+            peers.Probe.ReleaseRequest.TrySetResult();
+
+            Assert.Equal("in-handler", (await continuation).Value);
+            Assert.Equal(2, checks);
+            Assert.Equal(1, peers.Probe.Requests);
+            // Reusing rejected builders proves that rejection did not claim admission.
+            Assert.Equal("after-handler", request.Submit<ReplyMessage>().Value);
+            Assert.Equal(2, peers.Probe.Requests);
+        }
+        finally
+        {
+            peers.Probe.ReleaseRequest.TrySetResult();
+            peers.Probe.ReleaseSend.TrySetResult();
+        }
     }
 
     private static void AssertBlocked(SendProbe send, RequestProbe request)
@@ -378,6 +395,8 @@ public sealed class BlockingSubmitTests
     {
         public TaskCompletionSource<string> SendEntered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource RequestReady { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseSend { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource SendCompleted { get; } =
@@ -414,6 +433,7 @@ public sealed class BlockingSubmitTests
             probe.InHandler?.Invoke();
             await Task.Yield();
             probe.InHandler?.Invoke();
+            probe.RequestReady.TrySetResult();
             if (probe.ReleaseRequest is not null)
                 await probe.ReleaseRequest.Task.WaitAsync(cancellationToken);
             return new ReplyMessage(request.Value);
