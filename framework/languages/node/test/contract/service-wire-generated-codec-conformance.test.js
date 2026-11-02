@@ -334,8 +334,8 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
     catalog.fixtures.reduce((count, fixture) => count + fixture.malformed.length, 0),
     12
   );
-  assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'accept').length, 34);
-  assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'reject').length, 64);
+  assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'accept').length, 35);
+  assert.equal(catalog.operationCases.filter((entry) => entry.expect === 'reject').length, 65);
   const boundaryPairs = new Map();
   for (const entry of catalog.operationCases.filter(
     (candidate) => candidate.boundaryPair !== undefined
@@ -417,15 +417,16 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
       entry.operation === 'negotiated-bound'
         ? { runtimePredicates: context.runtimePredicates, ...entry.context }
         : { ...context, ...entry.context };
+    const seedContext = entry.operation === 'negotiated-bound' ? context : operationContext;
     let encodeValue;
     if (entry.input !== undefined) encodeValue = semanticInput(entry.input);
     else if (entry.encodeInputHex !== undefined) {
-      const seed = decode(Buffer.from(entry.encodeInputHex, 'hex'), context);
+      const seed = decode(Buffer.from(entry.encodeInputHex, 'hex'), seedContext);
       if (entry.encodeMutation !== 'duplicate-first-item') {
         throw new RangeError(`${label}:encode mutation`);
       }
       encodeValue = [seed[0], seed[0]];
-    } else if ((entry.directions ?? []).includes('encode')) encodeValue = decode(wire, context);
+    } else if ((entry.directions ?? []).includes('encode')) encodeValue = decode(wire, seedContext);
     for (const direction of entry.directions ?? ['decode']) {
       const directionLabel = `${label}:${direction}`;
       const action =

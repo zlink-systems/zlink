@@ -5279,13 +5279,14 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory_erased (
   std::function<void (void *, const zlink::message_t &, serializer_registry_t &)>
     deserialize_instance,
   std::function<std::shared_ptr<void> (actor_context_t)> create_context_instance,
+  std::function<actor_t *(void *)> as_actor,
   detail::actor_join_completion_callback_t on_join_completed,
   detail::factory_relocation_configuration_t relocation,
   std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture,
   std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore)
 {
     if ((!create_instance && !create_context_instance) || !configure_instance || !serialize_instance
-        || !deserialize_instance) {
+        || !deserialize_instance || !as_actor) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "actor factory callback must not be empty");
     }
@@ -5301,14 +5302,16 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory_erased (
              serialize_instance = std::move (serialize_instance),
              deserialize_instance = std::move (deserialize_instance),
              create_context_instance = std::move (create_context_instance),
-             on_join_completed = std::move (on_join_completed), relocation = std::move (relocation),
-             capture = std::move (capture), restore = std::move (restore)] () mutable {
+             as_actor = std::move (as_actor), on_join_completed = std::move (on_join_completed),
+             relocation = std::move (relocation), capture = std::move (capture),
+             restore = std::move (restore)] () mutable {
           const auto [_, inserted] = _state->actor_factories.emplace (
             actor_type, detail::spot_node_builder_state_t::actor_factory_registration_t{
                           actor_instance_type, relocation, std::move (create_instance),
                           std::move (configure_instance), std::move (serialize_instance),
                           std::move (deserialize_instance), std::move (create_context_instance),
-                          std::move (on_join_completed), std::move (capture), std::move (restore)});
+                          std::move (as_actor), std::move (on_join_completed), std::move (capture),
+                          std::move (restore)});
           if (!inserted) {
               throw framework_exception_t (framework_error_kind_t::already_exists,
                                            "duplicate actor factory registration");
@@ -14159,6 +14162,81 @@ std::optional<spot_id_t> spot_node_runtime_t::actor_spot (const actor_ref_t &act
         }
         return found->second;
     });
+}
+
+task_t<result_t<bool>> spot_node_runtime_t::run_actor_turn (
+  actor_ref_t actor_ref,
+  std::function<task_t<result_t<bool>> (actor_t &, std::stop_token)> work,
+  std::stop_token cancellation)
+{
+    if (!work)
+        co_return result_t<bool>::failure (framework_error_kind_t::protocol_error,
+                                           "Actor handler-turn work must not be empty");
+    const auto state = _state;
+    struct actor_turn_target_t
+    {
+        std::shared_ptr<void> instance;
+        actor_t *actor = nullptr;
+        std::shared_ptr<spot_context_state_t> context;
+        actor_ref_t actor_ref;
+    };
+    auto target = co_await state->lane.run_task (
+      [state, actor_ref = std::move (actor_ref)] () mutable -> std::optional<actor_turn_target_t> {
+          auto actor_type =
+            std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref));
+          if (actor_type.empty ()) {
+              const auto type =
+                state->actor_types_by_id.find (std::string (actor_ref.actor_id ().value ()));
+              if (type == state->actor_types_by_id.end ())
+                  return std::nullopt;
+              actor_type = type->second;
+              actor_ref = ::zlink::framework::detail::actor_ref_access_t::with_actor_type (
+                actor_ref, actor_type);
+          }
+          const auto key = actor_key (actor_ref);
+          const auto factory = state->actor_factories.find (actor_type);
+          const auto instance = state->actor_instances.find (key);
+          const auto membership = state->actor_spot_ids.find (key);
+          if (factory == state->actor_factories.end () || !factory->second.as_actor
+              || instance == state->actor_instances.end () || !instance->second
+              || membership == state->actor_spot_ids.end ())
+              return std::nullopt;
+          const auto context = state->spot_contexts_by_id.find (std::string (membership->second));
+          if (context == state->spot_contexts_by_id.end () || !context->second._state)
+              return std::nullopt;
+          return actor_turn_target_t{instance->second,
+                                     factory->second.as_actor (instance->second.get ()),
+                                     context->second._state, std::move (actor_ref)};
+      });
+    if (!target || !target->actor || !target->context)
+        co_return result_t<bool>::failure (framework_error_kind_t::not_found,
+                                           "Actor handler-turn target is not registered");
+
+    const auto actor_context = target->context;
+    auto outcome = std::make_shared<std::optional<result_t<bool>>> ();
+    try {
+        co_await actor_context->run_serial_task (
+          "actor-handler-turn",
+          [target = std::move (*target), work = std::move (work), cancellation,
+           outcome] () mutable -> task_t<void> {
+              runtime::actor_execution_scope_t actor_scope (actor_key (target.actor_ref),
+                                                            target.context->spot_id);
+              try {
+                  outcome->emplace (co_await work (*target.actor, cancellation));
+              }
+              catch (...) {
+                  outcome->emplace (detail::current_exception_result<bool> ());
+              }
+              co_return;
+          });
+    }
+    catch (...) {
+        co_return detail::current_exception_result<bool> ();
+    }
+    if (!*outcome)
+        co_return result_t<bool>::failure (framework_error_kind_t::internal_failure,
+                                           "Actor handler turn completed without a result");
+    co_return std::move (**outcome);
 }
 
 task_t<result_t<bool>> spot_node_runtime_t::release_local_actor_async (actor_ref_t actor)

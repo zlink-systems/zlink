@@ -318,6 +318,7 @@ class spot_node_builder_state_t
         std::function<void (void *, const zlink::message_t &, serializer_registry_t &)>
           deserialize_instance;
         std::function<std::shared_ptr<void> (actor_context_t)> create_context_instance;
+        std::function<actor_t *(void *)> as_actor;
         actor_join_completion_callback_t on_join_completed;
         std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture;
         std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore;
@@ -1906,6 +1907,10 @@ class spot_node_runtime_t
     std::optional<std::string> spot_name_for (spot_id_t spot_id) const;
     std::optional<spot_route_t> resolve_spot (spot_id_t spot_id) const;
     std::optional<spot_id_t> actor_spot (const actor_ref_t &actor_ref) const;
+    task_t<result_t<bool>>
+    run_actor_turn (actor_ref_t actor_ref,
+                    std::function<task_t<result_t<bool>> (actor_t &, std::stop_token)> work,
+                    std::stop_token cancellation = {});
     task_t<result_t<bool>> destroy_actor (actor_ref_t actor_ref);
     task_t<result_t<bool>> release_local_actor_async (actor_ref_t actor);
     void record_actor_spot (const actor_ref_t &actor_ref, spot_id_t spot_id);

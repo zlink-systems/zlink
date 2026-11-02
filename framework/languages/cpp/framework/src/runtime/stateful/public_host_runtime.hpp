@@ -342,6 +342,9 @@ struct bound_session_bind_operation_result_t
 {
     stateful::stateful_error_t error = stateful::stateful_error_t::none;
     std::optional<protocol::bound_session_replaced_t> replacement;
+    std::optional<std::uint32_t> terminal_result;
+    std::uint32_t failure_code = 0;
+    std::optional<protocol::stream_bind_reply_tail_t> reply_tail;
 };
 
 struct bound_session_operations_t
@@ -354,12 +357,13 @@ struct bound_session_operations_t
     std::function<task_t<std::optional<location_owner_token_t>> (const zlink::routing_id_t &,
                                                                  std::uint64_t)>
       session_owner;
-    std::function<bound_session_bind_operation_result_t (
+    std::function<task_t<bound_session_bind_operation_result_t> (
       const protocol::bound_session_bind_t &,
       const zlink::routing_id_t &,
       std::uint64_t,
       const location_owner_token_t &,
-      std::function<bool (const protocol::stream_bind_reply_tail_t &)>)>
+      std::function<bool (
+        std::uint32_t, std::uint32_t, std::optional<protocol::stream_bind_reply_tail_t>)>)>
       bind;
     std::function<stateful::stateful_error_t (const protocol::bound_session_send_t &,
                                               std::vector<zlink::message_t>)>

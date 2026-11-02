@@ -169,6 +169,7 @@ interface ServiceSpotMessageFollowState {
 export interface ServiceStatefulResult {
   readonly terminalResult: number;
   readonly failureCode: number;
+  readonly failureMessage?: string;
   readonly payload?: ServiceApplicationPayload;
   readonly kindData?: ReceiveKindData;
   readonly applicationMetadata?: Buffer;
@@ -5385,6 +5386,7 @@ export class ServiceStatefulRuntime {
     return {
       terminalResult,
       failureCode,
+      ...(tail?.kind === 'streamBindRejected' ? { failureMessage: tail.rejectionMessage } : {}),
       ...(payload === undefined ? {} : { payload }),
       ...(tail?.kind === 'streamBind'
         ? {

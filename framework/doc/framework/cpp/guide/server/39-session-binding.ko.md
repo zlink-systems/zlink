@@ -117,6 +117,48 @@ Framework가 합치므로, 직접 호출한 직후에 연결이 끊겨도 Spot�
 - 묶이는 대상 — [Actor](22-actor.ko.md)
 - 옮겨 가는 동안의 처리 — [Relocation](37-relocation.ko.md)
 
+## 6. 중복 연결은 Actor가 결정한다
+
+다른 session이 current인 Actor를 새 session에 bind하면 Framework는 Actor 순서 안에서
+`onDuplicateBind(current, incoming, signal)`을 호출한다. 두 인자는 session owner node, 그 node의
+lifecycle generation, binding generation으로 식별하는 읽기 전용 값이다. callback은 `undefined` 또는 빈 문자열을 반환해 받아들이고,
+비어 있지 않은 문자열을 반환해 그 메시지로 거부한다.
+
+EntrySpot의 계정 Actor는 기존 로그인 연결을 유지하려고 새 연결을 거부할 수 있다.
+
+```cpp
+bool match_finished = false;
+
+task_t<std::optional<std::string>> on_duplicate_bind(
+    const actor_session_binding_identity_t& current,
+    const actor_session_binding_identity_t& incoming,
+    std::stop_token cancellation) override {
+  return task_t<std::optional<std::string>>(
+      result_t<std::optional<std::string>>::success(
+          std::make_optional(std::string("An account session is already active."))));
+}
+```
+
+UserSpot의 game Actor는 application 상태에 따라 연결 교체를 허용할 수 있다.
+
+```cpp
+task_t<std::optional<std::string>> on_duplicate_bind(
+    const actor_session_binding_identity_t& current,
+    const actor_session_binding_identity_t& incoming,
+    std::stop_token cancellation) override {
+  return task_t<std::optional<std::string>>(
+      result_t<std::optional<std::string>>::success(
+          match_finished
+              ? std::make_optional(std::string("This match no longer accepts a connection."))
+              : std::nullopt));
+}
+```
+
+callback이 없으면 기존 동작처럼 새 session을 받아들인다. 거부하거나 callback이 제한 시간 안에 끝나지
+않으면 current binding을 유지하고 incoming bind만 오류로 끝낸다. Framework는 incoming 연결을 끊지 않고
+command 51도 보내지 않는다. 받아들이면 새 session을 current로 등록하고 이전 연결에 기존 교체 절차를
+적용한다. callback 제한 시간의 설정은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 소유한다.
+
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

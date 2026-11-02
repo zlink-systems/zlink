@@ -112,7 +112,15 @@ function fixture(request, disconnectOnFailure = true) {
       return runtime.joinActor(actor, 'target-node', spot, spot.generation, undefined, timeoutMs).promise;
     },
     terminal(attempt) {
-      return [wire.encodeStatefulReply(attempt.record.correlation, RequestResult.Rejected, 15)];
+      const tail = attempt.record.kind === 'boundSessionBind'
+        ? { kind: 'streamBindRejected', rejectionMessage: 'duplicate Session binding rejected' }
+        : undefined;
+      return [wire.encodeStatefulReply(
+        attempt.record.correlation,
+        RequestResult.Rejected,
+        15,
+        tail
+      )];
     },
     close() { runtime.close(); raw.close(); }
   };

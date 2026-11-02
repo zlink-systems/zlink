@@ -299,7 +299,7 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 35 | reserved (`relocationComplete`) | — | — | — | Removed target-completion-reply command |
 | 36 | `boundSessionSend` | application | required | — | Bound egress on a [STREAM session](../00-foundation/02-glossary.en.md#stream-session) — the server execution unit kept from accepting one STREAM client connection until it closes |
 | 37 | `actorJoined` | infrastructure | none | — | Actor join commit |
-| 38 | `boundSessionBind` | infrastructure | none | — | Session binding commit |
+| 38 | `boundSessionBind` | infrastructure | none | — | Session binding request; Session–Actor binding §6 owns the duplicate-bind content decision, and a rejection message returns in command 20's `streamBind` rejection tail |
 | 39 | `instanceSpot` | application | required | `metadata` | Logical Instance Spot operation |
 | 40 | `relocationPrepare` | infrastructure | none | — | Request to install temporary queue, declare the final-stage (and optional base-stage) payload manifest, and prepare relay |
 | 41 | reserved (`relocationReserved`) | — | — | — | Removed relocation-specific capacity-reservation ACK |
@@ -354,6 +354,9 @@ The `messageFollow` cache invalidation and notification suppression rules are de
 [Routing §2.5](../03-spot-actor/08-routing.en.md#25-a-message-arriving-at-a-previous-owner-route).
 
 ### 3.2 Bound Session Replacement Notification
+
+The acceptance condition for this notification is owned by
+[Session–Actor binding §6](../04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection).
 
 `boundSessionReplaced` is a one-way infrastructure record sent to the previous session owner after
 the new Actor binding becomes current. It carries an Actor-authority source fence and the previous
