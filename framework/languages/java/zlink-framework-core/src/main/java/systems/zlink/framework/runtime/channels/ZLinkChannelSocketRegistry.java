@@ -605,7 +605,7 @@ final class ZLinkChannelSocketRegistry {
             if (!ZLinkBlockingCalls.isRuntimeExecutionContext()) {
                 return owner.awaitTurn(() -> ZLinkFlowContext.call(flow, submission));
             }
-            return owner.runAsync(() -> ZLinkFlowContext.call(flow, submission))
+            return owner.runNowOrQueue(() -> ZLinkFlowContext.call(flow, submission))
                     .thenCompose(stage -> stage);
         };
     }
