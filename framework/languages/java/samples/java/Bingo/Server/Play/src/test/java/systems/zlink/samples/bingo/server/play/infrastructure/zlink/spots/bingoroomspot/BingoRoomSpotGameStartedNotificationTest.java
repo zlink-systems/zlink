@@ -21,17 +21,22 @@ import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkSpotContext;
+import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spots.ZLinkSpotOutbound;
 import systems.zlink.framework.spots.ZLinkSpotRelocationReadyCall;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.framework.spots.ZLinkSpotSendCall;
 import systems.zlink.framework.spots.ZLinkTimer;
 import systems.zlink.framework.spots.ZLinkTimerOptions;
+import systems.zlink.samples.bingo.server.play.domain.bingo.BingoRoomModels;
 import systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors.PlayerActor;
+import systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.entryspot.BingoEntrySpot;
 import systems.zlink.samples.bingo.shared.contracts.BingoMessages;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +45,57 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 final class BingoRoomSpotGameStartedNotificationTest {
+    @Test
+    void observerRequestAfterRoomFinishReturnsNotSubscribedWithoutCreatingRoom() {
+        var finishedState =
+                Messages.BingoRoomState.newBuilder()
+                        .setRoomId("room")
+                        .setStatus("Finished")
+                        .build();
+        var observation =
+                Messages.GetBingoObservationRes.newBuilder().setState(finishedState).build();
+        var reply = new ObservationReply(observation, null);
+        var requestCall =
+                (ZLinkSpotRequestCall)
+                        Proxy.newProxyInstance(
+                                ZLinkSpotRequestCall.class.getClassLoader(),
+                                new Class<?>[] {ZLinkSpotRequestCall.class},
+                                (proxy, method, args) ->
+                                        method.getName().equals("submit") ? reply : proxy);
+        var outbound =
+                (ZLinkSpotOutbound)
+                        Proxy.newProxyInstance(
+                                ZLinkSpotOutbound.class.getClassLoader(),
+                                new Class<?>[] {ZLinkSpotOutbound.class},
+                                (proxy, method, args) -> requestCall);
+        var entryContext =
+                (ZLinkEntrySpotContext)
+                        Proxy.newProxyInstance(
+                                ZLinkEntrySpotContext.class.getClassLoader(),
+                                new Class<?>[] {ZLinkEntrySpotContext.class},
+                                (proxy, method, args) ->
+                                        method.getName().equals("outbound") ? outbound : null);
+        var spots =
+                (ZLinkSpotManager)
+                        Proxy.newProxyInstance(
+                                ZLinkSpotManager.class.getClassLoader(),
+                                new Class<?>[] {ZLinkSpotManager.class},
+                                (proxy, method, args) -> {
+                                    throw new AssertionError(
+                                            "A finished room must not create an observer room.");
+                                });
+        var entry = new BingoEntrySpot(entryContext, spots);
+        var response =
+                entry.observeEvents(
+                                null,
+                                Messages.ObserveBingoEventsReq.newBuilder()
+                                        .setRoomId("room")
+                                        .build())
+                        .toCompletableFuture()
+                        .join();
+        assertEquals(false, response.getSubscribed());
+    }
+
     @Test
     void closedRoomEndsObserverJoinButOtherRequestFailuresPropagate() {
         for (var kind :
@@ -73,7 +129,7 @@ final class BingoRoomSpotGameStartedNotificationTest {
     }
 
     @Test
-    void finishedRoomRewardIsDeliveredWhenObserverMembershipCommits() {
+    void finishedRoomSnapshotDoesNotCompensateAnObserver() {
         var context = new RecordingSpotContext("observe:room:observer");
         var room = new BingoRoomSpot(context, null);
         room.applySettings(
@@ -111,11 +167,7 @@ final class BingoRoomSpotGameStartedNotificationTest {
                         .getFirst()
                         .getState()
                         .getStatus());
-        assertEquals(
-                "winner",
-                session.messagesOf(Messages.BingoRewardAnnouncedNotify.class)
-                        .getFirst()
-                        .getActorId());
+        assertTrue(session.messagesOf(Messages.BingoRewardAnnouncedNotify.class).isEmpty());
         // The already published event may reach this Spot after the snapshot reply.
         room.announceReward(reward).toCompletableFuture().join();
         assertEquals(1, session.messagesOf(Messages.BingoRewardAnnouncedNotify.class).size());
@@ -185,6 +237,52 @@ final class BingoRoomSpotGameStartedNotificationTest {
                 () -> assertEquals("Running", playerOneState.getStatus()),
                 () -> assertEquals(2, playerOneState.getPlayersCount()),
                 () -> assertEquals(playerOneState, playerTwoState));
+    }
+
+    @Test
+    void playerJoinedNotificationFailureDoesNotRejectTheNewPlayer() {
+        String roomId = "bingo-room-notify-failure";
+        BingoRoomSpot room = new BingoRoomSpot(new TestSpotContext(roomId), null);
+        room.applySettings(
+                new BingoRoomModels.BingoRoomSettings(
+                        "Bingo Room",
+                        "two-player",
+                        3,
+                        15,
+                        200,
+                        BingoRoomModels.BingoRoomSettings.GamePurpose,
+                        null));
+        CapturedBoundSession failingSession =
+                new CapturedBoundSession(Messages.PlayerJoinedNotify.class);
+        CapturedBoundSession connectedSession = new CapturedBoundSession();
+        PlayerActor existingPlayer =
+                new PlayerActor("player-1", new TestActorContext("player-1", failingSession));
+        PlayerActor connectedPlayer =
+                new PlayerActor("player-2", new TestActorContext("player-2", connectedSession));
+        PlayerActor joiningPlayer =
+                new PlayerActor(
+                        "player-3", new TestActorContext("player-3", new CapturedBoundSession()));
+
+        room.join(
+                existingPlayer,
+                BingoMessages.bingoRoomJoinReq(roomId, "player-1", "Player One", false),
+                0,
+                0);
+        room.join(
+                connectedPlayer,
+                BingoMessages.bingoRoomJoinReq(roomId, "player-2", "Player Two", false),
+                0,
+                0);
+        var response =
+                room.join(
+                        joiningPlayer,
+                        BingoMessages.bingoRoomJoinReq(roomId, "player-3", "Player Three", false),
+                        0,
+                        0);
+
+        assertEquals("Running", response.getState().getStatus());
+        assertEquals(3, response.getState().getPlayersCount());
+        assertEquals(1, connectedSession.messagesOf(Messages.PlayerJoinedNotify.class).size());
     }
 
     // Contract §7.2: the join continuation resumed after Yield must re-validate the pending
@@ -271,10 +369,19 @@ final class BingoRoomSpotGameStartedNotificationTest {
 
     private static final class CapturedBoundSession implements ZLinkBoundSession {
         private final List<Object> messages = new ArrayList<>();
+        private final Class<?> failingMessageType;
+
+        CapturedBoundSession() {
+            this(null);
+        }
+
+        CapturedBoundSession(Class<?> failingMessageType) {
+            this.failingMessageType = failingMessageType;
+        }
 
         @Override
         public ZLinkBoundSessionSendCall send(Object message) {
-            messages.add(message);
+            boolean fail = failingMessageType != null && failingMessageType.isInstance(message);
             return new ZLinkBoundSessionSendCall() {
                 @Override
                 public ZLinkBoundSessionSendCall metadata(String key, String value) {
@@ -283,6 +390,12 @@ final class BingoRoomSpotGameStartedNotificationTest {
 
                 @Override
                 public CompletionStage<Void> submit() {
+                    if (fail)
+                        return CompletableFuture.failedFuture(
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "The recipient session is closed."));
+                    messages.add(message);
                     return CompletableFuture.completedFuture(null);
                 }
             };
@@ -529,6 +642,20 @@ final class BingoRoomSpotGameStartedNotificationTest {
                     return (CompletionStage<TReply>) (CompletionStage<?>) recordFuture;
                 }
             };
+        }
+    }
+
+    private static final class ObservationReply
+            extends CompletableFuture<Messages.GetBingoObservationRes>
+            implements ZLinkRequestStage<Messages.GetBingoObservationRes> {
+        ObservationReply(Messages.GetBingoObservationRes observation, Throwable failure) {
+            if (failure == null) complete(observation);
+            else completeExceptionally(failure);
+        }
+
+        @Override
+        public CompletionStage<Void> admitted() {
+            return CompletableFuture.completedFuture(null);
         }
     }
 }

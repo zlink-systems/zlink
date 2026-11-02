@@ -1,12 +1,18 @@
 import { Inject } from '@nestjs/common';
-import { ZLINK_SPOT_MANAGER, zlinkEntrySpotActorRequestHandler } from '@zlink-systems/nestjs';
+import {
+  ZLINK_SPOT_MANAGER,
+  ZLINK_SPOT_OUTBOUND,
+  zlinkEntrySpotActorRequestHandler
+} from '@zlink-systems/nestjs';
 import { BingoEntrySpot } from '../bingo-entry-spot';
 import { PlayerActor } from '../../../Actors/player-actor';
 import { PacketNames } from '../../../../../../../Shared/Contracts/messages';
+import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import type {
   ZLinkEntrySpotActorRequestHandler,
   ZLinkMessageContext,
-  ZLinkSpotManager
+  ZLinkSpotManager,
+  ZLinkSpotOutbound
 } from '@zlink-systems/framework';
 import type { PlayerActor as PlayerActorType } from '../../../Actors/player-actor';
 import type { ObserveBingoEventsReq } from '../../../../../../../Shared/Contracts/messages';
@@ -14,6 +20,8 @@ import {
   BingoRoomJoinReq,
   BingoRoomCreateReq,
   BingoRoomSettingsPayload,
+  GetBingoObservationReq,
+  GetBingoObservationRes,
   ObserveBingoEventsRes
 } from '../../../../../../../Shared/Contracts/bingo-messages.generated';
 import { createObserverRoomSettings } from '../../../../../Domain/Bingo/bingo-room-models';
@@ -30,7 +38,10 @@ class ObserveBingoEventsHandler implements ZLinkEntrySpotActorRequestHandler<
   ObserveBingoEventsReq,
   ObserveBingoEventsRes
 > {
-  constructor(@Inject(ZLINK_SPOT_MANAGER) private readonly spots: ZLinkSpotManager) {}
+  constructor(
+    @Inject(ZLINK_SPOT_MANAGER) private readonly spots: ZLinkSpotManager,
+    @Inject(ZLINK_SPOT_OUTBOUND) private readonly outbound: ZLinkSpotOutbound
+  ) {}
 
   async handle(
     _spot: BingoEntrySpot,
@@ -38,6 +49,24 @@ class ObserveBingoEventsHandler implements ZLinkEntrySpotActorRequestHandler<
     context: ZLinkMessageContext,
     request: ObserveBingoEventsReq
   ): Promise<ObserveBingoEventsRes> {
+    let observation: GetBingoObservationRes;
+    try {
+      observation = await this.outbound
+        .requestToSpot(request.roomId, new GetBingoObservationReq({}))
+        .submit<GetBingoObservationRes>();
+    } catch (error) {
+      if (
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.NotFound
+      ) {
+        return new ObserveBingoEventsRes({ subscribed: false });
+      }
+      throw error;
+    }
+    if (observation.state.status === 'Finished') {
+      return new ObserveBingoEventsRes({ subscribed: false });
+    }
+
     const observerSpotId = `observe:${request.roomId}:${actor.actorId}`;
     const settings = createObserverRoomSettings(request.roomId, actor.actorId);
     await this.spots

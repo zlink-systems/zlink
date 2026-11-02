@@ -1,6 +1,13 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowResult;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 import java.util.Map;
@@ -11,6 +18,9 @@ final class ZLinkRelocationMetricOperation {
     private long sealed;
     private final Map<String, String> startTags;
     private final Map<String, String> unitTags;
+    private final ZLinkMessageFlowTracer flow;
+    private final ZLinkFlowContext.State flowContext;
+    private final String actorId;
 
     private enum Policy {
         RECREATE,
@@ -26,6 +36,23 @@ final class ZLinkRelocationMetricOperation {
 
     ZLinkRelocationMetricOperation(
             String meshName, ZLinkPlacementObjectKind kind, boolean snapshot) {
+        this(meshName, kind, snapshot, null);
+    }
+
+    ZLinkRelocationMetricOperation(
+            String meshName,
+            ZLinkPlacementObjectKind kind,
+            boolean snapshot,
+            ZLinkMessageFlowTracer flow) {
+        this(meshName, kind, snapshot, flow, null);
+    }
+
+    ZLinkRelocationMetricOperation(
+            String meshName,
+            ZLinkPlacementObjectKind kind,
+            boolean snapshot,
+            ZLinkMessageFlowTracer flow,
+            String actorId) {
         startTags =
                 Map.of(
                         ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
@@ -35,6 +62,12 @@ final class ZLinkRelocationMetricOperation {
                         ZLinkRuntimeMetrics.Tag.POLICY.wire(),
                         ZLinkRuntimeMetrics.wire(snapshot ? Policy.SNAPSHOT : Policy.RECREATE));
         unitTags = ZLinkRuntimeMetrics.relocationUnitTags(kind.value());
+        this.flow =
+                kind == ZLinkPlacementObjectKind.ACTOR && flow != null && flow.captureEnabled()
+                        ? flow
+                        : null;
+        flowContext = this.flow == null ? null : ZLinkFlowContext.current();
+        this.actorId = actorId;
         ZLinkRuntimeMetrics.increment(
                 ZLinkRuntimeMetrics.Metric.RELOCATION_STARTED.metricName(), startTags);
     }
@@ -110,6 +143,42 @@ final class ZLinkRelocationMetricOperation {
                 ZLinkRuntimeMetrics.Metric.RELOCATION_DURATION.metricName(),
                 secondsSince(started),
                 tags);
+        traceTerminal(outcome);
+    }
+
+    private void traceTerminal(Outcome outcome) {
+        if (flow == null || flowContext == null) return;
+        ZLinkMessageFlowResult result =
+                outcome == Outcome.COMPLETED
+                        ? ZLinkMessageFlowResult.SUCCEEDED
+                        : outcome == Outcome.SHUTDOWN
+                                ? ZLinkMessageFlowResult.SHUTDOWN
+                                : ZLinkMessageFlowResult.FAILED;
+        try (var ignored = ZLinkFlowContext.enter(flowContext)) {
+            flow.trace(
+                    new ZLinkMessageFlowEvent(
+                                    ZLinkMessageFlowOutcome.COMPLETED,
+                                    ZLinkDispatchErrorSurface.ACTOR_RELOCATION,
+                                    ZLinkDispatchMessageKind.CONTROL,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    actorId,
+                                    null,
+                                    null,
+                                    null,
+                                    null,
+                                    result == ZLinkMessageFlowResult.FAILED
+                                            ? "source_relocation_"
+                                                    + ZLinkRuntimeMetrics.wire(outcome)
+                                            : null,
+                                    flowContext.flowId(),
+                                    flowContext.origin())
+                            .withOutcome(result));
+        }
     }
 
     private static double secondsSince(long start) {

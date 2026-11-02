@@ -1,10 +1,13 @@
 package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.entryspot
 
 import org.slf4j.LoggerFactory
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
 import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.decode
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.framework.kotlin.requestToSpot
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkActorCreateResponse
 import systems.zlink.framework.spots.ZLinkEntrySpotContext
@@ -17,6 +20,7 @@ import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomCreateReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomJoinReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomSettingsPayload
 import systems.zlink.samples.kotlin.bingo.shared.contracts.EnsurePlayerActorReq
+import systems.zlink.samples.kotlin.bingo.shared.contracts.Messages
 import systems.zlink.samples.kotlin.bingo.shared.contracts.ObserveBingoEventsReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.ObserveBingoEventsRes
 
@@ -58,7 +62,25 @@ class BingoEntrySpot(
         actor: PlayerActor,
         request: ObserveBingoEventsReq,
     ): ObserveBingoEventsRes {
-        val observerSpotId = "observe:${request.roomId}:${actor.actorId()}"
+        val observation =
+            try {
+                context
+                    .outbound()
+                    .kotlin()
+                    .requestToSpot<Messages.GetBingoObservationRes>(
+                        request.roomId,
+                        Messages.GetBingoObservationReq.getDefaultInstance(),
+                    )
+                    .await()
+            } catch (error: ZLinkFrameworkException) {
+                if (error.kind() == ZLinkFrameworkErrorKind.NOT_FOUND) {
+                    return ObserveBingoEventsRes(false)
+                }
+                throw error
+            }
+        if (observation.state.status == "Finished") return ObserveBingoEventsRes(false)
+
+        val observerSpotId = "observe:" + request.roomId + ":" + actor.actorId()
         val settings =
             BingoRoomSettings.createObserver(
                 request.roomId,
