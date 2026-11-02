@@ -48,21 +48,8 @@ public sealed partial class EntrySpotActorDispatchTests
             // Observe the actual mailbox release boundary without changing its state.
             // Running this observer as soon as it is queued fixes the scheduling
             // order that a second worker may otherwise win only intermittently.
-            const System.Reflection.BindingFlags fields =
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-            var barrier = typeof(ZLinkDeferredActorJoin)
-                .GetField("_barrier", fields)!
-                .GetValue(join)!;
-            var waiter = barrier
-                .GetType()
-                .GetFields(fields)
-                .Single(field => field.FieldType == typeof(ZLinkActorSerialExecutor.Waiter))
-                .GetValue(barrier)!;
-            var released = (TaskCompletionSource)
-                typeof(ZLinkActorSerialExecutor.Waiter)
-                    .GetField("_released", fields)!
-                    .GetValue(waiter)!;
-            var nextTurn = released.Task.ContinueWith(
+            var released = join._barrier!.Released;
+            var nextTurn = released.ContinueWith(
                 _ => nextClaim = state.ReserveDeferredJoinBarrier(receiverMeshName, out var target),
                 CancellationToken.None,
                 TaskContinuationOptions.None,

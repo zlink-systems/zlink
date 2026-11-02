@@ -173,6 +173,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Reject private reflection in .NET tests
+        run: python3 scripts/ci/check-dotnet-test-private-access.py
+
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v5
         with:

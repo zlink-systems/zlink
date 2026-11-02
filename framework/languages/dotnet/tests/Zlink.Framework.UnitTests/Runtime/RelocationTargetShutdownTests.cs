@@ -417,9 +417,7 @@ public class ShutdownSettlementRepository : DispatchProxy
         proxy._inner = registration.ResolveStore()!;
         proxy._order = order;
         proxy._holdReadAfter = holdReadAfter;
-        typeof(ZLinkLocationRegistration)
-            .GetField("_repository", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(registration, repository);
+        registration._repository = repository;
         return proxy;
     }
 

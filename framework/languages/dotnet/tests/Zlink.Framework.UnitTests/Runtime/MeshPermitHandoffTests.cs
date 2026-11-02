@@ -49,9 +49,9 @@ public sealed class MeshPermitHandoffTests
         );
         using var stop = new CancellationTokenSource();
         AddAdmittedPeer(node, sourceRid, sourceGeneration, routeGeneration);
-        SetField(node, "_socket", socket);
+        node._socket = socket;
         await using var source = CreateReceiveSource(socket);
-        SetField(node, "_poller", source);
+        node._poller = source;
 
         try
         {
@@ -140,8 +140,8 @@ public sealed class MeshPermitHandoffTests
         finally
         {
             stop.Cancel();
-            SetField(node, "_socket", null);
-            SetField(node, "_poller", null);
+            node._socket = null;
+            node._poller = null;
         }
 
         async Task FillIngressAsync()
@@ -179,14 +179,14 @@ public sealed class MeshPermitHandoffTests
             applicationJobQueue: queue
         );
         using var stop = new CancellationTokenSource();
-        SetField(node, "_socket", socket);
+        node._socket = socket;
         await using var source = CreateReceiveSource(socket);
-        SetField(node, "_poller", source);
+        node._poller = source;
 
         // Arrange the producer's published reservation. The actual lease is
         // the handoff fact, including capacity for a successor waiter.
         var reservation = await queue.AcquireAsync(stop.Token, ZLinkApplicationJobOrigin.Remote);
-        SetField(node, "_reservedRawApplicationAdmission", reservation);
+        node._reservedRawApplicationAdmission = reservation;
         ZLinkApplicationJobQueueLease? held = null;
         try
         {
@@ -201,8 +201,8 @@ public sealed class MeshPermitHandoffTests
         {
             stop.Cancel();
             held?.Dispose();
-            SetField(node, "_socket", null);
-            SetField(node, "_poller", null);
+            node._socket = null;
+            node._poller = null;
         }
     }
 
@@ -245,17 +245,14 @@ public sealed class MeshPermitHandoffTests
             CancellationToken.None,
             ZLinkApplicationJobOrigin.Remote
         );
-        SetField(fixture.Node, "_reservedRawApplicationAdmission", handedOver);
+        fixture.Node._reservedRawApplicationAdmission = handedOver;
         var waiting = fixture
             .Queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
             .AsTask();
         await using (var closed = fixture.Context.CreateRouterSocket())
-            SetField(fixture.Node, "_socket", closed);
+            fixture.Node._socket = closed;
         // DisposeAsync has completed: the poller still holds the open socket.
-        var failure = await Assert.ThrowsAsync<TargetInvocationException>(() =>
-            fixture.DrainAsync(CancellationToken.None)
-        );
-        Assert.IsAssignableFrom<Exception>(failure.InnerException);
+        await Assert.ThrowsAnyAsync<Exception>(() => fixture.DrainAsync(CancellationToken.None));
 
         // The independently acquired lease still owns one permit. Both the
         // handed-over lease and the unused counted reservation have returned.
@@ -263,15 +260,11 @@ public sealed class MeshPermitHandoffTests
         var status = fixture.Queue.GetStatus();
         Assert.Equal(1UL, status.PermitsInUse);
         Assert.Equal(0UL, status.CapacityWaiters);
-        Assert.Null(
-            Field<ZLinkApplicationJobQueueLease?>(fixture.Node, "_reservedRawApplicationAdmission")
-        );
+        Assert.Null(fixture.Node._reservedRawApplicationAdmission);
         admitted.Dispose();
 
         // Without a waiter the same failure returns a counted reservation.
-        await Assert.ThrowsAsync<TargetInvocationException>(() =>
-            fixture.DrainAsync(CancellationToken.None)
-        );
+        await Assert.ThrowsAnyAsync<Exception>(() => fixture.DrainAsync(CancellationToken.None));
         Assert.Equal(0UL, fixture.Queue.GetStatus().PermitsInUse);
         Assert.Equal(4UL, fixture.Queue.GetStatus().PeakPermitsInUse);
     }
@@ -313,10 +306,8 @@ public sealed class MeshPermitHandoffTests
         Assert.Equal(2UL, first.QueuedApplicationJobs);
         Assert.Equal(0UL, first.ReservedSupplyPermits);
         Assert.Equal(1UL, first.CapacityWaiters);
-        Assert.NotNull(Field<object?>(fixture.Node, "_pendingRawMulticast"));
-        Assert.Null(
-            Field<ZLinkApplicationJobQueueLease?>(fixture.Node, "_reservedRawApplicationAdmission")
-        );
+        Assert.NotNull(fixture.Node._pendingRawMulticast);
+        Assert.Null(fixture.Node._reservedRawApplicationAdmission);
 
         stop.Cancel();
         Assert.Equal(0UL, fixture.Queue.GetStatus().CapacityWaiters);
@@ -325,19 +316,15 @@ public sealed class MeshPermitHandoffTests
 
         // The handed-over permit admits the last child. The rotation tops its
         // budget up to two; the unclaimed permit returns when the socket is empty.
-        SetField(
-            fixture.Node,
-            "_reservedRawApplicationAdmission",
-            await fixture.Queue.AcquireAsync(
-                CancellationToken.None,
-                ZLinkApplicationJobOrigin.Remote
-            )
+        fixture.Node._reservedRawApplicationAdmission = await fixture.Queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
         );
         await fixture.DrainAsync(CancellationToken.None);
         var last = fixture.Queue.GetStatus();
         Assert.Equal(1UL, last.QueuedApplicationJobs);
         Assert.Equal(0UL, last.ReservedSupplyPermits);
-        Assert.Null(Field<object?>(fixture.Node, "_pendingRawMulticast"));
+        Assert.Null(fixture.Node._pendingRawMulticast);
         Assert.Equal(1, DrainAndDisposeAllApplicationRecords(fixture.Node));
         Assert.Equal(0UL, fixture.Queue.GetStatus().PermitsInUse);
     }
@@ -479,10 +466,10 @@ public sealed class MeshPermitHandoffTests
             );
             var node = new ZLinkManagedMeshNode(context, name, applicationJobQueue: queue);
             AddAdmittedPeer(node, sourceRid, SourceGeneration, routeGeneration);
-            var peer = Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid")[sourceRid];
-            SetField(node, "_socket", socket);
+            var peer = node._peersByRid[sourceRid];
+            node._socket = socket;
             var source = CreateReceiveSource(socket);
-            SetField(node, "_poller", source);
+            node._poller = source;
             await source.ResumeAsync().ConfigureAwait(false);
             return new RawIngressFixture
             {
@@ -563,8 +550,8 @@ public sealed class MeshPermitHandoffTests
 
         public async ValueTask DisposeAsync()
         {
-            SetField(Node, "_socket", null);
-            SetField(Node, "_poller", null);
+            Node._socket = null;
+            Node._poller = null;
             await Node.DisposeAsync();
             Queue.Dispose();
             _completionPoller?.Dispose();
@@ -614,21 +601,7 @@ public sealed class MeshPermitHandoffTests
     }
 
     private static void Drain(ZLinkManagedMeshNode node, CancellationToken stop) =>
-        node.GetType()
-            .GetMethod("DrainRawSocket", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(node, [stop]);
-
-    private static void SetField(object instance, string name, object? value) =>
-        instance
-            .GetType()
-            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(instance, value);
-
-    private static T Field<T>(ZLinkManagedMeshNode node, string name) =>
-        (T)
-            typeof(ZLinkManagedMeshNode)
-                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(node)!;
+        node.DrainRawSocket(stop);
 
     private static void AddAdmittedPeer(
         ZLinkManagedMeshNode node,
@@ -664,7 +637,7 @@ public sealed class MeshPermitHandoffTests
             State = MeshPeerState.Admitted,
             Admitted = true,
         };
-        Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid").Add(routingId, peer);
+        node._peersByRid.Add(routingId, peer);
     }
 
     private static void DrainAndDisposeApplicationRecords(

@@ -6,7 +6,7 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed class ZLinkLocationRegistration
 {
     private ZLinkInMemoryProviderLocationStore? _inMemoryStore;
-    private IZLinkLocationRepository? _repository;
+    internal IZLinkLocationRepository? _repository;
     private IZLinkRelocationRepository? _relocationRepository;
     private TimeSpan? _sessionRelocationSealTimeoutAtStartup;
 

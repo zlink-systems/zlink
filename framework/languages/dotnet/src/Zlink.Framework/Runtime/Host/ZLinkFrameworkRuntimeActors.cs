@@ -4766,7 +4766,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         return GetOrCreateActorState(actorId).TryGetAnyStagedRelocationSessionRoute(out route);
     }
 
-    private async ValueTask ResetActorRuntimeGenerationAsync(
+    internal async ValueTask ResetActorRuntimeGenerationAsync(
         CancellationToken cancellationToken = default,
         Action<Exception>? detachedCleanupFailure = null
     )
