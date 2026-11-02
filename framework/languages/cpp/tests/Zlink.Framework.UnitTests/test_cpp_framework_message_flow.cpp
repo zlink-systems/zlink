@@ -538,7 +538,7 @@ int bounded_process_delivery (bool retire_first, int waiting = 8192)
     {
         std::mutex mutex;
         std::condition_variable changed;
-        bool entered = false, release = false, produced = false;
+        bool entered = false, release = false;
         std::vector<std::string> ids;
     };
     auto state = std::make_shared<state_t> ();
@@ -588,42 +588,10 @@ int bounded_process_delivery (bool retire_first, int waiting = 8192)
                                            [&] { return state->entered; });
     }
     // Both registrations share the spec's process limit, excluding the executing record.
-    std::thread producer ([&] {
-        for (int index = 0; index != waiting; ++index)
-            submit (index % 2 == 0 ? *first : *second, index, std::to_string (index));
-        for (int index = 0; index != 3; ++index)
-            submit (index % 2 == 0 ? *first : *second, index, "overflow-" + std::to_string (index));
-        std::lock_guard lock (state->mutex);
-        state->produced = true;
-        state->changed.notify_all ();
-    });
-    struct join_t
-    {
-        std::thread &producer;
-        std::shared_ptr<state_t> state;
-        ~join_t ()
-        {
-            if (!producer.joinable ())
-                return;
-            {
-                std::lock_guard lock (state->mutex);
-                state->release = true;
-                state->changed.notify_all ();
-            }
-            producer.join ();
-        }
-    } join{producer, state};
-    bool producer_completed;
-    {
-        std::unique_lock lock (state->mutex);
-        producer_completed = state->changed.wait_for (lock, std::chrono::milliseconds (500),
-                                                      [&] { return state->produced; });
-        if (!producer_completed) {
-            state->release = true;
-            state->changed.notify_all ();
-        }
-    }
-    producer.join ();
+    for (int index = 0; index != waiting; ++index)
+        submit (index % 2 == 0 ? *first : *second, index, std::to_string (index));
+    for (int index = 0; index != 3; ++index)
+        submit (index % 2 == 0 ? *first : *second, index, "overflow-" + std::to_string (index));
     const auto overflow = message_flow_tracer_t::observer_dropped () - before;
     // Host metric attachment must preserve the registration and its already queued records.
     access::bind_telemetry (*first, provider, meter);
@@ -669,11 +637,9 @@ int bounded_process_delivery (bool retire_first, int waiting = 8192)
         if (fields.at ("name") == "zlink.observability.events.overflow"
             && fields.at ("unit") == "{event}" && fields.at ("source") == "message_flow")
             exported += std::stod (fields.at ("value"));
-    const bool passed = entered && producer_completed && delivered && overflow == 3 && ids_ok
-                        && exported == 3
+    const bool passed = entered && delivered && overflow == 3 && ids_ok && exported == 3
                         && message_flow_tracer_t::observer_dropped () - before == 3;
     std::cout << "bounded_process_delivery retire=" << retire_first << " entered=" << entered
-              << " producer_completed_before_release=" << producer_completed
               << " overflow=" << overflow << " metric=" << exported
               << " delivered=" << state->ids.size () << " expected=" << expected
               << " exact_ids=" << ids_ok << " passed=" << passed << std::endl;

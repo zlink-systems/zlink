@@ -43,6 +43,14 @@ delivery, it uses **standard C++ lifetime and cancellation
 convention**. Timeout, host shutdown, RAII cleanup, and coroutine
 lifetime follow each capability contract.
 
+## Messaging Hot Path Transition Count Measurement
+
+[Messaging hot path §3](../../01-execution/08-messaging-hot-path.en.md) limits Framework-created execution-resource transitions to one from binding completion notification to the first instruction of the caller continuation. The unit test counts thread-identity changes between those boundaries. Task posting and wakeups are not execution-resource transitions.
+
+| Segment | Limit | Measurement point | Test identifier |
+|---|---:|---|---|
+| Binding completion notification → caller continuation's first instruction | At most 1 | Test-only thread identity comparison [test_cpp_framework_completion_dispatcher_owner.cpp:49](../../../../../../../languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_dispatcher_owner.cpp#L49); [provider_task_context.cpp:174](../../../../../../../languages/cpp/framework/src/runtime/dispatch/provider_task_context.cpp#L174) | `framework-unit:test_cpp_framework_completion_dispatcher_owner` (expected 1) |
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [Language interface table of contents](../README.en.md) | [Spec table of contents](../../README.en.md)

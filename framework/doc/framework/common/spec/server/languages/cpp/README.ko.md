@@ -34,6 +34,14 @@ C++ public interface에는 **`.NET` 모양을 옮긴 custom cancellation token�
 두지 않는다.** 중단 가능한 장기 작업에 명시적 중단 전달이 필요하면 **C++ 표준 수명과 중단
 관례**를 사용한다. timeout, host shutdown, RAII cleanup과 coroutine 수명은 각 기능 계약을 따른다.
 
+## Messaging hot path 전환 수 계측
+
+[Messaging hot path §3](../../01-execution/08-messaging-hot-path.ko.md)는 binding 완료 알림부터 caller continuation의 첫 instruction까지 Framework가 만드는 전환을 최대 1회로 제한한다. unit 시험은 알림 thread와 continuation 첫 instruction의 thread identity 차이를 세며, task 게시와 깨우기는 실행 자원 전환 수에 더하지 않는다.
+
+| 구간 | 상한 | 계측 지점 | 시험 식별자 |
+|---|---:|---|---|
+| binding 완료 알림 → caller continuation 첫 instruction | 1회 이하 | 시험 전용 thread identity 비교 [test_cpp_framework_completion_dispatcher_owner.cpp:49](../../../../../../../languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_dispatcher_owner.cpp#L49); [provider_task_context.cpp:174](../../../../../../../languages/cpp/framework/src/runtime/dispatch/provider_task_context.cpp#L174) | `framework-unit:test_cpp_framework_completion_dispatcher_owner` (기대 1회) |
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [언어별 interface 목차](../README.ko.md) | [스펙 목차](../../README.ko.md)
