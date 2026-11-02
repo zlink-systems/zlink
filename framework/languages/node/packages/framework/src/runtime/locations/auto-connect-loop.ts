@@ -51,7 +51,9 @@ export class ZLinkAutoConnectLoop {
     try {
       await this.tick(signal);
     } catch (error) {
-      await this.prepareTransportShutdown();
+      if (this.controller === controller) {
+        await this.prepareTransportShutdown();
+      }
       throw error;
     }
     this.scheduleNext(controller);

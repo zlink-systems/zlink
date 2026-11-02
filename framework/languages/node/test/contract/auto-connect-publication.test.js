@@ -17,9 +17,9 @@ const stored = {
 };
 
 function deferred() {
-  let resolve;
-  const promise = new Promise(done => { resolve = done; });
-  return { promise, resolve };
+  let resolve, reject;
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 function fixture() {
@@ -172,8 +172,8 @@ function lifecycleTimerFixture() {
   const reconciler = {
     localPublicationReady: true,
     storeFailed: false,
-    tick() {
-      const completion = deferred();
+    tick(signal) {
+      const completion = { ...deferred(), signal };
       ticks.push(completion);
       tickWaiters.shift()?.resolve(completion);
       return completion.promise;
@@ -249,6 +249,32 @@ test('one polling timer remains when a periodic tick overlaps across stop and st
 
   assert.equal(f.timers.size, 1, 'only the current lifecycle may arm a polling timer');
   await f.loop.stop();
+  assert.equal(f.timers.size, 0, 'stop clears the current lifecycle timer');
+});
+
+test('a failed earlier start leaves the later lifecycle running', async () => {
+  const f = lifecycleTimerFixture();
+  const failure = new Error('earlier startup tick failed');
+  const tick1Started = f.waitForTick();
+  const starting1 = f.loop.start();
+  const rejected1 = assert.rejects(starting1, error => error === failure);
+  const tick1 = await tick1Started;
+
+  const tick2Started = f.waitForTick();
+  const stopping1 = f.loop.stop();
+  const starting2 = f.loop.start();
+  tick1.reject(failure);
+  const tick2 = await tick2Started;
+  tick2.resolve();
+  await Promise.all([rejected1, starting2, stopping1]);
+
+  assert.deepEqual(
+    { aborted: tick2.signal.aborted, timers: f.timers.size },
+    { aborted: false, timers: 1 },
+    'an earlier startup failure must not stop the current lifecycle'
+  );
+  await f.loop.stop();
+  assert.equal(tick2.signal.aborted, true, 'stop cancels the current lifecycle');
   assert.equal(f.timers.size, 0, 'stop clears the current lifecycle timer');
 });
 
