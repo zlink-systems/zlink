@@ -801,23 +801,26 @@ struct channel_request_terminal_trace_t
 
     ~channel_request_terminal_trace_t () noexcept
     {
-        message_flow_tracer_t (*dispatch).trace (
-          message_flow_outcome_t::reply_received, result, [&] {
-              message_flow_event_t event{.outcome = message_flow_outcome_t::reply_received,
-                                         .surface = dispatch_error_surface_t::channel,
-                                         .message_kind = dispatch_message_kind_t::request,
-                                         .packet_name = packet_name,
-                                         .channel_name = channel_name,
-                                         .correlation_id = correlation_id,
-                                         .channel_route_kind = std::string ("client_server"),
-                                         .result = result};
-              if (duration_started) {
-                  event.duration_seconds =
-                    std::chrono::duration<double> (std::chrono::steady_clock::now () - started)
-                      .count ();
-              }
-              return event;
-          });
+        if (message_flow_tracer_t (*dispatch).enabled_for (message_flow_outcome_t::reply_received,
+                                                           result)) {
+            message_flow_tracer_t (*dispatch).trace (
+              message_flow_outcome_t::reply_received, result, [&] {
+                  message_flow_event_t event{.outcome = message_flow_outcome_t::reply_received,
+                                             .surface = dispatch_error_surface_t::channel,
+                                             .message_kind = dispatch_message_kind_t::request,
+                                             .packet_name = packet_name,
+                                             .channel_name = channel_name,
+                                             .correlation_id = correlation_id,
+                                             .channel_route_kind = std::string ("client_server"),
+                                             .result = result};
+                  if (duration_started) {
+                      event.duration_seconds =
+                        std::chrono::duration<double> (std::chrono::steady_clock::now () - started)
+                          .count ();
+                  }
+                  return event;
+              });
+        }
     }
 
     void succeeded () noexcept { result = message_flow_result_t::succeeded; }
@@ -962,20 +965,23 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             if (detail::message_flow_tracer_t (state->dispatch).capture_enabled ()) {
                 terminal_trace.correlation_id = header.correlation_id;
             }
-            detail::message_flow_tracer_t (state->dispatch)
-              .trace (message_flow_outcome_t::sent, [&] {
-                  return message_flow_event_t{message_flow_outcome_t::sent,
-                                              dispatch_error_surface_t::channel,
-                                              dispatch_message_kind_t::request,
-                                              call_packet_name,
-                                              channel_name,
-                                              std::nullopt,
-                                              header.correlation_id,
-                                              std::nullopt,
-                                              std::nullopt,
-                                              std::nullopt,
-                                              std::nullopt};
-              });
+            if (detail::message_flow_tracer_t (state->dispatch)
+                  .enabled_for (message_flow_outcome_t::sent)) {
+                detail::message_flow_tracer_t (state->dispatch)
+                  .trace (message_flow_outcome_t::sent, [&] {
+                      return message_flow_event_t{message_flow_outcome_t::sent,
+                                                  dispatch_error_surface_t::channel,
+                                                  dispatch_message_kind_t::request,
+                                                  call_packet_name,
+                                                  channel_name,
+                                                  std::nullopt,
+                                                  header.correlation_id,
+                                                  std::nullopt,
+                                                  std::nullopt,
+                                                  std::nullopt,
+                                                  std::nullopt};
+                  });
+            }
             runtime::messaging::envelope_codec_t envelope;
             auto parts = encode_channel_payload_parts (header, request_type, encode_payload,
                                                        *state->serializers);
@@ -1115,16 +1121,19 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                 }
                 co_await (*sender) (call_packet_name, std::move (serialized.content_type),
                                     std::move (payload), metadata);
-                detail::message_flow_tracer_t (state->dispatch)
-                  .trace (message_flow_outcome_t::sent, [&] {
-                      return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
-                                                  .surface = dispatch_error_surface_t::channel,
-                                                  .message_kind = dispatch_message_kind_t::send,
-                                                  .packet_name = call_packet_name,
-                                                  .channel_name = channel_name,
-                                                  .channel_route_kind =
-                                                    std::string ("client_server")};
-                  });
+                if (detail::message_flow_tracer_t (state->dispatch)
+                      .enabled_for (message_flow_outcome_t::sent)) {
+                    detail::message_flow_tracer_t (state->dispatch)
+                      .trace (message_flow_outcome_t::sent, [&] {
+                          return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
+                                                      .surface = dispatch_error_surface_t::channel,
+                                                      .message_kind = dispatch_message_kind_t::send,
+                                                      .packet_name = call_packet_name,
+                                                      .channel_name = channel_name,
+                                                      .channel_route_kind =
+                                                        std::string ("client_server")};
+                      });
+                }
                 co_return;
             }
             catch (const framework_exception_t &) {
@@ -1171,16 +1180,20 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                                           header.correlation_id.empty ()
                                             ? std::nullopt
                                             : std::make_optional (header.correlation_id));
-            detail::message_flow_tracer_t (state->dispatch)
-              .trace (message_flow_outcome_t::sent, [&] {
-                  return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
-                                              .surface = dispatch_error_surface_t::channel,
-                                              .message_kind = dispatch_message_kind_t::send,
-                                              .packet_name = call_packet_name,
-                                              .channel_name = channel_name,
-                                              .correlation_id = header.correlation_id,
-                                              .channel_route_kind = std::string ("client_server")};
-              });
+            if (detail::message_flow_tracer_t (state->dispatch)
+                  .enabled_for (message_flow_outcome_t::sent)) {
+                detail::message_flow_tracer_t (state->dispatch)
+                  .trace (message_flow_outcome_t::sent, [&] {
+                      return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
+                                                  .surface = dispatch_error_surface_t::channel,
+                                                  .message_kind = dispatch_message_kind_t::send,
+                                                  .packet_name = call_packet_name,
+                                                  .channel_name = channel_name,
+                                                  .correlation_id = header.correlation_id,
+                                                  .channel_route_kind =
+                                                    std::string ("client_server")};
+                  });
+            }
             co_return;
         }
         catch (const framework_exception_t &) {
