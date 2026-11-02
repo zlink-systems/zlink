@@ -43,8 +43,12 @@ public final class ZLinkJavaIngressAllocationTest {
 
     @Test
     void ingressAllocatesOnlyItsRecordAndLaneInvocation() throws Exception {
+        runIsolated(ZLinkJavaIngressAllocationTest.class);
+    }
+
+    static void runIsolated(Class<?> mainClass) throws Exception {
         var classpath = new LinkedHashSet<String>();
-        for (ClassLoader loader = getClass().getClassLoader();
+        for (ClassLoader loader = mainClass.getClassLoader();
                 loader != null;
                 loader = loader.getParent()) {
             if (loader instanceof URLClassLoader urls) {
@@ -66,7 +70,7 @@ public final class ZLinkJavaIngressAllocationTest {
                                     "-XX:FlightRecorderOptions=stackdepth=128",
                                     "-cp",
                                     String.join(java.io.File.pathSeparator, classpath),
-                                    getClass().getName())
+                                    mainClass.getName())
                             .redirectErrorStream(true)
                             .redirectOutput(output.toFile())
                             .start();
