@@ -54,6 +54,9 @@ env:
 
 jobs:
   plan:
+    # Merge queue draft PRs re-trigger pull_request; the original PR already ran these
+    # templates, and the queue needs the hosted runners. Every other job needs plan.
+    if: ${{ !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     name: Plan template matrix
     runs-on: ubuntu-24.04
     outputs:
@@ -344,11 +347,17 @@ jobs:
           echo "TEMPLATE_WORK=${RUNNER_TEMP}/framework-templates" >>"${GITHUB_ENV}"
           echo "PACKAGES_DIR=${RUNNER_TEMP}/framework-templates-packages" >>"${GITHUB_ENV}"
 
+      # Two dozen Java and Kotlin templates resolving the same dependencies from Maven
+      # Central at once got HTTP 429 (merge queue draft #3637); reuse the Gradle cache.
       - uses: actions/setup-java@v5
         if: matrix.package == 'java'
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+          cache-dependency-path: |
+            ${{ matrix.path }}/**/*.gradle*
+            ${{ matrix.path }}/gradle/wrapper/gradle-wrapper.properties
 
       - uses: actions/setup-dotnet@v5
         if: matrix.package == 'dotnet'
