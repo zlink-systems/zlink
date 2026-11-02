@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -263,6 +264,40 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     @Test
+    void requestFailureDiagnosticIncludesRemoteDetailsAndMatchingFlow() {
+        String spotId = "diagnostic-spot";
+        String matchingFlow =
+                "zlink flow: event_id=zlink.message_flow phase=received spot=" + spotId;
+        matchingFlow += " corr=4 flow=after-close-flow";
+        String otherCorrelation =
+                "zlink flow: event_id=zlink.message_flow phase=received spot=" + spotId;
+        otherCorrelation += " corr=3 flow=prior-flow";
+        String otherSpot =
+                "zlink flow: event_id=zlink.message_flow phase=received spot=other-spot"
+                        + " corr=4 flow=other-flow";
+        var remoteFailure =
+                systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping
+                        .receivedFailure(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                "remote request failed",
+                                1,
+                                java.util.Map.of());
+        String diagnostic =
+                requestFailureDiagnostic(
+                        spotId,
+                        new java.util.concurrent.ExecutionException(
+                                new CompletionException(remoteFailure)),
+                        List.of(matchingFlow, otherCorrelation, otherSpot));
+
+        assertTrue(diagnostic.contains("ReceivedFailure"), diagnostic);
+        assertTrue(diagnostic.contains("kind=UNAVAILABLE"), diagnostic);
+        assertTrue(diagnostic.contains("message=remote request failed"), diagnostic);
+        assertTrue(diagnostic.contains(matchingFlow), diagnostic);
+        assertFalse(diagnostic.contains(otherCorrelation), diagnostic);
+        assertFalse(diagnostic.contains(otherSpot), diagnostic);
+    }
+
+    @Test
     void secondAuthorityReleaseFailureResumesOnSameOwnerReentry() throws Exception {
         verifyCloseFailure(CloseScenario.DOUBLE_RELEASE);
     }
@@ -430,6 +465,8 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
 
         var backend = new ObservedBackend();
+        FlowDiagnosticCapture requestFlowCapture =
+                retainedBoundary ? new FlowDiagnosticCapture() : null;
         try (ZLinkFrameworkRuntime target =
                         RuntimeTestSupport.startFramework(targetOptions, backend);
                 ZLinkFrameworkRuntime source =
@@ -604,7 +641,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                                     readBoundary.resume.complete(null);
                                     assertEquals(
                                             "echo:hello|echo:again|echo:after-close",
-                                            SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
+                                            awaitSourceReplyWithDiagnostics(
+                                                    spotId, requestFlowCapture));
                                 }
                                 return;
                             }
@@ -612,7 +650,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                             assertEquals("echo:retained", boundary.reply.get(5, TimeUnit.SECONDS));
                             assertEquals(
                                     "echo:hello|echo:again|echo:after-close",
-                                    SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
+                                    awaitSourceReplyWithDiagnostics(spotId, requestFlowCapture));
                             assertEquals(
                                     List.of(EchoInstanceSpot.generations.getLast()),
                                     EchoInstanceSpot.retainedCalls);
@@ -774,7 +812,89 @@ final class InstanceSpotRuntimeIntegrationTest {
                 SourceEntrySpot.afterCloseStart.complete(null);
                 EchoInstanceSpot.closingFailure = null;
                 diagnosticLogger.removeHandler(diagnosticHandler);
+                if (requestFlowCapture != null) requestFlowCapture.close();
             }
+        }
+    }
+
+    private static String awaitSourceReplyWithDiagnostics(
+            String spotId, FlowDiagnosticCapture flowCapture) throws Exception {
+        try {
+            return SourceEntrySpot.reply.get(5, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.ExecutionException failure) {
+            List<String> flowEvents = flowCapture == null ? List.of() : flowCapture.records();
+            throw new AssertionError(
+                    requestFailureDiagnostic(spotId, failure, flowEvents), failure);
+        }
+    }
+
+    private static String requestFailureDiagnostic(
+            String spotId, Throwable failure, List<String> flowEvents) {
+        String correlation =
+                InstanceAdmissionReadBoundary.AFTER_CLOSE_CORRELATION.substring("corr=".length());
+        List<String> matchingFlowEvents =
+                flowEvents.stream()
+                        .filter(event -> event.contains("corr=" + correlation))
+                        .filter(event -> event.contains("spot=" + spotId + " "))
+                        .toList();
+        Throwable received = failure;
+        while ((received instanceof CompletionException
+                        || received instanceof java.util.concurrent.ExecutionException)
+                && received.getCause() != null) {
+            received = received.getCause();
+        }
+        StringBuilder diagnostic =
+                new StringBuilder("request failure spot=")
+                        .append(spotId)
+                        .append(" corr=")
+                        .append(correlation)
+                        .append(" exception=")
+                        .append(received.getClass().getName());
+        if (received instanceof ZLinkFrameworkException frameworkFailure) {
+            diagnostic.append(" kind=").append(frameworkFailure.kind());
+        }
+        diagnostic.append(" message=").append(received.getMessage());
+        diagnostic.append(" message_flow_events=").append(matchingFlowEvents);
+        return diagnostic.toString();
+    }
+
+    private static final class FlowDiagnosticCapture implements AutoCloseable {
+        private final java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(
+                        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                .getName());
+        private final java.util.logging.Level previousLevel = logger.getLevel();
+        private final List<String> records = new CopyOnWriteArrayList<>();
+        private final java.util.logging.Handler handler =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        String message = record.getMessage();
+                        if (message != null && message.startsWith("zlink flow:")) {
+                            records.add(message);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+
+        FlowDiagnosticCapture() {
+            logger.addHandler(handler);
+            logger.setLevel(java.util.logging.Level.ALL);
+        }
+
+        List<String> records() {
+            return List.copyOf(records);
+        }
+
+        @Override
+        public void close() {
+            logger.removeHandler(handler);
+            logger.setLevel(previousLevel);
         }
     }
 
