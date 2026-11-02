@@ -238,7 +238,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 new ZLinkRelocationMetricOperation(
                         meshName,
                         systems.zlink.framework.locations.ZLinkPlacementObjectKind.ACTOR,
-                        admission.owned().snapshotPolicy());
+                        admission.owned().snapshotPolicy(),
+                        relocationReplies.relocationFlow(),
+                        admission.owned().actorId());
         return sealAtTurnBoundary(
                         admission.owned().actorId(),
                         directJoin == null ? null : directJoin.activeTurnSeal(),

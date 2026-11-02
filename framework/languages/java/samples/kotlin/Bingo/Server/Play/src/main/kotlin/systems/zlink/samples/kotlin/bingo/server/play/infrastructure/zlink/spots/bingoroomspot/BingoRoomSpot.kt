@@ -132,8 +132,11 @@ class BingoRoomSpot(
                     .setState(observation.state)
                     .build()
             )
-            if (observation.hasReward()) announceReward(observation.reward)
-            else context.relocationReady().defer()
+            if (observation.state.status != BingoRoomGame.Finished && observation.hasReward()) {
+                announceReward(observation.reward)
+            } else {
+                context.relocationReady().defer()
+            }
             return
         }
         // --8<-- [start:doc-bingo-room-join]
@@ -448,8 +451,8 @@ class BingoRoomSpot(
             return
         }
         when (event.kind) {
-            BingoRoomEventKind.PLAYER_JOINED ->
-                recipient.push(
+            BingoRoomEventKind.PLAYER_JOINED -> {
+                val notification =
                     PlayerJoinedNotify(
                         event.state.roomId,
                         event.joinedActorId!!,
@@ -458,7 +461,17 @@ class BingoRoomSpot(
                         event.host,
                         event.state,
                     )
-                )
+                try {
+                    recipient.push(notification)
+                } catch (error: ZLinkFrameworkException) {
+                    logger.warn(
+                        "bingo-player-joined-notify-failed room={} recipient={}",
+                        event.state.roomId,
+                        recipient.actorId(),
+                        error,
+                    )
+                }
+            }
 
             BingoRoomEventKind.GAME_STARTED -> recipient.push(BingoGameStartedNotify(event.state))
 
