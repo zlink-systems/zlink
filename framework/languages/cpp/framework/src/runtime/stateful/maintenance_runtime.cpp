@@ -8,6 +8,8 @@
 #include "runtime/locations/sha256.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
+#include "runtime/diagnostics/flow_context.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -207,25 +209,47 @@ class maintenance_runtime_t::relocation_metric_operation_t
 {
   public:
     relocation_metric_operation_t (
-      const eligible_relocation_unit_t::canonical_wire_context_t &context, object_kind_t kind) :
+      const eligible_relocation_unit_t::canonical_wire_context_t &context,
+      object_kind_t kind,
+      std::string actor_id) :
         _metrics (context.monitoring)
     {
         using policy_t = framework::detail::factory_relocation_kind_t;
-        if (!_metrics.enabled ()
-            || (context.policy != policy_t::recreate && context.policy != policy_t::preserve_state))
+        const bool metric_enabled =
+          _metrics.enabled ()
+          && (context.policy == policy_t::recreate || context.policy == policy_t::preserve_state);
+        if (metric_enabled) {
+            const auto *object_kind = runtime::metric_object_kind (kind);
+            _tags = {
+              {"mesh_name", context.mesh_name},
+              {"object_kind", object_kind},
+              {"policy", context.policy == policy_t::preserve_state ? "snapshot" : "recreate"}};
+        }
+        if (kind == object_kind_t::actor && context.dispatch) {
+            detail::message_flow_tracer_t flow (*context.dispatch);
+            if (flow.flow_tracing ())
+                _flow_context = runtime::flow_context_t::current ();
+            _trace_flow = _flow_context.has_value ();
+        }
+        if (_tags.empty () && !_trace_flow)
             return;
-        const auto *object_kind = runtime::metric_object_kind (kind);
-        _tags = {{"mesh_name", context.mesh_name},
-                 {"object_kind", object_kind},
-                 {"policy", context.policy == policy_t::preserve_state ? "snapshot" : "recreate"}};
         _started = std::chrono::steady_clock::now ();
-        _metrics.counter ("zlink.relocation.started", "{relocation}", 1, _tags);
+        _dispatch = context.dispatch;
+        _mesh_name = context.mesh_name;
+        _actor_id = std::move (actor_id);
+        if (!_tags.empty ())
+            _metrics.counter ("zlink.relocation.started", "{relocation}", 1, _tags);
     }
 
     relocation_metric_operation_t (relocation_metric_operation_t &&other) noexcept :
         _metrics (std::move (other._metrics)),
         _tags (std::move (other._tags)),
-        _started (std::exchange (other._started, {}))
+        _started (std::exchange (other._started, {})),
+        _dispatch (other._dispatch),
+        _flow_context (std::move (other._flow_context)),
+        _mesh_name (std::move (other._mesh_name)),
+        _actor_id (std::move (other._actor_id)),
+        _trace_flow (std::exchange (other._trace_flow, false))
     {
     }
     relocation_metric_operation_t (const relocation_metric_operation_t &) = delete;
@@ -233,7 +257,7 @@ class maintenance_runtime_t::relocation_metric_operation_t
 
     void record_bytes (std::size_t bytes) const
     {
-        if (_started != std::chrono::steady_clock::time_point{})
+        if (!_tags.empty () && _started != std::chrono::steady_clock::time_point{})
             _metrics.histogram ("zlink.relocation.bytes", "By", static_cast<double> (bytes), _tags);
     }
 
@@ -261,18 +285,44 @@ class maintenance_runtime_t::relocation_metric_operation_t
                     break;
             }
         }
-        _tags.emplace ("outcome", outcome);
-        _metrics.counter ("zlink.relocation.completed", "{relocation}", 1, _tags);
-        _metrics.histogram (
-          "zlink.relocation.duration", "s",
-          std::chrono::duration<double> (std::chrono::steady_clock::now () - started).count (),
-          _tags);
+        if (!_tags.empty ()) {
+            _tags.emplace ("outcome", outcome);
+            _metrics.counter ("zlink.relocation.completed", "{relocation}", 1, _tags);
+            _metrics.histogram (
+              "zlink.relocation.duration", "s",
+              std::chrono::duration<double> (std::chrono::steady_clock::now () - started).count (),
+              _tags);
+        }
+        if (_trace_flow && _dispatch && _flow_context) {
+            const auto result =
+              std::string_view (outcome) == "completed"  ? message_flow_result_t::succeeded
+              : std::string_view (outcome) == "shutdown" ? message_flow_result_t::shutdown
+                                                         : message_flow_result_t::failed;
+            runtime::flow_context_t::scope_t flow_scope (_flow_context);
+            detail::message_flow_tracer_t flow (*_dispatch);
+            flow.trace (message_flow_outcome_t::completed, result, [&] {
+                return message_flow_event_t{.outcome = message_flow_outcome_t::completed,
+                                            .surface = dispatch_error_surface_t::actor_relocation,
+                                            .message_kind = dispatch_message_kind_t::control,
+                                            .actor_id = _actor_id,
+                                            .flow_id = _flow_context->flow_id,
+                                            .flow_origin = _flow_context->origin,
+                                            .detail_stage = "source_terminal",
+                                            .detail_result = outcome,
+                                            .mesh_name = _mesh_name};
+            });
+        }
     }
 
   private:
     runtime_metrics_t _metrics;
     std::map<std::string, std::string> _tags;
     std::chrono::steady_clock::time_point _started{};
+    const ::zlink::framework::dispatch_options_t *_dispatch = nullptr;
+    std::optional<runtime::flow_value_t> _flow_context;
+    std::string _mesh_name;
+    std::string _actor_id;
+    bool _trace_flow = false;
 };
 
 struct maintenance_runtime_t::relocation_terminal_state_t
@@ -899,7 +949,7 @@ task_t<relocation_preparation_t> maintenance_runtime_t::relocate_to_ready (
             finish ({relocation_terminal_t::blocked, relocation_reason_t::permit_unavailable,
                      std::nullopt})}));
     }
-    state->metric.emplace (*canonical_wire, source.kind);
+    state->metric.emplace (*canonical_wire, source.kind, source.key);
     return relocate_prepare_ready (std::move (state));
 }
 
@@ -997,6 +1047,7 @@ maintenance_runtime_t::relocate_seal (std::shared_ptr<relocation_terminal_state_
     state->seal_attempt = std::move (seal_attempt);
     if (state->seal_attempt.error != stateful_error_t::none
         || state->seal_attempt.seal.participants.size () != 1) {
+        state->metric->complete (std::nullopt);
         state->result.emplace (finish ({relocation_terminal_t::blocked,
                                         state->seal_attempt.error == stateful_error_t::backpressured
                                           ? relocation_reason_t::turn_active
@@ -1263,7 +1314,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     }
     auto state = std::make_shared<relocation_terminal_state_t> ();
     state->source = relocation_primary (sources);
-    state->metric.emplace (persisted_context, state->source.kind);
+    state->metric.emplace (persisted_context, state->source.kind, state->source.key);
     const auto seal_attempt = co_await _objects.try_seal_relocation_aggregate (
       sources, cancellation, [this, &persisted_context] {
           return capture_relocation_session_bindings (persisted_context);
