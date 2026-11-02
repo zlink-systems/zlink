@@ -1205,8 +1205,7 @@ void run_late_spot_terminal (
     physical_reply.complete (
       result_t<result_t<message_parts_t>>::success (result_t<message_parts_t>::failure (
         framework_error_kind_t::unavailable, "late physical terminal")));
-    // Waits for the operation's own terminal (no sleep): the outer coroutine's
-    // catch block has run once this returns.
+    // Observe physical delivery, including invalidation after the public failure.
     (void) detail::request_task_access_t::physical_reply (pending).result ();
 }
 } // namespace
