@@ -1,7 +1,10 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
@@ -1110,7 +1113,19 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         bool expireOwner
     )
     {
+        var stages = new ConcurrentBag<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stages.Add,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var options = new ZLinkDispatchOptionsModel();
+        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         await using var fixture = new CanonicalPhysicalRequest();
+        fixture.Node.SetFlowTracer(new ZLinkMessageFlowTracer(options));
         await fixture.MakeReadyAsync();
         var expectedReady = new ZLinkServiceWireCodec.RelocationReadyRecord(
             fixture.Prepare.RelocationId,
@@ -1186,6 +1201,10 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.Equal(0, fixture.Node.PendingOperationCount);
         Assert.Equal(0, fixture.Node.PendingCanonicalRelocationPrepareCount);
         Assert.Equal(2, fixture.Context.NativeRequests);
+        await WaitForFlowDeliveryAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Single(
+            stages.Where(stage => Equals(stage.GetTagItem("detail"), "relay_ready_received"))
+        );
         if (expireOwner)
             Assert.Same(
                 originalFailure,
@@ -1196,6 +1215,12 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             Assert.True(first.IsCanceled);
             var unchanged = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
             Assert.Equal(cancellation.Token, unchanged.CancellationToken);
+        }
+
+        static async Task WaitForFlowDeliveryAsync()
+        {
+            while (ZLinkMessageFlowDelivery.Shared.State is not { Pending: 0, Executing: false })
+                await Task.Yield();
         }
     }
 
