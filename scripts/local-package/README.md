@@ -34,6 +34,22 @@ Ordinary local-package builds and cache hits check the versions and exit on a mi
 changing a version file, run `--sync-versions` above explicitly. The Framework package versions
 themselves and the per-language sample pins are part of the same synchronization.
 
+### Genre template pins
+
+Genre templates use only published packages ([template authoring rules](../../framework/templates/TEMPLATE-AUTHORING.ko.md)),
+so the Framework and binding versions they pin move independently of the Framework `VERSION`.
+Each language's `framework/languages/<language>/templates/TEMPLATE_VERSIONS` owns them
+(`ZLINK_TEMPLATE_FRAMEWORK_VERSION`, plus `ZLINK_TEMPLATE_BINDING_VERSION` for .NET, Java and Node,
+which pin a binding; the Java file owns both the Java and the Kotlin templates). `--sync-versions`
+writes these values into the templates' package configuration and the version sentences of their
+README and AGENTS files, and `--verify-versions` reports templates that differ. This check reads no
+git tags.
+
+After the packages are published, edit only this file and run `--sync-versions`. Whether a binding
+pin equals the binding that Framework release requires is checked by
+`scripts/templates/check-template-bindings.py` against the `framework-<language>/v<version>` tag.
+A missing tag fails the check, so it needs `git fetch --tags`.
+
 ## Full build
 
 ```bash
