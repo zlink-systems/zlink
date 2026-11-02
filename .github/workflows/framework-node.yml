@@ -100,16 +100,10 @@ jobs:
         node-version:
           - 20
           - 22
-        target:
-          - name: linux-x64
-            runner: ubuntu-24.04
-            core_platform: linux-x64
-          - name: linux-arm64
-            runner: ubuntu-24.04-arm
-            core_platform: linux-arm64
-          - name: darwin-arm64
-            runner: macos-15
-            core_platform: macos-arm64
+        # PR-stage queue checks (queue_checks_only) run linux-x64 only; queue batches,
+        # schedule, manual and release runs add linux-arm64 and macOS. One full
+        # matrix per PR keeps the hosted macOS/arm64 concurrency for the queue.
+        target: ${{ fromJSON(inputs.queue_checks_only && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"}]' || '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","core_platform":"linux-arm64"},{"name":"darwin-arm64","runner":"macos-15","core_platform":"macos-arm64"}]') }}
         # Windows runs on schedule, manual and release runs; queue batches and queue checks omit Windows.
         include: ${{ fromJSON((inputs.queue_checks_only || startsWith(github.ref_name, 'mergify/merge-queue/')) && '[]' || '[{"node-version":20,"target":{"name":"win-x64","runner":"windows-latest","msvc_arch":"x64","core_platform":"windows-x64"}},{"node-version":22,"target":{"name":"win-x64","runner":"windows-latest","msvc_arch":"x64","core_platform":"windows-x64"}}]') }}
 
