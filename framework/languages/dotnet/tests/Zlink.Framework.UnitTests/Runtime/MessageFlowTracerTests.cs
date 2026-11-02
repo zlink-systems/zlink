@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -454,6 +455,46 @@ public sealed class MessageFlowTracerTests
                 field.Key == "error_message"
                 && Equals(field.Value, "restore failed token=<redacted>")
         );
+    }
+
+    [Fact]
+    public void SourceRelocationTerminalUsesItsCapturedFlowAndCompletesOnce()
+    {
+        const string flowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
+        var activities = CaptureActivities(out var listener);
+        using (listener)
+        {
+            var options = new ZLinkDispatchOptionsModel();
+            options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            var logger = new CapturingLogger();
+            var tracer = new ZLinkMessageFlowTracer(options, logger);
+            ZLinkRuntimeMetrics.ZLinkRelocationMetricOperation operation;
+            using (ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Application))
+            {
+                operation = ZLinkRuntimeMetrics.CreateRelocation(
+                    "game",
+                    ZLinkRelocationMetricObjectKind.Actor,
+                    ZLinkRelocationMetricPolicy.Snapshot,
+                    tracer,
+                    "actor-1"
+                );
+            }
+            operation.Start();
+
+            operation.CompleteSource(ZLinkSourceSettlement.TargetCommitted);
+            operation.CompleteSource(null);
+            TelemetryReceipt.Wait(() => activities.Count == 1);
+        }
+
+        var activity = Assert.Single(activities);
+        Assert.Equal("completed", activity.GetTagItem("phase"));
+        Assert.Equal("succeeded", activity.GetTagItem("outcome"));
+        Assert.Equal("actor_relocation", activity.GetTagItem("surface"));
+        Assert.Equal("control", activity.GetTagItem("message_kind"));
+        Assert.Equal("game", activity.GetTagItem("mesh_name"));
+        Assert.Equal("actor-1", activity.GetTagItem("actor_id"));
+        Assert.Equal(flowId, activity.GetTagItem("flow_id"));
+        Assert.Equal("application", activity.GetTagItem("flow_origin"));
     }
 
     [Theory]

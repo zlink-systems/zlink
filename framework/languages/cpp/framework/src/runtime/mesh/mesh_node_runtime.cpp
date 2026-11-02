@@ -4568,6 +4568,7 @@ void mesh_node_runtime_t::configure_relocation_metric_context (
     // metrics never participate in the authority or dispatch decision.
     const auto &catalog = *_state->spot_state;
     wire.monitoring = catalog.monitoring;
+    wire.dispatch = &catalog.dispatch;
     wire.mesh_name = _state->mesh_name;
     if (kind == runtime::stateful::object_kind_t::actor) {
         const auto factory = catalog.actor_factories.find (stable_type);

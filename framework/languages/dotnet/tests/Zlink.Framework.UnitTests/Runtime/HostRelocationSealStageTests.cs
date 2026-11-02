@@ -326,9 +326,13 @@ public sealed class HostRelocationSealStageTests
         }
         var builder = Host.CreateApplicationBuilder();
         var handler = new SealStageHandler();
+        var sessionTime = new ControllableTimeProvider();
         builder.Services.AddSingleton(handler);
         builder.Services.AddZLinkFramework(options =>
         {
+            // This scenario exercises continuity before seal expiry. Wall-clock
+            // contention must not advance the Session owner's seal deadline.
+            options.UseTestTimeProvider(sessionTime);
             options.AddLocationStore(store);
             options.AddRelocationStore(roots);
             options.ConfigureLocations().PollingInterval = TimeSpan.FromMilliseconds(10);
@@ -357,6 +361,7 @@ public sealed class HostRelocationSealStageTests
                 WaitForReadyPeersAsync(target.Services, 2, readyDeadline.Token),
                 WaitForReadyPeersAsync(session.Services, 2, readyDeadline.Token)
             );
+        sessionTime.Advance(TimeSpan.FromMilliseconds(1));
         var sessionRuntime = session.Services.GetRequiredService<IZLinkFrameworkRuntime>();
         await using var connector = ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
@@ -412,8 +417,12 @@ public sealed class HostRelocationSealStageTests
                 (await relocation.WaitAsync(TimeSpan.FromSeconds(15))).Outcome
             );
             Assert.Equal(1, trace.TargetLifecycleAttemptCount);
+            sessionTime.Advance(TimeSpan.FromMilliseconds(1));
             if (flow is not null)
             {
+                await WaitUntilAsync(() =>
+                    ZLinkMessageFlowDelivery.Shared.State is { Pending: 0, Executing: false }
+                );
                 var stages = flow.ReadLines()
                     .Select(line =>
                         System.Text.Json.JsonDocument.Parse(
