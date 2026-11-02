@@ -11,11 +11,22 @@ internal static class PerCallAllocation
 {
     public const int Windows = 8;
 
-    // A region is process-wide: allocations or induced collections on another thread
-    // can end it before the measured action returns. Only intact windows count.
-    internal static async ValueTask<T> MeasureWindowAsync<T>(
+    internal static (int Gen0, int Gen1, int Gen2) CollectionCounts() =>
+        (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
+
+    internal static bool CollectionCountsUnchanged((int Gen0, int Gen1, int Gen2) before) =>
+        before == CollectionCounts();
+
+    private static long RequireMinimum(long minimum) =>
+        minimum == long.MaxValue
+            ? throw new InvalidOperationException(
+                "All allocation measurement windows overlapped a GC."
+            )
+            : minimum;
+
+    // GC counts are process-wide, so a collection from another thread invalidates the sample.
+    internal static async ValueTask<(bool IsValid, T Value)> MeasureWindowAsync<T>(
         Func<ValueTask<T>> measure,
-        long budgetBytes = 8 * 1024 * 1024,
         Action? beforeWindow = null,
         Action? afterWindow = null
     )
@@ -24,38 +35,19 @@ internal static class PerCallAllocation
         for (var attempt = 0; attempt < attempts; attempt++)
         {
             beforeWindow?.Invoke();
+            var collectionCounts = CollectionCounts();
             try
             {
-                if (!GC.TryStartNoGCRegion(budgetBytes))
-                    throw new InvalidOperationException(
-                        "Could not reserve a GC-free measurement window."
-                    );
-                try
-                {
-                    var result = await measure();
-                    if (
-                        System.Runtime.GCSettings.LatencyMode
-                        == System.Runtime.GCLatencyMode.NoGCRegion
-                    )
-                        return result;
-                }
-                finally
-                {
-                    if (
-                        System.Runtime.GCSettings.LatencyMode
-                        == System.Runtime.GCLatencyMode.NoGCRegion
-                    )
-                        GC.EndNoGCRegion();
-                }
+                var result = await measure();
+                if (CollectionCountsUnchanged(collectionCounts))
+                    return (true, result);
             }
             finally
             {
                 afterWindow?.Invoke();
             }
         }
-        throw new InvalidOperationException(
-            $"GC-free measurement window ended during all {attempts} attempts; no valid allocation measurement was obtained."
-        );
+        return (false, default!);
     }
 
     public static long MinWindow(
@@ -86,7 +78,7 @@ internal static class PerCallAllocation
         var minimum = long.MaxValue;
         for (var window = 0; window < windows; window++)
         {
-            var bytes = MeasureWindowAsync(
+            var measurement = MeasureWindowAsync(
                     () =>
                     {
                         var before = GC.GetAllocatedBytesForCurrentThread();
@@ -99,15 +91,17 @@ internal static class PerCallAllocation
                 )
                 .GetAwaiter()
                 .GetResult();
-            minimum = Math.Min(minimum, bytes);
+            if (!measurement.IsValid)
+                continue;
+            minimum = Math.Min(minimum, measurement.Value);
         }
-        return minimum;
+        return RequireMinimum(minimum);
     }
 
     /// <summary>
     ///     Two actions measured in alternating windows, so that both see the same JIT tiering
     ///     and cache state, for tests that compare one against the other with Equal. Both
-    ///     windows run in the same GC-free region.
+    ///     actions share a window, which is discarded if a GC overlaps either action.
     /// </summary>
     public static (long First, long Second) MinWindowPair(
         Action<int> first,
@@ -120,7 +114,7 @@ internal static class PerCallAllocation
         var minimumSecond = long.MaxValue;
         for (var window = 0; window < windows; window++)
         {
-            var (firstBytes, secondBytes) = MeasureWindowAsync(() =>
+            var measurement = MeasureWindowAsync(() =>
                 {
                     var before = GC.GetAllocatedBytesForCurrentThread();
                     for (var index = 0; index < callsPerWindow; index++)
@@ -130,13 +124,17 @@ internal static class PerCallAllocation
                     for (var index = 0; index < callsPerWindow; index++)
                         second(index);
                     var secondBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-                    return new ValueTask<(long, long)>((firstBytes, secondBytes));
+                    return new ValueTask<(long First, long Second)>((firstBytes, secondBytes));
                 })
                 .GetAwaiter()
                 .GetResult();
-            minimumFirst = Math.Min(minimumFirst, firstBytes);
-            minimumSecond = Math.Min(minimumSecond, secondBytes);
+            if (!measurement.IsValid)
+                continue;
+            minimumFirst = Math.Min(minimumFirst, measurement.Value.First);
+            minimumSecond = Math.Min(minimumSecond, measurement.Value.Second);
         }
+        RequireMinimum(minimumFirst);
+        RequireMinimum(minimumSecond);
         return (minimumFirst, minimumSecond);
     }
 
@@ -149,16 +147,18 @@ internal static class PerCallAllocation
         var minimum = long.MaxValue;
         for (var window = 0; window < windows; window++)
         {
-            var bytes = await MeasureWindowAsync(async () =>
+            var measurement = await MeasureWindowAsync(async () =>
             {
                 var before = GC.GetAllocatedBytesForCurrentThread();
                 for (var index = 0; index < callsPerWindow; index++)
                     await action();
                 return GC.GetAllocatedBytesForCurrentThread() - before;
             });
-            minimum = Math.Min(minimum, bytes);
+            if (!measurement.IsValid)
+                continue;
+            minimum = Math.Min(minimum, measurement.Value);
         }
-        return minimum;
+        return RequireMinimum(minimum);
     }
 
     /// <summary>
