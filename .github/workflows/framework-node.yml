@@ -275,6 +275,11 @@ jobs:
         working-directory: framework/languages/node
         run: npm run verify:ci
 
+      - name: Run Node M6C runtime gate
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        working-directory: framework/languages/node
+        run: npm run verify:m6c-runtime
+
       # The browser build rewrites the committed WebGL bundle, so the bundle
       # check inside the gate always sees a fresh file. A diff here means the
       # source changed without the regenerated bundle being committed.
