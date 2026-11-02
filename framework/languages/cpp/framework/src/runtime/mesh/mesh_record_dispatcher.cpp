@@ -36,9 +36,7 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
                                     runtime::offload_executor_t *executor) const
 {
     using record_kind_t = runtime::host::record_kind_t;
-    if (record.kind != record_kind_t::node_send && record.kind != record_kind_t::node_request
-        && record.kind != record_kind_t::channel_send
-        && record.kind != record_kind_t::channel_request) {
+    if (!is_node_or_channel_record_kind (record.kind)) {
         return task_t<std::optional<route_dispatch_reply_t>> (
           result_t<std::optional<route_dispatch_reply_t>>::failure (
             framework_error_kind_t::protocol_error,
