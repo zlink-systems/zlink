@@ -195,7 +195,7 @@ struct operation_completion_item_t
     operation_registry_state_t::callback_t callback;
     std::shared_ptr<operation_registry_drain_state_t> drain_state;
     operation_terminal_t terminal = operation_terminal_t::transport_failed;
-    result_t<zlink::message_t> payload = result_t<zlink::message_t>::success ({});
+    std::optional<result_t<zlink::message_t>> payload;
     std::unique_ptr<operation_completion_item_t> next;
     mesh_request_metric_t request_metric;
 };
@@ -245,7 +245,7 @@ void post_completions (operation_completion_chain_t completions) noexcept
               const auto drain_lifetime = item->drain_state;
               const std::unique_ptr<operation_completion_item_t> completion (item);
               try {
-                  completion->callback (completion->terminal, std::move (completion->payload));
+                  completion->callback (completion->terminal, std::move (*completion->payload));
               }
               catch (...) {
                   // A consumer failure must still release its drain reservation.
