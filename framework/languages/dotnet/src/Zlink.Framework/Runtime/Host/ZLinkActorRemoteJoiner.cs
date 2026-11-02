@@ -255,7 +255,9 @@ internal sealed class ZLinkActorRemoteJoiner(
             ZLinkRelocationMetricObjectKind.Actor,
             relocation.PolicyKind != 2
                 ? ZLinkRelocationMetricPolicy.Recreate
-                : ZLinkRelocationMetricPolicy.Snapshot
+                : ZLinkRelocationMetricPolicy.Snapshot,
+            runtime.Flow,
+            actor.Context.ActorId
         );
         try
         {

@@ -79,10 +79,6 @@ class PlayerActor(private val actorId: String, private val context: ZLinkActorCo
     }
 
     suspend fun push(message: Any) {
-        try {
-            context.boundSession().kotlin().send(message).await()
-        } catch (_: RuntimeException) {
-            // A stale player session cannot fail the room or block later recipients.
-        }
+        context.boundSession().kotlin().send(message).await()
     }
 }
