@@ -574,7 +574,8 @@ export class ZLinkRuntimeMetrics {
   startRelocation(
     meshName: string,
     objectKind: 'actor' | 'user_spot' | 'instance_spot',
-    policy: 'recreate' | 'snapshot'
+    policy: 'recreate' | 'snapshot',
+    onComplete?: (outcome: string) => void
   ): ZLinkRelocationMetricOperation {
     const started = process.hrtime.bigint();
     const startAttributes = { mesh_name: meshName, object_kind: objectKind, policy };
@@ -595,6 +596,7 @@ export class ZLinkRuntimeMetrics {
           Number(process.hrtime.bigint() - started) / NANOSECONDS_PER_SECOND,
           terminal
         );
+        onComplete?.(outcome);
       }
     };
   }
