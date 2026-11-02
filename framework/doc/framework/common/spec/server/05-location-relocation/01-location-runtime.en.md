@@ -600,6 +600,18 @@ which a host reads descriptors other hosts published, and it doesn't set when a 
 publishes its own change. When the publication completes follows the host's execution
 model. A caller doesn't assume the new Revision is stored by the time the call returns.
 
+**An automatic discovery coordinator waits for its own descriptor publication without
+holding an execution resource.** Even when the coordinator must observe publication
+completion, as in republishing after Store recovery, it doesn't block a thread
+synchronously; it receives publication completion as a continuation. The same
+coordinator may process its next snapshot after the current publication ends — snapshot
+processing order is kept. Each publication wait ends within the renew timeout. A
+publication not confirmed by the renew timeout counts as that round's publication
+failure, and the next renewal publishes again. **Stop cancels a pending publication wait
+and completes within the renew timeout even if the Store doesn't respond.** A Store
+request that finishes late after cancellation doesn't make the coordinator process
+another snapshot or publish again.
+
 The `capacity` counts and `activationConcurrency.active` are copies used for candidate
 selection and operational queries; they don't guarantee acceptance. Atomic reservation in the
 Location Store secures capacity, and the target MeshNode decides activation acceptance through
