@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.locations;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 
 import java.util.Objects;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
@@ -18,9 +19,9 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     private final ScheduledExecutorService executor;
     private final Object lifecycleGate = new Object();
     private ScheduledFuture<?> task;
-    private CompletionStage<Void> inFlightTick = CompletableFuture.completedFuture(null);
+    private CompletableFuture<Void> inFlightTick = CompletableFuture.completedFuture(null);
     private CompletionStage<Void> termination;
-    private volatile boolean running;
+    private boolean running;
 
     ZLinkAutoConnectLoop(ZLinkAutoConnectReconciler reconciler, ZLinkLocationOptions options) {
         this(reconciler, options, () -> CompletableFuture.completedFuture(null));
@@ -51,19 +52,22 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     CompletionStage<Void> start() {
         synchronized (lifecycleGate) {
             running = true;
-            inFlightTick = tick().whenComplete((ignored, failure) -> scheduleNext());
+            inFlightTick =
+                    tick().toCompletableFuture().whenComplete((ignored, failure) -> scheduleNext());
             return inFlightTick;
         }
     }
 
     CompletionStage<Void> stop() {
         CompletableFuture<Void> stopping = new CompletableFuture<>();
-        CompletionStage<Void> settling;
+        CompletableFuture<Void> settling;
         synchronized (lifecycleGate) {
             if (termination != null) {
                 return termination;
             }
-            termination = stopping;
+            termination =
+                    stopping.orTimeout(
+                            options.ownerLeaseRenewTimeout().toNanos(), TimeUnit.NANOSECONDS);
             running = false;
             if (task != null) {
                 task.cancel(false);
@@ -71,26 +75,28 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
             }
             executor.shutdownNow();
             settling = inFlightTick;
+            settling.cancel(false);
         }
         settling.whenComplete(
-                (ignored, tickFailure) ->
-                        reconciler
-                                .shutdown()
-                                .whenComplete(
-                                        (shutdownIgnored, shutdownFailure) -> {
-                                            Throwable failure =
-                                                    tickFailure == null
-                                                            ? shutdownFailure
-                                                            : tickFailure;
-                                            if (tickFailure != null && shutdownFailure != null) {
-                                                tickFailure.addSuppressed(shutdownFailure);
-                                            }
-                                            if (failure == null) {
-                                                stopping.complete(null);
-                                            } else {
-                                                stopping.completeExceptionally(failure);
-                                            }
-                                        }));
+                (ignored, tickResult) -> {
+                    Throwable tickFailure =
+                            tickResult instanceof CancellationException ? null : tickResult;
+                    reconciler
+                            .shutdown()
+                            .whenComplete(
+                                    (shutdownIgnored, shutdownFailure) -> {
+                                        Throwable failure =
+                                                tickFailure == null ? shutdownFailure : tickFailure;
+                                        if (tickFailure != null && shutdownFailure != null) {
+                                            tickFailure.addSuppressed(shutdownFailure);
+                                        }
+                                        if (failure == null) {
+                                            stopping.complete(null);
+                                        } else {
+                                            stopping.completeExceptionally(failure);
+                                        }
+                                    });
+                });
         return stopping;
     }
 
@@ -99,22 +105,25 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
      * flight may have read the store before the request, so the immediate tick follows it.
      */
     void reconcileNow() {
-        synchronized (lifecycleGate) {
-            if (!running) return;
-            // The executor keeps a completed in-flight tick from recursively calling this
-            // method before its next task has been published.
-            executor.execute(
-                    () -> {
-                        synchronized (lifecycleGate) {
-                            if (!running) return;
-                            if (task == null) {
-                                inFlightTick.whenComplete((ignored, failure) -> reconcileNow());
-                            } else if (task.cancel(false)) {
-                                task = executor.schedule(this::tickOnLoop, 0, TimeUnit.NANOSECONDS);
-                            }
-                        }
-                    });
-        }
+        // Queue requests so a completed tick cannot recurse before its next task is assigned.
+        runWhileRunning(
+                () ->
+                        executor.execute(
+                                () ->
+                                        runWhileRunning(
+                                                () -> {
+                                                    if (task == null) {
+                                                        inFlightTick.whenComplete(
+                                                                (ignored, failure) ->
+                                                                        reconcileNow());
+                                                    } else if (task.cancel(false)) {
+                                                        task =
+                                                                executor.schedule(
+                                                                        this::tickOnLoop,
+                                                                        0,
+                                                                        TimeUnit.NANOSECONDS);
+                                                    }
+                                                })));
     }
 
     CompletionStage<Void> markDraining() {
@@ -122,30 +131,42 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     }
 
     private CompletionStage<Void> tick() {
-        return reconciler.tick().thenCompose(ignored -> refreshCapacity.get());
+        return reconciler.tick(this::runContinuation).thenCompose(ignored -> refreshCapacity.get());
+    }
+
+    private void runContinuation(Runnable continuation) {
+        if (!runWhileRunning(continuation)) {
+            throw new CancellationException("auto-connect loop stopped");
+        }
+    }
+
+    private boolean runWhileRunning(Runnable continuation) {
+        synchronized (lifecycleGate) {
+            if (!running) return false;
+            continuation.run();
+            return true;
+        }
     }
 
     private void tickOnLoop() {
-        synchronized (lifecycleGate) {
-            task = null;
-            if (!running) {
-                return;
-            }
-            inFlightTick = tick().whenComplete((ignored, failure) -> scheduleNext());
-        }
+        runWhileRunning(
+                () -> {
+                    task = null;
+                    inFlightTick =
+                            tick().toCompletableFuture()
+                                    .whenComplete((ignored, failure) -> scheduleNext());
+                });
     }
 
     private void scheduleNext() {
-        synchronized (lifecycleGate) {
-            if (!running) {
-                return;
-            }
-            task =
-                    executor.schedule(
-                            this::tickOnLoop,
-                            options.pollingInterval().toNanos(),
-                            TimeUnit.NANOSECONDS);
-        }
+        runWhileRunning(
+                () -> {
+                    task =
+                            executor.schedule(
+                                    this::tickOnLoop,
+                                    options.pollingInterval().toNanos(),
+                                    TimeUnit.NANOSECONDS);
+                });
     }
 
     @Override
