@@ -3194,16 +3194,20 @@ raw_mesh_node_owner_t::enqueue_received (service_mailbox_record_t record,
                     event->flow_origin = header.flow_origin;
                     event->mesh_name = _options.descriptor.mesh_name;
                     event->channel_route_kind = "route_mesh";
-                    flow.trace (message_flow_outcome_t::received,
-                                event->flow_id ? std::string_view (*event->flow_id)
-                                               : std::string_view{},
-                                [&] { return *event; });
-                    admitted = [&] {
-                        event->outcome = message_flow_outcome_t::admitted;
-                        flow.trace (message_flow_outcome_t::admitted,
+                    if (flow.enabled_for (message_flow_outcome_t::received)) {
+                        flow.trace (message_flow_outcome_t::received,
                                     event->flow_id ? std::string_view (*event->flow_id)
                                                    : std::string_view{},
                                     [&] { return *event; });
+                    }
+                    admitted = [&] {
+                        event->outcome = message_flow_outcome_t::admitted;
+                        if (flow.enabled_for (message_flow_outcome_t::admitted)) {
+                            flow.trace (message_flow_outcome_t::admitted,
+                                        event->flow_id ? std::string_view (*event->flow_id)
+                                                       : std::string_view{},
+                                        [&] { return *event; });
+                        }
                     };
                 }
             }

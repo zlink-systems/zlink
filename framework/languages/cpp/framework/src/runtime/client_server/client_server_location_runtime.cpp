@@ -1419,28 +1419,31 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
                                                   &flow, &request_envelope, &record] {
                 if (before)
                     before ();
-                flow.trace (message_flow_outcome_t::dispatched,
-                            request_envelope.flow_id ? std::string_view (*request_envelope.flow_id)
-                                                     : std::string_view{},
-                            [&] {
-                                message_flow_event_t event{message_flow_outcome_t::dispatched,
-                                                           dispatch_error_surface_t::channel,
-                                                           request_envelope.kind
-                                                               == messaging::message_kind_t::request
-                                                             ? dispatch_message_kind_t::request
-                                                             : dispatch_message_kind_t::send,
-                                                           request_envelope.message_name,
-                                                           record.owner,
-                                                           std::nullopt,
-                                                           request_envelope.correlation_id,
-                                                           std::nullopt,
-                                                           std::nullopt,
-                                                           std::nullopt,
-                                                           std::nullopt};
-                                event.flow_id = request_envelope.flow_id;
-                                event.flow_origin = request_envelope.flow_origin;
-                                return event;
-                            });
+                if (flow.enabled_for (message_flow_outcome_t::dispatched)) {
+                    flow.trace (message_flow_outcome_t::dispatched,
+                                request_envelope.flow_id
+                                  ? std::string_view (*request_envelope.flow_id)
+                                  : std::string_view{},
+                                [&] {
+                                    message_flow_event_t event{
+                                      message_flow_outcome_t::dispatched,
+                                      dispatch_error_surface_t::channel,
+                                      request_envelope.kind == messaging::message_kind_t::request
+                                        ? dispatch_message_kind_t::request
+                                        : dispatch_message_kind_t::send,
+                                      request_envelope.message_name,
+                                      record.owner,
+                                      std::nullopt,
+                                      request_envelope.correlation_id,
+                                      std::nullopt,
+                                      std::nullopt,
+                                      std::nullopt,
+                                      std::nullopt};
+                                    event.flow_id = request_envelope.flow_id;
+                                    event.flow_origin = request_envelope.flow_origin;
+                                    return event;
+                                });
+                }
             };
         }
         auto scope = zlink::framework::detail::service_scope_t::create (
@@ -1466,25 +1469,28 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
                 co_await _channel_runtime.dispatch_send_on_handler_executor (
                   record.owner, {}, request_envelope.message_name, scope.provider (), *_serializers,
                   *_handlers, message, inbound);
-                flow.trace (message_flow_outcome_t::completed,
-                            request_envelope.flow_id ? std::string_view (*request_envelope.flow_id)
-                                                     : std::string_view{},
-                            [&] {
-                                message_flow_event_t event{message_flow_outcome_t::completed,
-                                                           dispatch_error_surface_t::channel,
-                                                           dispatch_message_kind_t::send,
-                                                           request_envelope.message_name,
-                                                           record.owner,
-                                                           std::nullopt,
-                                                           inbound.message.correlation_id,
-                                                           std::nullopt,
-                                                           std::nullopt,
-                                                           std::nullopt,
-                                                           std::nullopt};
-                                event.flow_id = request_envelope.flow_id;
-                                event.flow_origin = request_envelope.flow_origin;
-                                return event;
-                            });
+                if (flow.enabled_for (message_flow_outcome_t::completed)) {
+                    flow.trace (message_flow_outcome_t::completed,
+                                request_envelope.flow_id
+                                  ? std::string_view (*request_envelope.flow_id)
+                                  : std::string_view{},
+                                [&] {
+                                    message_flow_event_t event{message_flow_outcome_t::completed,
+                                                               dispatch_error_surface_t::channel,
+                                                               dispatch_message_kind_t::send,
+                                                               request_envelope.message_name,
+                                                               record.owner,
+                                                               std::nullopt,
+                                                               inbound.message.correlation_id,
+                                                               std::nullopt,
+                                                               std::nullopt,
+                                                               std::nullopt,
+                                                               std::nullopt};
+                                    event.flow_id = request_envelope.flow_id;
+                                    event.flow_origin = request_envelope.flow_origin;
+                                    return event;
+                                });
+                }
             }
             catch (const framework_exception_t &error) {
                 report_client_server_dispatch_error (
@@ -1539,25 +1545,28 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
     if (pending_reply || pending_failure_reply) {
         detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
         const auto &header = record.envelope_header;
-        flow.trace (message_flow_outcome_t::replied,
-                    header.flow_id ? std::string_view (*header.flow_id) : std::string_view{}, [&] {
-                        message_flow_event_t event{message_flow_outcome_t::replied,
-                                                   dispatch_error_surface_t::channel,
-                                                   header.kind == messaging::message_kind_t::request
-                                                     ? dispatch_message_kind_t::request
-                                                     : dispatch_message_kind_t::send,
-                                                   header.message_name,
-                                                   record.owner,
-                                                   std::nullopt,
-                                                   header.correlation_id,
-                                                   std::nullopt,
-                                                   std::nullopt,
-                                                   std::nullopt,
-                                                   std::nullopt};
-                        event.flow_id = header.flow_id;
-                        event.flow_origin = header.flow_origin;
-                        return event;
-                    });
+        if (flow.enabled_for (message_flow_outcome_t::replied)) {
+            flow.trace (
+              message_flow_outcome_t::replied,
+              header.flow_id ? std::string_view (*header.flow_id) : std::string_view{}, [&] {
+                  message_flow_event_t event{message_flow_outcome_t::replied,
+                                             dispatch_error_surface_t::channel,
+                                             header.kind == messaging::message_kind_t::request
+                                               ? dispatch_message_kind_t::request
+                                               : dispatch_message_kind_t::send,
+                                             header.message_name,
+                                             record.owner,
+                                             std::nullopt,
+                                             header.correlation_id,
+                                             std::nullopt,
+                                             std::nullopt,
+                                             std::nullopt,
+                                             std::nullopt};
+                  event.flow_id = header.flow_id;
+                  event.flow_origin = header.flow_origin;
+                  return event;
+              });
+        }
     }
     try {
         if (pending_reply)

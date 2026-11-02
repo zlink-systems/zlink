@@ -30,8 +30,9 @@ namespace zlink::framework::detail
 //
 // PERFORMANCE: the tracer only borrows dispatch_options (no copy), and the mode
 // gate is a single relaxed atomic load + compare. Callers MUST build the event
-// behind `enabled(...)` (or use the lazy trace overload) so that when tracing is
-// off there is ZERO allocation on the dispatch hot path.
+// behind a live `enabled(...)` check, including lazy builder creation on
+// per-message paths. Rare failure/drop transitions may use the lazy overload
+// alone (message-flow tracing §5).
 //
 // Mode gating (modes are ordered off < errors < normal < detailed):
 //   * received / admitted / dispatched / replied / sent / reply_received require normal+.
