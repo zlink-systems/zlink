@@ -45,7 +45,9 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         ulong deadlineUnixMs = 0,
         IDisposable? payloadOwner = null,
         ZLinkMultipartPayloadView? applicationPayloadView = null,
-        bool instanceIntent = false
+        bool instanceIntent = false,
+        DateTimeOffset? receivedAt = null,
+        TimeProvider? timeProvider = null
     )
     {
         Parts = parts;
@@ -65,6 +67,9 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         DeadlineUnixMs = deadlineUnixMs;
         ApplicationPayloadView = applicationPayloadView;
         InstanceIntent = instanceIntent;
+        ReceivedAt = (
+            receivedAt ?? (timeProvider ?? TimeProvider.System).GetUtcNow()
+        ).ToUniversalTime();
         _payloadOwner = payloadOwner;
     }
 
@@ -88,6 +93,8 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
     public string? ChannelName { get; }
 
     public ulong? RequestSeq { get; }
+
+    public DateTimeOffset ReceivedAt { get; }
 
     public MeshOperationId OperationId { get; }
 
@@ -159,13 +166,18 @@ internal sealed class ZLinkBackendSubscribeMessage : IDisposable
         string topic,
         IReadOnlyList<Message> parts,
         ZLinkMessageMetadata? metadata = null,
-        IDisposable? payloadOwner = null
+        IDisposable? payloadOwner = null,
+        DateTimeOffset? receivedAt = null,
+        TimeProvider? timeProvider = null
     )
     {
         ChannelName = channelName;
         Topic = topic;
         Parts = parts;
         Metadata = metadata ?? ZLinkMessageMetadata.Empty;
+        ReceivedAt = (
+            receivedAt ?? (timeProvider ?? TimeProvider.System).GetUtcNow()
+        ).ToUniversalTime();
         _payloadOwner = payloadOwner;
     }
 
@@ -178,6 +190,8 @@ internal sealed class ZLinkBackendSubscribeMessage : IDisposable
     // The immutable application-metadata snapshot decoded from the logical
     // multicast record's application-metadata frame (S8-06A). Empty when none.
     public ZLinkMessageMetadata Metadata { get; }
+
+    public DateTimeOffset ReceivedAt { get; }
 
     internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission =>
         (_payloadOwner as ZLinkApplicationJobQueueRecordOwner)?.Admission;

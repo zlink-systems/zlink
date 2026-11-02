@@ -261,7 +261,7 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                 return;
             }
             if (ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
-                handleRoutedActorPacketParts(received.parts())
+                handleRoutedActorPacketParts(received.parts(), received.receivedAt())
                         .thenAccept(
                                 reply -> {
                                     if (received.requestSeq().isPresent()) {
@@ -404,7 +404,8 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
                         Map.of());
         if (ZLinkSpotRuntime.isNoBindActorPacket(headerPart)
                 || headerPart.sourceSessionRid().toBytes().length == 0) {
-            return host.dispatchLocalSessionActor(targetActor, header, payload)
+            return host.dispatchLocalSessionActor(
+                            targetActor, header, payload, headerPart.receivedAt())
                     .thenAccept(
                             reply -> {
                                 if (reply.isEmpty()) {

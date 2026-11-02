@@ -253,6 +253,7 @@ export interface ZLinkMessageFollowOrigin {
 }
 
 export interface ReceiveRecord {
+  readonly receivedAt?: Date;
   /** Resolve record prerequisites in owner order, outside an application handler turn. */
   readonly prepareDispatch?: (
     this: ReceiveRecord,

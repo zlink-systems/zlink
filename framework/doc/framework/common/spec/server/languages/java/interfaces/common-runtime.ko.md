@@ -235,6 +235,7 @@ public interface systems.zlink.framework.ZLinkMessageContext {
  public abstract java.util.Optional<java.lang.String> contentType();
  public abstract java.util.Map<java.lang.String, java.lang.String> metadata();
  public abstract java.util.Optional<java.lang.String> correlationId();
+ public abstract java.time.Instant receivedAt();
 }
 public final class systems.zlink.framework.ZLinkHandlerDispatchKind extends java.lang.Enum<systems.zlink.framework.ZLinkHandlerDispatchKind> {
  public static final systems.zlink.framework.ZLinkHandlerDispatchKind NODE_DIRECT_SEND;

@@ -1,5 +1,6 @@
 package systems.zlink.framework;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 
@@ -15,4 +16,6 @@ public interface ZLinkMessageContext {
     Map<String, String> metadata();
 
     Optional<String> correlationId();
+
+    Instant receivedAt();
 }
