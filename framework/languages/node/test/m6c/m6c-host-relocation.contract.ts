@@ -1414,7 +1414,7 @@ test('target-ready authority keeps aggregate, attempt and coordinator StoreVersi
   assert.equal(publication.coordinatorOwnerId, target.ownerId);
 });
 
-test('ActorJoin target invalidates a previous-owner Actor route before lifecycle and preserves post-open relay order', async () => {
+test('ActorJoin target keeps the route cache intact and preserves post-open relay order', async () => {
   const events: string[] = [];
   const actor = { context: { actorId: 'actor-join', meshName: 'mesh-a' } };
   const nativeRef = { actorId: 'actor-join', generation: 5n, nodeRid: 'target' };
@@ -1535,7 +1535,6 @@ test('ActorJoin target invalidates a previous-owner Actor route before lifecycle
     'route:closed',
     'publication:clear',
     'queue:merged',
-    'actorRoute:invalidated',
     'onJoined',
     'sourceLeave:submit',
     'sourceLeave:warning',
