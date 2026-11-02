@@ -4,6 +4,7 @@
 #include <zlink/Contracts/Core/routing_id.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <map>
 #include <optional>
@@ -68,6 +69,7 @@ struct message_context_t
     std::optional<std::string> content_type;
     message_metadata_t metadata;
     std::optional<std::string> correlation_id;
+    std::chrono::system_clock::time_point received_at = std::chrono::system_clock::now ();
 };
 
 /// Inbound context for event and Spot subscription handlers.

@@ -23,9 +23,10 @@ namespace
 framework::route_message_context_t
 make_route_message_context (const std::string &router_channel_id,
                             zlink::routing_id_t source_node_rid,
-                            runtime::messaging::envelope_header_t &header)
+                            runtime::messaging::envelope_header_t &header,
+                            std::chrono::system_clock::time_point received_at)
 {
-    framework::message_context_t base;
+    framework::message_context_t base{.received_at = received_at};
     base.mesh_name = router_channel_id;
     base.packet_name = header.message_name;
     base.content_type = header.content_type;
@@ -269,8 +270,8 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
           detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
             body, "route command body missing"));
     }
-    auto context =
-      make_route_message_context (_router_channel_id, received.source_node_rid, header);
+    auto context = make_route_message_context (_router_channel_id, received.source_node_rid, header,
+                                               received.received_at);
     const auto &filters = _filters != nullptr ? *_filters : empty_handler_filters ();
     auto before = _before_application_handler;
     if (message_flow_tracer_t (_dispatch_options).enabled_for (message_flow_outcome_t::dispatched))
@@ -373,8 +374,8 @@ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatc
         return task_t<std::optional<route_dispatch_reply_t>> (reply_route_error (
           _dispatch_options, _router_channel_id, _submit_reply, received, header, error));
     }
-    auto context =
-      make_route_message_context (_router_channel_id, received.source_node_rid, header);
+    auto context = make_route_message_context (_router_channel_id, received.source_node_rid, header,
+                                               received.received_at);
     const auto &filters = _filters != nullptr ? *_filters : empty_handler_filters ();
     auto before = _before_application_handler;
     if (message_flow_tracer_t (_dispatch_options).enabled_for (message_flow_outcome_t::dispatched))

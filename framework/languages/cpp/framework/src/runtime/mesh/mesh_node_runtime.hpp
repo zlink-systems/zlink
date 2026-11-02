@@ -427,7 +427,8 @@ class mesh_node_runtime_t
     task_t<std::size_t>
     dispatch_ready (runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
                     bool accept_application_receive = true,
-                    std::function<bool ()> next_application_receive = {});
+                    std::function<bool ()> next_application_receive = {},
+                    std::optional<zlink::poll_event_flag_t> readiness = {});
     host::node_status_t status () const;
     task_t<std::tuple<std::vector<std::string>, std::int32_t, std::int32_t>>
     monitoring_configuration_async () const;
@@ -615,6 +616,11 @@ class mesh_node_runtime_t
                                 Classified &&classified,
                                 Known &&known,
                                 Unknown &&unknown) -> decltype (known ());
+    void submit_node_request_reply (
+      const zlink::routing_id_t &target,
+      std::vector<zlink::message_t> parts,
+      std::chrono::milliseconds timeout,
+      request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
     void request_unknown_node_reply (
       zlink::routing_id_t target,
       std::vector<zlink::message_t> parts,

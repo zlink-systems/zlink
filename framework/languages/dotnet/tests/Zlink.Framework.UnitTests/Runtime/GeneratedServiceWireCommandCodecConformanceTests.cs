@@ -4,7 +4,9 @@ using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class GeneratedServiceWireCommandCodecConformanceTests
+public sealed class GeneratedServiceWireCommandCodecConformanceTests(
+    Xunit.Abstractions.ITestOutputHelper output
+)
 {
     private static readonly ServiceWireCodec.DecodeContext Context = new(
         null,
@@ -72,34 +74,151 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         Assert.Equal(bytes, ServiceWireCodec.EncodeU64(new(value), Context));
     }
 
-    [Fact]
-    public void Stateful_generated_codec_allocates_only_output_storage()
+    [Theory]
+    [InlineData(21)]
+    [InlineData(22)]
+    [InlineData(24)]
+    [InlineData(25)]
+    public void Stateful_generated_codec_allocates_only_retained_header_storage(int command)
     {
         using var fixture = ReadJson("golden/stateful-message-v1.json");
-        var frames = fixture
-            .RootElement.GetProperty("valid")[0]
-            .GetProperty("framesHex")
-            .EnumerateArray()
-            .Select(value => Convert.FromHexString(value.GetString()!))
-            .ToArray();
-        var decoded = ServiceWireCodec.DecodeSpotSend21(frames, Context);
-        var outputBytes = Allocated(() =>
-            new[] { new byte[frames[0].Length], new byte[frames[1].Length] }
+        var matched = 0;
+        foreach (var vector in fixture.RootElement.GetProperty("valid").EnumerateArray())
+        {
+            if (vector.GetProperty("commandId").GetInt32() != command)
+                continue;
+
+            matched++;
+            var header = Convert.FromHexString(vector.GetProperty("framesHex")[0].GetString()!);
+            switch (command)
+            {
+                case 21:
+                {
+                    var value = ServiceWireCodec.DecodeSpotSend21Header(header, Context);
+                    var retained =
+                        Allocated(() => new byte[value.TargetSpot.TargetNodeRid.Value.Length])
+                        + Allocated(() => new string('x', value.SourceSpotId.Value.Length))
+                        + Allocated(() =>
+                            new string('x', value.TargetSpot.Spot.SpotId.Value.Length)
+                        );
+                    AssertGeneratedHeaderAllocations(
+                        command,
+                        header,
+                        () => ServiceWireCodec.DecodeSpotSend21Header(header, Context),
+                        decoded => ServiceWireCodec.EncodeSpotSend21Header(decoded, Context),
+                        retained
+                    );
+                    break;
+                }
+                case 22:
+                {
+                    var value = ServiceWireCodec.DecodeSpotRequest22Header(header, Context);
+                    var retained =
+                        Allocated(() => new byte[value.TargetSpot.TargetNodeRid.Value.Length])
+                        + Allocated(() => new string('x', value.SourceSpotId.Value.Length))
+                        + Allocated(() =>
+                            new string('x', value.TargetSpot.Spot.SpotId.Value.Length)
+                        );
+                    AssertGeneratedHeaderAllocations(
+                        command,
+                        header,
+                        () => ServiceWireCodec.DecodeSpotRequest22Header(header, Context),
+                        decoded => ServiceWireCodec.EncodeSpotRequest22Header(decoded, Context),
+                        retained
+                    );
+                    break;
+                }
+                case 24:
+                {
+                    var value = ServiceWireCodec.DecodeActorSend24Header(header, Context);
+                    var retained = ActorHeaderRetainedBytes(
+                        value.TargetActor.TargetNodeRid.Value.Length,
+                        value.SourceActor.ActorId.Value,
+                        value.TargetActor.Actor.ActorId.Value,
+                        value.BoundSessionTail?.SourceSessionRid.Value.Length
+                    );
+                    AssertGeneratedHeaderAllocations(
+                        command,
+                        header,
+                        () => ServiceWireCodec.DecodeActorSend24Header(header, Context),
+                        decoded => ServiceWireCodec.EncodeActorSend24Header(decoded, Context),
+                        retained
+                    );
+                    break;
+                }
+                case 25:
+                {
+                    var value = ServiceWireCodec.DecodeActorRequest25Header(header, Context);
+                    var retained = ActorHeaderRetainedBytes(
+                        value.TargetActor.TargetNodeRid.Value.Length,
+                        value.SourceActor.ActorId.Value,
+                        value.TargetActor.Actor.ActorId.Value,
+                        value.BoundSessionTail?.SourceSessionRid.Value.Length
+                    );
+                    AssertGeneratedHeaderAllocations(
+                        command,
+                        header,
+                        () => ServiceWireCodec.DecodeActorRequest25Header(header, Context),
+                        decoded => ServiceWireCodec.EncodeActorRequest25Header(decoded, Context),
+                        retained
+                    );
+                    break;
+                }
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(command));
+            }
+        }
+
+        Assert.True(matched > 0, $"no golden vectors for command={command}");
+    }
+
+    private static long ActorHeaderRetainedBytes(
+        int targetNodeRidLength,
+        string? sourceActorId,
+        string targetActorId,
+        int? sourceSessionRidLength
+    )
+    {
+        var sourceActorBytes = sourceActorId is { } sourceId
+            ? Allocated(() => new string('x', sourceId.Length))
+            : 0;
+        var sourceSessionRidBytes = sourceSessionRidLength is { } ridLength
+            ? Allocated(() => new byte[ridLength])
+            : 0;
+        return Allocated(() => new byte[targetNodeRidLength])
+            + sourceActorBytes
+            + Allocated(() => new string('x', targetActorId.Length))
+            + sourceSessionRidBytes;
+    }
+
+    private void AssertGeneratedHeaderAllocations<T>(
+        int command,
+        byte[] header,
+        Func<T> decode,
+        Func<T, byte[]> encode,
+        long decodeOutputBytes
+    )
+    {
+        var value = decode();
+        Assert.Equal(header, encode(value));
+
+        var encodeOutputBytes = Allocated(() => new byte[header.Length]);
+        var encodeBytes = Allocated(() => encode(value));
+        var decodeBytes = Allocated(decode);
+        output.WriteLine(
+            $"command={command}, encode={encodeBytes / 1000} B/call "
+                + $"(output={encodeOutputBytes / 1000} B), "
+                + $"decode={decodeBytes / 1000} B/call "
+                + $"(retained={decodeOutputBytes / 1000} B)"
         );
-        var encodeBytes = Allocated(() => ServiceWireCodec.EncodeSpotSend21(decoded, Context));
-        // Decode owns the RID and payload bytes, and the decoded text strings.
-        var decodeOutputBytes =
-            Allocated(() => new byte[decoded.TargetSpot.TargetNodeRid.Value.Length])
-            + Allocated(() => new byte[decoded.Payload.Payload.Value.Length])
-            + Allocated(() => new string('x', decoded.SourceSpotId.Value.Length))
-            + Allocated(() => new string('x', decoded.TargetSpot.Spot.SpotId.Value.Length))
-            + Allocated(() => new string('x', decoded.Payload.PacketName.Value.Length))
-            + Allocated(() => new string('x', decoded.Payload.ContentType.Value.Length));
-        var decodeBytes = Allocated(() => ServiceWireCodec.DecodeSpotSend21(frames, Context));
-        Assert.True(encodeBytes <= outputBytes, $"encode={encodeBytes}, output={outputBytes}");
+
+        Assert.True(
+            encodeBytes <= encodeOutputBytes,
+            $"command={command}, encode={encodeBytes}, output={encodeOutputBytes}"
+        );
         Assert.True(
             decodeBytes <= decodeOutputBytes,
-            $"decode={decodeBytes}, output={decodeOutputBytes}"
+            $"command={command}, decode={decodeBytes}, retained={decodeOutputBytes}"
         );
     }
 

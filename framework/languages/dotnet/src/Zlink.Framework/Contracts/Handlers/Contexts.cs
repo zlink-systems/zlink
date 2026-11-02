@@ -13,4 +13,6 @@ public interface IZLinkMessageContext
     ZLinkMessageMetadata Metadata { get; }
 
     string? CorrelationId { get; }
+
+    DateTimeOffset ReceivedAt { get; }
 }

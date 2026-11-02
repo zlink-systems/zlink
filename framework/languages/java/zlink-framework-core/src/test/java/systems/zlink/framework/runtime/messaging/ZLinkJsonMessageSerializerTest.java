@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkJsonOptional;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ActorRefSnapshot;
 import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
@@ -257,6 +260,69 @@ final class ZLinkJsonMessageSerializerTest {
     }
 
     @Test
+    void applicationDtoRequiredPresenceMatchesSharedVectors() throws Exception {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        try (InputStream input =
+                getClass().getResourceAsStream("/framework-json-required-presence.txt")) {
+            if (input == null) {
+                throw new AssertionError("framework-json-required-presence fixture is missing");
+            }
+            for (String line :
+                    new String(input.readAllBytes(), StandardCharsets.UTF_8).split("\\R")) {
+                String[] parts = line.split("\\t", 2);
+                if (parts.length != 2) {
+                    continue;
+                }
+                boolean expectedValid = parts[0].equals("valid");
+                byte[] payload = parts[1].getBytes(StandardCharsets.UTF_8);
+                if (!expectedValid) {
+                    assertThrows(
+                            IllegalArgumentException.class,
+                            () ->
+                                    serializer.deserialize(
+                                            ZLinkEncodedPayload.from(payload),
+                                            RequiredPresenceRecord.class),
+                            parts[1]);
+                    continue;
+                }
+                RequiredPresenceRecord decoded =
+                        serializer.deserialize(
+                                ZLinkEncodedPayload.from(payload), RequiredPresenceRecord.class);
+                assertEquals(parts[1].contains("\"attempts\"") ? 12 : 0, decoded.attempts());
+            }
+        }
+    }
+
+    @Test
+    void javaConstructorParametersWithoutDefaultsRemainRequired() {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        byte[] validPayload = "{\"code\":\"present\"}".getBytes(StandardCharsets.UTF_8);
+        assertEquals(
+                "present",
+                serializer.deserialize(
+                                ZLinkEncodedPayload.from(validPayload),
+                                JavaConstructorPayload.class)
+                        .code);
+        byte[] payload = "{}".getBytes(StandardCharsets.UTF_8);
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        serializer.deserialize(
+                                ZLinkEncodedPayload.from(payload), JavaConstructorPayload.class));
+    }
+
+    @Test
+    void jsonPropertyNameDoesNotMakeRecordComponentOptional() {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        byte[] payload = "{\"accessToken\":null,\"accountId\":7}".getBytes(StandardCharsets.UTF_8);
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        serializer.deserialize(
+                                ZLinkEncodedPayload.from(payload), RequiredPresenceRecord.class));
+    }
+
+    @Test
     void enumFieldsUseNamesAndRejectOrdinals() {
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
         EnumPayload expected = new EnumPayload(ProfileReportReason.profile);
@@ -398,6 +464,21 @@ final class ZLinkJsonMessageSerializerTest {
             byte[] bytes,
             Object nullable,
             Map<String, Integer> labels) {}
+
+    record RequiredPresenceRecord(
+            @JsonProperty("code") String code,
+            String accessToken,
+            int accountId,
+            @ZLinkJsonOptional int attempts) {}
+
+    static final class JavaConstructorPayload {
+        private final String code;
+
+        @JsonCreator
+        JavaConstructorPayload(@JsonProperty("code") String code) {
+            this.code = code;
+        }
+    }
 
     enum GoldenState {
         Ready,

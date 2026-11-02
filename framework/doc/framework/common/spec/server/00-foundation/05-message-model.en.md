@@ -87,6 +87,12 @@ context provides the current message's nullable
 a message is sent to — PacketName, ContentType, immutable Metadata, and a nullable
 CorrelationId stored as UTF-8 bytes verbatim. CorrelationId is null on a send and non-null on a request.
 
+`receivedAt` is the UTC wall-clock time when Framework accepts the message submission. For a remote
+message, Framework records it immediately after accepting the packet and before submitting it to an
+Actor or Spot serial executor. For a local submission, Framework records the time it accepts the
+submission. This value is not a monotonic clock and doesn't change while the message waits in a later
+executor queue.
+
 MeshName is non-null on RouteMesh and Spot/Actor dispatch, and null on
 ClientServer/STREAM.
 
@@ -157,7 +163,9 @@ application payload cross a language boundary and decode to the same value.
 - Property order and insignificant whitespace carry no meaning.
 - Duplicate properties and missing required properties are rejected.
 - Unknown properties are ignored.
-- `null` is allowed only for values the contract declares nullable.
+- `null` is allowed only for values the contract declares nullable. An application DTO property is
+  required when it has no default. A nullable property is still rejected when missing, while an explicit
+  `null` is accepted when the property is nullable. The DTO declares a default to allow omission.
 - A signed or unsigned 64-bit integer is range-checked and represented as a decimal
   string with no leading zero.
 - An integer of 32 bits or fewer is represented as a JSON number with no fraction.
@@ -166,14 +174,30 @@ application payload cross a language boundary and decode to the same value.
 - Date, decimal, UUID, and language-specific custom types are not converted
   implicitly; they use the string or DTO specified by the contract.
 
+| Language declaration | Required | Omission allowed |
+|---|---|---|
+| C++ `dto_traits` | Every declared field. `std::optional<T>` permits null but does not change requiredness | Mark a field whose default-constructed DTO value is its default with `zlink::json::field(..., zlink::json::defaulted)` |
+| C# | A constructor parameter without a default | A constructor parameter with a declared default |
+| Java record | Every component | A component marked with `@ZLinkJsonOptional` |
+| Kotlin | A primary-constructor property without a default | A property with a declared default |
+| TypeScript | A property without `?`; definite-assignment `!` is also required | A property with `?` |
+
+Requiredness and nullability are independent. A defaulted non-nullable property uses its default when
+missing and rejects explicit `null`. A nullable property without a default accepts `null` and rejects
+omission.
+
+When an optional Java record component is omitted, a primitive component uses its Java default value
+and a reference component receives `null`.
+
 Where a specific framework DTO defines a stricter property set, that DTO contract
 takes precedence. For example, the global object reference in
 [§4](#4-global-object-reference-json) rejects unknown properties.
 
 Changing property or enum names, unknown/required-property handling, nullability,
 or numeric and byte representation is a breaking contract change because it changes
-cross-language decoding of an existing payload. The profile does not apply to
-opaque state bytes returned by an Actor or Spot relocation adapter.
+cross-language decoding of an existing payload. This revision also makes requiredness
+explicit and is breaking because it changes how earlier payloads decode. The profile does
+not apply to opaque state bytes returned by an Actor or Spot relocation adapter.
 
 ## 6. Application Metadata
 
