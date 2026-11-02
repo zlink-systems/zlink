@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using Zlink.Framework.Runtime.Execution;
 
@@ -63,7 +62,7 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
                 out var view
             )
         );
-        var lane = (ZLinkStateLane)Field("CacheLane");
+        var lane = ZLinkEnvelopeCodec.CacheLane;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _ = lane.RunAsync(async () =>
@@ -391,9 +390,4 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             null,
             null
         );
-
-    private static object Field(string name) =>
-        typeof(ZLinkEnvelopeCodec)
-            .GetField(name, BindingFlags.Static | BindingFlags.NonPublic)!
-            .GetValue(null)!;
 }

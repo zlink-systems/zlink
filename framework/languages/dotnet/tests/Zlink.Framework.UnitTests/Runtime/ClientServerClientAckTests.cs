@@ -1,5 +1,4 @@
 using System.Diagnostics.Tracing;
-using System.Reflection;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.UnitTests.Runtime;
@@ -16,15 +15,13 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         await fixture.Lane.RunAsync(() =>
         {
             using (ExecutionContext.SuppressFlow())
-                probe = (Task)
-                    fixture.Invoke(
-                        "RequestLivenessProbeAsync",
-                        47UL,
-                        1UL,
-                        new ZLinkServiceLiveness(TimeProvider.System.GetTimestamp()),
-                        fixture.AdmissionStop.Token
-                    )!;
-            fixture.Invoke("RegisterRequestTask", probe);
+                probe = fixture.Connection.RequestLivenessProbeAsync(
+                    47UL,
+                    1UL,
+                    new ZLinkServiceLiveness(TimeProvider.System.GetTimestamp()),
+                    fixture.AdmissionStop.Token
+                );
+            fixture.Connection.RegisterRequestTask(probe);
         });
         using var received = Received.Create();
         Assert.True(fixture.Router.Recv(received));
@@ -58,8 +55,8 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         );
         using var waits = new BlockingWaitListener(checkpoint);
         var poller = new TurnPoller(fixture.ReceiveStop, checkpoint, waits);
-        fixture.Set("_receivePoller", poller);
-        var ended = ((ValueTask)fixture.Invoke("RunControlLoop")!).AsTask();
+        fixture.Connection._receivePoller = poller;
+        var ended = fixture.Connection.RunControlLoop().AsTask();
         try
         {
             // The checkpoint is either the next receive turn or the actual synchronous
@@ -112,13 +109,13 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         var ack = ZLinkClientServerControlProtocol.EncodeLivenessAck(23);
         using var scheduling = new BlockingWaitListener(new TaskCompletionSource<bool>());
         scheduling.SubmitThread = Environment.CurrentManagedThreadId;
-        fixture.Invoke("StartControlAck", ack);
+        fixture.Connection.StartControlAck(ack);
         scheduling.SubmitThread = 0;
         Assert.Equal(0, scheduling.Scheduled);
         Assert.Equal(1, fixture.Dealer.Submissions);
         Assert.True(fixture.Dealer.SubmittedOnLane);
         Assert.Empty(await fixture.Lane.RunAsync(() => fixture.Requests.ToArray()));
-        Assert.Null(fixture.Get("_disposeTask"));
+        Assert.Null(fixture.Connection._disposeTask);
         Assert.Empty(fixture.Failures.Failures);
         using var received = Received.Create();
         Assert.True(fixture.Router.Recv(received));
@@ -144,7 +141,7 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         {
             // TryPost queues this after the current turn. A sentinel in the same FIFO
             // captures the observer before disposal can take the lane and close it.
-            fixture.Invoke("StartControlAck", ack);
+            fixture.Connection.StartControlAck(ack);
             fixture.Lane.TryPost(() => observers = fixture.Requests.ToArray());
         });
         await Task.WhenAll(observers);
@@ -178,13 +175,13 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
             using (ExecutionContext.SuppressFlow())
                 observer = releaseObserver
                     .Task.ContinueWith(
-                        _ => (Task)fixture.Invoke("ObserveControlAckAsync", failedSend, token)!,
+                        _ => fixture.Connection.ObserveControlAckAsync(failedSend, token),
                         CancellationToken.None,
                         TaskContinuationOptions.None,
                         TaskScheduler.Default
                     )
                     .Unwrap();
-            fixture.Invoke("RegisterRequestTask", observer);
+            fixture.Connection.RegisterRequestTask(observer);
         });
         Task? disposal = null;
         try
@@ -220,13 +217,13 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         if (laneAlreadyClosed)
         {
             await ((IAsyncDisposable)fixture.Connection).DisposeAsync();
-            fixture.Invoke("StartControlAck", ack);
+            fixture.Connection.StartControlAck(ack);
         }
         else
         {
             await fixture.Lane.RunAsync(() =>
             {
-                fixture.Invoke("StartControlAck", ack);
+                fixture.Connection.StartControlAck(ack);
                 disposal = ((IAsyncDisposable)fixture.Connection).DisposeAsync().AsTask();
             });
             await disposal;
@@ -250,14 +247,14 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         if (duringSubmit)
             fixture.Dealer.BeforeSubmit = () =>
                 disposal = ((IAsyncDisposable)fixture.Connection).DisposeAsync().AsTask();
-        fixture.Invoke("StartControlAck", ZLinkClientServerControlProtocol.EncodeLivenessAck(37));
+        fixture.Connection.StartControlAck(ZLinkClientServerControlProtocol.EncodeLivenessAck(37));
         Assert.Single(fixture.Requests);
         disposal ??= ((IAsyncDisposable)fixture.Connection).DisposeAsync().AsTask();
         await disposal;
         Assert.All(fixture.Requests, task => Assert.True(task.IsCompletedSuccessfully));
         Assert.True(fixture.AdmissionStop.IsCancellationRequested);
         Assert.True(fixture.ReceiveStop.IsCancellationRequested);
-        Assert.Equal("configured", fixture.Get("_diagnostics"));
+        Assert.Equal("configured", fixture.Connection._diagnostics);
         Assert.Empty(fixture.Failures.Failures);
     }
 
@@ -311,7 +308,7 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         await fixture.MakeReadyAsync();
         var expected = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
         fixture.Dealer.Failure = expected;
-        fixture.Invoke("StartControlAck", ZLinkClientServerControlProtocol.EncodeLivenessAck(41));
+        fixture.Connection.StartControlAck(ZLinkClientServerControlProtocol.EncodeLivenessAck(41));
         Task[] registered = [];
         Task? disposal = null;
         try
@@ -345,8 +342,7 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         using var received = Received.Create();
         Assert.True(fixture.Router.Recv(received));
         Assert.NotNull(received.ReplyToken);
-        fixture.Invoke(
-            "ReplyOwned",
+        ZLinkClientServerClientRuntime.Connection.ReplyOwned(
             received,
             ZLinkClientServerControlProtocol.EncodeLivenessAck(43)
         );
@@ -457,11 +453,7 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         internal readonly IRouterSocket Router;
         internal readonly AckDealer Dealer;
         internal readonly RoutingId Rid = RoutingId.From("ack-client");
-        internal readonly object Connection;
-        private readonly Type _type = typeof(ZLinkClientServerClientRuntime).GetNestedType(
-            "Connection",
-            BindingFlags.NonPublic
-        )!;
+        internal readonly ZLinkClientServerClientRuntime.Connection Connection;
         internal readonly CancellationTokenSource AdmissionStop = new();
         internal readonly CancellationTokenSource ReceiveStop;
         internal readonly AuditRuntimeFailureReporter Failures = new();
@@ -500,127 +492,73 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
                 );
             _deadlines = OuterRuntime is null
                 ? new(_deadlineOwner)
-                : (Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex)
-                    typeof(ZLinkClientServerClientRuntime)
-                        .GetField(
-                            "_requestDeadlines",
-                            BindingFlags.Instance | BindingFlags.NonPublic
-                        )!
-                        .GetValue(OuterRuntime)!;
-            Connection = Activator.CreateInstance(
-                _type,
-                BindingFlags.Instance | BindingFlags.NonPublic,
-                binder: null,
-                args:
-                [
-                    "work",
-                    endpoint,
-                    null,
-                    Dealer,
-                    CancellationToken.None,
-                    (Action<object, string>)((_, _) => { }),
-                    (Action<bool>)(_ => { }),
-                    TimeProvider.System,
-                    beforeReport is null ? Failures : new GatedReporter(Failures, beforeReport),
-                    new ZLinkRuntimeTaskRunner(Failures, CancellationToken.None),
-                    _deadlines,
-                ],
-                culture: null
-            )!;
-            Set("_admissionStop", AdmissionStop);
-            Lane = (ZLinkStateLane)Get("_lane")!;
-            Requests = (List<Task>)Get("_requestTasks")!;
-            ReceiveStop = (CancellationTokenSource)Get("_receiveStop")!;
+                : OuterRuntime._requestDeadlines;
+            Connection = new(
+                "work",
+                endpoint,
+                null,
+                Dealer,
+                CancellationToken.None,
+                (_, _) => { },
+                _ => { },
+                TimeProvider.System,
+                beforeReport is null ? Failures : new GatedReporter(Failures, beforeReport),
+                new ZLinkRuntimeTaskRunner(Failures, CancellationToken.None),
+                _deadlines
+            );
+            Connection._admissionStop = AdmissionStop;
+            Lane = Connection._lane;
+            Requests = Connection._requestTasks;
+            ReceiveStop = Connection._receiveStop;
             if (OuterRuntime is not null)
-                (
-                    (System.Collections.IDictionary)
-                        typeof(ZLinkClientServerClientRuntime)
-                            .GetField(
-                                "_connections",
-                                BindingFlags.Instance | BindingFlags.NonPublic
-                            )!
-                            .GetValue(OuterRuntime)!
-                ).Add(endpoint, Connection);
+                OuterRuntime._connections.Add(endpoint, Connection);
         }
-
-        internal object? Get(string name) =>
-            _type
-                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(Connection);
-
-        internal void Set(string name, object value) =>
-            _type
-                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-                .SetValue(Connection, value);
 
         internal void DrainCompletion() =>
             _completions.Wait(new PollEvent[1], Timeout.InfiniteTimeSpan);
-
-        internal object? Invoke(string name, params object[] args)
-        {
-            try
-            {
-                return _type
-                    .GetMethod(
-                        name,
-                        BindingFlags.Instance | BindingFlags.Static | BindingFlags.NonPublic
-                    )!
-                    .Invoke(Connection, args);
-            }
-            catch (TargetInvocationException error) when (error.InnerException is not null)
-            {
-                System
-                    .Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerException)
-                    .Throw();
-                throw;
-            }
-        }
 
         internal Task RegisterObserver(Task send)
         {
             Task observer;
             using (ExecutionContext.SuppressFlow())
-                observer = (Task)Invoke("ObserveControlAckAsync", send, AdmissionStop.Token)!;
-            Invoke("RegisterRequestTask", observer);
+                observer = Connection.ObserveControlAckAsync(send, AdmissionStop.Token);
+            Connection.RegisterRequestTask(observer);
             return observer;
         }
 
-        internal Task Disposal => (Task)Get("_disposeTask")!;
+        internal Task Disposal => Connection._disposeTask!;
 
         internal async Task MakeReadyAsync()
         {
             await Lane.RunAsync(() =>
             {
-                Set("_admissionCompleted", true);
-                Set(
-                    "_admittedDescriptor",
-                    new ZLinkClientServerControlProtocol.Admission(
-                        "work",
-                        RoutingId.From("server"),
-                        1,
-                        1,
-                        100,
-                        ZLinkFrameworkRuntimeState.Serving,
-                        "plaintext",
-                        4096,
-                        "inproc://fixture"
-                    )
+                Connection._admissionCompleted = true;
+                Connection._admittedDescriptor = new ZLinkClientServerControlProtocol.Admission(
+                    "work",
+                    RoutingId.From("server"),
+                    1,
+                    1,
+                    100,
+                    ZLinkFrameworkRuntimeState.Serving,
+                    "plaintext",
+                    4096,
+                    "inproc://fixture"
                 );
-                Set("_ready", true);
-                Set("_weight", 1);
-                Invoke("PublishReadyTargetUnderLock");
+                Connection._ready = true;
+                Connection._weight = 1;
+                Connection.PublishReadyTargetUnderLock();
             });
-            Assert.NotNull(Get("_readyTarget"));
+            Assert.NotNull(Connection.ReadyTarget);
         }
 
         internal void AssertControlFailure(Exception expected)
         {
             Assert.Same(expected, Assert.Single(Failures.Failures));
-            Assert.Equal(false, Get("_ready"));
-            Assert.Null(Get("_readyTarget"));
+            Assert.Equal(false, Connection._ready);
+            Assert.Null(Connection.ReadyTarget);
             Assert.Equal(
                 $"control:{expected.GetType().Name}:{expected.Message}",
-                Get("_diagnostics")
+                Connection._diagnostics
             );
             Assert.True(Disposal.IsCompletedSuccessfully);
             Assert.Equal(1, Dealer.Closes);
@@ -654,12 +592,7 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
                 {
                     if (Dealer.Closes == 0)
                         await Dealer.DisposeAsync();
-                    await (
-                        (ZLinkStateLane)
-                            typeof(ZLinkClientServerClientRuntime)
-                                .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
-                                .GetValue(OuterRuntime)!
-                    ).DisposeAsync();
+                    await OuterRuntime._lane.DisposeAsync();
                     await _deadlineOwner.DisposeAsync();
                     _completions.Dispose();
                     Router.Dispose();

@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -45,33 +44,34 @@ public sealed class MeshChannelSelectionHotPathTests
             new Dictionary<byte, byte[]>(),
             []
         );
-        var process = typeof(ZLinkManagedMeshNode).GetMethod(
-            "ProcessAdmissionCore",
-            BindingFlags.Instance | BindingFlags.NonPublic
-        )!;
-        process.Invoke(node, [rid, 1UL, ServiceWireConstants.Command.Hello, admission, null]);
+        Action<
+            RoutingId,
+            ulong,
+            ServiceWireConstants.Command,
+            ZLinkServiceWireCodec.AdmissionRecord,
+            SendOperation?
+        > process = node.ProcessAdmissionCore;
+        process(rid, 1UL, ServiceWireConstants.Command.Hello, admission, null);
         // Transport liveness §5: local registration does not establish send readiness.
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.Unknown,
             node.ClassifyLiveRouterTarget(rid)
         );
         AssertDirectPeerPublished(node, rid);
-        process.Invoke(node, [rid, 1UL, ServiceWireConstants.Command.Admit, admission, null]);
+        process(rid, 1UL, ServiceWireConstants.Command.Admit, admission, null);
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.ReadyEligible,
             node.ClassifyLiveRouterTarget(rid)
         );
         AssertDirectPeerPublished(node, rid);
         var draining = admission with { DescriptorRevision = 2, RuntimeState = 2 };
-        process.Invoke(node, [rid, 1UL, ServiceWireConstants.Command.Update, draining, null]);
+        process(rid, 1UL, ServiceWireConstants.Command.Update, draining, null);
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.Unknown,
             node.ClassifyLiveRouterTarget(rid)
         );
         AssertDirectPeerPublished(node, rid);
-        Method<Func<RouterRoute, RoutingId?>>(node, "EndRouteAdmissionUnderLock")(
-            new RouterRoute(rid, 1)
-        );
+        node.EndRouteAdmissionUnderLock(new RouterRoute(rid, 1));
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.Unknown,
             node.ClassifyLiveRouterTarget(rid)
@@ -82,13 +82,13 @@ public sealed class MeshChannelSelectionHotPathTests
             LifecycleGeneration = 2,
             ObjectRole = (byte)ZLinkMeshNodeObjectRole.Client,
         };
-        process.Invoke(node, [rid, 2UL, ServiceWireConstants.Command.Hello, client, null]);
+        process(rid, 2UL, ServiceWireConstants.Command.Hello, client, null);
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.ObjectClientTarget,
             node.ClassifyLiveRouterTarget(rid)
         );
         AssertDirectPeerPublished(node, rid);
-        process.Invoke(node, [rid, 2UL, ServiceWireConstants.Command.Admit, client, null]);
+        process(rid, 2UL, ServiceWireConstants.Command.Admit, client, null);
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.ObjectClientTarget,
             node.ClassifyLiveRouterTarget(rid)
@@ -99,17 +99,14 @@ public sealed class MeshChannelSelectionHotPathTests
             DescriptorRevision = client.DescriptorRevision + 1,
             ObjectRole = (byte)ZLinkMeshNodeObjectRole.Server,
         };
-        process.Invoke(
-            node,
-            [rid, 2UL, ServiceWireConstants.Command.Update, invalidRoleUpdate, null]
-        );
+        process(rid, 2UL, ServiceWireConstants.Command.Update, invalidRoleUpdate, null);
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.Unknown,
             node.ClassifyLiveRouterTarget(rid)
         );
         AssertDirectPeerPublished(node, rid);
         var replacement = admission with { LifecycleGeneration = 3 };
-        process.Invoke(node, [rid, 3UL, ServiceWireConstants.Command.Admit, replacement, null]);
+        process(rid, 3UL, ServiceWireConstants.Command.Admit, replacement, null);
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.ReadyEligible,
             node.ClassifyLiveRouterTarget(rid)
@@ -130,8 +127,8 @@ public sealed class MeshChannelSelectionHotPathTests
         await using var node = new ZLinkManagedMeshNode(context, "classification-turn");
         var peer = AddReadyPeer(node);
         peer.State = MeshPeerState.Admitted;
-        Method<Action>(node, "RebuildChannelSelectionPlansUnderLock")();
-        var lane = Field<ZLinkStateLane>(node, "_lane");
+        node.RebuildChannelSelectionPlansUnderLock();
+        var lane = node._lane;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var held = lane.RunAsync(async () =>
@@ -173,13 +170,13 @@ public sealed class MeshChannelSelectionHotPathTests
             node.ClassifyLiveRouterTarget(peer.RoutingId)
         );
         peer.State = MeshPeerState.Admitted;
-        Method<Action>(node, "RebuildChannelSelectionPlansUnderLock")();
+        node.RebuildChannelSelectionPlansUnderLock();
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.ReadyEligible,
             node.ClassifyLiveRouterTarget(peer.RoutingId)
         );
         peer.State = MeshPeerState.Configured;
-        Method<Action>(node, "RebuildChannelSelectionPlansUnderLock")();
+        node.RebuildChannelSelectionPlansUnderLock();
         Assert.Equal(
             ZLinkRouteMeshTargetClassification.Unknown,
             node.ClassifyLiveRouterTarget(peer.RoutingId)
@@ -208,8 +205,8 @@ public sealed class MeshChannelSelectionHotPathTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, "selection");
         var peer = AddReadyPeer(node);
-        var select = Method<SelectTarget>(node, "TrySelectChannelTarget");
-        var wait = Method<WaitForTarget>(node, "WaitForChannelTargetAsync");
+        SelectTarget select = node.TrySelectChannelTarget;
+        WaitForTarget wait = node.WaitForChannelTargetAsync;
         var terminal = new TaskCompletionSource().Task;
         using var cancellation = new CancellationTokenSource();
 
@@ -248,13 +245,12 @@ public sealed class MeshChannelSelectionHotPathTests
         await using var node = new ZLinkManagedMeshNode(context, "selection");
         var peer = AddReadyPeer(node);
         var originalPhysical = peer.PhysicalRoutingId;
-        var wait = Method<WaitForTarget>(node, "WaitForChannelTargetAsync");
+        WaitForTarget wait = node.WaitForChannelTargetAsync;
         var terminal = new TaskCompletionSource().Task;
         var selected = await wait("worker", terminal, CancellationToken.None);
 
         peer.PhysicalRoutingId = RoutingId.From("replacement-physical");
-        Field<ZLinkMeshChannelSelection>(node, "_channelSelection")
-            .PrepareRouterTargets(Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid"));
+        node._channelSelection.PrepareRouterTargets(node._peersByRid);
 
         Assert.Equal(peer.RoutingId, selected.TargetRid);
         Assert.Equal(originalPhysical, selected.PhysicalRid);
@@ -311,14 +307,13 @@ public sealed class MeshChannelSelectionHotPathTests
                 .NativeNode;
             AddPeer(node, "stale-peer", admitted: false);
             AddPeer(node, "observer-peer", admitted: true);
-            Field<ZLinkMeshChannelSelection>(node, "_channelSelection")
-                .Rebuild(
-                    ["worker", "observer"],
-                    channel =>
-                        channel == "worker"
-                            ? [new ZLinkMeshChannelTarget(RoutingId.From("stale-peer"), 1)]
-                            : [new ZLinkMeshChannelTarget(RoutingId.From("observer-peer"), 1)]
-                );
+            node._channelSelection.Rebuild(
+                ["worker", "observer"],
+                channel =>
+                    channel == "worker"
+                        ? [new ZLinkMeshChannelTarget(RoutingId.From("stale-peer"), 1)]
+                        : [new ZLinkMeshChannelTarget(RoutingId.From("observer-peer"), 1)]
+            );
 
             using var payload = Message.From("payload");
             node.Publish(
@@ -419,7 +414,7 @@ public sealed class MeshChannelSelectionHotPathTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, "selection");
         node.ConnectPeer("inproc://selection-not-started", RoutingId.From("pending-peer"));
-        var wait = Method<WaitForTarget>(node, "WaitForChannelTargetAsync");
+        WaitForTarget wait = node.WaitForChannelTargetAsync;
         var terminal = new TaskCompletionSource().Task;
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
@@ -451,11 +446,8 @@ public sealed class MeshChannelSelectionHotPathTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, "direct-peer-turn");
         var peer = AddReadyPeer(node);
-        var require = Method<Func<RoutingId, ulong, ZLinkMeshDirectPeer>>(
-            node,
-            "RequireDirectPeer"
-        );
-        var lane = Field<ZLinkStateLane>(node, "_lane");
+        Func<RoutingId, ulong, ZLinkMeshDirectPeer> require = node.RequireDirectPeer;
+        var lane = node._lane;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var held = lane.RunAsync(async () =>
@@ -503,19 +495,16 @@ public sealed class MeshChannelSelectionHotPathTests
             RouteGeneration = 7,
             LifecycleGeneration = 1,
         };
-        var peers = Field<Dictionary<RoutingId, ZLinkMeshPeer>>(source, "_peersByRid");
-        await Field<ZLinkStateLane>(source, "_lane")
-            .RunAsync(() =>
-            {
-                peers.Add(targetRid, peer);
-                Field<ZLinkMeshChannelSelection>(source, "_channelSelection")
-                    .PrepareRouterTargets(peers);
-                Field<ZLinkMeshSelectedRoutes>(source, "_selectedRoutes")
-                    .Apply([new RouterRoute(targetRid, 7)]);
-                // The peer object moved to a new physical route after the view
-                // was published.
-                peer.PhysicalRoutingId = RoutingId.From("prepare-route-new");
-            });
+        var peers = source._peersByRid;
+        await source._lane.RunAsync(() =>
+        {
+            peers.Add(targetRid, peer);
+            source._channelSelection.PrepareRouterTargets(peers);
+            source._selectedRoutes.Apply([new RouterRoute(targetRid, 7)]);
+            // The peer object moved to a new physical route after the view
+            // was published.
+            peer.PhysicalRoutingId = RoutingId.From("prepare-route-new");
+        });
         var payload = ZLinkRelocationTransferPayload.Create(
             new ZLinkRelocationEnvelope(
                 Guid.NewGuid(),
@@ -569,11 +558,8 @@ public sealed class MeshChannelSelectionHotPathTests
     // table holds, so a send that reads the view sees what a node turn would.
     private static void AssertDirectPeerPublished(ZLinkManagedMeshNode node, RoutingId rid)
     {
-        var published = Field<ZLinkMeshChannelSelection>(node, "_channelSelection").DirectPeer(rid);
-        if (
-            !Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid")
-                .TryGetValue(rid, out var peer)
-        )
+        var published = node._channelSelection.DirectPeer(rid);
+        if (!node._peersByRid.TryGetValue(rid, out var peer))
         {
             Assert.Null(published);
             return;
@@ -593,9 +579,9 @@ public sealed class MeshChannelSelectionHotPathTests
             PhysicalRoutingId = RoutingId.From("physical-peer"),
             Admitted = true,
         };
-        var peers = Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid");
+        var peers = node._peersByRid;
         peers.Add(peer.RoutingId, peer);
-        var selection = Field<ZLinkMeshChannelSelection>(node, "_channelSelection");
+        var selection = node._channelSelection;
         // The node publishes peer facts at every peer change; this fixture
         // changes the peer table directly, so it publishes them the same way.
         selection.PrepareRouterTargets(peers);
@@ -611,21 +597,9 @@ public sealed class MeshChannelSelectionHotPathTests
             PhysicalRoutingId = RoutingId.From($"physical-{routingId}"),
             Admitted = admitted,
         };
-        Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid").Add(peer.RoutingId, peer);
+        node._peersByRid.Add(peer.RoutingId, peer);
         return peer;
     }
-
-    private static T Method<T>(ZLinkManagedMeshNode node, string name)
-        where T : Delegate =>
-        typeof(ZLinkManagedMeshNode)
-            .GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-            .CreateDelegate<T>(node);
-
-    private static T Field<T>(ZLinkManagedMeshNode node, string name) =>
-        (T)
-            typeof(ZLinkManagedMeshNode)
-                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(node)!;
 
     private sealed class GatedManagedBackendAdapterFactory(GatedTaskScheduler scheduler)
         : IZLinkBackendAdapterFactory
