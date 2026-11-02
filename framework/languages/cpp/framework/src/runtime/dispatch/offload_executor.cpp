@@ -37,6 +37,7 @@ const offload_executor_t *offload_executor_t::current_worker_executor () noexcep
 {
     return _current_worker_executor;
 }
+
 #endif
 
 offload_executor_t::offload_executor_t (std::size_t worker_count, std::string thread_name) :
