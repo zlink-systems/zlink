@@ -74,10 +74,12 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     void visit_relocation_nodes (
       const std::function<void (const std::shared_ptr<detail::mesh_node_runtime_t> &)> &visitor)
       const override;
-    bool republish_after_store_recovery (
-      location_write_intent_t intent = location_write_intent_t::new_claim);
+    task_t<bool> republish_after_store_recovery (location_write_intent_t intent,
+                                                 std::stop_token cancellation,
+                                                 std::chrono::steady_clock::time_point deadline);
 
   private:
+    friend struct mesh_node_host_service_test_access_t;
     struct actor_destroy_callback_gate_t;
     struct node_receive_role_t;
 

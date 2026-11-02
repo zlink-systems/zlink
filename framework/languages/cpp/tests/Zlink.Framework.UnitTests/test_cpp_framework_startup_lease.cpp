@@ -343,7 +343,7 @@ TEST (ZLinkFrameworkStartupLease, PreparingUntilServingDescriptorIsStored)
     // Rejected publication cannot count as completion merely because a lease exists.
     auto *fanout_runtime = fanout_future.get ();
     ASSERT_NE (nullptr, fanout_runtime);
-    EXPECT_FALSE (fanout_runtime->republish_after_store_recovery ());
+    EXPECT_FALSE (fanout_runtime->republish_after_store_recovery ().result ().value ());
     EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
     EXPECT_FALSE (app.is_ready ());
     store->reject_fanout.store (false);
@@ -351,7 +351,7 @@ TEST (ZLinkFrameworkStartupLease, PreparingUntilServingDescriptorIsStored)
     ready.wait ();
     EXPECT_TRUE (app.is_ready ());
     const auto published_claims = store->fanout_claims.load ();
-    EXPECT_TRUE (fanout_runtime->republish_after_store_recovery ());
+    EXPECT_TRUE (fanout_runtime->republish_after_store_recovery ().result ().value ());
     EXPECT_EQ (published_claims, store->fanout_claims.load ());
     const auto descriptors = store->list_mesh_nodes ("startup-lease").result ().value ();
     EXPECT_EQ (1u, descriptors.items.size ());
