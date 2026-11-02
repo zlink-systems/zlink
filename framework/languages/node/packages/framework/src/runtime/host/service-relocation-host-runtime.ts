@@ -2799,7 +2799,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
   }
 
-  private startSourceRelocationMetric(
+  startSourceRelocationMetric(
     meshName: string,
     objectKind: 'actor' | 'user_spot' | 'instance_spot',
     policy: 'recreate' | 'snapshot',
