@@ -887,7 +887,7 @@ class route_client_t
            target_node_rid = std::move (target_node_rid),
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
                            const channel_request_call_t::metadata_map_t &metadata,
-                           detail::request_receiver_t<zlink::message_t> receiver) {
+                           detail::request_receiver_t<encoded_payload_t> receiver) {
               auto encode_payload = [request_value] (serializer_registry_t &serializers) {
                   return serializers.template get<TRequest> ().serialize_with_content_type (
                     *request_value);
@@ -999,7 +999,7 @@ class route_client_t
                                          payload_encoder_t encode_payload,
                                          std::chrono::milliseconds timeout,
                                          std::map<std::string, std::string> metadata,
-                                         detail::request_receiver_t<zlink::message_t> receiver);
+                                         detail::request_receiver_t<encoded_payload_t> receiver);
 
     static request_task_t<zlink::message_t> submit_channel_request_reply_message_erased (
       const std::shared_ptr<detail::route_client_state_t> &state,

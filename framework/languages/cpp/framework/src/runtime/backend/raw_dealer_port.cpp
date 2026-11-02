@@ -179,8 +179,12 @@ try {
     if (!stages) {
         return source->task ();
     }
-    observe_request_completion (std::move (*stages), source, std::move (admission), admitted,
-                                _requests, id);
+    observe_request_completion (
+      std::move (*stages),
+      [source] (result_t<raw_request_completion_t> completion) {
+          source->complete (std::move (completion));
+      },
+      std::move (admission), admitted, _requests, id);
     return source->task ();
 }
 catch (...) {
