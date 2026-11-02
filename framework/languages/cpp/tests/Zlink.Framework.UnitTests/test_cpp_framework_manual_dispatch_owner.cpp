@@ -345,6 +345,11 @@ struct native_manual_fixture_t
         handler->release_first.complete (fw::result_t<void>::success ());
         if (held)
             held->run_all ();
+        stop ();
+    }
+
+    void stop ()
+    {
         stopping.store (true, std::memory_order_release);
         server->signal_activity ();
         if (receiver.joinable ())
@@ -654,6 +659,10 @@ TEST (ManualDispatchOwner, NativeFailureMatrixSettlesPermitsScopesAndOriginalRep
             EXPECT_TRUE (header.value ().error_code.has_value ());
     }
     EXPECT_TRUE (fixture.executor->drain_until (std::chrono::steady_clock::now () + 2s));
+    // Result publication precedes coroutine parameter destruction. Join the
+    // completion turns before observing the permits retained by those parameters.
+    fixture.stop ();
+    fixture.completion_owner.close ();
     EXPECT_EQ (0u, fixture.jobs->snapshot ().queued_application_jobs);
     EXPECT_EQ (5, state.scopes_destroyed.load ());
     {
