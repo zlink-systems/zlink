@@ -880,43 +880,45 @@ void trace_instance_spot_activation (
   std::optional<zlink::framework::message_flow_result_t> result = std::nullopt,
   std::optional<zlink::framework::message_flow_reason_t> reason = std::nullopt)
 {
-    zlink::framework::detail::message_flow_tracer_t (dispatch).trace (outcome, result, [&] {
-        zlink::framework::message_flow_event_t event{
-          outcome,
-          zlink::framework::dispatch_error_surface_t::instance_spot,
-          message_kind,
-          context.packet_name,
-          std::nullopt,
-          std::nullopt,
-          context.correlation_id,
-          std::nullopt,
-          std::string (context.spot_id),
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          std::exception_ptr{},
-          std::nullopt,
-          std::nullopt};
-        if (flow && !flow->flow_id.empty ()) {
-            event.flow_id = flow->flow_id;
-            event.flow_origin = flow->origin;
-        }
-        event.mesh_name = context.mesh_name;
-        event.target_rid = context.target_node.to_string ();
-        event.instance_spot_type = context.instance_spot_type;
-        event.activation_state =
-          outcome == zlink::framework::message_flow_outcome_t::reply_received
-              && (!result || *result == zlink::framework::message_flow_result_t::succeeded)
-            ? "ready"
-            : "activating";
-        event.source_mesh_generation = context.source_node_generation;
-        if (result)
-            event.result = *result;
-        if (reason)
-            event.reason = *reason;
-        return event;
-    });
+    if (zlink::framework::detail::message_flow_tracer_t (dispatch).enabled_for (outcome, result)) {
+        zlink::framework::detail::message_flow_tracer_t (dispatch).trace (outcome, result, [&] {
+            zlink::framework::message_flow_event_t event{
+              outcome,
+              zlink::framework::dispatch_error_surface_t::instance_spot,
+              message_kind,
+              context.packet_name,
+              std::nullopt,
+              std::nullopt,
+              context.correlation_id,
+              std::nullopt,
+              std::string (context.spot_id),
+              std::nullopt,
+              std::nullopt,
+              std::nullopt,
+              std::nullopt,
+              std::exception_ptr{},
+              std::nullopt,
+              std::nullopt};
+            if (flow && !flow->flow_id.empty ()) {
+                event.flow_id = flow->flow_id;
+                event.flow_origin = flow->origin;
+            }
+            event.mesh_name = context.mesh_name;
+            event.target_rid = context.target_node.to_string ();
+            event.instance_spot_type = context.instance_spot_type;
+            event.activation_state =
+              outcome == zlink::framework::message_flow_outcome_t::reply_received
+                  && (!result || *result == zlink::framework::message_flow_result_t::succeeded)
+                ? "ready"
+                : "activating";
+            event.source_mesh_generation = context.source_node_generation;
+            if (result)
+                event.result = *result;
+            if (reason)
+                event.reason = *reason;
+            return event;
+        });
+    }
 }
 
 zlink::framework::result_t<void> one_way_native_submit_result (zlink::submit_result_t result,
@@ -983,13 +985,15 @@ zlink::framework::task_t<zlink::framework::result_t<void>> send_bound_session_fr
                                                "Actor bound Session route is not ready");
         }
         const auto local = application_mesh->native_node ().status ();
-        actor_gateway_runtime.trace_bound_session_send_stage (
-          actor.actor_id ().value (), "actor_owner_push_target",
-          [&] {
-              return "session_rid=" + route->session_rid->to_hex ()
-                     + " binding_generation=" + std::to_string (route->binding_generation);
-          },
-          &*route->session_rid);
+        if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+            actor_gateway_runtime.trace_bound_session_send_stage (
+              actor.actor_id ().value (), "actor_owner_push_target",
+              [&] {
+                  return "session_rid=" + route->session_rid->to_hex ()
+                         + " binding_generation=" + std::to_string (route->binding_generation);
+              },
+              &*route->session_rid);
+        }
         const auto local_actor = detail::actor_ref_access_t::make (
           node_rid_t::from_string (local.routing_id ().to_string ()),
           std::string (detail::actor_ref_access_t::actor_type (actor)),
@@ -2638,13 +2642,16 @@ void app_t::_apply_zlink_framework ()
                     zlink::routing_id_t::from (bind.actor.target_node_routing_id).to_string ()),
                   {}, bind.actor.actor_id, bind.actor.object_generation);
                 const auto session_rid = zlink::routing_id_t::from (bind.session_routing_id);
-                actor_gateway_runtime.trace_bound_session_send_stage (
-                  bind.actor.actor_id, "bound_session_bind_receive",
-                  [&] {
-                      return "new_session_rid=" + session_rid.to_hex () + " new_binding_generation="
-                             + std::to_string (bind.binding.generation);
-                  },
-                  &session_rid);
+                if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+                    actor_gateway_runtime.trace_bound_session_send_stage (
+                      bind.actor.actor_id, "bound_session_bind_receive",
+                      [&] {
+                          return "new_session_rid=" + session_rid.to_hex ()
+                                 + " new_binding_generation="
+                                 + std::to_string (bind.binding.generation);
+                      },
+                      &session_rid);
+                }
                 if (bind.binding.state
                     == runtime::protocol::bound_session_binding_state_t::tombstone) {
                     const auto retired = actor_gateway_runtime.retire_bound_session_route (
@@ -2728,14 +2735,16 @@ void app_t::_apply_zlink_framework ()
                 }
                 std::optional<runtime::protocol::bound_session_replaced_t> replacement;
                 const auto &change = transition.value ();
-                actor_gateway_runtime.trace_bound_session_send_stage (
-                  bind.actor.actor_id, "actor_owner_route_publish",
-                  [&] {
-                      return "session_rid=" + session_rid.to_hex ()
-                             + " binding_generation=" + std::to_string (bind.binding.generation)
-                             + " replaced=" + (change.changed ? "true" : "false");
-                  },
-                  &session_rid);
+                if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+                    actor_gateway_runtime.trace_bound_session_send_stage (
+                      bind.actor.actor_id, "actor_owner_route_publish",
+                      [&] {
+                          return "session_rid=" + session_rid.to_hex ()
+                                 + " binding_generation=" + std::to_string (bind.binding.generation)
+                                 + " replaced=" + (change.changed ? "true" : "false");
+                      },
+                      &session_rid);
+                }
                 if (change.changed && change.previous && change.previous->session_rid
                     && change.previous->node_generation != 0
                     && change.previous->binding_generation != 0
@@ -2759,13 +2768,15 @@ void app_t::_apply_zlink_framework ()
                 auto actor_gateway_runtime = detail::actor_gateway_runtime_t (
                   detail::lock_runtime_owner (weak_actor_gateway_runtime));
                 try {
-                    actor_gateway_runtime.trace_bound_session_send_stage (
-                      send.actor.actor_id, "session_node_receive",
-                      [&] {
-                          return "binding_generation="
-                                 + std::to_string (send.expected_binding_generation);
-                      },
-                      nullptr);
+                    if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+                        actor_gateway_runtime.trace_bound_session_send_stage (
+                          send.actor.actor_id, "session_node_receive",
+                          [&] {
+                              return "binding_generation="
+                                     + std::to_string (send.expected_binding_generation);
+                          },
+                          nullptr);
+                    }
                     const auto actor = detail::actor_ref_access_t::make (
                       node_rid_t::from_string (
                         zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()),
@@ -2808,13 +2819,15 @@ void app_t::_apply_zlink_framework ()
             -> std::optional<runtime::host::bound_session_operations_t::delivery_capability_t> {
                 auto actor_gateway_runtime = detail::actor_gateway_runtime_t (
                   detail::lock_runtime_owner (weak_actor_gateway_runtime));
-                actor_gateway_runtime.trace_bound_session_send_stage (
-                  send.actor.actor_id, "session_node_receive",
-                  [&] {
-                      return "binding_generation="
-                             + std::to_string (send.expected_binding_generation);
-                  },
-                  nullptr);
+                if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+                    actor_gateway_runtime.trace_bound_session_send_stage (
+                      send.actor.actor_id, "session_node_receive",
+                      [&] {
+                          return "binding_generation="
+                                 + std::to_string (send.expected_binding_generation);
+                      },
+                      nullptr);
+                }
                 const auto actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (
                     zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()),
