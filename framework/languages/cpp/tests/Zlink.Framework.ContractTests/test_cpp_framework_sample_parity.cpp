@@ -32,6 +32,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
@@ -308,26 +309,24 @@ void check_bingo_observer_join (std::optional<zlink::framework::framework_error_
     actor_gateway_runtime_t gateway (gateway_state);
     actor_ref_t actor_ref (actor_id_t ("observer"), 1, sample_names_t::room_spot_mesh,
                            node_rid_t::from_string ("play"));
-    std::vector<std::string> packets;
+    std::atomic_size_t packet_count{0};
     std::promise<void> delivered;
     auto delivery = delivered.get_future ();
     ASSERT_TRUE (gateway.bind_session_sink (
       actor_ref,
       [&] (std::string packet, stream_codec_t, const zlink::message_t &body) -> task_t<void> {
-          packets.push_back (packet);
-          if (packets.size () == 1)
+          (void) packet;
+          const auto count = packet_count.fetch_add (1, std::memory_order_acq_rel) + 1;
+          if (count == 1) {
               EXPECT_EQ (serializers.get<bingo_observation_state_notify_t> ()
                            .deserialize (encoded_payload_from_raw (body))
                            .state ()
                            .status (),
                          bingo_room_status_t::finished);
-          else
-              EXPECT_EQ (serializers.get<bingo_reward_announced_notify_t> ()
-                           .deserialize (encoded_payload_from_raw (body))
-                           .actor_id (),
-                         "winner");
-          if (packets.size () == 2)
               delivered.set_value ();
+          } else {
+              ADD_FAILURE () << "finished-room observer join must not send reward compensation";
+          }
           co_return;
       }));
     player_actor_t actor;
@@ -350,12 +349,12 @@ void check_bingo_observer_join (std::optional<zlink::framework::framework_error_
     state->drain_serial ();
     if (!failure)
         ASSERT_EQ (delivery.wait_for (std::chrono::seconds (1)), std::future_status::ready);
-    EXPECT_EQ (packets.size (), failure ? 0 : 2);
+    EXPECT_EQ (packet_count.load (std::memory_order_acquire), failure ? 0 : 1);
     state->spot_instance.reset ();
 }
 } // namespace
 
-TEST (CppFrameworkSampleParity, BingoLiveRoomDeliversConfirmedRewardAfterObserverJoin)
+TEST (CppFrameworkSampleParity, BingoFinishedRoomObserverGetsSnapshotWithoutRewardCompensation)
 {
     check_bingo_observer_join (std::nullopt);
 }
