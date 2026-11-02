@@ -42,7 +42,7 @@ theme:
   features:
     - content.code.copy
     - content.tabs.link
-    # navigation.tabs는 켜지 않는다. 최상위 nav를 헤더 탭으로 빼면 Spec·Bindings·Core가
+    # navigation.tabs는 켜지 않는다. 최상위 nav를 헤더 탭으로 빼면 Bindings·Core가
     # 사이드바에서 사라진다. 대신 최상위를 사이드바 1차 메뉴로 두고, 언어는 헤더의
     # 드롭다운으로 고른다(overrides/partials/zlink-lang.html).
     #
@@ -149,10 +149,6 @@ plugins:
             Protobuf codecs and types: Protobuf codec과 타입
             Operations: 운영
 
-            # 공통 스펙
-            Common spec: 공통 스펙
-            Sample scenario contract: 샘플 시나리오 계약
-
 # 문서 트리는 정본을 심링크로 직접 건다(`docs/guide` → `core/doc/guide` 등).
 # 복사본을 두면 양쪽이 갈라진다 — 실제로 갈라져서 사이트가 byte HWM 이전의 낡은
 # 내용을 내고 있었고, v11이 지운 서비스 계층 장까지 남아 있었다.
@@ -162,7 +158,6 @@ exclude_docs: |
   perf/
   */internals/
   # 언어별 bindings/framework internals는 공개용이 아니므로 제외한다.
-  # Framework 공통 내부 설계는 common/spec의 40~52 문서로 nav에 올린다.
   common/e2e/
   # 공통 가이드는 언어 탭을 담은 소스다. 읽는 자리는 언어별 생성판이다.
   common/guide/
@@ -173,8 +168,16 @@ exclude_docs: |
   guide/STYLE.en.md
   # 측정이 끝나지 않은 messaging bench다. 결과는 별도 보고서로 낸다.
   common/bench/
-  # 독자용 시나리오가 아니라 언어별 문서를 새로 쓸지 판단하는 작성 규약이다.
-  common/sample/languages/
+  # 스펙(framework 공통·샘플 시나리오 계약·bindings·core)은 internal.zlink.systems
+  # 에서 본다(#3576). 이 사이트는 가이드만 싣는다. 감추려는 것이 아니라 보는 자리를
+  # 나눈 것이라 원본은 제자리에 두고, 가이드의 스펙 링크는 repo_links 훅이 GitHub
+  # 원본 주소로 바꾼다. 앞에 `/`를 붙여 docs/ 바로 아래 자리만 잡는다.
+  /spec/
+  /common/README.*.md
+  /common/sample-e2e-configuration-policy.*.md
+  /common/spec/
+  /common/sample/
+  /bindings/spec/
 
 nav:
   - Home: index.md
@@ -562,78 +565,6 @@ nav:
           - Stream session: node/reference/06-stream-session.md
           - Location authority: node/reference/07-location-authority.md
           - Observability diagnostics: node/reference/08-observability-diagnostics.md
-  - Spec:
-      - Common spec: common/README.md
-      - Sample scenario contract:
-          - Overview: common/sample/README.md
-          - Bingo: common/sample/bingo/README.md
-          - TicTacToe: common/sample/tictactoe/README.md
-          - SupportChat: common/sample/supportchat/README.md
-          - DeliveryDispatch: common/sample/deliverydispatch/README.md
-          - ShoppingMall: common/sample/event/shoppingmall.md
-          - GameQuest: common/sample/event/gamequest.md
-          - ZoneWorld: common/sample/zoneworld/README.md
-          - Event sourcing: common/sample/event/README.md
-      - Server spec: common/spec/server/README.md
-      - Foundation:
-          - Foundation overview: common/spec/server/00-foundation/README.md
-          - Public Contract Governance: common/spec/server/00-foundation/01-public-contract-governance.md
-          - Framework Messaging Glossary: common/spec/server/00-foundation/02-glossary.md
-          - Framework Overview: common/spec/server/00-foundation/03-overview.md
-          - Interaction Model: common/spec/server/00-foundation/04-interaction-model.md
-          - Message Model: common/spec/server/00-foundation/05-message-model.md
-          - ZLink Framework API: common/spec/server/00-foundation/06-framework-api.md
-          - Framework Error Model: common/spec/server/00-foundation/07-framework-error-model.md
-          - Layering Boundaries And Identifiers: common/spec/server/00-foundation/08-layering.md
-      - Execution:
-          - Execution overview: common/spec/server/01-execution/README.md
-          - Submit And Completion: common/spec/server/01-execution/01-submit-and-completion.md
-          - Handler Turn And Execution Gate: common/spec/server/01-execution/02-handler-turn-and-execution-gate.md
-          - Cancellation And Shutdown: common/spec/server/01-execution/03-cancellation-and-shutdown.md
-          - Application Job Queue And Backpressure: common/spec/server/01-execution/04-application-job-queue-and-backpressure.md
-          - Payload Ownership And Codec: common/spec/server/01-execution/05-payload-ownership-and-codec.md
-          - State Ownership And Lanes: common/spec/server/01-execution/06-state-ownership-and-lanes.md
-          - Serial Executor Layers: common/spec/server/01-execution/07-serial-executor-layers.md
-          - Messaging Hot Path: common/spec/server/01-execution/08-messaging-hot-path.md
-      - Channel and transport:
-          - Channel and transport overview: common/spec/server/02-channel-transport/README.md
-          - RouteMesh Topology: common/spec/server/02-channel-transport/01-channel-topology.md
-          - Channel Messaging: common/spec/server/02-channel-transport/02-channel-messaging.md
-          - ClientServer Channel: common/spec/server/02-channel-transport/03-client-server-channel.md
-          - Network Listener Identity: common/spec/server/02-channel-transport/04-network-listener-identity.md
-          - Transport Liveness: common/spec/server/02-channel-transport/05-transport-liveness.md
-          - Service Wire Protocol: common/spec/server/02-channel-transport/06-wire-protocol.md
-          - Service Wire Schema Dialect: common/spec/server/02-channel-transport/07-schema-dialect.md
-      - Spot and Actor:
-          - Spot and Actor overview: common/spec/server/03-spot-actor/README.md
-          - Spot Model — Entry, User, Instance: common/spec/server/03-spot-actor/01-spot-model.md
-          - Spot Messaging: common/spec/server/03-spot-actor/02-spot-messaging.md
-          - MeshNode: common/spec/server/03-spot-actor/03-mesh-node.md
-          - Actor Model: common/spec/server/03-spot-actor/04-actor-model.md
-          - Spot And Actor Membership: common/spec/server/03-spot-actor/05-spot-actor-membership.md
-          - Spot Address Messaging: common/spec/server/03-spot-actor/06-spot-address-messaging.md
-          - Stage Wrapper On Spot: common/spec/server/03-spot-actor/07-stage-wrapper-on-spot.md
-          - Spot/Actor Routing: common/spec/server/03-spot-actor/08-routing.md
-          - Object Kind And Activation: common/spec/server/03-spot-actor/09-object-lifecycle.md
-          - Spot Timer: common/spec/server/03-spot-actor/10-spot-timer.md
-      - Session:
-          - Session overview: common/spec/server/04-session/README.md
-          - STREAM Server Session: common/spec/server/04-session/01-stream-session.md
-          - Session And Actor Binding: common/spec/server/04-session/02-session-actor-binding.md
-      - Location and relocation:
-          - Location and relocation overview: common/spec/server/05-location-relocation/README.md
-          - Location Runtime: common/spec/server/05-location-relocation/01-location-runtime.md
-          - Location Store Provider SPI And The Official Redis Implementation: common/spec/server/05-location-relocation/02-location-store-redis.md
-          - Relocation Store Provider SPI And The Official Redis Implementation: common/spec/server/05-location-relocation/03-relocation-store-redis.md
-          - Complete Actor And Spot Relocation Flow: common/spec/server/05-location-relocation/04-relocation-flow.md
-          - Complete Host Relocation Flow: common/spec/server/05-location-relocation/05-host-relocation-flow.md
-          - Failure Handling And Failover Scope: common/spec/server/05-location-relocation/06-failure-failover-policy.md
-      - Observability:
-          - Observability overview: common/spec/server/06-observability/README.md
-          - Runtime Status Query And Operational Diagnostics: common/spec/server/06-observability/01-runtime-monitoring.md
-          - Runtime Metrics And Aggregation Rules: common/spec/server/06-observability/02-runtime-metrics.md
-          - Message Flow Tracing: common/spec/server/06-observability/03-message-flow-tracing.md
-          - Request Correlation And Business Flow Identification: common/spec/server/06-observability/04-flow-correlation.md
   - Bindings:
       - Guide:
           - Overview: bindings/guide/README.md
@@ -696,17 +627,6 @@ nav:
               - Sockets: bindings/reference/rust/03-sockets.md
               - Eventing: bindings/reference/rust/04-eventing.md
               - Errors: bindings/reference/rust/05-errors.md
-      - Spec:
-          - Overview: bindings/spec/README.md
-          - Async & Coroutine Policy: bindings/spec/async-coroutine-policy.md
-          - C: bindings/spec/c/README.md
-          - .NET: bindings/spec/dotnet/README.md
-          - C++: bindings/spec/cpp/README.md
-          - Java: bindings/spec/java/README.md
-          - Node.js: bindings/spec/node/README.md
-          - Python: bindings/spec/python/README.md
-          - Go: bindings/spec/go/README.md
-          - Rust: bindings/spec/rust/README.md
   - Core:
       - Guide:
           - Overview: guide/01-overview.md
@@ -755,42 +675,6 @@ nav:
           - Timers: reference/16-timers.md
           - Utilities: reference/17-utilities.md
           - Errors, results, and version: reference/18-errors.md
-      - Spec:
-          - Overview: spec/core/README.md
-          - Public Contract Governance: spec/core/00-public-contract-governance.md
-          - Context: spec/core/01-context.md
-          - Message: spec/core/02-message.md
-          - Errors: spec/core/03-errors.md
-          - Events: spec/core/04-events.md
-          - Polling: spec/core/05-polling.md
-          - Monitoring: spec/core/06-monitoring.md
-          - Utilities: spec/core/07-utilities.md
-          - Runtime Boundary: spec/core/08-runtime-boundary.md
-          - Sockets:
-              - Overview: spec/core/socket/README.md
-              - PAIR: spec/core/socket/01-pair.md
-              - PUB: spec/core/socket/02-pub.md
-              - SUB: spec/core/socket/03-sub.md
-              - XPUB: spec/core/socket/04-xpub.md
-              - XSUB: spec/core/socket/05-xsub.md
-              - DEALER: spec/core/socket/06-dealer.md
-              - ROUTER: spec/core/socket/07-router.md
-              - STREAM: spec/core/socket/08-stream.md
-          - Protocol:
-              - Overview: spec/core/protocol/README.md
-              - Protocol ZMP: spec/core/protocol/01-zmp.md
-              - Protocol Raw: spec/core/protocol/02-raw.md
-          - Systems:
-              - Overview: spec/core/systems/README.md
-              - Architecture: spec/core/systems/01-architecture.md
-              - Threading Model: spec/core/systems/02-threading-model.md
-              - I/O Thread: spec/core/systems/03-io-thread.md
-              - Thread Safety: spec/core/systems/04-thread-safety.md
-              - Connection Memory: spec/core/systems/05-connection-memory.md
-              - Auto HWM: spec/core/systems/06-auto-hwm.md
-              - Source Layout: spec/core/systems/07-core-source-layout.md
-              - POSD Module Structure: spec/core/systems/08-posd-module-structure.md
-              - Design Decisions: spec/core/systems/09-design-decisions.md
 markdown_extensions:
   - admonition
   - attr_list

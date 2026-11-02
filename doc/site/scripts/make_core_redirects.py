@@ -5,10 +5,14 @@ core 사이트가 `zlink.systems`(Pages) 최상위였을 때의 주소는 이랬
 
   `/guide/...`     영어 가이드        → 지금은 같은 경로가 **한국어**다
   `/ko/guide/...`  한국어 가이드      → `/guide/...`
-  `/api/...`       축약 API 레퍼런스  → `/spec/core/...`
+  `/api/...`       축약 API 레퍼런스  → `/reference/...`
 
-합친 사이트는 한국어가 기본이라 `/ko/` 접두사가 없어졌고, 축약 `api/`를 버리고
-정본 spec을 그대로 낸다. 그 두 자리에 stub을 깔아 외부 링크와 검색 색인을 잇는다.
+합친 사이트는 한국어가 기본이라 `/ko/` 접두사가 없어졌고, 축약 `api/`를 버렸다.
+그 두 자리에 stub을 깔아 외부 링크와 검색 색인을 잇는다.
+
+`/api/...`는 처음에 정본 spec(`/spec/core/...`)으로 보냈다. spec은 이제 이 사이트에
+싣지 않고 internal.zlink.systems에서 보므로(#3576), 같은 주제의 Core API 레퍼런스로
+보낸다. 로그인이 필요한 자리로 보내면 외부 독자가 막힌다.
 
 GitHub Pages는 정적 호스팅이라 301을 낼 수 없다. `<meta http-equiv="refresh">`와
 `<link rel="canonical">`을 쓴다. 대상은 상대 경로다 — 사이트가 도메인 루트에 있든
@@ -39,20 +43,22 @@ STUB = """<!DOCTYPE html>
 </html>
 """
 
-#  옛 축약 API 레퍼런스 한 장 → 정본 spec의 대응 자리.
+#  옛 축약 API 레퍼런스 한 장 → Core API 레퍼런스의 대응 자리.
+#  event는 monitor event와 readiness를 함께 다루던 장이라 socket monitor로 보낸다.
+#  레퍼런스에 대응하는 장이 없는 spot은 레퍼런스 목차로, bindings는 bindings 가이드로 보낸다.
 API_MAP = {
-    "context": "spec/core/01-context",
-    "message": "spec/core/02-message",
-    "errors": "spec/core/03-errors",
-    "errno-map": "spec/core/04-errno-map",
-    "events": "spec/core/05-events",
-    "polling": "spec/core/06-polling",
-    "monitoring": "spec/core/07-monitoring",
-    "utilities": "spec/core/08-utilities",
-    "socket": "spec/core/socket",
-    "spot": "spec/core",
-    "bindings": "bindings/spec",
-    "README": "spec/core",
+    "context": "reference/01-context",
+    "message": "reference/02-message",
+    "errors": "reference/18-errors",
+    "errno-map": "reference/18-errors",
+    "events": "reference/14-socket-monitor",
+    "polling": "reference/15-polling",
+    "monitoring": "reference/14-socket-monitor",
+    "utilities": "reference/17-utilities",
+    "socket": "reference/03-socket-lifecycle",
+    "spot": "reference",
+    "bindings": "bindings/guide",
+    "README": "reference",
 }
 
 
@@ -79,7 +85,7 @@ def main() -> int:
     #  `/ko/**` → 같은 경로의 한국어 기본판.
     #  옛 core 사이트가 `/ko/` 아래 두던 것은 이 셋뿐이다. framework 문서는
     #  그 사이트에 없었으므로 `/ko/dotnet/...` 같은 자리는 만들지 않는다.
-    for top in ("guide", "internals", "spec"):
+    for top in ("guide", "internals"):
         base = root / top
         if not base.is_dir():
             continue
