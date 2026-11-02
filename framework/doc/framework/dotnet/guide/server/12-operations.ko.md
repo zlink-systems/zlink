@@ -57,18 +57,13 @@ builder.Services.AddOpenTelemetry()
         .AddPrometheusExporter());
 ```
 
-- .NET metric 이름은 `zlink.framework`, trace source 이름은 `Zlink.Framework`다. OTel
-  tracing 설정에서 `AddSource("Zlink.Framework")`를 등록한다. OTel을 쓰지 않는 .NET
-  application은 `MeterListener`에서 `zlink.framework`를 구독할 수 있다.
-- C++은 `app_t::use_metric_provider(...)`로 metric provider를 연결하고, message-flow 기록은
-  application이 구성한 logger로 보낸다. C++에는 OpenTelemetry `Tracer` source가 없다.
-- Java/Kotlin Spring Boot starter는 application의 Micrometer `MeterRegistry`에 `zlink.*`
-  계기를 연결한다. Message-flow 기록은 SLF4J logger category
-  `systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer`로 전달하며 OTel `Tracer`는 없다.
-- Node.js는 `metrics.setGlobalMeterProvider(...)`와 `trace.setGlobalTracerProvider(...)`로
-  OpenTelemetry SDK provider를 등록한다. Framework는 meter `zlink.framework`와 tracer
-  `@zlink-systems/framework`를 조회한다.
-- 대시보드와 exporter 선택은 application 몫이다.
+언어별 수집 이름은 다음과 같다.
+
+.NET metric 이름은 `zlink.framework`, trace source 이름은 `Zlink.Framework`다. OTel tracing 설정에서
+`AddSource("Zlink.Framework")`를 등록한다. OTel을 쓰지 않는 .NET application은 `MeterListener`에서
+`zlink.framework`를 구독할 수 있다.
+
+대시보드와 exporter 선택은 application 몫이다.
 
 계기 카탈로그는 다음 표가 MeshNode, object·STREAM, location·fanout의 측정값과 단위를 정리한다.
 세부 라벨·단위·종류는 [Runtime Metrics](../../../common/spec/server/06-observability/02-runtime-metrics.ko.md)와

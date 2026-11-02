@@ -84,18 +84,40 @@ include a scrape server.
     ```
 
 
-- .NET uses meter `zlink.framework` and ActivitySource `Zlink.Framework`. Add
-  `AddSource("Zlink.Framework")` to the OTel tracing setup. A .NET app that doesn't use OTel
-  can subscribe to `zlink.framework` with `MeterListener`.
-- C++ connects a metric provider through `app_t::use_metric_provider(...)`. Message-flow
-  records go to the application-configured logger; C++ has no OpenTelemetry `Tracer` source.
-- The Java/Kotlin Spring Boot starter connects the application's Micrometer `MeterRegistry` to
-  the `zlink.*` instruments. Message-flow records use SLF4J category
-  `systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer`; there is no OTel `Tracer`.
-- Node.js registers SDK providers with `metrics.setGlobalMeterProvider(...)` and
-  `trace.setGlobalTracerProvider(...)`. The Framework reads meter `zlink.framework` and tracer
-  `@zlink-systems/framework`.
-- Choosing a dashboard and exporter is the app's job.
+Collection names per language:
+
+=== "C#/.NET"
+
+    .NET uses meter `zlink.framework` and ActivitySource `Zlink.Framework`. Add
+    `AddSource("Zlink.Framework")` to the OTel tracing setup. A .NET app that doesn't use OTel
+    can subscribe to `zlink.framework` with `MeterListener`.
+
+=== "C++"
+
+    C++ connects a metric provider through `app_t::use_metric_provider(...)`. Message-flow
+    records go to the application-configured logger; C++ has no OpenTelemetry `Tracer` source.
+
+=== "Java"
+
+    The Java/Kotlin Spring Boot starter connects the application's Micrometer `MeterRegistry` to
+    the `zlink.*` instruments. Message-flow records use SLF4J category
+    `systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer`; there is no OTel
+    `Tracer`.
+
+=== "Kotlin"
+
+    The Java/Kotlin Spring Boot starter connects the application's Micrometer `MeterRegistry` to
+    the `zlink.*` instruments. Message-flow records use SLF4J category
+    `systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer`; there is no OTel
+    `Tracer`.
+
+=== "Node/TypeScript"
+
+    Node.js registers SDK providers with `metrics.setGlobalMeterProvider(...)` and
+    `trace.setGlobalTracerProvider(...)`. The Framework reads meter `zlink.framework` and tracer
+    `@zlink-systems/framework`.
+
+Choosing a dashboard and exporter is the app's job.
 
 The catalog below lists the measurements and units for MeshNode, object/STREAM, and
 location/fanout instruments. For detailed labels, units, and kinds, see
