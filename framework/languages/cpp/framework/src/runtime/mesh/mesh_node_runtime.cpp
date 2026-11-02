@@ -3849,6 +3849,19 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
             co_return result_t<runtime::protocol::stream_bind_reply_tail_t>::success (
               *reply.binding);
         }
+        if (reply.header.terminal_result
+            == static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::rejected)) {
+            co_return result_t<runtime::protocol::stream_bind_reply_tail_t>::failure (
+              framework_error_kind_t::rejected, reply.binding && reply.binding->rejection_message
+                                                  ? *reply.binding->rejection_message
+                                                  : "Remote Actor rejected the Session binding");
+        }
+        if (reply.header.terminal_result
+            == static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::timedOut)) {
+            co_return result_t<runtime::protocol::stream_bind_reply_tail_t>::failure (
+              framework_error_kind_t::deadline_exceeded,
+              "Remote Actor duplicate-bind callback timed out");
+        }
         const auto stale_route =
           reply.header.terminal_result
             == static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::conflict)

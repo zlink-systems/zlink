@@ -277,6 +277,7 @@ export interface ReceiveRecord {
   readonly kindData: ReceiveKindData | null;
   readonly terminalResult: number;
   readonly failureErrno: number;
+  readonly failureMessage?: string;
   readonly parts: Message[];
   /** Returns whether the local operation can still accept a lifecycle reply. */
   readonly isPending?: () => boolean;
@@ -300,7 +301,11 @@ export interface ReceiveRecord {
     replyContentType?: string
   ): SubmitResult;
   /** Emits a typed command-20 terminal for a lifecycle request before admission. */
-  replyFailure?(terminalResult: number, failureCode: number): SubmitResult;
+  replyFailure?(
+    terminalResult: number,
+    failureCode: number,
+    tail?: import('./service-stateful-wire-codec').ServiceStatefulReplyTail
+  ): SubmitResult;
 }
 
 export interface ClaimReceiveResult {

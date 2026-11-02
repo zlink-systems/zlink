@@ -12,6 +12,7 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   type ActorRef,
   type RoutingId,
+  type ZLinkSessionBindingIdentity,
   type ZLinkClientServerRuntime,
   type ZLinkFanoutRuntime,
   type ZLinkFrameworkLifecycleOptions,
@@ -3320,8 +3321,7 @@ export class ZLinkFrameworkRuntimeHost
       replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
       return;
     }
-    replyBindingSuccess();
-    state.installBoundSessionBinding({
+    const incomingTarget = {
       ...target,
       sessionNodeRid: binding.sessionNodeRid,
       sessionRid: binding.sessionRid,
@@ -3329,8 +3329,105 @@ export class ZLinkFrameworkRuntimeHost
       sessionOwnerId: binding.sessionOwnerId,
       sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
       bindingGeneration: binding.bindingGeneration
+    };
+    const currentBinding = state.boundSession;
+    const currentActor = state.actor;
+    if (
+      currentBinding === undefined ||
+      currentActor?.onDuplicateBind === undefined ||
+      samePhysicalSession(currentBinding, incomingTarget)
+    ) {
+      state.installBoundSessionBinding(incomingTarget);
+      replyBindingSuccess();
+      return;
+    }
+    const spotManager = this.spotManager;
+    if (spotManager === undefined || state.meshName === undefined) {
+      replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
+      return;
+    }
+
+    let callbackStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      callbackStarted = resolve;
     });
-    return Promise.resolve();
+    let callbackTimedOut = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const cancellation = new AbortController();
+    const callbackSignal =
+      signal === undefined ? cancellation.signal : AbortSignal.any([signal, cancellation.signal]);
+    const turn = spotManager.executeActorTurn(
+      state.meshName,
+      state.actor?.context.spotId,
+      state.actorId,
+      async () => {
+        const current = state.boundSession;
+        const actor = state.actor;
+        const duplicateCallback =
+          current !== undefined && !samePhysicalSession(current, incomingTarget)
+            ? actor?.onDuplicateBind
+            : undefined;
+        if (duplicateCallback === undefined || actor === undefined || current === undefined) {
+          state.installBoundSessionBinding(incomingTarget);
+          replyBindingSuccess();
+          return;
+        }
+        callbackStarted();
+        const decision = await duplicateCallback.call(
+          actor,
+          sessionBindingIdentity(current),
+          sessionBindingIdentity(incomingTarget),
+          callbackSignal
+        );
+        if (callbackTimedOut) return;
+        if (decision !== undefined && decision.length > 0) {
+          if (Buffer.byteLength(decision, 'utf8') > 0xffff) {
+            throw new RangeError('Duplicate bind rejection message exceeds Text16 capacity.');
+          }
+          if (
+            record.replyFailure?.(RequestResult.Rejected, 0, {
+              kind: 'streamBindRejected',
+              rejectionMessage: decision
+            }) !== SubmitResult.Ok
+          ) {
+            throw new ZLinkConfigurationException(
+              `MeshNode Actor binding target '${binding.actor.actorId}' rejection acknowledgement failed.`
+            );
+          }
+          return;
+        }
+        state.installBoundSessionBinding(incomingTarget);
+        replyBindingSuccess();
+      }
+    );
+    const timeout = started.then(
+      () =>
+        new Promise<'timedOut'>((resolve) => {
+          timeoutHandle = setTimeout(() => {
+            callbackTimedOut = true;
+            resolve('timedOut');
+          }, this.options.registration.sessionReplacementCallbackTimeoutMs);
+        })
+    );
+    try {
+      const outcome = await Promise.race([turn.then(() => 'completed' as const), timeout]);
+      if (outcome === 'timedOut') {
+        cancellation.abort(createDeadlineExceededError('Duplicate bind callback timed out.'));
+        if (record.replyFailure?.(RequestResult.TimedOut, 0) !== SubmitResult.Ok) {
+          throw new ZLinkConfigurationException(
+            `MeshNode Actor binding target '${binding.actor.actorId}' timeout acknowledgement failed.`
+          );
+        }
+        void turn.catch((error: unknown) =>
+          this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+            `duplicate bind callback '${binding.actor.actorId}'`,
+            error
+          )
+        );
+      }
+    } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    }
   }
 
   private submitLocalMeshRoute(
@@ -3589,6 +3686,50 @@ export function hasUnsupportedManualTopology(registration: ZLinkFrameworkRegistr
   }
 
   return false;
+}
+
+function samePhysicalSession(
+  left: {
+    readonly sessionNodeRid?: RoutingId;
+    readonly sessionRid?: RoutingId;
+    readonly sessionOwnerNodeGeneration?: bigint;
+  },
+  right: {
+    readonly sessionNodeRid?: RoutingId;
+    readonly sessionRid?: RoutingId;
+    readonly sessionOwnerNodeGeneration?: bigint;
+  }
+): boolean {
+  return (
+    left.sessionNodeRid !== undefined &&
+    left.sessionRid !== undefined &&
+    left.sessionOwnerNodeGeneration !== undefined &&
+    right.sessionNodeRid !== undefined &&
+    right.sessionRid !== undefined &&
+    right.sessionOwnerNodeGeneration !== undefined &&
+    routingIdsEqual(left.sessionNodeRid, right.sessionNodeRid) &&
+    left.sessionRid === right.sessionRid &&
+    left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration
+  );
+}
+
+function sessionBindingIdentity(value: {
+  readonly sessionNodeRid?: RoutingId;
+  readonly sessionOwnerNodeGeneration?: bigint;
+  readonly bindingGeneration?: bigint;
+}): ZLinkSessionBindingIdentity {
+  if (
+    value.sessionNodeRid === undefined ||
+    value.sessionOwnerNodeGeneration === undefined ||
+    value.bindingGeneration === undefined
+  ) {
+    throw new ZLinkConfigurationException('Duplicate bind callback requires a complete identity.');
+  }
+  return {
+    sessionOwnerNodeRid: value.sessionNodeRid,
+    sessionOwnerNodeGeneration: value.sessionOwnerNodeGeneration,
+    bindingGeneration: value.bindingGeneration
+  };
 }
 
 function hasConfiguredLocationStore(registration: ZLinkFrameworkRegistration): boolean {

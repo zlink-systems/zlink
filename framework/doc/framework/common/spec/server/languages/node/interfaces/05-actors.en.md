@@ -22,7 +22,18 @@ incarnation or bind to a session.
 export interface ZLinkActor {
  readonly context: ZLinkActorContext;
  configure?(): void;
+ onDuplicateBind?(
+ current: ZLinkSessionBindingIdentity,
+ incoming: ZLinkSessionBindingIdentity,
+ signal: AbortSignal,
+ ): Promise<string | undefined>;
  onJoinCompleted?(completion: ZLinkActorJoinCompletion): Promise<void>;
+}
+
+export interface ZLinkSessionBindingIdentity {
+ readonly sessionOwnerNodeRid: RoutingId;
+ readonly sessionOwnerNodeGeneration: bigint;
+ readonly bindingGeneration: bigint;
 }
 
 export interface ZLinkActorContext {
@@ -74,6 +85,10 @@ The canonical declaration of `ActorId` and `ActorRef` is owned by
 [Foundation Types And Configuration](01-foundation-configuration.en.md).
 This document only fixes the location where the Actor lifecycle
 and manager use that type.
+
+The callback accepts when it returns `undefined` or an empty string and rejects with a returned
+non-empty string as its message. If the optional method isn't implemented, the framework accepts a new Session as before.
+When the timeout expires, `signal` becomes aborted.
 
 ## 2. Global Client And Manager
 

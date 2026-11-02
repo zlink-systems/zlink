@@ -268,7 +268,7 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..25
 | 35 | reserved (`relocationComplete`) | — | — | — | 제거된 target completion reply command |
 | 36 | `boundSessionSend` | application | 필수 | — | bound, STREAM client connection 하나를 수락한 때부터 닫을 때까지 유지하는 서버 실행 단위인 [STREAM session](../00-foundation/02-glossary.ko.md#stream-session) egress |
 | 37 | `actorJoined` | infrastructure | 없음 | — | Actor join commit |
-| 38 | `boundSessionBind` | infrastructure | 없음 | — | session binding commit |
+| 38 | `boundSessionBind` | infrastructure | 없음 | — | Session binding 요청 · 중복 bind의 콘텐츠 판정은 Session–Actor binding §6이며, 거부 메시지는 command 20의 `streamBind` rejection tail로 반환한다 |
 | 39 | `instanceSpot` | application | 필수 | `metadata` | logical Instance Spot operation |
 | 40 | `relocationPrepare` | infrastructure | 없음 | — | temporary queue 설치·final-stage(과 선택적 base-stage) payload manifest 선언·relay 준비 request |
 | 41 | reserved (`relocationReserved`) | — | — | — | 제거된 relocation별 capacity reservation ACK |
@@ -318,7 +318,8 @@ relay 시점의 queue count·byte, 원래 operation ID와 원래 reply route ID�
 
 ### 3.2 Bound session 교체 notification
 
-`boundSessionReplaced`는 새 Actor binding을 current로 확정한 뒤 이전 session owner에 보내는 one-way
+`boundSessionReplaced`는 [Session–Actor binding §6](../04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)의
+중복 bind 결정이 받아들임이고 새 Actor binding을 current로 확정한 뒤 이전 session owner에 보내는 one-way
 infrastructure record다. Actor authority source fence와 이전 session owner의 lifecycle·binding identity를
 전달하며 flags, application payload와 ACK를 사용하지 않는다. 보내는 node가 Actor authority target과 일치하는지
 확인하고, 받는 node에서는 이전 session owner identity를 local target fence로 검사한다. 전송과 이전 owner의

@@ -1,5 +1,6 @@
 package systems.zlink.framework.kotlin
 
+import java.util.Optional
 import java.util.concurrent.CompletionStage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -7,9 +8,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.future.future
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ZLinkActor
+import systems.zlink.framework.actors.ZLinkActorCallbackCancellation
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorFactory
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion
+import systems.zlink.framework.actors.ZLinkSessionBindingIdentity
 import systems.zlink.framework.channels.ZLinkPublishMessageContext
 import systems.zlink.framework.channels.ZLinkRouteMessageContext
 import systems.zlink.framework.messaging.ZLinkMessage
@@ -154,6 +157,20 @@ abstract class ZLinkSuspendingActor : ZLinkActor {
     ): CompletionStage<Void> = coroutineVoidStage { onJoinCompletedSuspending(completion) }
 
     abstract suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion)
+
+    final override fun onDuplicateBind(
+        current: ZLinkSessionBindingIdentity,
+        incoming: ZLinkSessionBindingIdentity,
+        cancellation: ZLinkActorCallbackCancellation,
+    ): CompletionStage<Optional<String>> = coroutineStage {
+        Optional.ofNullable(onDuplicateBindSuspending(current, incoming, cancellation))
+    }
+
+    open suspend fun onDuplicateBindSuspending(
+        current: ZLinkSessionBindingIdentity,
+        incoming: ZLinkSessionBindingIdentity,
+        cancellation: ZLinkActorCallbackCancellation,
+    ): String? = null
 }
 
 abstract class ZLinkSuspendingSpot<TActor : ZLinkActor> : ZLinkSpot<TActor> {
