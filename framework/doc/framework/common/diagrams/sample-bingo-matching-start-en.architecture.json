@@ -62,7 +62,8 @@
         "Each Player Actor registers a deferred Room join (mermaid Actor self-message) and responds with the WaitingForPlayers projection. mermaid Note over Actor1,Room: the handler returns, then the deferred join runs — so MatchBingoRes alone does not prove the join completed.",
         "For player-2 the response branch and the deferred-join branch run in parallel (mermaid par 'Match result' ‖ 'Deferred join after handler return'). Once the second Actor join finishes, the Room sets State = Running (mermaid Room self-message) and BingoGameStartedNotify is the authoritative game-start completion.",
         "The Location Store handles room-owner lookup and remote join; Reservation Redis doesn't decide which Play node owns the room. A concurrent GetOrCreate caller waits for the single Creating authority to become Ready.",
-        "The join callback waits on API's record lookup via Yield; on resume it re-checks Finished/membership before changing state. The Observer doesn't look up the player record."
+        "The join callback waits on API's record lookup via Yield; on resume it re-checks Finished/membership before changing state. The Observer doesn't look up the player record.",
+        "A failed PlayerJoinedNotify is logged for that recipient; the accepted player join and delivery to other recipients continue."
       ]
     }
   ]

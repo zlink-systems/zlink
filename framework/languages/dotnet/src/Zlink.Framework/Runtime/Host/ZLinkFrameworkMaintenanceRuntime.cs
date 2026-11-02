@@ -32,6 +32,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
     private readonly Func<bool> _acceptingWorkSnapshot;
     private readonly Func<ZLinkHostCapacityStatus?> _capacitySnapshot;
     private readonly Func<bool> _safeToShutdownSnapshot;
+    private readonly Func<bool> _flowCaptureEnabled;
     private readonly Action? _resetCapacityMetrics;
     private readonly Func<ZLinkListenerKind, string, ZLinkListenerStatus> _listenerStatus;
     private readonly ILogger<ZLinkFrameworkMaintenanceRuntime>? _logger;
@@ -68,7 +69,8 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         Action? resetCapacityMetrics = null,
         ILogger<ZLinkFrameworkMaintenanceRuntime>? logger = null,
         Func<bool>? safeToShutdownSnapshot = null,
-        Action<Action>? subscribeSafeToShutdownChanged = null
+        Action<Action>? subscribeSafeToShutdownChanged = null,
+        Func<bool>? flowCaptureEnabled = null
     )
     {
         _failureReporter = failureReporter;
@@ -80,6 +82,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         _acceptingWorkSnapshot = acceptingWorkSnapshot ?? (() => true);
         _capacitySnapshot = capacitySnapshot ?? (() => null);
         _safeToShutdownSnapshot = safeToShutdownSnapshot ?? (() => true);
+        _flowCaptureEnabled = flowCaptureEnabled ?? (() => false);
         _resetCapacityMetrics = resetCapacityMetrics;
         _listenerStatus = listenerStatus;
         _logger = logger;
@@ -252,12 +255,14 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
                 _activeMode = options.Mode;
                 _activeTargetVersion = effectiveTargetVersion;
                 _deadline = DateTimeOffset.UtcNow + timeout;
+                var relocationFlow = _flowCaptureEnabled() ? ZLinkFlowContext.Current : null;
                 using (ExecutionContext.SuppressFlow())
                     _relocationOperation = ExecuteRelocationAsync(
                         options.Mode,
                         effectiveTargetVersion,
                         Stopwatch.GetElapsedTime(0) + timeout,
-                        _relocationCancellation!.Token
+                        _relocationCancellation!.Token,
+                        relocationFlow
                     );
                 operation = _relocationOperation;
             }
@@ -337,10 +342,14 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime
         ZLinkFrameworkRelocationMode mode,
         long targetApplicationVersion,
         TimeSpan absoluteDeadline,
-        CancellationToken shutdownCancellation
+        CancellationToken shutdownCancellation,
+        ZLinkFlowValue? relocationFlow
     )
     {
         await Task.Yield();
+        using var flowScope = relocationFlow is { } capturedFlow
+            ? ZLinkFlowContext.EnterExisting(capturedFlow.FlowId, capturedFlow.Origin)
+            : default;
         var metricStarted = ZLinkRuntimeMetrics.StartHostRelocation(
             mode == ZLinkFrameworkRelocationMode.PlannedMaintenance
                 ? "planned_maintenance"

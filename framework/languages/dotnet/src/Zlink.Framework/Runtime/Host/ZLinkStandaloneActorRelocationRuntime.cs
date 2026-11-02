@@ -147,7 +147,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             ZLinkRelocationMetricObjectKind.Actor,
             relocation.PolicyKind != 2
                 ? ZLinkRelocationMetricPolicy.Recreate
-                : ZLinkRelocationMetricPolicy.Snapshot
+                : ZLinkRelocationMetricPolicy.Snapshot,
+            runtime.Flow,
+            actorState.ActorId
         );
         relocationMetric.Start();
         var captureStarted = false;
