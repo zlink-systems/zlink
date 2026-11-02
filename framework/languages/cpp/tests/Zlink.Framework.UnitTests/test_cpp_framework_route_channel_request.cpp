@@ -653,7 +653,17 @@ TEST (CppFrameworkRouteChannelRequest, ThrowingSubmissionRemovesPendingEntry)
           throw std::runtime_error ("submission failed");
       });
     const auto target = zlink::routing_id_t::from (std::string ("peer"));
-    EXPECT_THROW ((void) route.request_reply_parts (target, {}, 1s), std::runtime_error);
+    const auto reply = route.request_reply_parts (target, {}, 1s).result ().value ();
+    ASSERT_FALSE (reply);
+    EXPECT_EQ (reply.error (), nullptr);
+    ASSERT_NE (reply.exception (), nullptr);
+    try {
+        (void) reply.value ();
+        ADD_FAILURE () << "backend exception was not preserved";
+    }
+    catch (const std::runtime_error &error) {
+        EXPECT_STREQ ("submission failed", error.what ());
+    }
     EXPECT_EQ (0u, route.pending_request_count ());
 }
 
@@ -968,6 +978,438 @@ TEST (CppFrameworkRouteChannelRequest,
     EXPECT_FALSE (reply);
     EXPECT_EQ (framework_error_kind_t::deadline_exceeded, reply.error_kind ());
     EXPECT_EQ (std::future_status::ready, status);
+}
+
+class v21_controlled_spot_resolver_t final : public runtime::spot_address_resolver_t
+{
+  public:
+    task_completion_source_t<std::optional<runtime::spot_address_t>> resolved;
+    task_t<std::optional<runtime::spot_address_t>> resolve_spot_address (std::string,
+                                                                         std::string) override
+    {
+        return resolved.task ();
+    }
+    void invalidate_spot_address (std::string_view) override {}
+    void invalidate_all_routes_after_store_recovery () override {}
+    void finish ()
+    {
+        resolved.complete (result_t<std::optional<runtime::spot_address_t>>::success (
+          runtime::spot_address_t{"spot-route", zlink::routing_id_t::from ("peer"), "spot"}));
+    }
+};
+
+// Submit/completion §9: resolving the address consumes the original deadline.
+TEST (CppFrameworkRouteChannelRequest, V21RedSpotResolveKeepsOriginalDeadline)
+{
+    public_spot_fixture_t fixture;
+    auto resolver = std::make_shared<v21_controlled_spot_resolver_t> ();
+    detail::channel_runtime_t::from (fixture.builder.message_bus ())
+      .bind_spot_address_resolver (resolver);
+    int submitted = 0;
+    fixture.route ().set_request_backend (
+      [&] (const auto &, const auto &, const auto &parts, auto) {
+          ++submitted;
+          runtime::messaging::envelope_codec_t codec;
+          auto header = codec.decode_header (parts).value ();
+          header.kind = runtime::messaging::message_kind_t::response;
+          return request_task_t<parts_t> (result_t<parts_t>::success (
+            codec.encode_raw_body_parts (header, codec.decode_body (parts).value ())));
+      });
+    auto client = fixture.builder.route_client (fixture.serializers);
+    const auto started = std::chrono::steady_clock::now ();
+    auto pending =
+      client.request_to_spot ("spot", spot_packet_t{79}).timeout (20ms).async<spot_packet_t> ();
+    // Keep the dependency unresolved beyond the deadline; release it for teardown.
+    std::this_thread::sleep_until (started + 120ms);
+    const bool completed_before_resolve = pending.await_ready ();
+    resolver->finish ();
+    const auto reply = pending.result ();
+    EXPECT_TRUE (completed_before_resolve);
+    EXPECT_EQ (0, submitted);
+    ASSERT_FALSE (reply) << "late address resolution succeeded after the original deadline";
+    EXPECT_EQ (framework_error_kind_t::deadline_exceeded, reply.error_kind ());
+}
+
+TEST (CppFrameworkRouteChannelRequest, V21RedSpotResolveShutdownEndsOriginalWait)
+{
+    public_spot_fixture_t fixture;
+    auto resolver = std::make_shared<v21_controlled_spot_resolver_t> ();
+    auto runtime = detail::channel_runtime_t::from (fixture.builder.message_bus ());
+    runtime.bind_spot_address_resolver (resolver);
+    auto client = fixture.builder.route_client (fixture.serializers);
+    auto pending =
+      client.request_to_spot ("spot", spot_packet_t{79}).timeout (5s).async<spot_packet_t> ();
+    runtime.shutdown ();
+    // Observe shutdown without using the unresolved dependency to complete it.
+    const auto observe_until = std::chrono::steady_clock::now () + 100ms;
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < observe_until)
+        std::this_thread::yield ();
+    const bool completed_before_resolve = pending.await_ready ();
+    resolver->finish ();
+    const auto reply = pending.result ();
+    EXPECT_TRUE (completed_before_resolve);
+    EXPECT_EQ (framework_error_kind_t::shutting_down, reply.error_kind ());
+}
+
+TEST (CppFrameworkRouteChannelRequest, V21SpotResolveWaitOwnerStopPreservesTerminalAfterLateAddress)
+{
+    public_spot_fixture_t fixture;
+    auto resolver = std::make_shared<v21_controlled_spot_resolver_t> ();
+    detail::channel_runtime_t::from (fixture.builder.message_bus ())
+      .bind_spot_address_resolver (resolver);
+    auto client = fixture.builder.route_client (fixture.serializers);
+    std::stop_source parent;
+    std::optional<request_task_t<spot_packet_t>> pending;
+    {
+        detail::ambient_context_scope_t scope (nullptr, nullptr, parent.get_token ());
+        pending.emplace (
+          client.request_to_spot ("spot", spot_packet_t{79}).timeout (5s).async<spot_packet_t> ());
+    }
+    parent.request_stop ();
+    const auto observe_until = std::chrono::steady_clock::now () + 100ms;
+    while (!pending->await_ready () && std::chrono::steady_clock::now () < observe_until)
+        std::this_thread::yield ();
+    const bool completed_before_resolve = pending->await_ready ();
+    resolver->finish ();
+    const auto reply = pending->result ();
+    EXPECT_TRUE (completed_before_resolve);
+    // Cancellation/shutdown §5.1: ending the runtime wait owner is ShuttingDown.
+    ASSERT_FALSE (reply);
+    EXPECT_EQ (framework_error_kind_t::shutting_down, reply.error_kind ());
+}
+
+// Positive control: the legacy Spot adapter does debit its local encoding time.
+// The node adapter must preserve the same request-entry deadline.
+void verify_v21_encoding_budget (bool spot)
+{
+    auto builder = test::runtime_failure_builder ();
+    serializer_registry_t serializers;
+    serializers.add<spot_packet_t> (
+      [] (const auto &packet) {
+          std::this_thread::sleep_for (80ms);
+          return encoded_payload_t::from_string (std::to_string (packet.value));
+      },
+      [] (const encoded_payload_t &payload) {
+          return spot_packet_t{std::stoi (payload.to_string ())};
+      },
+      "application/json");
+    builder.route_channel ("spot-route");
+    auto manager = detail::channel_runtime_manager_t::from (builder);
+    manager.initialize_route_channels (builder);
+    detail::channel_runtime_t::from (builder.message_bus ())
+      .bind_spot_address_resolver (std::make_shared<spot_resolver_t> ());
+    auto &route = manager.get_route_channel ("spot-route");
+    int submitted = 0;
+    route.set_request_backend ([&] (const auto &, const auto &, const auto &parts, auto) {
+        ++submitted;
+        runtime::messaging::envelope_codec_t codec;
+        auto header = codec.decode_header (parts).value ();
+        header.kind = runtime::messaging::message_kind_t::response;
+        return request_task_t<parts_t> (result_t<parts_t>::success (
+          codec.encode_raw_body_parts (header, codec.decode_body (parts).value ())));
+    });
+    auto client = builder.route_client (serializers);
+    auto pending =
+      spot
+        ? client.request_to_spot ("spot", spot_packet_t{79}).timeout (20ms).async<spot_packet_t> ()
+        : client
+            .request_to_node ("spot-route", zlink::routing_id_t::from ("peer"), spot_packet_t{79})
+            .timeout (20ms)
+            .async<spot_packet_t> ();
+    const auto reply = pending.result ();
+    EXPECT_EQ (0, submitted);
+    ASSERT_FALSE (reply) << "request encoding restarted the original deadline";
+    EXPECT_EQ (framework_error_kind_t::deadline_exceeded, reply.error_kind ());
+}
+
+TEST (CppFrameworkRouteChannelRequest, V21RedNodeEncodingKeepsOriginalDeadline)
+{
+    verify_v21_encoding_budget (false);
+}
+
+TEST (CppFrameworkRouteChannelRequest, V21SpotEncodingBudgetPositiveControl)
+{
+    verify_v21_encoding_budget (true);
+}
+
+struct v21_lane_packet_t
+{
+    static constexpr const char *packet_name = "v21.lane.request";
+    int value;
+};
+
+TEST (CppFrameworkRouteChannelRequest, V21NodeLaneWaitConsumesDeadlineWithoutBlockingSubmit)
+{
+    public_spot_fixture_t fixture;
+    std::promise<std::chrono::steady_clock::time_point> request_started;
+    fixture.serializers.add<v21_lane_packet_t> (
+      [&] (const auto &packet) {
+          request_started.set_value (std::chrono::steady_clock::now ());
+          return encoded_payload_t::from_string (std::to_string (packet.value));
+      },
+      [] (const encoded_payload_t &payload) {
+          return v21_lane_packet_t{std::stoi (payload.to_string ())};
+      },
+      "application/json");
+    std::promise<void> entered, release;
+    auto released = release.get_future ().share ();
+    unsigned submitted = 0;
+    fixture.route ().set_request_backend ([&] (const auto &, const auto &, const auto &, auto) {
+        ++submitted;
+        entered.set_value ();
+        released.wait ();
+        return request_task_t<parts_t> (result_t<parts_t>::success ({}));
+    });
+    const auto target = zlink::routing_id_t::from ("peer");
+    auto first = std::async (std::launch::async, [&] {
+        return fixture.route ().request_reply_spot_parts (target, "spot", {},
+                                                          std::chrono::steady_clock::now () + 5s);
+    });
+    entered.get_future ().wait ();
+    auto client = fixture.builder.route_client (fixture.serializers);
+    auto second = std::async (std::launch::async, [&] {
+        return client.request_to_node ("spot-route", target, v21_lane_packet_t{79})
+          .timeout (20ms)
+          .async<spot_packet_t> ();
+    });
+    const auto deadline_observation = request_started.get_future ().get () + 100ms;
+    const auto status = second.wait_for (100ms);
+    (void) released.wait_until (deadline_observation);
+    // Release the occupied owner on either implementation before assertions.
+    release.set_value ();
+    (void) first.get ().result ();
+    const auto terminal = second.get ().result ();
+    EXPECT_EQ (std::future_status::ready, status);
+    EXPECT_EQ (1u, submitted);
+    ASSERT_FALSE (terminal);
+    EXPECT_EQ (framework_error_kind_t::deadline_exceeded, terminal.error_kind ());
+}
+
+TEST (CppFrameworkRouteChannelRequest, V21FinalReceiverDecodesLatePhysicalSpotReplyOnce)
+{
+    for (const bool node : {false, true}) {
+        for (const bool decode_failure : {false, true}) {
+            SCOPED_TRACE (node);
+            SCOPED_TRACE (decode_failure);
+            auto builder = test::runtime_failure_builder ();
+            serializer_registry_t serializers;
+            unsigned decoded = 0;
+            serializers.add<spot_packet_t> (
+              [] (const auto &packet) {
+                  return encoded_payload_t::from_string (std::to_string (packet.value));
+              },
+              [&] (const encoded_payload_t &payload) {
+                  ++decoded;
+                  if (decode_failure)
+                      throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                                   "typed reply decode failed");
+                  return spot_packet_t{std::stoi (payload.to_string ())};
+              },
+              "application/json");
+            builder.route_channel ("spot-route");
+            auto manager = detail::channel_runtime_manager_t::from (builder);
+            manager.initialize_route_channels (builder);
+            auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+            runtime.bind_spot_address_resolver (std::make_shared<spot_resolver_t> ());
+            task_completion_source_t<parts_t> physical;
+            auto admitted = std::make_shared<task_completion_source_t<void>> ();
+            parts_t response;
+            auto held = std::make_shared<int> (1);
+            std::weak_ptr<int> retained = held;
+            manager.get_route_channel ("spot-route")
+              .set_request_backend (
+                [&, held] (const auto &, const auto &, const auto &parts, auto) {
+                    runtime::messaging::envelope_codec_t codec;
+                    auto header = codec.decode_header (parts).value ();
+                    header.kind = runtime::messaging::message_kind_t::response;
+                    response =
+                      codec.encode_raw_body_parts (header, codec.decode_body (parts).value ());
+                    return request_task_t<parts_t> (physical.task (), admitted);
+                });
+            auto client = builder.route_client (serializers);
+            auto pending =
+              node ? client
+                       .request_to_node ("spot-route", zlink::routing_id_t::from ("peer"),
+                                         spot_packet_t{79})
+                       .async<spot_packet_t> ()
+                   : client.request_to_spot ("spot", spot_packet_t{79}).async<spot_packet_t> ();
+            admitted->complete (
+              result_t<void>::failure (framework_error_kind_t::unavailable, "admission refused"));
+            ASSERT_FALSE (pending.result ());
+            EXPECT_EQ (framework_error_kind_t::unavailable, pending.result ().error_kind ());
+            runtime.shutdown ();
+            held.reset ();
+            EXPECT_FALSE (retained.expired ());
+            EXPECT_EQ (0u, decoded);
+            physical.complete (result_t<parts_t>::success (std::move (response)));
+            const auto terminal = detail::request_task_access_t::physical_reply (pending).result ();
+            EXPECT_EQ (1u, decoded);
+            EXPECT_TRUE (retained.expired ());
+            EXPECT_EQ (framework_error_kind_t::unavailable, pending.result ().error_kind ());
+            if (decode_failure) {
+                ASSERT_FALSE (terminal);
+                EXPECT_EQ (framework_error_kind_t::protocol_error, terminal.error_kind ());
+            } else {
+                ASSERT_TRUE (terminal);
+                EXPECT_EQ (79, terminal.value ().value);
+            }
+        }
+    }
+}
+
+TEST (CppFrameworkRouteChannelRequest, V21QueuedSubmissionRetainsOriginalWaitOwner)
+{
+    public_spot_fixture_t fixture;
+    std::promise<void> entered, release, second_entered;
+    auto released = release.get_future ().share ();
+    task_completion_source_t<parts_t> physical;
+    auto admitted = std::make_shared<task_completion_source_t<void>> ();
+    using cancellation_t = std::stop_callback<std::function<void ()>>;
+    std::unique_ptr<cancellation_t> cancellation;
+    unsigned submitted = 0;
+    bool owner_preserved = false;
+    fixture.route ().set_request_backend ([&] (const auto &, const auto &, const auto &, auto) {
+        if (++submitted == 1) {
+            entered.set_value ();
+            released.wait ();
+            return request_task_t<parts_t> (result_t<parts_t>::success ({}));
+        }
+        const auto owner = detail::current_wait_owner ();
+        owner_preserved = owner.stop_possible ();
+        cancellation = std::make_unique<cancellation_t> (owner, [admitted] {
+            admitted->complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                         "backend wait owner stopped"));
+        });
+        second_entered.set_value ();
+        return request_task_t<parts_t> (physical.task (), admitted);
+    });
+    const auto target = zlink::routing_id_t::from ("peer");
+    auto first = std::async (std::launch::async, [&] {
+        return fixture.route ().request_reply_spot_parts (target, "spot", {},
+                                                          std::chrono::steady_clock::now () + 5s);
+    });
+    entered.get_future ().wait ();
+    auto client = fixture.builder.route_client (fixture.serializers);
+    std::stop_source parent;
+    auto second = std::async (std::launch::async, [&] {
+        detail::ambient_context_scope_t invocation (nullptr, nullptr, parent.get_token ());
+        return client.request_to_node ("spot-route", target, spot_packet_t{79})
+          .timeout (5s)
+          .async<spot_packet_t> ();
+    });
+    const auto submission_status = second.wait_for (100ms);
+    release.set_value ();
+    (void) first.get ().result ();
+    auto pending = second.get ();
+    const auto backend_status = second_entered.get_future ().wait_for (1s);
+    parent.request_stop ();
+    auto terminal = std::async (std::launch::async, [&] { return pending.result (); });
+    const auto terminal_status = terminal.wait_for (100ms);
+    // Finish teardown even if a regression discarded the backend's wait owner.
+    admitted->complete (
+      result_t<void>::failure (framework_error_kind_t::shutting_down, "backend teardown"));
+    const auto result = terminal.get ();
+    physical.complete (result_t<parts_t>::success ({}));
+    EXPECT_EQ (std::future_status::ready, submission_status);
+    EXPECT_EQ (std::future_status::ready, backend_status);
+    EXPECT_TRUE (owner_preserved);
+    EXPECT_EQ (std::future_status::ready, terminal_status);
+    ASSERT_FALSE (result);
+    EXPECT_EQ (framework_error_kind_t::shutting_down, result.error_kind ());
+}
+
+TEST (CppFrameworkRouteChannelRequest, V21SpotEncodingExceptionKeepsAdmissionFailure)
+{
+    public_spot_fixture_t fixture;
+    fixture.serializers.add<v21_lane_packet_t> (
+      [] (const auto &) -> encoded_payload_t { throw std::runtime_error ("encoding failed"); },
+      [] (const encoded_payload_t &) { return v21_lane_packet_t{}; }, "application/json");
+    unsigned submitted = 0;
+    fixture.route ().set_request_backend ([&] (const auto &, const auto &, const auto &, auto) {
+        ++submitted;
+        return request_task_t<parts_t> (result_t<parts_t>::success ({}));
+    });
+    auto pending = fixture.builder.route_client (fixture.serializers)
+                     .request_to_spot ("spot", v21_lane_packet_t{79})
+                     .async<spot_packet_t> ();
+    const auto admitted = pending.admitted ().result ();
+    const auto terminal = pending.result ();
+    EXPECT_EQ (0u, submitted);
+    ASSERT_FALSE (admitted);
+    ASSERT_NE (admitted.error (), nullptr);
+    EXPECT_EQ (framework_error_kind_t::protocol_error, admitted.error_kind ());
+    EXPECT_STREQ ("payload serialization failed", admitted.error ()->what ());
+    EXPECT_EQ (detail::failure_origin_t::payload_encode,
+               detail::failure_origin (*admitted.error ()));
+    ASSERT_FALSE (terminal);
+    ASSERT_NE (terminal.error (), nullptr);
+    EXPECT_EQ (framework_error_kind_t::protocol_error, terminal.error_kind ());
+    EXPECT_STREQ ("payload serialization failed", terminal.error ()->what ());
+    EXPECT_EQ (detail::failure_origin_t::payload_encode,
+               detail::failure_origin (*terminal.error ()));
+}
+
+TEST (CppFrameworkRouteChannelRequest, V21SubmissionExceptionReachesPreparedReceiver)
+{
+    for (const bool node : {false, true}) {
+        SCOPED_TRACE (node);
+        public_spot_fixture_t fixture;
+        fixture.route ().set_request_backend (
+          [] (const auto &, const auto &, const auto &, auto) -> request_task_t<parts_t> {
+              throw std::runtime_error ("submission failed");
+          });
+        auto client = fixture.builder.route_client (fixture.serializers);
+        auto pending =
+          node ? client
+                   .request_to_node ("spot-route", zlink::routing_id_t::from ("peer"),
+                                     spot_packet_t{79})
+                   .async<spot_packet_t> ()
+               : client.request_to_spot ("spot", spot_packet_t{79}).async<spot_packet_t> ();
+        auto admitted = pending.admitted ().result ();
+        const auto terminal = pending.result ();
+        ASSERT_FALSE (admitted);
+        ASSERT_FALSE (terminal);
+        EXPECT_EQ (terminal.error (), nullptr);
+        try {
+            (void) terminal.value ();
+            ADD_FAILURE () << "backend exception was not preserved";
+        }
+        catch (const std::runtime_error &error) {
+            EXPECT_STREQ ("submission failed", error.what ());
+        }
+        EXPECT_EQ (0u, fixture.route ().pending_request_count ());
+    }
+}
+
+TEST (CppFrameworkRouteChannelRequest, V21ResolutionFailureKeepsResolverInvalidationOwner)
+{
+    class failed_resolver_t final : public runtime::spot_address_resolver_t
+    {
+      public:
+        unsigned invalidations = 0;
+        task_t<std::optional<runtime::spot_address_t>> resolve_spot_address (std::string,
+                                                                             std::string) override
+        {
+            return task_t<std::optional<runtime::spot_address_t>> (
+              result_t<std::optional<runtime::spot_address_t>>::failure (
+                framework_error_kind_t::unavailable, "lookup failed"));
+        }
+        void invalidate_spot_address (std::string_view) override { ++invalidations; }
+        void invalidate_all_routes_after_store_recovery () override {}
+    };
+    auto builder = test::runtime_failure_builder ();
+    serializer_registry_t serializers;
+    auto resolver = std::make_shared<failed_resolver_t> ();
+    detail::channel_runtime_t::from (builder.message_bus ()).bind_spot_address_resolver (resolver);
+    auto pending = builder.route_client (serializers)
+                     .request_to_spot ("spot", spot_packet_t{79})
+                     .async<spot_packet_t> ();
+    const auto terminal = pending.result ();
+    ASSERT_FALSE (terminal);
+    EXPECT_EQ (framework_error_kind_t::unavailable, terminal.error_kind ());
+    ASSERT_NE (terminal.error (), nullptr);
+    EXPECT_STREQ (terminal.error ()->what (), "lookup failed");
+    EXPECT_EQ (0u, resolver->invalidations);
 }
 
 TEST (CppFrameworkRouteChannelRequest, SpotBackendPreservesParentTurnCancellation)

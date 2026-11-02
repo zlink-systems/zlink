@@ -107,6 +107,12 @@ class route_channel_runtime_t
                          runtime::messaging::message_parts_t parts,
                          std::chrono::milliseconds timeout);
 
+    void request_reply_parts (const zlink::routing_id_t &target_node_rid,
+                              std::optional<std::string> target_spot_id,
+                              runtime::messaging::message_parts_t parts,
+                              std::chrono::steady_clock::time_point deadline,
+                              request_receiver_t<runtime::messaging::message_parts_t> receiver);
+
     task_t<void> submit_spot_send_parts (const zlink::routing_id_t &target_node_rid,
                                          const std::string &target_spot_id,
                                          runtime::messaging::message_parts_t parts);
@@ -136,12 +142,6 @@ class route_channel_runtime_t
     await_readiness (std::shared_ptr<state_t> state,
                      std::shared_ptr<ready_observer_t> observer,
                      std::optional<std::chrono::steady_clock::time_point> deadline);
-    static request_task_t<runtime::messaging::message_parts_t>
-    request_backend_parts (const std::shared_ptr<state_t> &_state,
-                           const zlink::routing_id_t &target_node_rid,
-                           std::optional<std::string> target_spot_id,
-                           runtime::messaging::message_parts_t parts,
-                           std::chrono::steady_clock::time_point deadline);
     static route_outbound_packet_t &
     append_outbound_unlocked (const std::shared_ptr<state_t> &_state,
                               const zlink::routing_id_t &target_node_rid,
@@ -154,12 +154,6 @@ class route_channel_runtime_t
     static result_t<void>
     ensure_ready (const std::shared_ptr<state_t> &state,
                   const std::optional<zlink::routing_id_t> &target = std::nullopt);
-    static request_task_t<runtime::messaging::message_parts_t>
-    request_reply_spot_parts_owned (std::shared_ptr<state_t> state,
-                                    zlink::routing_id_t target_node_rid,
-                                    std::string target_spot_id,
-                                    runtime::messaging::message_parts_t parts,
-                                    std::chrono::steady_clock::time_point deadline);
     static std::optional<result_t<void>>
     ready_unlocked (const state_t &state,
                     const std::optional<zlink::routing_id_t> &target,
