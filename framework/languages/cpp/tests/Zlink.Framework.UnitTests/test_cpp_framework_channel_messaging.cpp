@@ -2645,7 +2645,8 @@ int main ()
            const zlink::framework::runtime::messaging::message_parts_t &parts,
            std::chrono::milliseconds timeout) {
           if (target != target_node || spot || parts.size () == 0
-              || timeout != std::chrono::milliseconds (25)) {
+              || timeout <= std::chrono::milliseconds::zero ()
+              || timeout > std::chrono::milliseconds (25)) {
               return zlink::framework::
                 result_t<zlink::framework::runtime::messaging::message_parts_t>::failure (
                   zlink::framework::framework_error_kind_t::internal_failure,

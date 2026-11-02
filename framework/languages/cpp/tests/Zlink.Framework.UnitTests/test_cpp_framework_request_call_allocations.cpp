@@ -476,9 +476,8 @@ class ready_spot_resolver_t final : public fw::runtime::spot_address_resolver_t
     void invalidate_all_routes_after_store_recovery () override {}
 };
 
-// Measure the operation's promise, admission and selected-submission await with
-// the same value boundaries as the Spot submit. The frame size is deliberately
-// not compared: its compiler-owned locals differ from the real resolver path.
+// Retain the displaced operation and projection primitives as an allocation
+// ceiling. Compare allocation counts, rather than compiler-owned frame sizes.
 fw::request_task_t<zlink::message_t>
 spot_operation_primitive (fw::route_client_t::payload_encoder_t encode_payload,
                           fw::channel_request_call_t::metadata_map_t metadata,
@@ -566,11 +565,10 @@ allocation_sample_t spot_projection_allocations (
     return sample;
 }
 
-/* A Spot request resolves its address in its own operation coroutine, which
- * owns the operation's admission source and message reply (Spot address
- * messaging: one resolve per operation). The selected mesh request below it
- * is projected once and shares the transport's admission. */
-TEST (RequestCallAllocations, SpotRequestProjectsTheSelectedMeshRequestOnce)
+/* Submit/completion §9 removes conversion-only message result states. The
+ * old primitive chain remains the cost ceiling: a prepared typed receiver
+ * must use fewer allocations and still own both final reply states. */
+TEST (RequestCallAllocations, SpotFinalReceiverUsesFewerAllocationsThanTheConversionChain)
 {
     fw::serializer_registry_t serializers;
     add_payload (serializers);
@@ -622,7 +620,7 @@ TEST (RequestCallAllocations, SpotRequestProjectsTheSelectedMeshRequestOnce)
     print_allocation_sizes ("spot request above transport", actual);
     SCOPED_TRACE (actual.diagnostics);
     EXPECT_EQ (submitted, 1u);
-    EXPECT_EQ (actual.total, encode.total + operation.total + selection.total + target_owner.total
+    EXPECT_LT (actual.total, encode.total + operation.total + selection.total + target_owner.total
                                + projection.total + public_projection.total);
 
     ASSERT_TRUE (pending.has_value ());
