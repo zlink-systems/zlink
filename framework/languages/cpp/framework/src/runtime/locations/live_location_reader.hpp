@@ -14,6 +14,7 @@
 #include <map>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <utility>
 #include <vector>
 
@@ -100,7 +101,11 @@ class live_location_reader_t final
     using mesh_sources_t = std::vector<mesh_source_t>;
 
     // Auto-connect and request acceptance share these descriptor originals and lease deadlines.
-    task_t<std::shared_ptr<const mesh_sources_t>> poll_mesh_sources (std::string mesh_name)
+    task_t<std::shared_ptr<const mesh_sources_t>>
+    poll_mesh_sources (std::string mesh_name,
+                       std::chrono::steady_clock::time_point deadline_at =
+                         std::chrono::steady_clock::time_point::max (),
+                       std::stop_token cancellation = {})
     {
         auto sources = std::make_shared<mesh_sources_t> ();
         std::map<std::string,
@@ -108,11 +113,15 @@ class live_location_reader_t final
           leases;
         location_page_request_t page;
         do {
-            auto listed = co_await _store->list_mesh_nodes (mesh_name, page);
+            auto listing = co_await observe_until (_store->list_mesh_nodes (mesh_name, page),
+                                                   deadline_at, cancellation);
+            auto listed = std::move (listing.value ());
             for (auto &descriptor : listed.items) {
                 if (!leases.contains (descriptor.owner_id)) {
                     const auto started = std::chrono::steady_clock::now ();
-                    auto lease = co_await _store->read_owner_lease (descriptor.owner_id);
+                    auto reading = co_await observe_until (
+                      _store->read_owner_lease (descriptor.owner_id), deadline_at, cancellation);
+                    auto lease = std::move (reading.value ());
                     leases.emplace (descriptor.owner_id,
                                     std::make_pair (std::move (lease), started));
                 }

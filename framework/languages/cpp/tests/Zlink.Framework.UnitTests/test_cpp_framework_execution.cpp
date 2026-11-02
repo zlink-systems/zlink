@@ -93,11 +93,7 @@ struct fanout_location_runtime_test_access_t
     static state_lane_t &lane (fanout_location_runtime_t &runtime) { return runtime._lane; }
     static void pump (fanout_location_runtime_t &runtime) { runtime.pump (); }
     static void run (fanout_location_runtime_t &runtime) { runtime.run (); }
-    static void request_stop (fanout_location_runtime_t &runtime)
-    {
-        runtime._stop.store (true, std::memory_order_release);
-        runtime._wake_timer.signal ();
-    }
+    static void request_stop (fanout_location_runtime_t &runtime) { runtime.request_stop (); }
 };
 }
 
