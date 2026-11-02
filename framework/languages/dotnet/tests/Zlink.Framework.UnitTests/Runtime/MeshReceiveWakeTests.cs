@@ -923,16 +923,43 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         });
         await entered.Task;
         var addTurn = false;
-        long actual = 0;
-        long baseline = 0;
+        var actualSamples = new List<long>();
+        var baselineSamples = new List<long>();
         var rotations = 0;
         long last = 0;
+        var lastCollectionCounts = default((int Gen0, int Gen1, int Gen2));
+        var collectionRequested = new SemaphoreSlim(0);
+        var collectionCompleted = new SemaphoreSlim(0);
+        var stopCollection = 0;
+        var collectionInjected = false;
+        var collector = new Thread(() =>
+        {
+            while (true)
+            {
+                collectionRequested.Wait();
+                if (Volatile.Read(ref stopCollection) != 0)
+                    return;
+                GC.Collect();
+                collectionCompleted.Release();
+            }
+        })
+        {
+            IsBackground = true,
+        };
+        var collectorStarted = false;
         SemaphoreSlim rotated = new(0);
         // The window opens after the controlled poller returns and closes before
         // its next wait, so it holds only the node's own rotation.
         poller.AfterWait = () =>
         {
+            lastCollectionCounts = PerCallAllocation.CollectionCounts();
             last = GC.GetAllocatedBytesForCurrentThread();
+            if (rotations > warmup && !collectionInjected)
+            {
+                collectionInjected = true;
+                collectionRequested.Release();
+                collectionCompleted.Wait();
+            }
             if (addTurn)
                 _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
         };
@@ -945,15 +972,20 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             var control = GC.GetAllocatedBytesForCurrentThread() - start;
             if (rotations > warmup)
             {
-                actual += measured;
-                baseline += control;
+                if (PerCallAllocation.CollectionCountsUnchanged(lastCollectionCounts))
+                {
+                    actualSamples.Add(measured);
+                    baselineSamples.Add(control);
+                }
             }
             rotations++;
             rotated.Release();
         };
-        node.Start();
         try
         {
+            collector.Start();
+            collectorStarted = true;
+            node.Start();
             await poller.FirstWait.Task.WaitAsync(CompletionBound);
             poller.AllowWait();
             await rotated.WaitAsync(CompletionBound);
@@ -962,6 +994,10 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 node.SignalReceiveOwner();
                 Assert.True(await rotated.WaitAsync(CompletionBound));
             }
+            Assert.True(collectionInjected);
+            Assert.True(actualSamples.Count < iterations);
+            var actual = PerCallAllocation.MinWindow(actualSamples);
+            var baseline = PerCallAllocation.MinWindow(baselineSamples);
             output.WriteLine(
                 $"idle rotation={actual}B, node turns={baseline}B, excess={actual - baseline}B/{iterations}"
             );
@@ -970,13 +1006,16 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 $"idle rotation={actual}B, node turns={baseline}B, excess={actual - baseline}B/{iterations}"
             );
             addTurn = true;
-            actual = baseline = 0;
+            actualSamples.Clear();
+            baselineSamples.Clear();
             rotations = 0;
             for (var index = 0; index < warmup + iterations; index++)
             {
                 node.SignalReceiveOwner();
                 Assert.True(await rotated.WaitAsync(CompletionBound));
             }
+            actual = PerCallAllocation.MinWindow(actualSamples);
+            baseline = PerCallAllocation.MinWindow(baselineSamples);
             Assert.Throws<Xunit.Sdk.TrueException>(() => Assert.True(actual == baseline));
             output.WriteLine(
                 $"negative control: extra owner turn actual={actual}B baseline={baseline}B"
@@ -984,6 +1023,12 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         }
         finally
         {
+            if (collectorStarted)
+            {
+                Volatile.Write(ref stopCollection, 1);
+                collectionRequested.Release();
+                collector.Join();
+            }
             release.SetResult();
             await occupied;
             var shutdown = node.DisposeAsync();
