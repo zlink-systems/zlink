@@ -1009,7 +1009,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json.cpp)
   target_link_libraries(test_cpp_framework_typed_json PRIVATE zlink_framework zlink::stream_connector)
   target_compile_definitions(test_cpp_framework_typed_json PRIVATE
-    ZLINK_TYPED_JSON_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/framework-json-v1.json")
+    ZLINK_TYPED_JSON_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/framework-json-v1.json"
+    ZLINK_REQUIRED_PRESENCE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/framework-json-required-presence.txt")
   add_test(NAME test_cpp_framework_typed_json COMMAND test_cpp_framework_typed_json)
   set_tests_properties(test_cpp_framework_typed_json PROPERTIES LABELS "framework-unit;protocol;unit" TIMEOUT 30)
 

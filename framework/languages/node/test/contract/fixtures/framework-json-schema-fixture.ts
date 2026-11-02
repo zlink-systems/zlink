@@ -23,13 +23,25 @@ type FixturePacket = {
   status: FixtureStatus;
 };
 
+type RequiredPresence = {
+  code: string;
+  accessToken: string | null;
+  accountId: ZLinkInt32;
+  attempts?: ZLinkInt32;
+};
+
 class ClassPacket {
   readonly identifier!: string;
   readonly flags?: readonly boolean[];
 }
 
-const PacketNames = Object.freeze({ fixture: 'FixturePacket', classPacket: 'ClassPacket' });
+const PacketNames = Object.freeze({
+  fixture: 'FixturePacket',
+  classPacket: 'ClassPacket',
+  requiredPresence: 'RequiredPresence'
+});
 void PacketNames.fixture;
 void PacketNames.classPacket;
+void PacketNames.requiredPresence;
 
-export type { FixturePacket, ClassPacket };
+export type { FixturePacket, ClassPacket, RequiredPresence };

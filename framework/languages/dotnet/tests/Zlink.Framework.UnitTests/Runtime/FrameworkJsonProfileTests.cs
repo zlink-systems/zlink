@@ -230,6 +230,48 @@ public sealed class FrameworkJsonProfileTests
     }
 
     [Fact]
+    public void Application_Dto_Required_Presence_Matches_Shared_Vectors()
+    {
+        var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
+        var path = Path.GetFullPath(
+            "../../runtime/protocol/golden/framework-json-required-presence.txt",
+            frameworkRoot
+        );
+
+        foreach (var line in File.ReadLines(path))
+        {
+            var parts = line.Split('\t', 2);
+            var expectedValid = parts[0] == "valid";
+            var payload = Encoding.UTF8.GetBytes(parts[1]);
+            if (!expectedValid)
+            {
+                Assert.ThrowsAny<JsonException>(() =>
+                    ZLinkFrameworkJsonPayloadCodec.Deserialize<RequiredPresenceMessage>(payload)
+                );
+                Assert.ThrowsAny<JsonException>(() =>
+                    ZLinkFrameworkJsonPayloadCodec.Deserialize<ReadOnlyRequiredPresenceMessage>(
+                        payload
+                    )
+                );
+                continue;
+            }
+
+            var decoded = Assert.IsType<RequiredPresenceMessage>(
+                ZLinkFrameworkJsonPayloadCodec.Deserialize<RequiredPresenceMessage>(payload)
+            );
+            Assert.Equal(
+                parts[1].Contains("\"attempts\"", StringComparison.Ordinal) ? 12 : 5,
+                decoded.Attempts
+            );
+            var readOnlyDecoded = Assert.IsType<ReadOnlyRequiredPresenceMessage>(
+                ZLinkFrameworkJsonPayloadCodec.Deserialize<ReadOnlyRequiredPresenceMessage>(payload)
+            );
+            Assert.Equal(decoded.Attempts, readOnlyDecoded.Attempts);
+            Assert.Null(readOnlyDecoded.AccessToken);
+        }
+    }
+
+    [Fact]
     public void Codec_Rejects_Implicit_Language_Specific_Types()
     {
         Assert.ThrowsAny<JsonException>(() =>
@@ -289,5 +331,25 @@ public sealed class FrameworkJsonProfileTests
     private sealed class UnsupportedMessage
     {
         public Guid Id { get; init; }
+    }
+
+    public sealed record RequiredPresenceMessage(
+        string Code,
+        string? AccessToken,
+        int AccountId,
+        int Attempts = 5
+    );
+
+    private sealed class ReadOnlyRequiredPresenceMessage(
+        string code,
+        string? accessToken,
+        int accountId,
+        int attempts = 5
+    )
+    {
+        public string Code { get; } = code;
+        public string? AccessToken { get; } = accessToken;
+        public int AccountId { get; } = accountId;
+        public int Attempts { get; } = attempts;
     }
 }
