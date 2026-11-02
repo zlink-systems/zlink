@@ -126,6 +126,13 @@ test('canonical inbound headers decode each field once and keep UTF-8 validation
   assert.equal(utf8Checks, 0);
   assert.equal(jsonParses, 0);
 
+  const populatedMetadata = Buffer.from(
+    ascii.toString().replace('"metadata":{}', '"metadata":{"tenant":"north"}')
+  );
+  assert.equal(decode(populatedMetadata).metadata.tenant, 'north');
+  assert.equal(utf8Checks, 0);
+  assert.equal(jsonParses, 0);
+
   const escaped = decode(Buffer.from(ascii.toString().replace('"bench"', '"be\\"nch"')));
   assert.equal(escaped.channelName, 'be"nch');
   const unicode = decode(Buffer.from(ascii.toString().replace('"bench"', '"bénch"')));
