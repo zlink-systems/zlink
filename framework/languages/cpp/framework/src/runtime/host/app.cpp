@@ -1047,13 +1047,15 @@ apply_bound_session_bind_async (
     using bind_result_t = runtime::host::bound_session_bind_operation_result_t;
     actor_gateway_runtime_t actor_gateway_runtime (lock_runtime_owner (weak_actor_gateway_runtime));
     const auto session_rid = zlink::routing_id_t::from (bind.session_routing_id);
-    actor_gateway_runtime.trace_bound_session_send_stage (
-      bind.actor.actor_id, "bound_session_bind_receive",
-      [&] {
-          return "new_session_rid=" + session_rid.to_hex ()
-                 + " new_binding_generation=" + std::to_string (bind.binding.generation);
-      },
-      &session_rid);
+    if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+        actor_gateway_runtime.trace_bound_session_send_stage (
+          bind.actor.actor_id, "bound_session_bind_receive",
+          [&] {
+              return "new_session_rid=" + session_rid.to_hex ()
+                     + " new_binding_generation=" + std::to_string (bind.binding.generation);
+          },
+          &session_rid);
+    }
     if (bind.binding.state == runtime::protocol::bound_session_binding_state_t::tombstone) {
         const auto retired = actor_gateway_runtime.retire_bound_session_route (
           actor, session_owner, session_rid, bind.binding.generation);
@@ -1207,14 +1209,17 @@ apply_bound_session_bind_async (
 
           std::optional<runtime::protocol::bound_session_replaced_t> replacement;
           const auto &change = transition.value ();
-          actor_gateway_runtime.trace_bound_session_send_stage (
-            std::string (actor.actor_id ().value ()), "actor_owner_route_publish",
-            [&] {
-                return "session_rid=" + incoming_route.session_rid->to_hex ()
-                       + " binding_generation=" + std::to_string (incoming_route.binding_generation)
-                       + " replaced=" + (change.changed ? "true" : "false");
-            },
-            &*incoming_route.session_rid);
+          if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+              actor_gateway_runtime.trace_bound_session_send_stage (
+                std::string (actor.actor_id ().value ()), "actor_owner_route_publish",
+                [&] {
+                    return "session_rid=" + incoming_route.session_rid->to_hex ()
+                           + " binding_generation="
+                           + std::to_string (incoming_route.binding_generation)
+                           + " replaced=" + (change.changed ? "true" : "false");
+                },
+                &*incoming_route.session_rid);
+          }
           if (change.changed && change.previous && change.previous->session_rid
               && change.previous->node_generation != 0 && change.previous->binding_generation != 0
               && !change.previous->session_owner_id.empty ()
