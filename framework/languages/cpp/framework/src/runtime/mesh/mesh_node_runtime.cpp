@@ -847,13 +847,14 @@ void mesh_node_runtime_t::start (
                     const runtime::stateful::object_ref_t &target,
                     const runtime::protocol::relocation_prepare_t &prepare) {
           return spot_node_runtime_t (spot_state)
-            .consume_actor_join_recovery (frozen, target, prepare);
+            .consume_actor_join_recovery_async (frozen, target, prepare);
       },
       [spot_state] (const runtime::stateful::object_ref_t &target) {
           return spot_node_runtime_t (spot_state).actor_relocation_authority (target);
       },
       [spot_state] (const std::string &stable_type, const runtime::stateful::object_ref_t &target) {
-          spot_node_runtime_t (spot_state).discard_actor_join_recovery (stable_type, target);
+          return spot_node_runtime_t (spot_state)
+            .discard_actor_join_recovery_async (stable_type, target);
       },
       [spot_state] (const runtime::stateful::object_ref_t &target,
                     std::uint64_t target_node_generation,

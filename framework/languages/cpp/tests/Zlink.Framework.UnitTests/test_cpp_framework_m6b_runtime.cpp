@@ -9340,12 +9340,16 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
           return std::nullopt;
       },
       [] (stateful::frozen_object_state_t &, const stateful::object_ref_t &,
-          const protocol::relocation_prepare_t &) { return true; },
+          const protocol::relocation_prepare_t &) -> zlink::framework::task_t<bool> {
+          co_return true;
+      },
       [] (const stateful::object_ref_t &)
         -> std::optional<zlink::framework::runtime::actor_authority_payload_t> {
           return std::nullopt;
       },
-      [] (const std::string &, const stateful::object_ref_t &) {},
+      [] (const std::string &, const stateful::object_ref_t &) -> zlink::framework::task_t<void> {
+          co_return;
+      },
       [] (const stateful::object_ref_t &, std::uint64_t, std::uint64_t) { return true; });
     source->start ();
     target->start ();

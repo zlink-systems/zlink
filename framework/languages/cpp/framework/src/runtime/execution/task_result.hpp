@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <memory>
+#include <type_traits>
 #include <utility>
 
 namespace zlink::framework::runtime
@@ -27,10 +28,20 @@ task_t<R> continue_task (task_t<T> pending, Next next)
 {
     if (!pending.await_ready ())
         return [] (task_t<T> pending, Next next) -> task_t<R> {
-            co_return co_await next (co_await pending);
+            if constexpr (std::is_void_v<T>) {
+                co_await pending;
+                co_return co_await next ();
+            } else {
+                co_return co_await next (co_await pending);
+            }
         }(std::move (pending), std::move (next));
     try {
-        return next (pending.await_resume ());
+        if constexpr (std::is_void_v<T>) {
+            pending.await_resume ();
+            return next ();
+        } else {
+            return next (pending.await_resume ());
+        }
     }
     catch (...) {
         return task_t<R> (detail::current_exception_result<R> ());
