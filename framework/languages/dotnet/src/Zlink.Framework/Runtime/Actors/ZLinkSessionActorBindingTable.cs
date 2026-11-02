@@ -293,7 +293,7 @@ internal sealed class ZLinkSessionActorBindingTable
             new EventId(28003, "late_session_relocation_seal"),
             "late_session_relocation_seal actor={ActorId} relocation={RelocationId}"
         );
-    private readonly ZLinkStateLane _lane = new();
+    internal readonly ZLinkStateLane _lane = new();
 
     // Each binding record lives once: current, or retained for exact retirement cleanup.
     private sealed class ActorBindings

@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
@@ -263,56 +262,56 @@ public sealed partial class RelocationBehaviorConformanceTests
             ZLinkDiagnosticsLevel.Normal
         );
         var prepares = new ConcurrentQueue<ZLinkServiceWireCodec.RelocationPrepareRecord>();
-        var socketField = typeof(ZLinkManagedMeshNode).GetField("_socket", PrivateInstance)!;
-        var socket = (IRouterSocket)socketField.GetValue(native)!;
+        var socket = native._socket!;
         var nativePrepare = new TaskCompletionSource<RequestSubmission>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var injected = 0;
-        socketField.SetValue(
-            native,
-            PrepareRequestRecorder.Create(
-                socket,
-                prepares,
-                fault == PrepareRollbackFault.NativeTimeout ? TimeSpan.FromMilliseconds(250) : null,
-                submission =>
+        native._socket = PrepareRequestRecorder.Create(
+            socket,
+            prepares,
+            fault == PrepareRollbackFault.NativeTimeout ? TimeSpan.FromMilliseconds(250) : null,
+            submission =>
+            {
+                nativePrepare.TrySetResult(submission);
+                if (!replayable || Interlocked.Exchange(ref injected, 1) != 0)
+                    return;
+                if (fault == PrepareRollbackFault.NativeTimeout)
                 {
-                    nativePrepare.TrySetResult(submission);
-                    if (!replayable || Interlocked.Exchange(ref injected, 1) != 0)
-                        return;
-                    if (fault == PrepareRollbackFault.NativeTimeout)
-                    {
-                        var nativeId = prepares.Single().RelocationId;
-                        store.HeldSourceAbort = Guid.ParseExact(
-                            $"{nativeId.High:x16}{nativeId.Low:x16}",
-                            "N"
-                        );
-                        trace.Record("nativePrepareSubmitted");
-                        return;
-                    }
-                    // Submit the peer replacement before the caller can send its first chunk.
-                    var lane = (ZLinkStateLane)
-                        typeof(ZLinkManagedMeshNode)
-                            .GetField("_lane", PrivateInstance)!
-                            .GetValue(native)!;
-                    var peers = (IDictionary)
-                        typeof(ZLinkManagedMeshNode)
-                            .GetField("_peersByRid", PrivateInstance)!
-                            .GetValue(native)!;
-                    AwaitStateLane(
-                        lane.RunAsync(() =>
-                        {
-                            var peer = peers[target.LocalNodeRid]!;
-                            peers[target.LocalNodeRid] = typeof(object)
-                                .GetMethod("MemberwiseClone", PrivateInstance)!
-                                .Invoke(peer, null);
-                        })
+                    var nativeId = prepares.Single().RelocationId;
+                    store.HeldSourceAbort = Guid.ParseExact(
+                        $"{nativeId.High:x16}{nativeId.Low:x16}",
+                        "N"
                     );
-                    trace.Record("preparePeerReplaced");
-                    var id = prepares.Single().RelocationId;
-                    store.HeldSourceAbort = Guid.ParseExact($"{id.High:x16}{id.Low:x16}", "N");
+                    trace.Record("nativePrepareSubmitted");
+                    return;
                 }
-            )
+                // Submit the peer replacement before the caller can send its first chunk.
+                var lane = native._lane;
+                AwaitStateLane(
+                    lane.RunAsync(() =>
+                    {
+                        var peer = native._peersByRid[target.LocalNodeRid]!;
+                        native._peersByRid[target.LocalNodeRid] = new ZLinkMeshPeer(peer.SnapshotId)
+                        {
+                            RoutingId = peer.RoutingId,
+                            PhysicalRoutingId = peer.PhysicalRoutingId,
+                            RouteGeneration = peer.RouteGeneration,
+                            LifecycleGeneration = peer.LifecycleGeneration,
+                            DescriptorRevision = peer.DescriptorRevision,
+                            Channels = peer.Channels,
+                            Admission = peer.Admission,
+                            State = peer.State,
+                            Admitted = peer.Admitted,
+                            Liveness = peer.Liveness,
+                            LastChangedMs = peer.LastChangedMs,
+                        };
+                    })
+                );
+                trace.Record("preparePeerReplaced");
+                var id = prepares.Single().RelocationId;
+                store.HeldSourceAbort = Guid.ParseExact($"{id.High:x16}{id.Low:x16}", "N");
+            }
         );
         var completionRelease = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -326,14 +325,8 @@ public sealed partial class RelocationBehaviorConformanceTests
             if (fault == PrepareRollbackFault.None)
             {
                 Assert.False(sourceState.Handoff.IsSourceMigrationInProgress);
-                var mailbox = (ZLinkActorSerialExecutor)
-                    typeof(ZLinkActorRuntimeState)
-                        .GetField("_dispatchMailbox", PrivateInstance)!
-                        .GetValue(sourceState)!;
-                var queue = (ZLinkSerialExecutionQueue)
-                    typeof(ZLinkActorSerialExecutor)
-                        .GetField("_queue", PrivateInstance)!
-                        .GetValue(mailbox)!;
+                var mailbox = sourceState._dispatchMailbox;
+                var queue = mailbox._queue;
                 sourceFifoAdmission.SetResult(queue.ApplicationPendingCount);
             }
             trace.Record("completionCallbackStarted");
@@ -357,7 +350,7 @@ public sealed partial class RelocationBehaviorConformanceTests
                 .Timeout(TimeSpan.FromSeconds(15))
                 .Async<BehaviorAck>()
                 .AsTask();
-            await WaitForCapturedFrameAsync(sourceState.Handoff, "_frames");
+            await WaitForCapturedFrameAsync(sourceState.Handoff, sourceState.Handoff._frames);
             trace.ReleaseJoinHandler.SetResult();
             await join.WaitAsync(TimeSpan.FromSeconds(5));
             await transport.PrepareCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -366,7 +359,10 @@ public sealed partial class RelocationBehaviorConformanceTests
                 .Timeout(TimeSpan.FromSeconds(15))
                 .Async<BehaviorAck>()
                 .AsTask();
-            await WaitForCapturedFrameAsync(sourceState.Handoff, "_sourceHoldFrames");
+            await WaitForCapturedFrameAsync(
+                sourceState.Handoff,
+                sourceState.Handoff._sourceHoldFrames
+            );
             if (replayable)
                 transport.ReleasePrepareCall.SetResult();
             else
@@ -594,7 +590,7 @@ public sealed partial class RelocationBehaviorConformanceTests
         }
         finally
         {
-            socketField.SetValue(native, socket);
+            native._socket = socket;
             completionRelease.TrySetResult();
             trace.ReleaseJoinHandler.TrySetResult();
             transport.ReleasePrepareCall.TrySetResult();
@@ -603,18 +599,13 @@ public sealed partial class RelocationBehaviorConformanceTests
         }
     }
 
-    private static Task WaitForCapturedFrameAsync(ZLinkActorHandoffState handoff, string field)
-    {
-        var lane = (ZLinkStateLane)
-            typeof(ZLinkActorHandoffState).GetField("_lane", PrivateInstance)!.GetValue(handoff)!;
-        var frames = (ICollection)
-            typeof(ZLinkActorHandoffState).GetField(field, PrivateInstance)!.GetValue(handoff)!;
-        return WaitUntilAsync(() =>
-            ValueTask.FromResult(AwaitStateLane(lane.RunAsync(() => frames.Count != 0)))
+    private static Task WaitForCapturedFrameAsync(
+        ZLinkActorHandoffState handoff,
+        IReadOnlyCollection<ZLinkActorHandoffFrame> frames
+    ) =>
+        WaitUntilAsync(() =>
+            ValueTask.FromResult(AwaitStateLane(handoff._lane.RunAsync(() => frames.Count != 0)))
         );
-    }
-
-    private const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
 }
 
 internal sealed class BeginUserSpotBehaviorJoinHandler(RelocationBehaviorTrace trace)

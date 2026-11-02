@@ -241,7 +241,7 @@ internal sealed class ZLinkChannelReceiveLoop(
         }
     }
 
-    private static void ReplyClientServerControl(
+    internal static void ReplyClientServerControl(
         IRouterSocket router,
         Received received,
         ZLinkClientServerServerIdentity identity,

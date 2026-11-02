@@ -2011,12 +2011,7 @@ public sealed class ServiceRuntimeFoundationTests
         var expiryTimestamp =
             Stopwatch.GetTimestamp()
             + (long)(ZLinkServiceLiveness.PeerTimeout.TotalSeconds * Stopwatch.Frequency);
-        typeof(ZLinkManagedMeshNode)
-            .GetMethod(
-                "ProcessInfrastructure",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-            )!
-            .Invoke(target, [expiryTimestamp]);
+        target.ProcessInfrastructure(expiryTimestamp);
 
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 0);
         Assert.Equal(MeshNodeState.Started, target.Status().State);
@@ -2032,16 +2027,7 @@ public sealed class ServiceRuntimeFoundationTests
         var first = node.ConnectPeer($"inproc://shared-first-{suffix}", peerRid);
         var second = node.ConnectPeer($"inproc://shared-second-{suffix}", peerRid);
         var ended = new List<RoutingId>();
-        var addListener = typeof(ZLinkManagedMeshNode)
-            .GetEvent(
-                "PeerConnectionIntentRemoved",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-            )!
-            .GetAddMethod(nonPublic: true)!;
-        addListener.Invoke(
-            node,
-            [new Func<RoutingId, Action?>(removed => () => ended.Add(removed))]
-        );
+        node.PeerConnectionIntentRemoved += removed => () => ended.Add(removed);
 
         node.RemovePeerConnection(first);
         Assert.Empty(ended);
