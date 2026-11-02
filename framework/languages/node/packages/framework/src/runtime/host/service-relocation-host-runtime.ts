@@ -80,6 +80,7 @@ import {
   flowIfEnabled,
   type ZLinkMessageFlowTracer
 } from '../diagnostics/message-flow';
+import { currentFlowContext } from '../diagnostics/flow-context';
 import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
 import { isStructuralGuardEnabled, trackDiagnosticCompletion } from '../execution/state-lane';
 import {
@@ -1962,7 +1963,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const relocationMetric =
       spotRegistration.relocation.kind === 'disabled'
         ? undefined
-        : this.options.metrics?.startRelocation(meshName, kind, spotRegistration.relocation.kind);
+        : this.startSourceRelocationMetric(meshName, kind, spotRegistration.relocation.kind);
     try {
       const waitForRelocationBoundary = (
         activation as unknown as {
@@ -2115,7 +2116,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const relocationMetric =
       actorPolicy === 'disabled'
         ? undefined
-        : this.options.metrics?.startRelocation(meshName, 'actor', actorPolicy);
+        : this.startSourceRelocationMetric(meshName, 'actor', actorPolicy, state.actorId);
     try {
       if (isRelocationDebugEnabled()) {
         relocationDebug('standalone_actor.wait_budget', {
@@ -2277,11 +2278,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const relocationMetric =
       spotRegistration.relocation.kind === 'disabled'
         ? undefined
-        : this.options.metrics?.startRelocation(
-            meshName,
-            'user_spot',
-            spotRegistration.relocation.kind
-          );
+        : this.startSourceRelocationMetric(meshName, 'user_spot', spotRegistration.relocation.kind);
     try {
       await this.waitForRelocationBudgetHeadroom(String(target.rid), signal);
       const captured = await new ServiceRelocationObjectCaptureOwner().captureUserSpotAggregate(
@@ -2800,6 +2797,50 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
               ? 'shutdown'
               : 'failed'
     );
+  }
+
+  private startSourceRelocationMetric(
+    meshName: string,
+    objectKind: 'actor' | 'user_spot' | 'instance_spot',
+    policy: 'recreate' | 'snapshot',
+    actorId?: string
+  ): ZLinkRelocationMetricOperation | undefined {
+    const flow = objectKind === 'actor' ? this.options.messageFlow?.() : undefined;
+    const flowContext = flow?.flowCreationEnabled() === true ? currentFlowContext() : undefined;
+    const traceTerminal = (outcome: string): void => {
+      if (flow === undefined || flowContext === undefined) return;
+      const result =
+        outcome === 'completed' ? 'succeeded' : outcome === 'shutdown' ? 'shutdown' : 'failed';
+      flowIfEnabled(flow, ZLinkMessageFlowOutcome.Completed, result, flowContext.flowId)?.trace({
+        outcome: ZLinkMessageFlowOutcome.Completed,
+        result,
+        surface: ZLinkDispatchErrorSurface.ActorRelocation,
+        messageKind: ZLinkDispatchMessageKind.Control,
+        meshName,
+        actorId,
+        flowId: flowContext.flowId,
+        flowOrigin: flowContext.flowOrigin,
+        errorMessage: result === 'failed' ? `source_relocation_${outcome}` : undefined
+      });
+    };
+    const metric = this.options.metrics?.startRelocation(
+      meshName,
+      objectKind,
+      policy,
+      traceTerminal
+    );
+    if (metric !== undefined) return metric;
+    if (flow === undefined || flowContext === undefined) return undefined;
+
+    let completed = false;
+    return {
+      recordBytes: (): void => {},
+      complete: (outcome: string): void => {
+        if (completed) return;
+        completed = true;
+        traceTerminal(outcome);
+      }
+    };
   }
 
   /** Streams the payload chunks of one stage under the effective in-flight budgets. */

@@ -120,7 +120,10 @@ internal sealed class BingoRoom(
                     new BingoObservationStateNotify { State = observation.State }
                 )
                 .Async();
-            if (observation.Reward is { } reward)
+            if (
+                observation.State.Status != BingoRoomStatus.Finished
+                && observation.Reward is { } reward
+            )
                 await AnnounceRewardAsync(reward, cancellationToken);
             else
                 Context.RelocationReady().Defer();
