@@ -38,11 +38,12 @@ build=fail e2e=skipped scenarios=""
 if (cd "$game" && ./run-e2e.sh --local --build-only) 2>&1 </dev/null | tee "$game/.logs/ci-build.log"; then
   build=pass
   e2e=fail
-  if (cd "$game" && ./run-e2e.sh) 2>&1 </dev/null | tee "$game/.logs/ci-e2e.log"; then
-    scenarios="$(grep -o 'Scenarios: [0-9]*/[0-9]* passed' "$game/.logs/ci-e2e.log" | tail -n1 | sed 's/Scenarios: //; s/ passed//' || true)"
-    # A run that exits 0 without the scenario line did not run the scenarios.
-    [ -n "$scenarios" ] && e2e=pass
-  fi
+  e2e_exit=0
+  (cd "$game" && ./run-e2e.sh) 2>&1 </dev/null | tee "$game/.logs/ci-e2e.log" || e2e_exit=$?
+  # Recorded for failed runs too, so the summary shows how far the scenarios got.
+  scenarios="$(grep -o 'Scenarios: [0-9]*/[0-9]* passed' "$game/.logs/ci-e2e.log" | tail -n1 | sed 's/Scenarios: //; s/ passed//' || true)"
+  # A run that exits 0 without the scenario line did not run the scenarios.
+  [ "$e2e_exit" -eq 0 ] && [ -n "$scenarios" ] && e2e=pass
 fi
 
 printf '{"lang":"%s","template":"%s","build":"%s","e2e":"%s","scenarios":"%s"}\n' \
