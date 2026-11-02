@@ -880,8 +880,7 @@ void trace_instance_spot_activation (
   std::optional<zlink::framework::message_flow_result_t> result = std::nullopt,
   std::optional<zlink::framework::message_flow_reason_t> reason = std::nullopt)
 {
-    if ((result && *result != zlink::framework::message_flow_result_t::succeeded)
-        || zlink::framework::detail::message_flow_tracer_t (dispatch).enabled_for (outcome)) {
+    if (zlink::framework::detail::message_flow_tracer_t (dispatch).enabled_for (outcome, result)) {
         zlink::framework::detail::message_flow_tracer_t (dispatch).trace (outcome, result, [&] {
             zlink::framework::message_flow_event_t event{
               outcome,

@@ -801,9 +801,8 @@ struct channel_request_terminal_trace_t
 
     ~channel_request_terminal_trace_t () noexcept
     {
-        if (result != message_flow_result_t::succeeded
-            || message_flow_tracer_t (*dispatch).enabled_for (
-              message_flow_outcome_t::reply_received)) {
+        if (message_flow_tracer_t (*dispatch).enabled_for (message_flow_outcome_t::reply_received,
+                                                           result)) {
             message_flow_tracer_t (*dispatch).trace (
               message_flow_outcome_t::reply_received, result, [&] {
                   message_flow_event_t event{.outcome = message_flow_outcome_t::reply_received,

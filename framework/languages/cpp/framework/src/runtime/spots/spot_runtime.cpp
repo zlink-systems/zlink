@@ -1377,8 +1377,7 @@ void report_spot_dispatch_trace (const std::shared_ptr<detail::spot_node_builder
     }
     // string_view params + lazy build: callers pass cheap views; std::string is
     // only allocated inside the lambda after the gate passes (zero cost when off).
-    if ((result && *result != message_flow_result_t::succeeded)
-        || detail::message_flow_tracer_t (state->dispatch).enabled_for (outcome)) {
+    if (detail::message_flow_tracer_t (state->dispatch).enabled_for (outcome, result)) {
         detail::message_flow_tracer_t (state->dispatch).trace (outcome, result, [&] {
             auto field = [] (std::string_view value) -> std::optional<std::string> {
                 if (value.empty ()) {
@@ -10725,10 +10724,8 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
 bool spot_node_runtime_t::actor_transfer_marker_enabled (
   message_flow_result_t result) const noexcept
 {
-    const auto tracer = message_flow_tracer_t (_state->dispatch);
-    return result == message_flow_result_t::failed
-             ? tracer.enabled (message_flow_log_mode_t::errors)
-             : tracer.enabled_for (message_flow_outcome_t::dispatched);
+    return message_flow_tracer_t (_state->dispatch)
+      .enabled_for (message_flow_outcome_t::dispatched, result);
 }
 
 void spot_node_runtime_t::emit_actor_transfer_marker (std::string marker,
