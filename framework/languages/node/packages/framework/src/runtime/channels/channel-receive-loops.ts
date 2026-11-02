@@ -19,8 +19,9 @@ import {
 } from './channel-receive-task-tracker';
 import { ApplicationJobQueue, type ApplicationJobQueuePermit } from '../host/application-job-queue';
 import {
-  bindApplicationJobPermit,
-  runWithApplicationJobPermit
+  enterApplicationJobPermitScope,
+  leaveApplicationJobPermitScope,
+  releaseApplicationJobPermitTurn
 } from '../application-jobs/application-job-queue-scope';
 import {
   ZLinkSerialExecutionQueue,
@@ -29,20 +30,45 @@ import {
 
 export function createChannelApplicationDispatchQueue(): ZLinkSerialExecutionQueue {
   return new ZLinkSerialExecutionQueue(async (record: ZLinkSerialWorkRecord<unknown>) => {
+    const permit = record.context as ApplicationJobQueuePermit;
+    const previousPermit = enterApplicationJobPermitScope(permit);
     try {
       void Promise.resolve(record.operation()).then(
         (value) => {
-          record.resolve(value);
-          record.release();
+          try {
+            record.resolve(value);
+          } finally {
+            try {
+              record.release();
+            } finally {
+              releaseApplicationJobPermitTurn(permit);
+            }
+          }
         },
         (error) => {
-          record.reject(error);
-          record.release();
+          try {
+            record.reject(error);
+          } finally {
+            try {
+              record.release();
+            } finally {
+              releaseApplicationJobPermitTurn(permit);
+            }
+          }
         }
       );
     } catch (error) {
-      record.reject(error);
-      record.release();
+      try {
+        record.reject(error);
+      } finally {
+        try {
+          record.release();
+        } finally {
+          releaseApplicationJobPermitTurn(permit);
+        }
+      }
+    } finally {
+      leaveApplicationJobPermitScope(previousPermit);
     }
   });
 }
@@ -327,19 +353,18 @@ export class ZLinkChannelReceiveLoop {
                 break;
               } else {
                 applicationJobPermit.markApplicationQueued();
-                const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-                  this.applicationDispatchQueue.submitPreAdmitted(
-                    bindApplicationJobPermit(() =>
-                      this.dispatchAndClose(
-                        received,
-                        signal,
-                        classification.decodedHeader,
-                        true,
-                        undefined,
-                        receivedAt
-                      )
-                    )
-                  )
+                const task = this.applicationDispatchQueue.submitPreAdmitted(
+                  () =>
+                    this.dispatchAndClose(
+                      received,
+                      signal,
+                      classification.decodedHeader,
+                      true,
+                      undefined,
+                      receivedAt
+                    ),
+                  undefined,
+                  applicationJobPermit
                 );
                 this.inFlight.track(task);
               }
@@ -572,19 +597,18 @@ export class ZLinkSubscriberReceiveLoop {
         break;
       }
       applicationJobPermit.markApplicationQueued();
-      const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-        this.applicationDispatchQueue.submitPreAdmitted(
-          bindApplicationJobPermit(() =>
-            this.dispatchAndClose(
-              topicMessage,
-              signal,
-              classification.decodedHeader,
-              true,
-              undefined,
-              receivedAt
-            )
-          )
-        )
+      const task = this.applicationDispatchQueue.submitPreAdmitted(
+        () =>
+          this.dispatchAndClose(
+            topicMessage,
+            signal,
+            classification.decodedHeader,
+            true,
+            undefined,
+            receivedAt
+          ),
+        undefined,
+        applicationJobPermit
       );
       releaseRawReceive();
       this.inFlight.track(task);
@@ -794,12 +818,10 @@ export class ZLinkRouteReceiveLoop {
         break;
       }
       applicationJobPermit.markApplicationQueued();
-      const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-        this.applicationDispatchQueue.submitPreAdmitted(
-          bindApplicationJobPermit(() =>
-            this.dispatchAndClose(received, signal, true, undefined, receivedAt)
-          )
-        )
+      const task = this.applicationDispatchQueue.submitPreAdmitted(
+        () => this.dispatchAndClose(received, signal, true, undefined, receivedAt),
+        undefined,
+        applicationJobPermit
       );
       releaseRawReceive();
       this.inFlight.track(task);
