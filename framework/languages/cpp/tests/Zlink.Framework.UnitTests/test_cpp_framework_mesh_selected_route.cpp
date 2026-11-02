@@ -398,7 +398,7 @@ TEST (CppFrameworkDecodeFailure, RepliesOnlyWithCompleteCorrelationAndRequestTok
                 == mesh::raw_mesh_pump_result_t::protocol_error
               || rejected;
             (void) port.poll (0ms);
-            return truncated.await_ready ();
+            return rejected && truncated.await_ready ();
         }));
         EXPECT_TRUE (rejected);
         ASSERT_TRUE (truncated.result ());
