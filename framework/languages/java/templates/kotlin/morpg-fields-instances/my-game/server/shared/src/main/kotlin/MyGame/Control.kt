@@ -15,4 +15,5 @@ object Control {
     val HOST_DEADLINE: Duration = Duration.ofSeconds(30)
     val SAFE_DEADLINE: Duration = MESSAGE_FOLLOW.plus(HOST_DEADLINE)
     val PROCESS_SECONDS = SAFE_DEADLINE.plusSeconds(5).toSeconds()
+    const val THREAD_DUMP_SECONDS = 3L
 }
