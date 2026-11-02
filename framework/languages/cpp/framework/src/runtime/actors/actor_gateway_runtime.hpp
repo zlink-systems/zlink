@@ -325,22 +325,24 @@ void trace_detached_bound_session_send_stage (const std::shared_ptr<actor_gatewa
                                               const zlink::routing_id_t *session_rid,
                                               const std::string *session_rid_hex)
 {
-    message_flow_tracer_t (state->dispatch)
-      .trace (message_flow_log_mode_t::detailed, message_flow_outcome_t::admitted, [&] {
-          auto event = message_flow_event_t{
-            message_flow_outcome_t::admitted, dispatch_error_surface_t::stream_session,
-            dispatch_message_kind_t::send, std::string ("bound_session_push")};
-          event.actor_id = std::string (actor_id);
-          if (session_rid)
-              event.stream_session_id = session_rid->to_hex ();
-          else if (session_rid_hex)
-              event.stream_session_id = *session_rid_hex;
-          event.detail_stage = std::string (stage);
-          auto result = std::string (std::invoke (std::forward<BuildResult> (build_result)));
-          if (!result.empty ())
-              event.detail_result = std::move (result);
-          return event;
-      });
+    if (message_flow_tracer_t (state->dispatch).enabled (message_flow_log_mode_t::detailed)) {
+        message_flow_tracer_t (state->dispatch)
+          .trace (message_flow_log_mode_t::detailed, message_flow_outcome_t::admitted, [&] {
+              auto event = message_flow_event_t{
+                message_flow_outcome_t::admitted, dispatch_error_surface_t::stream_session,
+                dispatch_message_kind_t::send, std::string ("bound_session_push")};
+              event.actor_id = std::string (actor_id);
+              if (session_rid)
+                  event.stream_session_id = session_rid->to_hex ();
+              else if (session_rid_hex)
+                  event.stream_session_id = *session_rid_hex;
+              event.detail_stage = std::string (stage);
+              auto result = std::string (std::invoke (std::forward<BuildResult> (build_result)));
+              if (!result.empty ())
+                  event.detail_result = std::move (result);
+              return event;
+          });
+    }
 }
 
 struct prepared_session_stream_t

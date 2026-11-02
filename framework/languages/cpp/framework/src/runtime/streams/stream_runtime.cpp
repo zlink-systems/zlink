@@ -529,9 +529,11 @@ task_t<void> dispatch_packet_session (packet_stream_session_t *session,
         }
         context.actor = std::make_shared<session_actor_t> (std::move (*actor));
     }
-    flow_tracer.trace (message_flow_outcome_t::dispatched, [&] {
-        return stream_packet_flow_event (message_flow_outcome_t::dispatched, header);
-    });
+    if (flow_tracer.enabled_for (message_flow_outcome_t::dispatched)) {
+        flow_tracer.trace (message_flow_outcome_t::dispatched, [&] {
+            return stream_packet_flow_event (message_flow_outcome_t::dispatched, header);
+        });
+    }
     return dispatch_packet_session_callback (session, std::move (stream), std::move (packet));
 }
 
@@ -2014,9 +2016,11 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
       !runtime::flow_context_t::tracing (flow_mode) || !stream.routing_id ()
         ? std::nullopt
         : std::optional<std::string> (stream.routing_id ()->to_hex ()));
-    flow_tracer.trace (message_flow_outcome_t::received, [&] {
-        return stream_packet_flow_event (message_flow_outcome_t::received, header);
-    });
+    if (flow_tracer.enabled_for (message_flow_outcome_t::received)) {
+        flow_tracer.trace (message_flow_outcome_t::received, [&] {
+            return stream_packet_flow_event (message_flow_outcome_t::received, header);
+        });
+    }
     auto current_flow = runtime::flow_context_t::current ();
     auto dispatch_stream = stream;
     dispatch_stream._reply_header = header;
@@ -2081,9 +2085,11 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
       !runtime::flow_context_t::tracing (flow_mode) || !stream.routing_id ()
         ? std::nullopt
         : std::optional<std::string> (stream.routing_id ()->to_hex ()));
-    flow_tracer.trace (message_flow_outcome_t::received, [&] {
-        return stream_packet_flow_event (message_flow_outcome_t::received, header);
-    });
+    if (flow_tracer.enabled_for (message_flow_outcome_t::received)) {
+        flow_tracer.trace (message_flow_outcome_t::received, [&] {
+            return stream_packet_flow_event (message_flow_outcome_t::received, header);
+        });
+    }
     auto current_flow = runtime::flow_context_t::current ();
     auto dispatch_stream = stream;
     dispatch_stream._reply_header = header;
