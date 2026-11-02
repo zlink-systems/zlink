@@ -17,4 +17,5 @@ public final class Control {
     public static final Duration HOST_DEADLINE = Duration.ofSeconds(30);
     public static final Duration SAFE_SHUTDOWN_DEADLINE = MESSAGE_FOLLOW.plus(HOST_DEADLINE);
     public static final long PROCESS_SECONDS = 35;
+    public static final long THREAD_DUMP_SECONDS = 3;
 }

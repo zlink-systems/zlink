@@ -1,5 +1,6 @@
 package MyGame.e2e
 
+import MyGame.Control
 import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -25,13 +26,17 @@ internal object DockerRuntime {
                 // The container name is the last argument of `docker start -a -i <container>`.
                 val container = process.info().arguments().get().last()
                 execute("kill", "--signal=QUIT", container)
-            } else if (!System.getProperty("os.name").startsWith("Windows")) {
+            } else if (!isWindows()) {
                 ProcessBuilder("kill", "-3", process.pid().toString())
                     .start()
-                    .waitFor(3, TimeUnit.SECONDS)
+                    .waitFor(Control.THREAD_DUMP_SECONDS, TimeUnit.SECONDS)
+            } else {
+                return
             }
-        } catch (_: Exception) {}
-        Thread.sleep(3000)
+        } catch (_: Exception) {
+            return
+        }
+        Thread.sleep(TimeUnit.SECONDS.toMillis(Control.THREAD_DUMP_SECONDS))
     }
 
     fun process(command: List<String>, config: Path): ProcessBuilder {
