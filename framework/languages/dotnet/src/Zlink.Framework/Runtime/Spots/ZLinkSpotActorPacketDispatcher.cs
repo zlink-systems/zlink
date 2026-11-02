@@ -12,7 +12,8 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
         ZlinkStreamHeader header,
         Message body,
         CancellationToken cancellationToken,
-        RoutingId? sourceSessionRid
+        RoutingId? sourceSessionRid,
+        DateTimeOffset? receivedAt = null
     )
     {
         using var currentFlow = ZLinkFlowContext.Enter(
@@ -41,7 +42,14 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             try
             {
                 await handlerInvoker()
-                    .InvokeActorPacketAsync(descriptor, actor, header, body, cancellationToken)
+                    .InvokeActorPacketAsync(
+                        descriptor,
+                        actor,
+                        header,
+                        body,
+                        cancellationToken,
+                        receivedAt
+                    )
                     .ConfigureAwait(false);
 
                 scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
@@ -71,7 +79,8 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
         ZlinkStreamHeader header,
         Message body,
         CancellationToken cancellationToken,
-        RoutingId? sourceSessionRid
+        RoutingId? sourceSessionRid,
+        DateTimeOffset? receivedAt = null
     )
     {
         using var dispatch = runtimeState.EnterDispatch();
@@ -96,7 +105,8 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
                         actor,
                         header,
                         body,
-                        cancellationToken
+                        cancellationToken,
+                        receivedAt
                     )
                     .ConfigureAwait(false);
 

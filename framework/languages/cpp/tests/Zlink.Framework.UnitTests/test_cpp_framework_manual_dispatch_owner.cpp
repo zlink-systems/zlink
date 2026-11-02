@@ -2,6 +2,7 @@
 
 #include "runtime/channels/channel_packet_dispatcher.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/mesh/service_mailbox.hpp"
 #include "test_runtime_options_owner_pause.hpp"
 #include "runtime/channels/channel_host_service_test_access.hpp"
 #include "../support/manual_internal_scheduler.hpp"
@@ -21,8 +22,10 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -40,17 +43,20 @@ struct owner_handler_t
 {
     std::thread::id entered_on;
     unsigned calls = 0;
+    std::chrono::system_clock::time_point received_at;
 
-    payload_t request (const payload_t &payload)
+    payload_t request (const payload_t &payload, const fw::message_context_t &context)
     {
         entered_on = std::this_thread::get_id ();
+        received_at = context.received_at;
         ++calls;
         return payload_t{payload.value + 1};
     }
 
-    void send (const payload_t &)
+    void send (const payload_t &, const fw::message_context_t &context)
     {
         entered_on = std::this_thread::get_id ();
+        received_at = context.received_at;
         ++calls;
     }
 };
@@ -92,21 +98,32 @@ void check_synchronous_handler_owner (bool request)
     fw::runtime::offload_executor_t application_worker (1, "manual-dispatch-owner");
     std::promise<fw::result_t<messaging::message_parts_t>> finished;
     auto result = finished.get_future ();
+    std::promise<void> worker_ready;
+    auto ready = worker_ready.get_future ();
+    std::promise<void> release_worker;
+    auto release = release_worker.get_future ();
     std::thread::id worker_thread;
+    const auto accepted_at =
+      std::chrono::system_clock::time_point{std::chrono::seconds (1'798'436'400)};
     application_worker.submit ([&] {
         worker_thread = std::this_thread::get_id ();
+        worker_ready.set_value ();
+        release.wait ();
         try {
-            finished.set_value (dispatcher.dispatch_server_message ("manual", parts, provider,
-                                                                    serializers, handlers));
+            finished.set_value (dispatcher.dispatch_server_message (
+              "manual", parts, provider, serializers, handlers, {}, accepted_at));
         }
         catch (...) {
             finished.set_exception (std::current_exception ());
         }
     });
+    ready.wait ();
+    release_worker.set_value ();
     const auto reply = result.get ();
     application_worker.drain ();
     ASSERT_TRUE (reply);
     ASSERT_EQ (1u, handler.calls);
+    EXPECT_EQ (accepted_at, handler.received_at);
     EXPECT_EQ (worker_thread, handler.entered_on)
       << "the granted application worker reposted the record to another executor";
     if (request) {
@@ -126,6 +143,39 @@ TEST (ManualDispatchOwner, SynchronousRequestPreservesApplicationWorker)
 TEST (ManualDispatchOwner, SynchronousSendPreservesApplicationWorker)
 {
     check_synchronous_handler_owner (false);
+}
+
+TEST (ManualDispatchOwner, ReceivedAtSurvivesApplicationQueueWait)
+{
+    check_synchronous_handler_owner (true);
+}
+
+TEST (ManualDispatchOwner, MailboxUsesItsInjectedUtcClockAtAcceptance)
+{
+    const auto accepted_at =
+      std::chrono::system_clock::time_point{std::chrono::seconds (1'798'436'400)};
+    unsigned clock_calls = 0;
+    fw::runtime::mesh::service_mailbox_t mailbox ([&] {
+        ++clock_calls;
+        return accepted_at;
+    });
+    std::optional<std::chrono::system_clock::time_point> prepared_at;
+    mailbox.bind_application_dispatch (
+      [&] (fw::runtime::mesh::service_mailbox_record_t &record) {
+          prepared_at = record.received_at;
+      },
+      [] (const std::string &) {});
+
+    fw::runtime::mesh::service_mailbox_record_t record;
+    record.owner = fw::runtime::mesh::service_mailbox_t::application_owner (
+      fw::runtime::host::owner_kind_t::node);
+    record.domain = fw::runtime::mesh::service_mailbox_domain_t::application;
+    record.parts.push_back (zlink::message_t::from ("payload"));
+
+    ASSERT_TRUE (mailbox.try_enqueue (std::move (record)));
+    ASSERT_TRUE (prepared_at);
+    EXPECT_EQ (accepted_at, *prepared_at);
+    EXPECT_EQ (1u, clock_calls);
 }
 } // namespace
 

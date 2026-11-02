@@ -37,14 +37,16 @@ interface ZLinkSpotActorPacketDrainOptions {
   ) => void;
   readonly waitIdle: () => Promise<void>;
   readonly flowEnabled?: () => boolean;
+  readonly receivedAtClock?: () => Date;
 }
 
 const ZLINK_SPOT_ACTOR_RECV_INFO_NO_BIND = 1;
+const systemReceivedAtClock = (): Date => new Date();
 
 export class ZLinkSpotActorPacketDrain {
   private readonly continuations = new Map<
     string,
-    { readonly owner: string; readonly parts: Message[] }
+    { readonly owner: string; readonly parts: Message[]; readonly receivedAt: Date }
   >();
 
   constructor(private readonly options: ZLinkSpotActorPacketDrainOptions) {}
@@ -60,6 +62,7 @@ export class ZLinkSpotActorPacketDrain {
     let requestId: bigint | undefined;
     let flags: number | undefined;
     let packetKey: string | undefined;
+    let receivedAt: Date | undefined;
     try {
       for (;;) {
         const part = info.recvActorPart(ZLINK_RECV_DONT_WAIT);
@@ -67,7 +70,8 @@ export class ZLinkSpotActorPacketDrain {
           if (parts.length > 0 && packetKey !== undefined) {
             this.continuations.set(packetKey, {
               owner: continuationOwner(parts[0], this.flowEnabled()),
-              parts: parts.splice(0)
+              parts: parts.splice(0),
+              receivedAt: receivedAt ?? (this.options.receivedAtClock ?? systemReceivedAtClock)()
             });
             return;
           }
@@ -78,6 +82,8 @@ export class ZLinkSpotActorPacketDrain {
         if (packetKey === undefined) {
           packetKey = currentPacketKey;
           const pending = this.continuations.get(currentPacketKey);
+          receivedAt =
+            pending?.receivedAt ?? (this.options.receivedAtClock ?? systemReceivedAtClock)();
           if (pending !== undefined) {
             if (isStreamHeaderMessage(part.message, this.flowEnabled())) {
               closeMessages(pending.parts);
@@ -125,7 +131,13 @@ export class ZLinkSpotActorPacketDrain {
         return;
       }
       if (noBindInfo !== undefined) {
-        await this.dispatchNoBindActorRequest(noBindInfo, actorId, parts, actorRef);
+        await this.dispatchNoBindActorRequest(
+          noBindInfo,
+          actorId,
+          parts,
+          actorRef,
+          receivedAt ?? (this.options.receivedAtClock ?? systemReceivedAtClock)()
+        );
       } else {
         await this.options.actorPacketHandler({
           origin: 'remote',
@@ -133,7 +145,8 @@ export class ZLinkSpotActorPacketDrain {
           parts,
           returnResponse: false,
           sourceSessionRid,
-          fallbackActorRef: actorRef as unknown as ActorRef | undefined
+          fallbackActorRef: actorRef as unknown as ActorRef | undefined,
+          receivedAt
         });
       }
     } finally {
@@ -188,7 +201,8 @@ export class ZLinkSpotActorPacketDrain {
     info: ZLinkBackendActorRecvInfo,
     actorId: string,
     parts: readonly Message[],
-    actorRef: ZLinkBackendActorRef | undefined
+    actorRef: ZLinkBackendActorRef | undefined,
+    receivedAt: Date
   ): Promise<void> {
     try {
       const response = await this.options.actorPacketHandler?.({
@@ -197,7 +211,8 @@ export class ZLinkSpotActorPacketDrain {
         parts,
         returnResponse: true,
         sourceSessionRid: info.sourceSessionRid,
-        fallbackActorRef: actorRef as unknown as ActorRef | undefined
+        fallbackActorRef: actorRef as unknown as ActorRef | undefined,
+        receivedAt
       });
       this.options.replyActorNoBind?.(
         info,

@@ -19,5 +19,7 @@ internal sealed class ZLinkHandlerFilterContext(
 
     public string? CorrelationId => message.CorrelationId;
 
+    public DateTimeOffset ReceivedAt => message.ReceivedAt;
+
     public ZLinkHandlerDispatchKind DispatchKind { get; } = dispatchKind;
 }

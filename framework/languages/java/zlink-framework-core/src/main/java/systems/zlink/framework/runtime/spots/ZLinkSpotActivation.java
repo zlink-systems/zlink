@@ -397,7 +397,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                         .whenComplete((ignored, error) -> closeRouteReceived(received));
             }
             if (ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME.equals(packet.packetName())) {
-                return handleRoutedActorPacketParts(received.parts())
+                return handleRoutedActorPacketParts(received.parts(), received.receivedAt())
                         .thenAccept(
                                 reply -> {
                                     if (received.requestSeq().isPresent()) {
