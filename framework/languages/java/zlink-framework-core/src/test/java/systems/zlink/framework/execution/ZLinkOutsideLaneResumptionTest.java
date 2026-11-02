@@ -7,12 +7,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceCompletionDispatcher;
+
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -25,11 +28,13 @@ final class ZLinkOutsideLaneResumptionTest {
     private static final ThreadLocal<Boolean> COMPLETING = new ThreadLocal<>();
 
     @Test
-    void frameworkDeliveredCompletionResumesInDispatcherTurnNotOnCompletingThread()
-            throws Exception {
+    void messagingHotPathCompletionTransitionCountIsOne() throws Exception {
         var source = new CompletableFuture<String>();
         CompletionStage<String> caller = ZLinkSerialExecutionQueue.manageCurrent(source);
         var resumedOn = new AtomicReference<Thread>();
+        var notificationResource = new AtomicReference<Thread>();
+        var transitionCount = new AtomicInteger(-1);
+        var dispatcherTurn = new AtomicReference<Boolean>();
         var insideCompletingCall = new AtomicReference<Boolean>();
         var ownsProducerLock = new AtomicReference<Boolean>();
         var producerLock = new Object();
@@ -39,6 +44,10 @@ final class ZLinkOutsideLaneResumptionTest {
                 caller.thenApply(
                         value -> {
                             resumedOn.set(Thread.currentThread());
+                            transitionCount.set(
+                                    notificationResource.get() == Thread.currentThread() ? 0 : 1);
+                            dispatcherTurn.set(
+                                    ZLinkServiceCompletionDispatcher.isCurrentCompletion());
                             insideCompletingCall.set(Boolean.TRUE.equals(COMPLETING.get()));
                             ownsProducerLock.set(Thread.holdsLock(producerLock));
                             completionPool.set(ForkJoinTask.getPool());
@@ -50,6 +59,7 @@ final class ZLinkOutsideLaneResumptionTest {
                 new Thread(
                         () -> {
                             synchronized (producerLock) {
+                                notificationResource.set(Thread.currentThread());
                                 COMPLETING.set(true);
                                 source.complete("reply");
                                 COMPLETING.remove();
@@ -61,7 +71,8 @@ final class ZLinkOutsideLaneResumptionTest {
 
         assertTrue(observed.await(5, TimeUnit.SECONDS));
         assertEquals("reply", resumed.toCompletableFuture().join());
-        assertNotSame(completer, resumedOn.get());
+        assertEquals(1, transitionCount.get());
+        assertEquals(Boolean.TRUE, dispatcherTurn.get());
         assertSame(ForkJoinPool.commonPool(), completionPool.get());
         assertEquals(false, insideCompletingCall.get());
         assertEquals(false, ownsProducerLock.get());

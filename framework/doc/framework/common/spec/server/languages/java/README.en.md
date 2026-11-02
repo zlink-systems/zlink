@@ -46,6 +46,14 @@ stopping CPU/I/O worker execution, respectively. These types aren't
 reused for handler, Spot lifecycle, host termination, or the regular
 message API.
 
+## Messaging Hot Path Transition Count Measurement
+
+[Messaging hot path §3](../../01-execution/08-messaging-hot-path.en.md) limits Framework-created execution-resource transitions to one from binding completion notification to the first instruction of the caller continuation. The unit test counts thread-identity changes between the binding callback and continuation, and uses the completion-dispatcher turn marker to verify that Framework delivery ran on its worker. Task posting and wakeups are not execution-resource transitions.
+
+| Segment | Limit | Measurement point | Test identifier |
+|---|---:|---|---|
+| Binding completion notification → caller continuation's first instruction | At most 1 | Test-only identity comparison [ZLinkOutsideLaneResumptionTest.java:48](../../../../../../../languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/execution/ZLinkOutsideLaneResumptionTest.java#L48); [ZLinkServiceCompletionDispatcher.java:53](../../../../../../../languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceCompletionDispatcher.java#L53) | `unit:ZLinkOutsideLaneResumptionTest.messagingHotPathCompletionTransitionCountIsOne` (expected 1) |
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [Language interface table of contents](../README.en.md) | [Spec table of contents](../../README.en.md)

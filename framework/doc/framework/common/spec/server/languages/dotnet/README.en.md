@@ -52,6 +52,14 @@ of the contract.
 | `ContractSurfaceCoverage.Fixed_spec_snapshot_matches_every_exported_contract_signature` | Confirms the formal spec snapshot matches the public signatures of the source and package. |
 | `RegressionTests.DotNetContractRegressionTestReferences_Resolve_ToActiveTestMethods` | Confirms the regression tests and E2E scenarios the document points to exist in the current test tree. |
 
+## Messaging Hot Path Transition Count Measurement
+
+[Messaging hot path §3](../../01-execution/08-messaging-hot-path.en.md) limits Framework-created execution-resource transitions to one from binding completion notification to the first instruction of the caller continuation. The unit test verifies that the caller continuation runs inside the completion-dispatcher turn marker. Task posting and wakeups are not execution-resource transitions.
+
+| Segment | Limit | Measurement point | Test identifier |
+|---|---:|---|---|
+| Binding completion notification → caller continuation's first instruction | At most 1 | Dispatcher-turn marker [CompletionDispatcherIsolationTests.cs:107](../../../../../../../languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/CompletionDispatcherIsolationTests.cs#L107); [ZLinkCompletionDispatcher.cs:27](../../../../../../../languages/dotnet/src/Zlink.Framework/Runtime/Backend/DotNet/ZLinkCompletionDispatcher.cs#L27) | `unit:CompletionDispatcherIsolationTests.MessagingHotPathCompletionTransitionCountIsOne` (expected 1) |
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [Language interface table of contents](../README.en.md) | [Spec table of contents](../../README.en.md)
