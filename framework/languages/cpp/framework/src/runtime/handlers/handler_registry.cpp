@@ -509,8 +509,8 @@ handler_registry_t::invoke_on_handler_executor (std::string channel_name,
     if (entry == nullptr)
         co_return result_t<zlink::message_t>::failure (framework_error_kind_t::not_found,
                                                        "handler is not registered");
-    auto owned_inbound =
-      detail::resolve_inbound_context (inbound, entry->descriptor, channel_name, packet_name);
+    auto owned_inbound = detail::resolve_inbound_context (
+      std::exchange (inbound, {}), entry->descriptor, channel_name, packet_name);
     result_t<zlink::message_t> result = result_t<zlink::message_t>::failure (
       framework_error_kind_t::internal_failure, "handler failed");
     try {
