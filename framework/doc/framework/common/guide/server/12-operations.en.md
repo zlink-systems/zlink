@@ -32,62 +32,70 @@ Terms that appear for the first time:
 
 ## 2. Runtime Metrics
 
-The framework emits every instrument through one `System.Diagnostics.Metrics.Meter` named
-`"zlink.framework"`. The app registers this canonical meter name in its collection pipeline.
+The Framework connects its instruments and message-flow records to each language's
+collector. The application configures the providers and exporters; the Framework doesn't
+include a scrape server.
 
 === "C#/.NET"
 
     ```csharp
-    // This one line brings every zlink instrument into the app's OTel pipeline.
-    builder.Services.AddOpenTelemetry().WithMetrics(m => m
-        // The canonical meter name the Framework emits instruments through.
-        .AddMeter("zlink.framework")
-        .AddPrometheusExporter());
+    builder.Services.AddOpenTelemetry()
+        .WithMetrics(metrics => metrics
+            .AddMeter("zlink.framework")
+            .AddPrometheusExporter());
     ```
 
 === "C++"
 
     ```cpp
-    // C++ has no language-standard metrics pipeline, so read directly from the monitoring
-    // surface and hand it to the app's exporter. The instrument names match the other languages.
-    auto status = runtime.status ();
-    // Send status's inbound_dispatch value out through the app's exporter.
+    auto sdk = std::make_shared<opentelemetry::sdk::metrics::MeterProvider>();
+    // Configure application-owned readers and exporters on sdk.
+    app.use_metric_provider(
+        opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider>(sdk));
+    app.logging().use_file("zlink.log");
+    auto &options = app.add_zlink_framework();
+    options.configure_dispatch().message_flow(
+        zlink::framework::message_flow_log_mode_t::normal);
     ```
 
 === "Java"
 
     ```java
-    // Wire the zlink instruments into whatever registry the app uses, such as Micrometer.
-    // "zlink.framework" is the canonical meter name the Framework emits instruments through.
-    Metrics.addRegistry(prometheusRegistry);
+    // The Spring Boot starter connects the application's MeterRegistry to Framework metrics.
+    @EnableZLinkFramework
+    @SpringBootApplication
+    class Application {}
     ```
 
 === "Kotlin"
 
     ```kotlin
-    // Kotlin uses the same registry as Java.
-    // "zlink.framework" is the canonical meter name the Framework emits instruments through.
-    Metrics.addRegistry(prometheusRegistry)
+    // The Spring Boot starter connects the application's MeterRegistry to Framework metrics.
+    @EnableZLinkFramework
+    @SpringBootApplication
+    class Application
     ```
 
 === "Node/TypeScript"
 
     ```typescript
-    // Wire the zlink meter into the OpenTelemetry Node SDK.
-    // "zlink.framework" is the canonical meter name the Framework emits instruments through.
+    // Register SDK providers, configured with exporters, on the global OTel API.
     const meterProvider = new MeterProvider({ readers: [prometheusExporter] });
-    meterProvider.getMeter('zlink.framework');
     ```
 
 
-- There's no zlink-specific metrics API. The framework uses each language's standard metrics
-  API directly. To collect without OTel, subscribe directly to the meter name `"zlink.framework"`
-  from a `MeterListener`.
-- If no listener is attached at all, an instrument update ends on a minimal-cost inactive
-  path. Registering an instrument without turning it on has no effect on messaging
-  performance.
-- Choosing a dashboard and exporter is the app's job. The framework doesn't bundle a scrape
-  server.
+- .NET uses meter `zlink.framework` and ActivitySource `Zlink.Framework`. Add
+  `AddSource("Zlink.Framework")` to the OTel tracing setup. A .NET app that doesn't use OTel
+  can subscribe to `zlink.framework` with `MeterListener`.
+- C++ connects a metric provider through `app_t::use_metric_provider(...)`. Message-flow
+  records go to the application-configured logger; C++ has no OpenTelemetry `Tracer` source.
+- The Java/Kotlin Spring Boot starter connects the application's Micrometer `MeterRegistry` to
+  the `zlink.*` instruments. Message-flow records use SLF4J category
+  `systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer`; there is no OTel `Tracer`.
+- Node.js registers SDK providers with `metrics.setGlobalMeterProvider(...)` and
+  `trace.setGlobalTracerProvider(...)`. The Framework reads meter `zlink.framework` and tracer
+  `@zlink-systems/framework`.
+- Choosing a dashboard and exporter is the app's job.
 
 The catalog below lists the measurements and units for MeshNode, object/STREAM, and
 location/fanout instruments. For detailed labels, units, and kinds, see
