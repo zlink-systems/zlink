@@ -358,24 +358,25 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests(
         for (var index = 0; index < iterations; index++)
             action();
 
-        // Background GC can charge unused allocation-context space to this thread's counter
-        // (dotnet/runtime#134724). Only a complete no-GC window gives a valid measurement.
-        return PerCallAllocation
-            .MeasureWindowAsync(
-                () =>
-                {
-                    var before = GC.GetAllocatedBytesForCurrentThread();
-                    T last = default!;
-                    for (var index = 0; index < iterations; index++)
-                        last = action();
-                    var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-                    GC.KeepAlive(last);
-                    return new ValueTask<long>(bytes);
-                },
-                budgetBytes: 16 * 1024 * 1024
-            )
+        // The helper accepts only windows whose process-wide GC counts stayed unchanged.
+        var measurement = PerCallAllocation
+            .MeasureWindowAsync(() =>
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                T last = default!;
+                for (var index = 0; index < iterations; index++)
+                    last = action();
+                var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+                GC.KeepAlive(last);
+                return new ValueTask<long>(bytes);
+            })
             .GetAwaiter()
             .GetResult();
+        if (!measurement.IsValid)
+            throw new InvalidOperationException(
+                "All allocation measurement samples overlapped a GC."
+            );
+        return measurement.Value;
     }
 
     [Fact]

@@ -24,6 +24,89 @@ public sealed class PerCallAllocationTests
         Assert.True(bytes >= 64 * 64, $"measured {bytes} bytes for 64 allocations of 64 bytes");
     }
 
+    [Theory]
+    [InlineData("single")]
+    [InlineData("pair")]
+    [InlineData("async")]
+    public async Task Skips_windows_interrupted_by_gc_on_another_thread(string mode)
+    {
+        using var requested = new SemaphoreSlim(0);
+        using var collected = new SemaphoreSlim(0);
+        var stopping = 0;
+        var collector = new Thread(() =>
+        {
+            while (true)
+            {
+                requested.Wait();
+                if (Volatile.Read(ref stopping) != 0)
+                    return;
+                GC.Collect();
+                collected.Release();
+            }
+        })
+        {
+            IsBackground = true,
+        };
+        collector.Start();
+        var collectionsToForce = mode == "pair" ? 8 : 4;
+        var collectionIndex = 0;
+        void Allocate()
+        {
+            if (Interlocked.Increment(ref collectionIndex) <= collectionsToForce)
+            {
+                requested.Release();
+                collected.Wait();
+            }
+            _sink = new byte[64];
+        }
+
+        try
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            _sink = new byte[64];
+            var expected = GC.GetAllocatedBytesForCurrentThread() - before;
+            switch (mode)
+            {
+                case "single":
+                    Assert.Equal(
+                        expected,
+                        PerCallAllocation.MinWindow(_ => Allocate(), 1, windows: 2)
+                    );
+                    break;
+                case "pair":
+                    var pair = PerCallAllocation.MinWindowPair(
+                        _ => Allocate(),
+                        _ => Allocate(),
+                        1,
+                        windows: 2
+                    );
+                    Assert.Equal(expected, pair.First);
+                    Assert.Equal(expected, pair.Second);
+                    break;
+                case "async":
+                    Assert.Equal(
+                        expected,
+                        await PerCallAllocation.MinWindowAsync(
+                            () =>
+                            {
+                                Allocate();
+                                return ValueTask.CompletedTask;
+                            },
+                            1,
+                            windows: 2
+                        )
+                    );
+                    break;
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref stopping, 1);
+            requested.Release();
+            collector.Join();
+        }
+    }
+
     [Fact]
     public void Excludes_a_one_time_allocation_from_the_minimum()
     {
@@ -57,9 +140,6 @@ public sealed class PerCallAllocationTests
 
         void Allocate()
         {
-            Assert.True(
-                System.Runtime.GCSettings.LatencyMode == System.Runtime.GCLatencyMode.NoGCRegion
-            );
             if (payloadSize != 0)
                 _sink = new byte[payloadSize];
         }
@@ -214,25 +294,23 @@ public sealed class PerCallAllocationTests
     }
 
     [Fact]
-    public async Task Reports_exhaustion_after_four_interrupted_attempts()
+    public async Task Marks_a_window_with_a_collection_invalid()
     {
         var calls = 0;
-        var failure = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await PerCallAllocation.MeasureWindowAsync<int>(() =>
-            {
-                calls++;
-                GC.Collect();
-                return new ValueTask<int>(0);
-            })
-        );
+        var measurement = await PerCallAllocation.MeasureWindowAsync<int>(() =>
+        {
+            calls++;
+            GC.Collect();
+            return new ValueTask<int>(0);
+        });
+        Assert.False(measurement.IsValid);
+        Assert.Equal(0, measurement.Value);
         Assert.Equal(4, calls);
-        Assert.Contains("all 4 attempts", failure.Message);
-        Assert.Contains("no valid allocation measurement", failure.Message);
         Assert.Equal(0, PerCallAllocation.MinWindow(() => { }, 1));
     }
 
     [Fact]
-    public void Preserves_an_action_failure_after_the_region_has_ended()
+    public void Preserves_an_action_failure_after_a_collection()
     {
         var failure = new InvalidOperationException("action failed after GC");
         Assert.Same(
@@ -251,7 +329,7 @@ public sealed class PerCallAllocationTests
     }
 
     [Fact]
-    public void Releases_the_region_when_the_action_throws()
+    public void Allows_a_new_measurement_after_an_action_throws()
     {
         var failure = new InvalidOperationException("action failed");
         Assert.Same(
