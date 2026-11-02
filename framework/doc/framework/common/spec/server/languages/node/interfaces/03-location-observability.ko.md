@@ -15,6 +15,7 @@ export interface ZLinkMessageContext {
  readonly contentType?: string;
  readonly metadata: ZLinkMessageMetadata;
  readonly correlationId?: string;
+ readonly receivedAt: Date;
 }
 
 export enum ZLinkHandlerDispatchKind {

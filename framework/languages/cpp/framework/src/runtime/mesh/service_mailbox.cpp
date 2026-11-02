@@ -91,6 +91,8 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
     if (_state->closed) {
         return false;
     }
+    if (!record.received_at)
+        record.received_at = _utc_clock ();
     const auto owner = record.owner;
     auto &queue = target.owners[owner];
     if (record.domain == service_mailbox_domain_t::application && _state->application_prepare)

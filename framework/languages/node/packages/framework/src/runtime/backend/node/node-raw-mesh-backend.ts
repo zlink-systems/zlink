@@ -2819,16 +2819,20 @@ function decodeStatefulRecord(
 }
 
 function receiveIngressLifecycle(record: ServiceMailboxRecord): {
+  readonly receivedAt?: Date;
   readonly applicationJobPermit?: import('../../application-jobs/contracts').ApplicationJobPermitPort;
   readonly releaseRetainedIngress?: () => void;
 } {
   const applicationJob = record.applicationJob;
-  return applicationJob === undefined
-    ? {}
-    : {
-        applicationJobPermit: applicationJob,
-        releaseRetainedIngress: () => applicationJob.close()
-      };
+  return {
+    ...(record.receivedAt === undefined ? {} : { receivedAt: record.receivedAt }),
+    ...(applicationJob === undefined
+      ? {}
+      : {
+          applicationJobPermit: applicationJob,
+          releaseRetainedIngress: () => applicationJob.close()
+        })
+  };
 }
 
 function prepareStatefulMailboxDispatch(

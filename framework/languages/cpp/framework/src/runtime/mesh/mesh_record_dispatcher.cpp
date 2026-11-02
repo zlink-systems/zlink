@@ -65,7 +65,8 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
           return result_t<void>::success ();
       });
     return dispatcher.dispatch (
-      route_received_packet_t{record.source_node_rid, {}, std::move (message_parts), {}},
+      route_received_packet_t{
+        record.source_node_rid, {}, std::move (message_parts), {}, record.received_at},
       std::move (header), std::move (terminal), executor);
 }
 

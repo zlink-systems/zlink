@@ -5,7 +5,8 @@ namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelReceiveLoop(
     ZLinkFanoutPacketDispatcher dispatcher,
-    ZLinkClientServerDispatcher clientServerDispatcher
+    ZLinkClientServerDispatcher clientServerDispatcher,
+    TimeProvider? timeProvider = null
 )
 {
     // The bundle owns this logical source and closes its router after source removal.
@@ -76,6 +77,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                                 received = receiveStoragePool.Rent();
                                 if (!router.Recv(received, RecvFlags.DontWait))
                                     break;
+                                var receivedAt = (timeProvider ?? TimeProvider.System).GetUtcNow();
                                 admission = reservation.Claim()!;
                                 records++;
                                 bytes = checked(
@@ -143,7 +145,8 @@ internal sealed class ZLinkChannelReceiveLoop(
                                             applicationDispatch.ReplyGate,
                                             admittedMaximumMessageBytes,
                                             admission,
-                                            envelope
+                                            envelope,
+                                            receivedAt
                                         ),
                                         cancellationToken
                                     )
@@ -227,7 +230,8 @@ internal sealed class ZLinkChannelReceiveLoop(
                     work.ReplyGate,
                     work.MaximumMessageBytes,
                     cancellationToken,
-                    work.Envelope
+                    work.Envelope,
+                    work.ReceivedAt
                 )
                 .ConfigureAwait(false);
         }
@@ -580,7 +584,8 @@ internal sealed class ZLinkChannelReceiveLoop(
         ZLinkChannelReplyGate ReplyGate,
         uint MaximumMessageBytes,
         ZLinkApplicationJobQueueLease Admission,
-        (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error) Envelope
+        (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error) Envelope,
+        DateTimeOffset ReceivedAt
     );
 
     internal ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork> CreateFanoutDispatchQueue(

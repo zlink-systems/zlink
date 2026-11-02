@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -432,6 +433,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                                                                                 payloadCopy,
                                                                                                 contentType,
                                                                                                 metadata,
+                                                                                                received
+                                                                                                        .receivedAt(),
                                                                                                 context
                                                                                                                 .handlerInstances()
                                                                                                         ::instance))
@@ -506,6 +509,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                                                 payloadCopy,
                                                                 contentType,
                                                                 metadata,
+                                                                received.receivedAt(),
                                                                 context.handlerInstances()
                                                                         ::instance);
                                                     } catch (RuntimeException decodeFailure) {
@@ -574,6 +578,11 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
     }
 
     final CompletionStage<Optional<Message>> handleRoutedActorPacketParts(List<Message> parts) {
+        return handleRoutedActorPacketParts(parts, Instant.now());
+    }
+
+    final CompletionStage<Optional<Message>> handleRoutedActorPacketParts(
+            List<Message> parts, Instant receivedAt) {
         List<Message> packetParts =
                 parts.size() == 2
                         ? systems.zlink.framework.runtime.actors.ZLinkActorEntryTransferEnvelope
@@ -598,17 +607,22 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 packet.handoffArrivalIndex() == null
                         ? packet.acceptedJournalRecord().length == 0
                                 ? host.dispatchLocalSessionActor(
-                                        packet.actorRef(), packet.header(), packet.payload())
+                                        packet.actorRef(),
+                                        packet.header(),
+                                        packet.payload(),
+                                        receivedAt)
                                 : host.dispatchMessageFollow(
                                         packet.actorRef(),
                                         packet.header(),
                                         packet.payload(),
-                                        packet.acceptedJournalRecord())
+                                        packet.acceptedJournalRecord(),
+                                        receivedAt)
                         : host.dispatchTransferBacklog(
                                         packet.actorRef(),
                                         packet.header(),
                                         packet.payload(),
-                                        packet.acceptedJournalRecord())
+                                        packet.acceptedJournalRecord(),
+                                        receivedAt)
                                 .thenApply(
                                         reply ->
                                                 reply.map(

@@ -12,6 +12,7 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -43,6 +44,28 @@ final class ZLinkSpotHandlerInvoker {
             Map<String, String> metadata,
             Function<Class<?>, Object> handlers,
             String failureMessage) {
+        return invokeActorSend(
+                registration,
+                spotSurface,
+                actor,
+                payload,
+                contentType,
+                metadata,
+                Instant.now(),
+                handlers,
+                failureMessage);
+    }
+
+    CompletionStage<Void> invokeActorSend(
+            SpotActorPacketHandlerRegistration registration,
+            Object spotSurface,
+            ZLinkActor actor,
+            Message payload,
+            String contentType,
+            Map<String, String> metadata,
+            Instant receivedAt,
+            Function<Class<?>, Object> handlers,
+            String failureMessage) {
         Object message;
         try {
             message = deserialize(payload, registration.messageType(), contentType);
@@ -55,7 +78,7 @@ final class ZLinkSpotHandlerInvoker {
         }
         ZLinkMessageContext context =
                 new ZLinkSpotActorSendHandlerContext(
-                        registration.packetName(), contentType, metadata);
+                        registration.packetName(), contentType, metadata, receivedAt);
         try {
             return registration
                     .invocation()
@@ -99,10 +122,32 @@ final class ZLinkSpotHandlerInvoker {
             Map<String, String> metadata,
             Function<Class<?>, Object> handlers,
             String failureMessage) {
+        return invokeActorRequest(
+                registration,
+                spotSurface,
+                actor,
+                payload,
+                contentType,
+                metadata,
+                Instant.now(),
+                handlers,
+                failureMessage);
+    }
+
+    CompletionStage<Optional<Message>> invokeActorRequest(
+            SpotActorPacketHandlerRegistration registration,
+            Object spotSurface,
+            ZLinkActor actor,
+            Message payload,
+            String contentType,
+            Map<String, String> metadata,
+            Instant receivedAt,
+            Function<Class<?>, Object> handlers,
+            String failureMessage) {
         Object message = deserialize(payload, registration.messageType(), contentType);
         ZLinkMessageContext context =
                 new ZLinkSpotActorRequestHandlerContext(
-                        registration.packetName(), contentType, metadata);
+                        registration.packetName(), contentType, metadata, receivedAt);
         CompletionStage<Object> reply;
         try {
             reply =
@@ -170,9 +215,22 @@ final class ZLinkSpotHandlerInvoker {
             String contentType,
             Map<String, String> metadata,
             Function<Class<?>, Object> handlers) {
+        return invokePacket(
+                registration, spot, payload, contentType, metadata, Instant.now(), handlers);
+    }
+
+    CompletionStage<Void> invokePacket(
+            SpotPacketHandlerRegistration registration,
+            Object spot,
+            Message payload,
+            String contentType,
+            Map<String, String> metadata,
+            Instant receivedAt,
+            Function<Class<?>, Object> handlers) {
         Object message = deserialize(payload, registration.messageType(), contentType);
         ZLinkMessageContext context =
-                new ZLinkSpotSendHandlerContext(registration.packetName(), contentType, metadata);
+                new ZLinkSpotSendHandlerContext(
+                        registration.packetName(), contentType, metadata, receivedAt);
         try {
             Object handler = handlers.apply(registration.handlerType());
             CompletionStage<?> stage =
@@ -212,10 +270,22 @@ final class ZLinkSpotHandlerInvoker {
             String contentType,
             Map<String, String> metadata,
             Function<Class<?>, Object> handlers) {
+        return invokeRequest(
+                registration, spot, payload, contentType, metadata, Instant.now(), handlers);
+    }
+
+    CompletionStage<Message> invokeRequest(
+            SpotPacketHandlerRegistration registration,
+            Object spot,
+            Message payload,
+            String contentType,
+            Map<String, String> metadata,
+            Instant receivedAt,
+            Function<Class<?>, Object> handlers) {
         Object message = deserialize(payload, registration.messageType(), contentType);
         ZLinkMessageContext context =
                 new ZLinkSpotRequestHandlerContext(
-                        registration.packetName(), contentType, metadata);
+                        registration.packetName(), contentType, metadata, receivedAt);
         try {
             Object handler = handlers.apply(registration.handlerType());
             CompletionStage<?> stage =
