@@ -6,6 +6,7 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
+#include "runtime/execution/task_result.hpp"
 
 #include <exception>
 #include <optional>
@@ -206,25 +207,27 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
 {
     if (_internal_packets != nullptr && _internal_packets->can_handle_send (header.message_name)) {
         auto dispatched = _internal_packets->dispatch_send (received, header, *_services);
-        if (!dispatched) {
-            return task_t<std::optional<route_dispatch_reply_t>> (
-              detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
-                dispatched, "route internal send failed"));
-        }
-        if (message_flow_tracer_t (_dispatch_options)
-              .enabled_for (message_flow_outcome_t::dispatched)) {
-            trace_route_flow (_dispatch_options, _router_channel_id,
-                              message_flow_outcome_t::dispatched, dispatch_message_kind_t::send,
-                              received, header);
-        }
-        if (message_flow_tracer_t (_dispatch_options)
-              .enabled_for (message_flow_outcome_t::completed)) {
-            trace_route_flow (_dispatch_options, _router_channel_id,
-                              message_flow_outcome_t::completed, dispatch_message_kind_t::send,
-                              received, header);
-        }
-        return task_t<std::optional<route_dispatch_reply_t>> (
-          result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt));
+        return runtime::continue_task<std::optional<route_dispatch_reply_t>> (
+          std::move (dispatched),
+          [received =
+             route_received_packet_t{received.source_node_rid, {}, {}, {}, received.received_at},
+           header = std::move (header), options = _dispatch_options,
+           channel_id = _router_channel_id, terminal = std::move (terminal)] (
+            result_t<void> dispatched) -> task_t<std::optional<route_dispatch_reply_t>> {
+              if (!dispatched)
+                  co_return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
+                    dispatched, "route internal send failed");
+              if (message_flow_tracer_t (options).enabled_for (
+                    message_flow_outcome_t::dispatched)) {
+                  trace_route_flow (options, channel_id, message_flow_outcome_t::dispatched,
+                                    dispatch_message_kind_t::send, received, header);
+              }
+              if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::completed)) {
+                  trace_route_flow (options, channel_id, message_flow_outcome_t::completed,
+                                    dispatch_message_kind_t::send, received, header);
+              }
+              co_return std::nullopt;
+          });
     }
     const auto *handler =
       _handlers != nullptr

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
-#include "runtime/execution/state_lane.hpp"
+#include <zlink/framework/detail/infrastructure_wait_context.hpp>
 
 #include <condition_variable>
 #include <thread>
