@@ -72,9 +72,9 @@ interface ZLinkSerialAdmissionLane {
  * Application work carries the host permit through the queue until the handler starts.
  */
 export class ZLinkSerialExecutionQueue {
-  private readonly application: ZLinkSerialAdmissionLane;
-  private readonly lifecycle: ZLinkSerialAdmissionLane;
-  private activeLifecycle?: ZLinkSerialWorkRecord<unknown>;
+  readonly application: ZLinkSerialAdmissionLane;
+  readonly lifecycle: ZLinkSerialAdmissionLane;
+  activeLifecycle?: ZLinkSerialWorkRecord<unknown>;
   private activeRecord?: ZLinkSerialWorkRecord<unknown>;
   /** The admitted node itself owns ready membership; no second readiness flag. */
   private ownerMembership?: SerialWorkRecord<unknown>;
@@ -86,10 +86,10 @@ export class ZLinkSerialExecutionQueue {
   private lifecycleDebt = false;
   private claimStartedAt?: number;
   private closed = false;
-  private readonly idleWaiters: Array<() => void> = [];
+  readonly idleWaiters: Array<() => void> = [];
 
   constructor(
-    private readonly executeRecord: (record: ZLinkSerialWorkRecord<unknown>) => Promise<void>,
+    readonly executeRecord: (record: ZLinkSerialWorkRecord<unknown>) => Promise<void>,
     options: ZLinkSerialSchedulerOptions = {},
     private readonly sharedOwner?: ZLinkSerialExecutionQueue
   ) {
@@ -217,7 +217,7 @@ export class ZLinkSerialExecutionQueue {
     return this.closed;
   }
 
-  private admit<T>(
+  admit<T>(
     operation: () => Promise<T> | T,
     options: ZLinkSerialWorkOptions | undefined,
     context?: unknown,
@@ -291,7 +291,7 @@ export class ZLinkSerialExecutionQueue {
     return result;
   }
 
-  private scheduleDrain(): void {
+  scheduleDrain(): void {
     if (this.sharedOwner !== undefined) {
       if (this.activeRecord !== undefined) return;
       // Ready membership in the existing owner queue is the only notification state.
@@ -320,7 +320,7 @@ export class ZLinkSerialExecutionQueue {
   }
 
   /** Notifications carry no payload, admission sequence, result Promise, or host permit. */
-  private enqueueMailboxTurn(operation: () => void): void {
+  enqueueMailboxTurn(operation: () => void): void {
     const entry: SerialWorkRecord<unknown> = {
       acceptedSequence: 0n,
       lane: 'application',
@@ -384,7 +384,7 @@ export class ZLinkSerialExecutionQueue {
     });
   }
 
-  private async drain(): Promise<void> {
+  async drain(): Promise<void> {
     const consumer = this.consumer!;
     if (consumer.running) return;
     consumer.running = true;
@@ -461,7 +461,7 @@ export class ZLinkSerialExecutionQueue {
     return record.preparationState !== 'pending' && record.preparationState !== 'canceling';
   }
 
-  private selectNext(): SerialWorkRecord<unknown> | undefined {
+  selectNext(): SerialWorkRecord<unknown> | undefined {
     const lifecycleOwner = this.activeLifecycle?.context as ZLinkSerialLifecycleContext | undefined;
     let applicationRecord: SerialWorkRecord<unknown> | undefined;
     if (lifecycleOwner === undefined) {
@@ -488,7 +488,7 @@ export class ZLinkSerialExecutionQueue {
     return applicationRecord!;
   }
 
-  private takeSelected(selected: SerialWorkRecord<unknown>): ZLinkSerialWorkRecord<unknown> {
+  takeSelected(selected: SerialWorkRecord<unknown>): ZLinkSerialWorkRecord<unknown> {
     const record =
       selected.lane === 'lifecycle' ? this.takeLifecycle() : this.takeApplication(selected);
     if (record !== selected) {
@@ -508,7 +508,7 @@ export class ZLinkSerialExecutionQueue {
     return record;
   }
 
-  private takeApplication(selected: SerialWorkRecord<unknown>): ZLinkSerialWorkRecord<unknown> {
+  takeApplication(selected: SerialWorkRecord<unknown>): ZLinkSerialWorkRecord<unknown> {
     this.lifecycleStreak = 0;
     this.lifecycleDebt = false;
     if (this.application.records[0] === selected) return this.application.records.shift()!;
@@ -577,7 +577,7 @@ export class ZLinkSerialExecutionQueue {
     return performance.now() - (this.claimStartedAt ?? performance.now()) >= this.ownerTimeBudget;
   }
 
-  private resolveIdleWaiters(): void {
+  resolveIdleWaiters(): void {
     for (let index = 0; index < this.idleWaiters.length; index++) this.idleWaiters[index]!();
     this.idleWaiters.length = 0;
   }

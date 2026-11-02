@@ -32,8 +32,8 @@ export interface ZLinkLocationRuntimeStopSnapshot {
 }
 
 export class ZLinkLocationRuntimeOwner {
-  private stores?: ZLinkLocationRuntimeStores;
-  private runtime?: ZLinkLocationRuntime;
+  stores?: ZLinkLocationRuntimeStores;
+  runtime?: ZLinkLocationRuntime;
   private lifecycle?: ZLinkLocationLifecycle;
   private events?: ZLinkLocationEventSink;
   private leaseTrackerState?: {

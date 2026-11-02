@@ -8,8 +8,8 @@ const {
 const {
   runWithApplicationJobPermit
 } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
-const { DefaultZLinkSpotManager } = require('../../packages/framework/dist/runtime/spots');
-const { ZLinkFrameworkRuntimeHost } = require('../../packages/framework/dist/runtime/host');
+const { DefaultZLinkSpotManager } = require('../../packages/framework/dist/internal');
+const { ZLinkFrameworkRuntimeHost } = require('../../packages/framework/dist/internal');
 const {
   ZLinkBufferMessage
 } = require('../../packages/framework/dist/runtime/backend/runtime-message');

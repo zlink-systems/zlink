@@ -14,7 +14,7 @@ import {
 import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
 
 export class ZLinkActorSerialExecutor {
-  private readonly scheduler: ZLinkSerialExecutionQueue;
+  readonly scheduler: ZLinkSerialExecutionQueue;
 
   constructor(
     private readonly actorId: string,

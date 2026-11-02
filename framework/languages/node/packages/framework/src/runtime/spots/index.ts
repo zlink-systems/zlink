@@ -346,14 +346,14 @@ export class DefaultZLinkSpotManager {
   }
 
   private readonly factories: ReadonlySet<Type<ZLinkSpot>>;
-  private readonly activations: ZLinkSpotActivationRegistry;
+  readonly activations: ZLinkSpotActivationRegistry;
   private readonly workerRuntime: ZLinkWorkerRuntime;
   private readonly locationClaim: ZLinkSpotLocationClaim;
   private readonly routedSpotPackets: ZLinkRoutedSpotPacketDispatch;
   private readonly actorMembership: ZLinkSpotActorMembership;
   private readonly activationLifecycle: ZLinkSpotActivationLifecycle;
   private readonly formalRemoteTransfers = new ZLinkFormalRemoteActorTransferRegistry();
-  private readonly formalRemoteActorAdmissions = new ZLinkFormalRemoteActorAdmissionRegistry();
+  readonly formalRemoteActorAdmissions = new ZLinkFormalRemoteActorAdmissionRegistry();
   private readonly pendingInstanceMaterializations = new Map<
     string,
     Promise<ZLinkSpotActivation>
@@ -365,7 +365,7 @@ export class DefaultZLinkSpotManager {
     string,
     Map<string, Promise<ZLinkSpotActivation>>
   >();
-  private readonly closeOperations = new Map<string, ZLinkTargetSpotCloseOperation>();
+  readonly closeOperations = new Map<string, ZLinkTargetSpotCloseOperation>();
   private readonly pendingInstanceTerminals = new Map<string, number>();
   private readonly pendingInstanceTerminalGenerations = new Map<string, Map<string, number>>();
   private readonly deferredInstanceAuthorityReleases = new Map<string, Set<bigint>>();
@@ -2278,7 +2278,7 @@ export class DefaultZLinkSpotManager {
     }
   }
 
-  private async dispatchMeshActorJoinCore(
+  async dispatchMeshActorJoinCore(
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord,

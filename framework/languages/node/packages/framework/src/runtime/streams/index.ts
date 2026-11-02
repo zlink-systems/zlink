@@ -420,7 +420,7 @@ export class ZLinkStreamSessionNodeRuntime extends ZLinkStreamSessionNodeRuntime
 }
 
 export class ZLinkStreamBindingRuntime {
-  private readonly routes: ZLinkActorSessionBindingRegistry<
+  readonly routes: ZLinkActorSessionBindingRegistry<
     DefaultZLinkSessionContext,
     DefaultZLinkSessionActor
   >;

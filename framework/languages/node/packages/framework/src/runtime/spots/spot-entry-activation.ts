@@ -105,7 +105,7 @@ interface ZLinkEntrySpotActivationOptions {
 
 export class ZLinkEntrySpotActivation {
   private readonly serial: ZLinkSpotSerialTurnExecutor;
-  private readonly spotSerialExecutor: ZLinkSpotSerialExecutor;
+  readonly spotSerialExecutor: ZLinkSpotSerialExecutor;
   private readonly timers: ZLinkSpotTimerRegistry;
   private readonly actorHandlers = new ZLinkSpotActorHandlerRegistryRuntime();
   private readonly handlers: DefaultZLinkSpotHandlerRegistry;

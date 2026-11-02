@@ -9,7 +9,7 @@ const {
 const {
   ZLinkHostServiceRelocationRuntime,
   relocationFailedFailureCode
-} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');

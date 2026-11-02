@@ -48,7 +48,7 @@ const {
 } = require('../../packages/framework/dist/runtime/host/actor-packet-relay');
 const {
   ZLinkActorSessionBindingRegistry
-} = require('../../packages/framework/dist/runtime/streams/actor-session-binding-registry');
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkActorSessionLifecycleCoordinator
 } = require('../../packages/framework/dist/runtime/streams/actor-session-lifecycle-coordinator');
