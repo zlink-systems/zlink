@@ -358,6 +358,63 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingClientServerRequestOwnsCallA
     EXPECT_EQ (events[0].channel_route_kind, "client_server");
 }
 
+TEST (CppFrameworkRouteClientChannelRouting, UnawaitedRequestDoesNotBlockFollowingSend)
+{
+    using namespace std::chrono_literals;
+    using namespace zlink::framework;
+    serializer_registry_t serializers;
+    add_int_serializer<route_request_t> (serializers, "application/x-route-request");
+    add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
+    add_int_serializer<route_event_t> (serializers, "application/x-route-event");
+    auto builder = test::runtime_failure_builder ();
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+
+    task_completion_source_t<void> release_request;
+    int send_submissions = 0;
+    bool request_submitted = false;
+    const std::string channel_name = "mixed-send-request-channel";
+    runtime.bind_client_server_transport (
+      channel_name,
+      [&] (std::string packet_name, std::string content_type, zlink::message_t payload,
+           std::map<std::string, std::string>) -> task_t<void> {
+          EXPECT_EQ (packet_name, route_event_t::packet_name);
+          EXPECT_EQ (content_type, "application/x-route-event");
+          EXPECT_EQ (payload.to_string (), "31");
+          ++send_submissions;
+          co_return;
+      },
+      [&] (std::string packet_name, std::string content_type, zlink::message_t payload,
+           std::chrono::milliseconds timeout,
+           std::map<std::string, std::string>) -> request_task_t<zlink::message_t> {
+          request_submitted = true;
+          EXPECT_EQ (packet_name, route_request_t::packet_name);
+          EXPECT_EQ (content_type, "application/x-route-request");
+          EXPECT_EQ (payload.to_string (), "19");
+          EXPECT_EQ (timeout, 1s);
+          co_await release_request.task ();
+          co_await detail::request_admitted_t{};
+          co_return zlink::message_t::from (std::string ("38"));
+      });
+
+    auto client = builder.route_client (serializers);
+    auto pending_request = client.request_to_channel (channel_name, route_request_t{19})
+                             .timeout (1s)
+                             .async<route_reply_t> ();
+    EXPECT_TRUE (request_submitted);
+    EXPECT_FALSE (pending_request.await_ready ());
+
+    const auto sent = client.send_to_channel (channel_name, route_event_t{31}).async ().result ();
+    EXPECT_TRUE (sent) << error_message (sent);
+    EXPECT_EQ (send_submissions, 1);
+    EXPECT_FALSE (pending_request.await_ready ());
+
+    release_request.complete (result_t<void>::success ());
+    const auto reply = pending_request.result ();
+    ASSERT_TRUE (reply) << error_message (reply);
+    EXPECT_EQ (reply.value ().value, 38);
+}
+
 TEST (CppFrameworkRouteClientChannelRouting, OneWayPublishDoesNotCreateCorrelation)
 {
     using namespace std::chrono_literals;
