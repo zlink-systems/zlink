@@ -211,10 +211,11 @@ on different MeshNodes, the session owner sends a
 `boundSessionBind(38)` control request to the Actor owner. The Actor owner
 checks the Actor `ObjectGeneration`, target `NodeGeneration` (the generation
 identifying the target node's process lifecycle), and
-`AuthorityOwnerGeneration`, all together, then registers a
-[binding generation](../00-foundation/02-glossary.en.md#binding-generation) and returns a
-terminal reply exactly once. **The admission decision uses these three values
-only.** When the bind completes, the session owner sends the binding's Actor
+`AuthorityOwnerGeneration`, all together, then applies the duplicate-bind decision in §6,
+registers the [binding generation](../00-foundation/02-glossary.en.md#binding-generation) of an accepted
+request, and returns one success or failure terminal reply. **Authority validation uses only these three values.** The content decision to accept or
+reject a duplicate bind is owned by [§6](#6-rebind-and-replacing-the-previous-connection).
+When the bind completes, the session owner sends the binding's Actor
 slot and `ActorId` to the client as the `$zlink.actor.bound` control packet.
 **The session owner submits `$zlink.actor.bound` before the first STREAM
 packet that carries that slot, and `$zlink.actor.unbound` after the last
@@ -233,7 +234,7 @@ verification ([routing](../03-spot-actor/08-routing.en.md)); using it in bind
 admission would turn a derived-copy mismatch into grounds for a stale verdict,
 conflicting with the judging-authority principle of §8.1.
 
-**The Actor owner compares an admitted request with the current binding once
+**The Actor owner compares a request that passed authority validation with the current binding once
 and decides the result.** It compares binding generations only within the same
 Session owner lifecycle, as [§4](#4-what-binding-connects-and-what-it-stores)
 requires.
@@ -242,7 +243,7 @@ requires.
 |---|---|
 | Both the binding identity (§4) and SessionRid are the same. | The current binding stays and the bind succeeds. |
 | The first row does not apply, the Session owner Node RID and lifecycle generation are the same, and the requested binding generation is less than or equal to the current one. | The current binding stays and the bind ends with the binding fence stale result of [§12](#12-failure-and-errors) (`Unavailable`). |
-| Any other case (no current binding, a larger generation in the same Session owner lifecycle, a different Session owner lifecycle) | The requested identity is registered as current ([§6](#6-rebind-and-replacing-the-previous-connection)). |
+| Any other case (no current binding, a larger generation in the same Session owner lifecycle, a different Session owner lifecycle) | With no current binding, register the requested identity. With a different Session current, register it only when the duplicate-bind decision in [§6](#6-rebind-and-replacing-the-previous-connection) accepts it (always accepted without a callback). Resubmission by the same physical Session follows the existing idempotent rule in §6. |
 
 The tail of a successful `boundSessionBind(38)` reply carries the binding
 generation and `AuthorityOwnerGeneration` of the binding accepted by this
@@ -418,7 +419,7 @@ The control commands this section and §8.2 use are as follows.
 
 | Command | Name | Direction and use | How it completes |
 |---|---|---|---|
-| 38 | `boundSessionBind` | Session owner → Actor owner: bind request | request/reply, terminal once |
+| 38 | `boundSessionBind` | Session owner → Actor owner: bind request; §6 owns the duplicate-bind content decision | request/reply, terminal once |
 | 24 | `actorSend` | Session owner → Actor owner: session→Actor payload (includes bound-session tail) | send or request relay — the existing correlation/deadline contract as-is |
 | 36 | `boundSessionSend` | Actor owner → Session owner: Actor→session push | send |
 | 51 | `boundSessionReplaced` | Actor owner → previous Session owner: binding-replacement notification | one-way, at most once |
@@ -436,7 +437,36 @@ When an Actor already bound to another session is connected to a new
 session, the two physical connections may briefly remain open. But the
 Actor owner's current binding must always be exactly one.
 
-- **The new connection is confirmed immediately, and the previous
+**The Actor owner alone makes the content decision for a bind with a different Session current.**
+For a request that passed the authority and binding-fence checks in §5, the Actor owner calls
+`onDuplicateBind(current, incoming)` once in that Actor's handler order. `current` and `incoming`
+are read-only information identifying the Sessions involved in the decision. Each carries the
+binding identity from §4: session-owner node RID, that node's lifecycle generation, and binding
+generation. The callback accepts when it returns no value or an empty string and rejects when it
+returns a non-empty string. The
+rejection message is returned in command 20's `streamBind` rejection tail. Each language's Actor interface owns its exact
+representation. No callback runs with no current binding or for an idempotent resubmission by the
+same physical Session. Without a callback, always accept and preserve the existing later-Session-wins behavior.
+
+The callback uses the Actor gate and lifecycle lane from
+[Handler Turn and Execution Gate §2 and §7](../01-execution/02-handler-turn-and-execution-gate.en.md).
+It uses the shared Spot gate in `SpotWide`, and the Actor gate for Entry Actors and `PerActor` Actors.
+Do not call it directly in a Session callback's execution context or add a separate queue, gate, or
+current state for duplicate-bind decisions. The decision and its binding effect follow the same
+Actor owner order.
+
+The callback execution timeout uses the server setting `SessionReplacementCallbackTimeout`, default
+`30,000 ms`. This setting also applies to the Actor owner's duplicate-bind callback. If no result arrives within that time, end the incoming
+bind with `DeadlineExceeded` and signal cancellation to the callback. A late acceptance does not
+change the binding. Do not extend the existing bind operation deadline. Cancellation and callback
+continuations follow the execution-gate contract above.
+
+On rejection or timeout, keep the current binding. End the incoming bind with the §12 error;
+the framework neither closes the incoming connection nor sends command 51. The binding that was
+current before the decision remains current while the callback runs. Perform the replacement
+procedure below only on acceptance.
+
+- **When the duplicate bind is accepted, the new connection is confirmed and the previous
   session is notified one-way of the replacement.** The new identity is
   first registered atomically with the Actor owner, and the new session
   owner that receives a successful reply stores the new route. From the
@@ -456,6 +486,7 @@ sequenceDiagram
     participant PO as Previous session owner
 
     SO->>AO: bind the specified Actor to new session
+    AO->>AO: decide duplicate bind in Actor turn · accept
     AO->>AO: install new current binding
     AO-->>SO: return bind terminal
     SO->>SO: switch to new route
@@ -530,7 +561,7 @@ remove the replaced Actor's new binding identity.
 
 When rebinding to a different owner or a different Actor generation, the
 new Actor owner also registers the new identity atomically and returns the
-bind terminal reply. It then sends `boundSessionReplaced(51)` one-way to
+bind terminal reply on acceptance by this section's duplicate-bind decision. It then sends `boundSessionReplaced(51)` one-way to
 the previous binding route. No acknowledgment or request/reply waits
 for the previous owner to finish. If a new identity under the same owner
 has already replaced the previous identity, a late notification or
@@ -979,6 +1010,8 @@ sessions from sharing the same business result.
 | There's no Actor factory. | Ends with `NotFound`. Because the type is not registered, retrying cannot resolve it. |
 | Push or close was requested with no current binding. | Ends with a session-not-bound error. The public kind is `InvalidOperation`. It isn't that no target exists — it's an ordering issue where a binding must be made first, and the same call succeeds once one exists. |
 | The Actor/owner/binding fence is stale. | Ends with `Unavailable`, without falling back to a different target. |
+| The duplicate-bind callback in §6 rejects. | End bind admission with `Rejected` and preserve the content message in the error. Binding and connection handling follow §6. |
+| The duplicate-bind callback timeout in §6 expires. | End the incoming bind with `DeadlineExceeded`. Binding and connection handling follow §6. |
 
 ## 13. Public Interface Excerpt
 

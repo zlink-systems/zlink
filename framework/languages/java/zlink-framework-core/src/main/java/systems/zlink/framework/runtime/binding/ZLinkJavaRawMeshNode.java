@@ -3648,7 +3648,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         throw ZLinkRequestFailureMapping.receivedFailure(
                                 ZLinkBackendRequestResult.fromWireTerminal(reply.terminalResult())
                                         .toFrameworkErrorKind(reply.failureCode()),
-                                "bound session binding was rejected",
+                                reply.rejectionMessage().isEmpty()
+                                        ? "bound session binding was rejected"
+                                        : reply.rejectionMessage(),
                                 reply.failureCode(),
                                 java.util.Map.of());
                     }

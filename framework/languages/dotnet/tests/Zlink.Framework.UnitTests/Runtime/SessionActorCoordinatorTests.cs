@@ -3122,7 +3122,7 @@ public sealed class SessionActorCoordinatorTests
             cancellationToken
         );
 
-    private static ValueTask<ZLinkSessionBindingIdentity> ConfirmWithDescriptorFixture(
+    private static ValueTask<Zlink.Framework.Runtime.Streams.ZLinkSessionBindingIdentity> ConfirmWithDescriptorFixture(
         ZLinkSessionContext context,
         ActorRef actor,
         CancellationToken cancellationToken
@@ -3161,7 +3161,7 @@ public sealed class SessionActorCoordinatorTests
             FixtureSessionOwnerLeaseGeneration
         );
         return ValueTask.FromResult(
-            new ZLinkSessionBindingIdentity(
+            new Zlink.Framework.Runtime.Streams.ZLinkSessionBindingIdentity(
                 bindingToken,
                 bindingGeneration,
                 ZLinkMeshName.FromBoundary(actor.MeshName, nameof(actor.MeshName)),

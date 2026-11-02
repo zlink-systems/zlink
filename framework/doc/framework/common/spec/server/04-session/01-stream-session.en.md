@@ -298,7 +298,7 @@ sequenceDiagram
     S->>A: [send] command 24 actorSend · relay, attaching session sequence
     A->>S: [send] command 36 boundSessionSend · Actor->session push
     S-->>C: deliver push
-    Note over A: when a different session binds the same Actor,<br/>it sends command 51 boundSessionReplaced to the previous session owner node
+    Note over A: when a duplicate bind from another session is accepted under binding §6,<br/>send command 51 boundSessionReplaced to the previous session owner node
     C-xS: connection ends
     S->>A: disconnect notification · tombstone of the current binding generation (command 38 transition)
 ```

@@ -84,10 +84,10 @@ export interface ZLinkRequestDispatch<TContext extends ZLinkMessageContext> {
 }
 
 export class ZLinkChannelDispatchPipeline {
-  private readonly filters: readonly ZLinkHandlerFilter[];
+  readonly filters: readonly ZLinkHandlerFilter[];
   private readonly unhandled: ZLinkUnhandledDispatchOptions;
 
-  constructor(private readonly options: ZLinkChannelDispatchPipelineOptions) {
+  constructor(readonly options: ZLinkChannelDispatchPipelineOptions) {
     this.filters = options.filters ?? [];
     this.unhandled = options.unhandled ?? DEFAULT_UNHANDLED_DISPATCH;
   }
@@ -203,7 +203,7 @@ export class ZLinkChannelDispatchPipeline {
     }
   }
 
-  private invokeInFlow<TContext extends ZLinkMessageContext, TResult>(
+  invokeInFlow<TContext extends ZLinkMessageContext, TResult>(
     dispatch: ZLinkOneWayDispatch<TContext> | ZLinkRequestDispatch<TContext>,
     handler: ZLinkChannelDispatchHandler<TContext, TResult>
   ): unknown {
@@ -330,7 +330,7 @@ export class ZLinkChannelDispatchPipeline {
     });
   }
 
-  private invoke<TContext extends ZLinkMessageContext, TResult>(
+  invoke<TContext extends ZLinkMessageContext, TResult>(
     dispatch: ZLinkOneWayDispatch<TContext> | ZLinkRequestDispatch<TContext>,
     handler: ZLinkChannelDispatchHandler<TContext, TResult>
   ):
@@ -457,7 +457,7 @@ export class ZLinkChannelDispatchPipeline {
     });
   }
 
-  private trace(outcome: ZLinkMessageFlowOutcome, fields: ZLinkChannelDispatchFields): void {
+  trace(outcome: ZLinkMessageFlowOutcome, fields: ZLinkChannelDispatchFields): void {
     if (fields.messageKind === ZLinkDispatchMessageKind.Publish) return;
     const flow = this.options.dispatchErrors.flow;
     const tracePoint = flow.begin(outcome, undefined, fields.flowId);

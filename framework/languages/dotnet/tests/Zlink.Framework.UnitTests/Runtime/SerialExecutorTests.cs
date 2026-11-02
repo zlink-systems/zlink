@@ -843,54 +843,54 @@ public sealed class SerialExecutorTests
         var observedSamples = new List<long>();
         for (var round = 0; round < windowQueues * PerCallAllocation.Windows; round++)
         {
-            // A retry needs a fresh busy queue: its first observation owns the signal.
-            observedSamples.Add(
-                await PerCallAllocation.MeasureWindowAsync(async () =>
-                {
-                    using var errors = new ZLinkRuntimeErrorSink();
-                    await using var queue = new ZLinkSerialExecutionQueue(
-                        new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
-                        errors,
+            // Each sample needs a fresh busy queue: its first observation owns the signal.
+            var measurement = await PerCallAllocation.MeasureWindowAsync(async () =>
+            {
+                using var errors = new ZLinkRuntimeErrorSink();
+                await using var queue = new ZLinkSerialExecutionQueue(
+                    new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+                    errors,
+                    CancellationToken.None
+                );
+                Assert.True(queue.ApplicationDrained.IsCompletedSuccessfully);
+                var entered = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                var release = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                var execution = queue
+                    .RunAsync(
+                        async _ =>
+                        {
+                            entered.TrySetResult();
+                            await release.Task;
+                        },
                         CancellationToken.None
-                    );
+                    )
+                    .AsTask();
+                try
+                {
+                    await entered.Task;
+                    var before = GC.GetAllocatedBytesForCurrentThread();
+                    var drained = queue.ApplicationDrained;
+                    var observedStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+                    Assert.Same(drained, queue.ApplicationDrained);
+                    Assert.False(drained.IsCompleted);
+                    release.TrySetResult();
+                    await execution;
+                    await drained;
                     Assert.True(queue.ApplicationDrained.IsCompletedSuccessfully);
-                    var entered = new TaskCompletionSource(
-                        TaskCreationOptions.RunContinuationsAsynchronously
-                    );
-                    var release = new TaskCompletionSource(
-                        TaskCreationOptions.RunContinuationsAsynchronously
-                    );
-                    var execution = queue
-                        .RunAsync(
-                            async _ =>
-                            {
-                                entered.TrySetResult();
-                                await release.Task;
-                            },
-                            CancellationToken.None
-                        )
-                        .AsTask();
-                    try
-                    {
-                        await entered.Task;
-                        var before = GC.GetAllocatedBytesForCurrentThread();
-                        var drained = queue.ApplicationDrained;
-                        var observedStorage = GC.GetAllocatedBytesForCurrentThread() - before;
-                        Assert.Same(drained, queue.ApplicationDrained);
-                        Assert.False(drained.IsCompleted);
-                        release.TrySetResult();
-                        await execution;
-                        await drained;
-                        Assert.True(queue.ApplicationDrained.IsCompletedSuccessfully);
-                        return observedStorage;
-                    }
-                    finally
-                    {
-                        release.TrySetResult();
-                        await execution;
-                    }
-                })
-            );
+                    return observedStorage;
+                }
+                finally
+                {
+                    release.TrySetResult();
+                    await execution;
+                }
+            });
+            if (measurement.IsValid)
+                observedSamples.Add(measurement.Value);
         }
         Assert.Equal(signalStorage, PerCallAllocation.MinWindow(observedSamples));
     }

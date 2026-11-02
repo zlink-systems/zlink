@@ -190,7 +190,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private readonly lifecycleGeneration: bigint;
   private bindEndpoint?: string;
   private advertiseHost?: string;
-  private runtime?: RawServiceMeshRuntime;
+  runtime?: RawServiceMeshRuntime;
   private stateful?: ServiceStatefulRuntime;
   private readyHandler?: (domains: number) => number;
   private maintenanceTimer?: NodeJS.Timeout;
@@ -1691,7 +1691,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.requireStateful().clearSubscriptions(state.ref.spotId);
   }
 
-  private createDescriptor(): ServiceNodeDescriptor {
+  createDescriptor(): ServiceNodeDescriptor {
     const channels: ServiceChannelDescriptor[] = [...this.channels]
       .map(([name, weight]) => ({ name, weight }))
       .sort((left, right) => left.name.localeCompare(right.name));
@@ -2560,6 +2560,9 @@ function completionRecord(
     kindData: 'kindData' in result ? (result.kindData ?? null) : null,
     terminalResult: result.terminalResult,
     failureErrno: result.failureCode,
+    ...('failureMessage' in result && result.failureMessage !== undefined
+      ? { failureMessage: result.failureMessage }
+      : {}),
     parts:
       payload === undefined
         ? []
@@ -2809,9 +2812,9 @@ function decodeStatefulRecord(
       });
       return accepted ? SubmitResult.Ok : SubmitResult.InvalidState;
     },
-    replyFailure(terminalResult, failureCode) {
+    replyFailure(terminalResult, failureCode, tail) {
       if (stateful.reply === undefined) return SubmitResult.InvalidState;
-      return stateful.reply(terminalResult, failureCode)
+      return stateful.reply(terminalResult, failureCode, undefined, tail)
         ? SubmitResult.Ok
         : SubmitResult.InvalidState;
     }

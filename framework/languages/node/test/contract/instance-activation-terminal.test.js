@@ -12,7 +12,7 @@ const {
 } = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
 const {
   ServiceStatefulRuntime
-} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   encodeMultipartApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');

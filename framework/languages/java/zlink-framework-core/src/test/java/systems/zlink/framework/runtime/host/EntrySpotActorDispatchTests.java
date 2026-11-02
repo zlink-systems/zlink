@@ -1860,7 +1860,7 @@ final class EntrySpotActorDispatchTests {
                                                 actor,
                                                 route.sessionOwnerNodeRid(),
                                                 route.sessionRid()));
-                                return true;
+                                return CompletableFuture.completedFuture(true);
                             })
                     .toCompletableFuture()
                     .join();

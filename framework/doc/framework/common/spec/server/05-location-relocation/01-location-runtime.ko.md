@@ -547,6 +547,15 @@ Framework에 노출하지 않는다.
 않는다. 게시가 끝나는 시점은 host의 실행 모델을 따른다. 호출자는 호출이 반환한 시점에 새
 Revision이 Store에 저장되어 있다고 가정하지 않는다.
 
+**Automatic discovery coordinator는 자기 descriptor 게시를 실행 자원을 붙잡지 않고
+기다린다.** Store 복구 뒤 재게시처럼 coordinator가 게시 완료를 확인해야 하는 경우에도
+thread를 막는 동기 대기를 하지 않고, 게시 완료를 continuation으로 받는다. 같은
+coordinator는 현재 게시가 끝난 뒤에 다음 snapshot을 처리해도 된다 — snapshot 처리 순서는
+유지한다. 게시 대기 하나는 renew timeout 안에 끝난다. Renew timeout까지 확인되지 않은
+게시는 그 회차의 게시 실패로 처리하고, 다음 갱신이 다시 게시한다. **Stop은 진행 중인 게시
+대기를 취소하고, Store가 응답하지 않아도 renew timeout 안에 끝난다.** 취소 뒤 늦게 끝난
+Store 요청은 coordinator가 다음 snapshot을 처리하거나 다시 게시하게 만들지 않는다.
+
 `capacity`의 count와 `activationConcurrency.active`는 후보 선택과 운영 조회에 쓰는 복사본이며,
 수락을 보장하지 않는다. 수용 공간은 Location Store의 atomic reservation이 확보하고, activation
 수락은 target MeshNode가 자신의 admission으로 정한다. **이 count가 바뀐 것만으로 descriptor 게시나

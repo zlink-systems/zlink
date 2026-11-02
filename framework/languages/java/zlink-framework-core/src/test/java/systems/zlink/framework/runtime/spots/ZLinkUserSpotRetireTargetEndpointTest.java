@@ -986,7 +986,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             } finally {
                 recoveredBackend.restoreRelease.complete(null);
             }
-            publication.join();
+            recoveredBackend.executor.drainUntil(publication);
             recoveredBackend.executor.drain();
             if (eagerActorDrain)
                 assertFalse(
@@ -1635,7 +1635,34 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             systems.zlink.framework.streams.ZLinkStreamCodec.JSON,
                             null,
                             executor);
-            sessionNode.setRemoteSessionBindingOwner(actorRuntime::applyRemoteSessionBinding);
+            sessionNode.setRemoteSessionBindingOwner(
+                    new ZLinkInternalSpotNode.RemoteSessionBindingOwner() {
+                        @Override
+                        public CompletionStage<Boolean> apply(
+                                ZLinkInternalSpotNode ownerNode,
+                                ZLinkBackendActorRef actor,
+                                java.util.function.Function<
+                                                ZLinkInternalSpotNode
+                                                        .RemoteSessionBindingTransition,
+                                                CompletionStage<Boolean>>
+                                        transition) {
+                            return actorRuntime.applyRemoteSessionBindingAsync(
+                                    ownerNode, actor, transition);
+                        }
+
+                        @Override
+                        public CompletionStage<Boolean> restoreRelocated(
+                                ZLinkInternalSpotNode ownerNode,
+                                ZLinkBackendActorRef actor,
+                                java.util.function.Function<
+                                                ZLinkInternalSpotNode
+                                                        .RemoteSessionBindingTransition,
+                                                CompletionStage<Boolean>>
+                                        transition) {
+                            return actorRuntime.restoreRelocatedRemoteSessionBindingAsync(
+                                    ownerNode, actor, transition);
+                        }
+                    });
         }
 
         private CompletionStage<Void> restoreBoundSession(

@@ -1808,7 +1808,8 @@ void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_sea
        .bind =
          [&] (const auto &, const auto &, std::uint64_t, const auto &, auto) {
              ++binds;
-             return host::bound_session_bind_operation_result_t{};
+             using bind_result_t = host::bound_session_bind_operation_result_t;
+             return task_t<bind_result_t> (result_t<bind_result_t>::success (bind_result_t{}));
          },
        .send = [] (const auto &, auto) { return stateful::stateful_error_t::conflict; },
        .replaced = [] (const auto &) {},
@@ -1930,13 +1931,19 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
 
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
-        [] (
-          const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
-          const zlink::framework::location_owner_token_t &,
-          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
+        [] (const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
+            const zlink::framework::location_owner_token_t &,
+            std::function<bool (std::uint32_t, std::uint32_t,
+                                std::optional<protocol::stream_bind_reply_tail_t>)>
+              submit_terminal_reply) {
             (void) submit_terminal_reply (
-              {bind.binding.generation, bind.actor.authority_owner_generation});
-            return host::bound_session_bind_operation_result_t{};
+              static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+              static_cast<std::uint32_t> (protocol::framework_error_code::none),
+              protocol::stream_bind_reply_tail_t{bind.binding.generation,
+                                                 bind.actor.authority_owner_generation});
+            using bind_result_t = host::bound_session_bind_operation_result_t;
+            return zlink::framework::task_t<bind_result_t> (
+              zlink::framework::result_t<bind_result_t>::success (bind_result_t{}));
         },
       .send = [] (const protocol::bound_session_send_t &,
                   std::vector<zlink::message_t>) { return stateful::stateful_error_t::conflict; },
@@ -2028,13 +2035,19 @@ void verify_bound_session_push_admission_uses_only_session_owned_fields ()
     std::atomic_int deliveries{0};
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
-        [] (
-          const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
-          const zlink::framework::location_owner_token_t &,
-          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
+        [] (const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
+            const zlink::framework::location_owner_token_t &,
+            std::function<bool (std::uint32_t, std::uint32_t,
+                                std::optional<protocol::stream_bind_reply_tail_t>)>
+              submit_terminal_reply) {
             (void) submit_terminal_reply (
-              {bind.binding.generation, bind.actor.authority_owner_generation});
-            return host::bound_session_bind_operation_result_t{};
+              static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+              static_cast<std::uint32_t> (protocol::framework_error_code::none),
+              protocol::stream_bind_reply_tail_t{bind.binding.generation,
+                                                 bind.actor.authority_owner_generation});
+            using bind_result_t = host::bound_session_bind_operation_result_t;
+            return zlink::framework::task_t<bind_result_t> (
+              zlink::framework::result_t<bind_result_t>::success (bind_result_t{}));
         },
       .send =
         [&deliveries] (const protocol::bound_session_send_t &, std::vector<zlink::message_t>) {
@@ -9340,12 +9353,16 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
           return std::nullopt;
       },
       [] (stateful::frozen_object_state_t &, const stateful::object_ref_t &,
-          const protocol::relocation_prepare_t &) { return true; },
+          const protocol::relocation_prepare_t &) -> zlink::framework::task_t<bool> {
+          co_return true;
+      },
       [] (const stateful::object_ref_t &)
         -> std::optional<zlink::framework::runtime::actor_authority_payload_t> {
           return std::nullopt;
       },
-      [] (const std::string &, const stateful::object_ref_t &) {},
+      [] (const std::string &, const stateful::object_ref_t &) -> zlink::framework::task_t<void> {
+          co_return;
+      },
       [] (const stateful::object_ref_t &, std::uint64_t, std::uint64_t) { return true; });
     source->start ();
     target->start ();
@@ -9501,8 +9518,11 @@ void verify_dispatch_callbacks_survive_suspension (bool through_mesh, bool dispa
              entered->store (true);
              return release->task ();
          },
-       .bind = [] (const auto &, const auto &, std::uint64_t, const auto &,
-                   auto) { return host::bound_session_bind_operation_result_t{}; },
+       .bind =
+         [] (const auto &, const auto &, std::uint64_t, const auto &, auto) {
+             using bind_result_t = host::bound_session_bind_operation_result_t;
+             return task_t<bind_result_t> (result_t<bind_result_t>::success (bind_result_t{}));
+         },
        .send = [] (const auto &, auto) { return stateful::stateful_error_t::conflict; },
        .replaced = [] (const auto &) {},
        .commit_relocation_route = [] (const auto &, const auto &, const auto &) { return false; },

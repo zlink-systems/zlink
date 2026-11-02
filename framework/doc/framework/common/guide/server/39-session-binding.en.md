@@ -155,6 +155,162 @@ covers that boundary.
 - What gets bound — [Actor](22-actor.en.md)
 - What happens during a move — [Relocation](37-relocation.en.md)
 
+## 6. The Actor Decides Whether to Replace a Session
+
+When a new session binds an Actor whose current binding belongs to another session, the framework
+calls `onDuplicateBind(current, incoming, signal)` in the Actor's order. The two arguments are
+read-only values identified by session-owner node, its lifecycle generation, and binding generation. The callback accepts by
+returning `undefined` or an empty string, and rejects with a non-empty returned string as its message.
+
+An Entry Spot account Actor can reject a new connection to keep the existing login session.
+
+=== "C#/.NET"
+
+    ```csharp
+    private bool matchFinished;
+
+    public ValueTask<string?> OnDuplicateBindAsync(
+        ZLinkSessionBindingIdentity current,
+        ZLinkSessionBindingIdentity incoming,
+        CancellationToken cancellationToken) =>
+        ValueTask.FromResult<string?>("An account session is already active.");
+    ```
+
+=== "C++"
+
+    ```cpp
+    bool match_finished = false;
+
+    task_t<std::optional<std::string>> on_duplicate_bind(
+        const actor_session_binding_identity_t& current,
+        const actor_session_binding_identity_t& incoming,
+        std::stop_token cancellation) override {
+      return task_t<std::optional<std::string>>(
+          result_t<std::optional<std::string>>::success(
+              std::make_optional(std::string("An account session is already active."))));
+    }
+    ```
+
+=== "Java"
+
+    ```java
+    private boolean matchFinished;
+
+    @Override
+    public CompletionStage<Optional<String>> onDuplicateBind(
+        ZLinkSessionBindingIdentity current,
+        ZLinkSessionBindingIdentity incoming,
+        ZLinkActorCallbackCancellation cancellation) {
+      return CompletableFuture.completedFuture(
+          Optional.of("An account session is already active."));
+    }
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    private var matchFinished = false
+
+    override fun onDuplicateBind(
+        current: ZLinkSessionBindingIdentity,
+        incoming: ZLinkSessionBindingIdentity,
+        cancellation: ZLinkActorCallbackCancellation,
+    ): CompletionStage<Optional<String>> =
+        CompletableFuture.completedFuture(Optional.of("An account session is already active."))
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    class EntryAccountActor {
+      onDuplicateBind(
+        current: ZLinkSessionBindingIdentity,
+        incoming: ZLinkSessionBindingIdentity,
+        signal: AbortSignal,
+      ): Promise<string | undefined> {
+        return Promise.resolve("An account session is already active.");
+      }
+    }
+    ```
+
+A User Spot game Actor can allow replacement based on application state.
+
+=== "C#/.NET"
+
+    ```csharp
+    public ValueTask<string?> OnDuplicateBindAsync(
+        ZLinkSessionBindingIdentity current,
+        ZLinkSessionBindingIdentity incoming,
+        CancellationToken cancellationToken) =>
+        ValueTask.FromResult<string?>(
+            this.matchFinished ? "This match no longer accepts a connection." : null);
+    ```
+
+=== "C++"
+
+    ```cpp
+    task_t<std::optional<std::string>> on_duplicate_bind(
+        const actor_session_binding_identity_t& current,
+        const actor_session_binding_identity_t& incoming,
+        std::stop_token cancellation) override {
+      return task_t<std::optional<std::string>>(
+          result_t<std::optional<std::string>>::success(
+              match_finished
+                  ? std::make_optional(std::string("This match no longer accepts a connection."))
+                  : std::nullopt));
+    }
+    ```
+
+=== "Java"
+
+    ```java
+    @Override
+    public CompletionStage<Optional<String>> onDuplicateBind(
+        ZLinkSessionBindingIdentity current,
+        ZLinkSessionBindingIdentity incoming,
+        ZLinkActorCallbackCancellation cancellation) {
+      return CompletableFuture.completedFuture(Optional.ofNullable(
+          this.matchFinished ? "This match no longer accepts a connection." : null));
+    }
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    override fun onDuplicateBind(
+        current: ZLinkSessionBindingIdentity,
+        incoming: ZLinkSessionBindingIdentity,
+        cancellation: ZLinkActorCallbackCancellation,
+    ): CompletionStage<Optional<String>> =
+        CompletableFuture.completedFuture(
+            Optional.ofNullable(
+                if (matchFinished) "This match no longer accepts a connection." else null))
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    class MatchActor {
+      private matchFinished = false;
+
+      onDuplicateBind(
+        current: ZLinkSessionBindingIdentity,
+        incoming: ZLinkSessionBindingIdentity,
+        signal: AbortSignal,
+      ): Promise<string | undefined> {
+        return Promise.resolve(
+          this.matchFinished ? "This match no longer accepts a connection." : undefined,
+        );
+      }
+    }
+    ```
+
+Without a callback, the framework accepts the new session as before. Rejection or a callback that
+doesn't finish within its timeout keeps the current binding and ends only the incoming bind with an
+error. The framework doesn't close the incoming connection or send command 51. Acceptance registers
+the new session as current and applies the existing replacement procedure to the previous
+connection. [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection) owns the callback timeout setting.
+
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

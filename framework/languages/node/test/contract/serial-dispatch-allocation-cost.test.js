@@ -2,11 +2,9 @@ const assert = require('node:assert/strict');
 const { createHook } = require('node:async_hooks');
 const test = require('node:test');
 const {
-  ZLinkSerialExecutionQueue
-} = require('../../packages/framework/dist/runtime/execution/serial-execution-queue');
-const {
+  ZLinkSerialExecutionQueue,
   ZLinkSpotSerialTurnExecutor
-} = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+} = require('../../packages/framework/dist/internal');
 
 function queue() {
   return new ZLinkSerialExecutionQueue(
@@ -110,7 +108,7 @@ function countDirectPromises(method, invoke) {
 test('Actor handler invoker forwards the lifecycle result without another Promise', async () => {
   const {
     ZLinkSpotActorDispatcher
-  } = require('../../packages/framework/dist/runtime/actors/spot-actor-dispatch');
+  } = require('../../packages/framework/dist/internal');
   const actor = {};
   class Handler {
     async handle() {
@@ -365,7 +363,7 @@ const {
   ZLinkSpotActorDispatcher,
   ZLinkSpotActorHandlerRegistryRuntime,
   ZLinkActorPacketKind
-} = require('../../packages/framework/dist/runtime/actors/spot-actor-dispatch');
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkMessageMetadataEmpty
 } = require('../../packages/framework/dist/contracts/Common/ZLinkMessageMetadata');
@@ -506,7 +504,7 @@ for (const remaining of [0, 1])
 test('channel flow dispatch binds only the existing invoker inside the enabled branch', () => {
   const {
     ZLinkChannelDispatchPipeline
-  } = require('../../packages/framework/dist/runtime/channels/channel-dispatch-pipeline');
+  } = require('../../packages/framework/dist/internal');
   for (const enabled of [false, true]) {
     const pipeline = Object.create(ZLinkChannelDispatchPipeline.prototype);
     pipeline.options = { dispatchErrors: { flow: { flowCreationEnabled: () => enabled } } };
@@ -531,7 +529,7 @@ test('channel flow dispatch binds only the existing invoker inside the enabled b
 test('channel invoker preserves record getter and handler flow scopes', async () => {
   const {
     ZLinkChannelDispatchPipeline
-  } = require('../../packages/framework/dist/runtime/channels/channel-dispatch-pipeline');
+  } = require('../../packages/framework/dist/internal');
   const {
     currentFlowContext
   } = require('../../packages/framework/dist/runtime/diagnostics/flow-context');

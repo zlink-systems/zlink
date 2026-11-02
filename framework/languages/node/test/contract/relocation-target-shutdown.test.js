@@ -12,7 +12,7 @@ function deliverCutover(runtime, meshName, cutover) {
 }
 const {
   ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+} = require('../../packages/framework/dist/internal');
 
 function deferred() {
   let resolve;

@@ -3,10 +3,10 @@ const test = require('node:test');
 const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
-} = require('../../packages/framework/dist/runtime/host/application-job-queue');
+} = require('../../packages/framework/dist/internal');
 const {
   RawServiceMeshRuntime
-} = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   SERVICE_WIRE_REQUIRED_CAPABILITY
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');

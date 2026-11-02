@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const ts = require('typescript');
 
@@ -19,6 +20,68 @@ function isPrivate(declaration) {
     (ts.isPrivateIdentifier(declaration.name) ||
       declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword))
   );
+}
+
+function accessExpression(location, source) {
+  const access = location.parent;
+  if (
+    (ts.isPropertyAccessExpression(access) || ts.isElementAccessExpression(access)) &&
+    ts.isCallExpression(access.parent) &&
+    access.parent.expression === access
+  )
+    return access.parent.getText(source);
+  if (ts.isStringLiteralLike(location) && ts.isCallExpression(location.parent))
+    return location.parent.getText(source);
+  return access.getText(source);
+}
+
+function accessIdentity(row) {
+  const normalized = row.expression.trim().replace(/\s+/gu, ' ');
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify([row.member, normalized]))
+    .digest('hex');
+}
+
+function accessAllowlist(accesses) {
+  const files = new Map();
+  for (const access of accesses) {
+    const counts = files.get(access.file) ?? new Map();
+    const identity = accessIdentity(access);
+    counts.set(identity, (counts.get(identity) ?? 0) + 1);
+    files.set(access.file, counts);
+  }
+  return Object.fromEntries(
+    [...files]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([file, counts]) => [
+        file,
+        {
+          reason: 'Legacy private access tracked by #2309; migrate to public operations or internal exports.',
+          accesses: Object.fromEntries([...counts].sort(([left], [right]) => left.localeCompare(right)))
+        }
+      ])
+  );
+}
+
+function compareAccesses(accesses, allowlist) {
+  const actual = accessAllowlist(accesses);
+  const errors = [];
+  for (const file of [...new Set([...Object.keys(actual), ...Object.keys(allowlist)])].sort()) {
+    const found = actual[file]?.accesses ?? {};
+    const allowed = allowlist[file]?.accesses ?? {};
+    const unlisted = Object.entries(found)
+      .map(([identity, count]) => [identity, count - (allowed[identity] ?? 0)])
+      .filter(([, count]) => count > 0);
+    const stale = Object.entries(allowed)
+      .map(([identity, count]) => [identity, count - (found[identity] ?? 0)])
+      .filter(([, count]) => count > 0);
+    if (unlisted.length > 0)
+      errors.push(`Unlisted private access: ${file} (${unlisted.reduce((sum, [, count]) => sum + count, 0)} accesses)`);
+    if (stale.length > 0)
+      errors.push(`Stale allowance; remove migrated accesses: ${file} (${stale.reduce((sum, [, count]) => sum + count, 0)} accesses)`);
+  }
+  return errors;
 }
 
 // Test imports resolve to sources; emitted declarations omit private member types.
@@ -122,7 +185,7 @@ function scanPrivateAccess(nodeRoot, additionalSources = new Map()) {
         file: path.relative(nodeRoot, file).split(path.sep).join('/'),
         line: position.line + 1,
         member: name,
-        expression: location.parent.getText(source).replace(/\s+/gu, ' ')
+        expression: accessExpression(location, source).replace(/\s+/gu, ' ')
       };
       if (
         declarations.some(
@@ -160,4 +223,4 @@ function scanPrivateAccess(nodeRoot, additionalSources = new Map()) {
   return { accesses, unresolved, privateMembers };
 }
 
-module.exports = { scanPrivateAccess };
+module.exports = { accessAllowlist, compareAccesses, scanPrivateAccess };

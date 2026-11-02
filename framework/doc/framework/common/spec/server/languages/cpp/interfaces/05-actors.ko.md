@@ -33,6 +33,12 @@ public:
  const node_rid_t &node_rid() const noexcept;
 };
 
+struct actor_session_binding_identity_t final {
+ node_rid_t session_owner_node_rid;
+ std::uint64_t session_owner_node_generation;
+ std::uint64_t binding_generation;
+};
+
 struct actor_join_accepted_t {
  std::uint64_t operation_id_high;
  std::uint64_t operation_id_low;
@@ -63,6 +69,10 @@ public:
  virtual actor_context_t &context() noexcept = 0;
  virtual const actor_context_t &context() const noexcept = 0;
  virtual void configure() {}
+ virtual task_t<std::optional<std::string>> on_duplicate_bind(
+ const actor_session_binding_identity_t &current,
+ const actor_session_binding_identity_t &incoming,
+ std::stop_token cancellation);
  virtual task_t<void> on_join_completed(
  const actor_join_completion_t &completion);
 };
@@ -139,6 +149,11 @@ factory가 만든 instance에 같은 immutable payload를 적용한다. Framewor
 취소하면 `deadline_exceeded`로 분류한다. 같은 source와 target process 안의 재시도 때문에 두 method는 두 번
 이상 호출될 수 있으므로 구현은 retry-safe해야 한다. 다른 target을 자동 선택하지 않는다. Framework는
 adapter의 external side effect에 exactly-once를 보장하지 않는다.
+
+`on_duplicate_bind`의 반환값이 `std::nullopt` 또는 빈 문자열이면 받아들이고, 비어 있지 않은 `std::string`이면
+그 메시지로 거부한다. 기본 구현은
+`std::nullopt`를 반환하므로 override하지 않은 Actor는 기존처럼 새 Session을 받아들인다. 제한 시간이 끝나면
+Framework는 `std::stop_token`으로 취소를 전달한다.
 
 ## 2. ID-only messaging
 

@@ -349,7 +349,7 @@ internal interface IZLinkBackendBoundSessionBind
             RoutingId,
             ulong,
             Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38,
-            Action,
+            Action<RequestResult, uint, string?>,
             CancellationToken,
             ValueTask
         > handler

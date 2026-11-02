@@ -104,7 +104,7 @@ export class ZLinkChannelRuntimeLifecycle {
   private readonly receiveRoundRobin = new ZLinkReceiveRoundRobinCoordinator();
   private readonly channelReceiveLoops: ZLinkChannelReceiveLoop[] = [];
   private readonly subscriberReceiveLoops: ZLinkSubscriberReceiveLoop[] = [];
-  private readonly manualFanoutSubscribers = new Map<string, ManualFanoutSubscriberState>();
+  readonly manualFanoutSubscribers = new Map<string, ManualFanoutSubscriberState>();
   private readonly manualFanoutSubscriberOwners = new Set<object>();
   private readonly routeReceiveLoops: Array<{ stop(): Promise<void> }> = [];
   private readonly meshChannelDispatchers = new Map<string, ZLinkChannelRequestDispatcher>();
@@ -664,7 +664,7 @@ export class ZLinkChannelRuntimeLifecycle {
     return state;
   }
 
-  private requestManualFanoutConnect(
+  requestManualFanoutConnect(
     channelName: string,
     endpoint: string,
     taskRunner: ZLinkRuntimeTaskRunner,
