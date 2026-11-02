@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/location_runtime_test_access.hpp"
 #include "../support/session_disconnect_probe_spot.hpp"
 #include <zlink.hpp>
 #if defined(ZLINK_TEST_CONNECT_COUNT)
@@ -589,6 +590,29 @@ zlink::message_t make_route_multicast_frame (std::string_view packet_name,
     return zlink::message_t::from (std::move (frame));
 }
 
+struct owner_lease_node_send_message_t
+{
+    std::string value;
+};
+
+class owner_lease_node_send_handler_t
+{
+  public:
+    explicit owner_lease_node_send_handler_t (std::shared_ptr<std::promise<void>> dispatched) :
+        _dispatched (std::move (dispatched))
+    {
+    }
+
+    void handle (const owner_lease_node_send_message_t &,
+                 const zlink::framework::route_message_context_t &)
+    {
+        _dispatched->set_value ();
+    }
+
+  private:
+    std::shared_ptr<std::promise<void>> _dispatched;
+};
+
 void enqueue_application_route (
   const std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t> &node,
   zlink::framework::runtime::host::ready_record_t owner,
@@ -615,6 +639,11 @@ void verify_route_internal_packets_precede_application_dispatch ()
     namespace messaging = zlink::framework::runtime::messaging;
 
     auto registration = make_node ("tcp://127.0.0.1:0", "internal-route-owner");
+    auto node_send_dispatched = std::make_shared<std::promise<void>> ();
+    auto node_send_dispatched_future = node_send_dispatched->get_future ();
+    registration->handlers
+      .on_send<owner_lease_node_send_handler_t, owner_lease_node_send_message_t> (
+        "vertical-mesh", "OwnerLeaseProbe", &owner_lease_node_send_handler_t::handle);
     auto worker = std::make_shared<runtime::offload_executor_t> (1, "rel-358-internal-route");
     registration->spot_state->worker_executor = worker;
     spot_node_runtime_t spots (registration->spot_state);
@@ -686,8 +715,17 @@ void verify_route_internal_packets_precede_application_dispatch ()
       registration->spot_state->actor_instances.at ("vertical.actor:internal-route-actor").get ());
 
     serializer_registry_t serializers;
+    serializers.add<owner_lease_node_send_message_t> (
+      [] (const owner_lease_node_send_message_t &message) {
+          return encoded_payload_t::from_string (message.value);
+      },
+      [] (const encoded_payload_t &payload) {
+          return owner_lease_node_send_message_t{payload.to_string ()};
+      });
     service_collection_t services;
     services.add_singleton<actor_gateway_runtime_t> ();
+    services.add_singleton<owner_lease_node_send_handler_t> (
+      std::make_unique<owner_lease_node_send_handler_t> (node_send_dispatched));
     auto owned_store = std::make_unique<runtime::in_memory_location_repository_t> ();
     auto &location_store = *owned_store;
     services.add_singleton<location_repository_t> (
@@ -777,6 +815,30 @@ void verify_route_internal_packets_precede_application_dispatch ()
       };
     const auto binding_before = actor_gateway.bound_session_route_async (actor).result ();
     assert (binding_before && !binding_before.value ());
+    runtime::location_runtime_test_access_t::set_deadline (
+      location_runtime, std::chrono::steady_clock::time_point::min ());
+    assert (!location_runtime.owner_lease_usable ());
+    messaging::client_call_codec_t node_send_codec;
+    auto node_send_header = node_send_codec.create_envelope (messaging::message_kind_t::command,
+                                                             "vertical-mesh", "OwnerLeaseProbe");
+    auto node_send_parts = node_send_codec.encode_envelope_parts (
+      node_send_header, owner_lease_node_send_message_t{"owner lease independent"}, serializers);
+    runtime::mesh::service_mailbox_record_t node_send_record;
+    node_send_record.owner =
+      runtime::mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
+    node_send_record.domain = runtime::mesh::service_mailbox_domain_t::application;
+    node_send_record.before_application_handler = [] {};
+    node_send_record.source_routing_id = zlink::routing_id_t::from ("route-source").to_bytes ();
+    node_send_record.parts = {
+      zlink::message_t::from (runtime::protocol::encode_node_send_header ()),
+      zlink::message_t::from (runtime::protocol::encode_application_payload (
+        runtime::protocol::application_payload_t::from_parts (
+          std::move (node_send_parts).take_items ())))};
+    assert (
+      node->native_node ().transport ().mailbox ().try_enqueue (std::move (node_send_record)));
+    assert (node_send_dispatched_future.wait_for (1s) == std::future_status::ready);
+    assert (service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 1s));
+
     enqueue_application_route (node, std::move (node_owner), std::move (node_record),
                                std::move (disconnect_parts).take_items ());
     assert (disconnect_reply_future.wait_for (1s) == std::future_status::ready);
@@ -3476,6 +3538,10 @@ void verify_repeated_mesh_connect_keeps_one_physical_connection ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--route-internal-owner-lease") {
+        verify_route_internal_packets_precede_application_dispatch ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--terminal-owner-capture-lifetime")
         return verify_application_terminal_drain_waits_for_capture_destruction () ? 0 : 1;
     if (argc == 2 && std::string_view (argv[1]) == "--connect-intent") {

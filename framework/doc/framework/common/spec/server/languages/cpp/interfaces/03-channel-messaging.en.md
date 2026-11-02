@@ -786,6 +786,7 @@ struct message_context_t {
  std::optional<std::string> content_type;
  message_metadata_t metadata;
  std::optional<std::string> correlation_id;
+ std::chrono::system_clock::time_point received_at;
 };
 
 struct publish_message_context_t : message_context_t {

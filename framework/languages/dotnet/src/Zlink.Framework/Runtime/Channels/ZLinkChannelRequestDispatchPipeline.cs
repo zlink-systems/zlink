@@ -6,7 +6,8 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
     ZLinkHandlerDispatcher dispatcher,
     Func<string, IReadOnlySet<string>> resolveMappedGroups,
     ZLinkCodecRegistryBuilder codecs,
-    ZLinkDispatchErrorReporter dispatchErrors
+    ZLinkDispatchErrorReporter dispatchErrors,
+    TimeProvider? timeProvider = null
 )
 {
     public async Task DispatchAsync<TState>(
@@ -18,7 +19,8 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
         Func<TState, ZLinkEnvelopeHeader, ValueTask> replyError,
         CancellationToken cancellationToken,
         ZLinkMessageMetadata? metadata = null,
-        RoutingId? sourceNodeRid = null
+        RoutingId? sourceNodeRid = null,
+        DateTimeOffset? receivedAt = null
     )
     {
         var scope = new ZLinkDispatchFlowScope(
@@ -94,7 +96,9 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     header.MessageName,
                     header.ContentType,
                     metadata,
-                    header.CorrelationId
+                    header.CorrelationId,
+                    receivedAt,
+                    timeProvider: timeProvider
                 )
                 : new ZLinkMessageContext(
                     meshName,
@@ -102,7 +106,9 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     header.MessageName,
                     header.ContentType,
                     metadata,
-                    header.CorrelationId
+                    header.CorrelationId,
+                    receivedAt,
+                    timeProvider: timeProvider
                 );
             try
             {
@@ -164,7 +170,8 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
         Func<TState, ZLinkEnvelopeHeader, ValueTask> replyError,
         CancellationToken cancellationToken,
         ZLinkMessageMetadata? metadata = null,
-        RoutingId? sourceNodeRid = null
+        RoutingId? sourceNodeRid = null,
+        DateTimeOffset? receivedAt = null
     )
     {
         var scope = new ZLinkDispatchFlowScope(
@@ -239,7 +246,9 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 scope.PacketName!,
                 scope.ContentType,
                 metadata,
-                header.CorrelationId
+                header.CorrelationId,
+                receivedAt,
+                timeProvider: timeProvider
             )
             : new ZLinkMessageContext(
                 meshName,
@@ -247,7 +256,9 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 scope.PacketName!,
                 scope.ContentType,
                 metadata,
-                header.CorrelationId
+                header.CorrelationId,
+                receivedAt,
+                timeProvider: timeProvider
             );
 
         try

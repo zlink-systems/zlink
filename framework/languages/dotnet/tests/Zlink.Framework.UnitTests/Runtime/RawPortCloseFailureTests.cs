@@ -115,34 +115,20 @@ public sealed class RawPortCloseFailureTests
             errors,
             runner
         );
-        var type = typeof(ZLinkClientServerClientRuntime).GetNestedType(
-            "Connection",
-            BindingFlags.NonPublic
-        )!;
-        var connection = Activator.CreateInstance(
-            type,
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+        var connection = new ZLinkClientServerClientRuntime.Connection(
+            "events",
+            "tcp://127.0.0.1:1",
             null,
-            [
-                "events",
-                "tcp://127.0.0.1:1",
-                null,
-                dealer,
-                CancellationToken.None,
-                null,
-                (Action<bool>)(_ => { }),
-                TimeProvider.System,
-                errors,
-                runner,
-                deadlines,
-            ],
-            null
-        )!;
-        var connections = (System.Collections.IDictionary)
-            typeof(ZLinkClientServerClientRuntime)
-                .GetField("_connections", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(runtime)!;
-        connections.Add("manual:tcp://127.0.0.1:1", connection);
+            dealer,
+            CancellationToken.None,
+            null!,
+            _ => { },
+            TimeProvider.System,
+            errors,
+            runner,
+            deadlines
+        );
+        runtime._connections.Add("manual:tcp://127.0.0.1:1", connection);
         await Assert.ThrowsAnyAsync<Exception>(async () => await runtime.DisposeAsync());
         await runtime.DisposeAsync();
         Assert.Equal(2, proxy.CloseAttempts);

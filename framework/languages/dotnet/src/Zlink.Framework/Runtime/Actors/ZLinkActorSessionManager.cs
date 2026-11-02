@@ -11,7 +11,7 @@ internal sealed partial class ZLinkActorSessionManager(
     Func<string, ZLinkActivationConcurrencyAdmission?>? getActivationAdmission = null
 )
 {
-    private readonly ZLinkActorSessionRegistry _actorSessions = new(
+    internal readonly ZLinkActorSessionRegistry _actorSessions = new(
         services,
         runtime.LogActorHandoff,
         runtime.Registration.DefaultRequestTimeout + runtime.Registration.DefaultRequestTimeout

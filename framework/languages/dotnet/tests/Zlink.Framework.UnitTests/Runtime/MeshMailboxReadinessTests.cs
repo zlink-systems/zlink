@@ -1,6 +1,5 @@
 using System.Collections;
 using System.Collections.Concurrent;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
@@ -417,7 +416,6 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
     // Framework-only fixture: no native context, transport, or worker is started.
     private sealed class ReadyRegistryFixture : IDisposable
     {
-        private const BindingFlags Fields = BindingFlags.Instance | BindingFlags.NonPublic;
         private readonly IDictionary _owned;
         private readonly ILookupHook _hook;
         internal ZLinkManagedMeshNode Node { get; }
@@ -432,14 +430,13 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
         {
             Node = (ZLinkManagedMeshNode)
                 RuntimeHelpers.GetUninitializedObject(typeof(ZLinkManagedMeshNode));
-            var readyField = typeof(ZLinkManagedMeshNode).GetField("_readyMailboxes", Fields)!;
-            var ownedField = typeof(ZLinkManagedMeshNode).GetField("_ownedMailboxes", Fields)!;
             var comparer = new LookupHook<MeshMailboxKey>();
             _hook = (ILookupHook)comparer;
             Ready = new ConcurrentDictionary<MeshMailboxKey, bool>(comparer);
             _owned = new ConcurrentDictionary<MeshMailboxKey, ZLinkMeshNodeOwnedMailbox>();
-            readyField.SetValue(Node, Ready);
-            ownedField.SetValue(Node, _owned);
+            Node._readyMailboxes = (ConcurrentDictionary<MeshMailboxKey, bool>)Ready;
+            Node._ownedMailboxes =
+                (ConcurrentDictionary<MeshMailboxKey, ZLinkMeshNodeOwnedMailbox>)_owned;
         }
 
         internal MeshMailboxKey Add(

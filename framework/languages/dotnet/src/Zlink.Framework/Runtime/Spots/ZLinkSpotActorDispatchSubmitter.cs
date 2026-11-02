@@ -3,7 +3,8 @@ namespace Zlink.Framework.Runtime.Spots;
 internal sealed class ZLinkSpotActorDispatchSubmitter(
     ZLinkFrameworkRuntime runtime,
     ZLinkSpotSerialExecutor serial,
-    ZLinkSpotActorPacketDispatcher dispatcher
+    ZLinkSpotActorPacketDispatcher dispatcher,
+    TimeProvider? timeProvider = null
 )
 {
     public async ValueTask Async(
@@ -17,6 +18,7 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         RoutingId? sourceSessionRid
     )
     {
+        var receivedAt = (timeProvider ?? TimeProvider.System).GetUtcNow();
         var ownedPayload = payload.Copy();
 
         try
@@ -30,7 +32,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 runtimeState,
                 header,
                 ownedPayload,
-                sourceSessionRid
+                sourceSessionRid,
+                receivedAt
             );
             await SubmitAsync(
                     runtimeState.ActorId,
@@ -60,6 +63,7 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         RoutingId? sourceSessionRid
     )
     {
+        var receivedAt = (timeProvider ?? TimeProvider.System).GetUtcNow();
         var ownedPayload = payload.Copy();
 
         try
@@ -76,7 +80,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 runtimeState,
                 header,
                 ownedPayload,
-                sourceSessionRid
+                sourceSessionRid,
+                receivedAt
             );
             await SubmitAsync(
                     runtimeState.ActorId,
@@ -157,7 +162,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 state.Header,
                 currentPayload,
                 cancellationToken,
-                state.SourceSessionRid
+                state.SourceSessionRid,
+                state.ReceivedAt
             )
             .ConfigureAwait(false);
     }
@@ -177,7 +183,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 state.Header,
                 currentPayload,
                 cancellationToken,
-                state.SourceSessionRid
+                state.SourceSessionRid,
+                state.ReceivedAt
             )
             .ConfigureAwait(false);
     }
@@ -188,7 +195,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         ZLinkActorRuntimeState runtimeState,
         ZlinkStreamHeader header,
         Message payload,
-        RoutingId? sourceSessionRid
+        RoutingId? sourceSessionRid,
+        DateTimeOffset receivedAt
     )
     {
         public ZLinkSpotActorPacketDispatcher Dispatcher { get; } = dispatcher;
@@ -202,6 +210,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         public Message Payload { get; } = payload;
 
         public RoutingId? SourceSessionRid { get; } = sourceSessionRid;
+
+        public DateTimeOffset ReceivedAt { get; } = receivedAt;
     }
 
     private sealed class ActorReplyDispatchState(
@@ -210,7 +220,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         ZLinkActorRuntimeState runtimeState,
         ZlinkStreamHeader header,
         Message payload,
-        RoutingId? sourceSessionRid
+        RoutingId? sourceSessionRid,
+        DateTimeOffset receivedAt
     )
     {
         public ZLinkSpotActorPacketDispatcher Dispatcher { get; } = dispatcher;
@@ -224,6 +235,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         public Message Payload { get; } = payload;
 
         public RoutingId? SourceSessionRid { get; } = sourceSessionRid;
+
+        public DateTimeOffset ReceivedAt { get; } = receivedAt;
 
         public ZLinkActorReply? Reply { get; set; }
     }

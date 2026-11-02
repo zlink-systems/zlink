@@ -1484,15 +1484,19 @@ route_client_t::submit_channel_send_erased (std::shared_ptr<detail::route_client
             co_await (*client_server) (packet_name, std::move (serialized.content_type),
                                        detail::encoded_payload_to_raw (serialized.payload),
                                        metadata);
-            detail::message_flow_tracer_t (state->runtime->dispatch)
-              .trace (message_flow_outcome_t::sent, [&] {
-                  return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
-                                              .surface = dispatch_error_surface_t::channel,
-                                              .message_kind = dispatch_message_kind_t::send,
-                                              .packet_name = packet_name,
-                                              .channel_name = channel_name,
-                                              .channel_route_kind = std::string ("client_server")};
-              });
+            if (detail::message_flow_tracer_t (state->runtime->dispatch)
+                  .enabled_for (message_flow_outcome_t::sent)) {
+                detail::message_flow_tracer_t (state->runtime->dispatch)
+                  .trace (message_flow_outcome_t::sent, [&] {
+                      return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
+                                                  .surface = dispatch_error_surface_t::channel,
+                                                  .message_kind = dispatch_message_kind_t::send,
+                                                  .packet_name = packet_name,
+                                                  .channel_name = channel_name,
+                                                  .channel_route_kind =
+                                                    std::string ("client_server")};
+                  });
+            }
             co_return;
         }
         const auto &sender = std::get<1> (*channel_transport);
@@ -1500,20 +1504,23 @@ route_client_t::submit_channel_send_erased (std::shared_ptr<detail::route_client
         auto header = codec.create_envelope (runtime::messaging::message_kind_t::command,
                                              channel_name, packet_name);
         header.metadata = metadata;
-        detail::message_flow_tracer_t (state->runtime->dispatch)
-          .trace (message_flow_outcome_t::sent, [&] {
-              return message_flow_event_t{message_flow_outcome_t::sent,
-                                          dispatch_error_surface_t::route_mesh_channel,
-                                          dispatch_message_kind_t::send,
-                                          packet_name,
-                                          channel_name,
-                                          std::nullopt,
-                                          header.correlation_id,
-                                          std::nullopt,
-                                          std::nullopt,
-                                          std::nullopt,
-                                          std::nullopt};
-          });
+        if (detail::message_flow_tracer_t (state->runtime->dispatch)
+              .enabled_for (message_flow_outcome_t::sent)) {
+            detail::message_flow_tracer_t (state->runtime->dispatch)
+              .trace (message_flow_outcome_t::sent, [&] {
+                  return message_flow_event_t{message_flow_outcome_t::sent,
+                                              dispatch_error_surface_t::route_mesh_channel,
+                                              dispatch_message_kind_t::send,
+                                              packet_name,
+                                              channel_name,
+                                              std::nullopt,
+                                              header.correlation_id,
+                                              std::nullopt,
+                                              std::nullopt,
+                                              std::nullopt,
+                                              std::nullopt};
+              });
+        }
         auto parts =
           codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
         (co_await sender (std::move (parts))).value ();
@@ -1555,20 +1562,23 @@ route_client_t::submit_request_erased (const std::shared_ptr<detail::route_clien
         auto header = codec.create_envelope (runtime::messaging::message_kind_t::request,
                                              router_channel_id, packet_name, effective_timeout);
         header.metadata = metadata;
-        detail::message_flow_tracer_t (state->runtime->dispatch)
-          .trace (message_flow_outcome_t::sent, [&] {
-              return message_flow_event_t{message_flow_outcome_t::sent,
-                                          dispatch_error_surface_t::route_mesh_channel,
-                                          dispatch_message_kind_t::request,
-                                          packet_name,
-                                          router_channel_id,
-                                          std::nullopt,
-                                          header.correlation_id,
-                                          target_node_rid.to_string (),
-                                          std::nullopt,
-                                          std::nullopt,
-                                          std::nullopt};
-          });
+        if (detail::message_flow_tracer_t (state->runtime->dispatch)
+              .enabled_for (message_flow_outcome_t::sent)) {
+            detail::message_flow_tracer_t (state->runtime->dispatch)
+              .trace (message_flow_outcome_t::sent, [&] {
+                  return message_flow_event_t{message_flow_outcome_t::sent,
+                                              dispatch_error_surface_t::route_mesh_channel,
+                                              dispatch_message_kind_t::request,
+                                              packet_name,
+                                              router_channel_id,
+                                              std::nullopt,
+                                              header.correlation_id,
+                                              target_node_rid.to_string (),
+                                              std::nullopt,
+                                              std::nullopt,
+                                              std::nullopt};
+              });
+        }
         parts =
           codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
@@ -1625,20 +1635,23 @@ route_client_t::submit_spot_send_erased (const std::shared_ptr<detail::route_cli
         auto header = codec.create_envelope (runtime::messaging::message_kind_t::command,
                                              router_channel_id, packet_name);
         header.metadata = metadata;
-        detail::message_flow_tracer_t (state->runtime->dispatch)
-          .trace (message_flow_outcome_t::sent, [&] {
-              return message_flow_event_t{message_flow_outcome_t::sent,
-                                          dispatch_error_surface_t::spot_route,
-                                          dispatch_message_kind_t::send,
-                                          packet_name,
-                                          router_channel_id,
-                                          std::nullopt,
-                                          header.correlation_id,
-                                          target_node_rid.to_string (),
-                                          spot_id,
-                                          std::nullopt,
-                                          std::nullopt};
-          });
+        if (detail::message_flow_tracer_t (state->runtime->dispatch)
+              .enabled_for (message_flow_outcome_t::sent)) {
+            detail::message_flow_tracer_t (state->runtime->dispatch)
+              .trace (message_flow_outcome_t::sent, [&] {
+                  return message_flow_event_t{message_flow_outcome_t::sent,
+                                              dispatch_error_surface_t::spot_route,
+                                              dispatch_message_kind_t::send,
+                                              packet_name,
+                                              router_channel_id,
+                                              std::nullopt,
+                                              header.correlation_id,
+                                              target_node_rid.to_string (),
+                                              spot_id,
+                                              std::nullopt,
+                                              std::nullopt};
+              });
+        }
         parts =
           codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
@@ -1672,7 +1685,7 @@ void route_client_t::submit_request_reply_message_erased (
   payload_encoder_t encode_payload,
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata,
-  detail::request_receiver_t<zlink::message_t> receiver)
+  detail::request_receiver_t<encoded_payload_t> receiver)
 {
     // Retain the runtime through the physical reply conversion.
     const auto state = state_ref;
@@ -1688,7 +1701,7 @@ void route_client_t::submit_request_reply_message_erased (
     runtime::messaging::message_parts_t parts;
     auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
     if (!transport)
-        detail::propagate_failure<zlink::message_t> (transport, "node transport lookup failed")
+        detail::propagate_failure<encoded_payload_t> (transport, "node transport lookup failed")
           .value ();
     const auto route =
       std::get_if<std::shared_ptr<detail::route_channel_runtime_t>> (&transport.value ());
@@ -1715,20 +1728,23 @@ void route_client_t::submit_request_reply_message_erased (
         auto header = codec.create_envelope (runtime::messaging::message_kind_t::request,
                                              router_channel_id, packet_name, effective_timeout);
         header.metadata = std::move (metadata);
-        detail::message_flow_tracer_t (state->runtime->dispatch)
-          .trace (message_flow_outcome_t::sent, [&] {
-              return message_flow_event_t{message_flow_outcome_t::sent,
-                                          dispatch_error_surface_t::route_mesh_channel,
-                                          dispatch_message_kind_t::request,
-                                          packet_name,
-                                          router_channel_id,
-                                          std::nullopt,
-                                          header.correlation_id,
-                                          target_owner->to_string (),
-                                          std::nullopt,
-                                          std::nullopt,
-                                          std::nullopt};
-          });
+        if (detail::message_flow_tracer_t (state->runtime->dispatch)
+              .enabled_for (message_flow_outcome_t::sent)) {
+            detail::message_flow_tracer_t (state->runtime->dispatch)
+              .trace (message_flow_outcome_t::sent, [&] {
+                  return message_flow_event_t{message_flow_outcome_t::sent,
+                                              dispatch_error_surface_t::route_mesh_channel,
+                                              dispatch_message_kind_t::request,
+                                              packet_name,
+                                              router_channel_id,
+                                              std::nullopt,
+                                              header.correlation_id,
+                                              target_owner->to_string (),
+                                              std::nullopt,
+                                              std::nullopt,
+                                              std::nullopt};
+              });
+        }
         parts =
           codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
@@ -1738,55 +1754,59 @@ void route_client_t::submit_request_reply_message_erased (
           [state, transport = transport.value (), packet_name = std::move (packet_name),
            router_channel_id = std::move (router_channel_id),
            target_owner] (const result_t<result_t<runtime::messaging::message_parts_t>> &terminal)
-            -> result_t<zlink::message_t> {
+            -> result_t<encoded_payload_t> {
               // Retain the selected callable and its borrowed target until terminal.
               (void) transport;
               try {
                   const auto &reply = terminal.value ();
                   runtime::messaging::envelope_codec_t envelope;
                   if (!reply)
-                      return detail::propagate_failure<zlink::message_t> (reply,
-                                                                          "route request failed");
+                      return detail::propagate_failure<encoded_payload_t> (reply,
+                                                                           "route request failed");
                   auto reply_header = envelope.decode_header (reply.value (), false);
                   if (!reply_header) {
-                      return result_t<zlink::message_t>::failure (
+                      return result_t<encoded_payload_t>::failure (
                         reply_header.error_kind (), reply_header.error ()
                                                       ? reply_header.error ()->what ()
                                                       : "route reply header decode failed");
                   }
                   if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
                       runtime::messaging::request_failure_mapper_t failure_mapper;
-                      return detail::result_access_t::failure<zlink::message_t> (
+                      return detail::result_access_t::failure<encoded_payload_t> (
                         failure_mapper.error_header_exception (
                           reply_header.value ().error_code.value_or ("request_failed"),
                           reply_header.value ().error_message.value_or ("route request failed"),
                           "route request"));
                   }
-                  auto body = envelope.decode_body (reply.value ());
+                  auto body = envelope.decode_body_view (reply.value ());
                   if (!body)
-                      return detail::propagate_failure<zlink::message_t> (
+                      return detail::propagate_failure<encoded_payload_t> (
                         body, "route reply body decode failed");
-                  detail::message_flow_tracer_t (state->runtime->dispatch)
-                    .trace (message_flow_outcome_t::reply_received, [&] {
-                        return message_flow_event_t{message_flow_outcome_t::reply_received,
-                                                    dispatch_error_surface_t::route_mesh_channel,
-                                                    dispatch_message_kind_t::response,
-                                                    packet_name,
-                                                    router_channel_id,
-                                                    std::nullopt,
-                                                    reply_header.value ().correlation_id,
-                                                    target_owner->to_string (),
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    std::nullopt};
-                    });
-                  return result_t<zlink::message_t>::success (body.value ());
+                  if (detail::message_flow_tracer_t (state->runtime->dispatch)
+                        .enabled_for (message_flow_outcome_t::reply_received)) {
+                      detail::message_flow_tracer_t (state->runtime->dispatch)
+                        .trace (message_flow_outcome_t::reply_received, [&] {
+                            return message_flow_event_t{
+                              message_flow_outcome_t::reply_received,
+                              dispatch_error_surface_t::route_mesh_channel,
+                              dispatch_message_kind_t::response,
+                              packet_name,
+                              router_channel_id,
+                              std::nullopt,
+                              reply_header.value ().correlation_id,
+                              target_owner->to_string (),
+                              std::nullopt,
+                              std::nullopt,
+                              std::nullopt};
+                        });
+                  }
+                  return result_t<encoded_payload_t>::success (std::move (body.value ()));
               }
               catch (const framework_exception_t &error) {
-                  return detail::result_access_t::failure<zlink::message_t> (error);
+                  return detail::result_access_t::failure<encoded_payload_t> (error);
               }
               catch (const std::exception &error) {
-                  return result_t<zlink::message_t>::failure (
+                  return result_t<encoded_payload_t>::failure (
                     framework_error_kind_t::internal_failure, error.what ());
               }
           });
@@ -1841,15 +1861,19 @@ try {
         try {
             auto serialized = encode_payload (*state->serializers);
             const auto ambient_guard = detail::enter_ambient_context (ambient_context);
-            detail::message_flow_tracer_t (state->runtime->dispatch)
-              .trace (message_flow_outcome_t::sent, [&] {
-                  return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
-                                              .surface = dispatch_error_surface_t::channel,
-                                              .message_kind = dispatch_message_kind_t::request,
-                                              .packet_name = packet_name,
-                                              .channel_name = channel_name,
-                                              .channel_route_kind = std::string ("client_server")};
-              });
+            if (detail::message_flow_tracer_t (state->runtime->dispatch)
+                  .enabled_for (message_flow_outcome_t::sent)) {
+                detail::message_flow_tracer_t (state->runtime->dispatch)
+                  .trace (message_flow_outcome_t::sent, [&] {
+                      return message_flow_event_t{.outcome = message_flow_outcome_t::sent,
+                                                  .surface = dispatch_error_surface_t::channel,
+                                                  .message_kind = dispatch_message_kind_t::request,
+                                                  .packet_name = packet_name,
+                                                  .channel_name = channel_name,
+                                                  .channel_route_kind =
+                                                    std::string ("client_server")};
+                  });
+            }
             auto selected = (*client_server) (packet_name, std::move (serialized.content_type),
                                               detail::encoded_payload_to_raw (serialized.payload),
                                               effective_timeout, std::move (metadata));
@@ -1876,20 +1900,23 @@ try {
         auto header = codec.create_envelope (runtime::messaging::message_kind_t::request,
                                              channel_name, packet_name, effective_timeout);
         header.metadata = std::move (metadata);
-        detail::message_flow_tracer_t (state->runtime->dispatch)
-          .trace (message_flow_outcome_t::sent, [&] {
-              return message_flow_event_t{message_flow_outcome_t::sent,
-                                          dispatch_error_surface_t::route_mesh_channel,
-                                          dispatch_message_kind_t::request,
-                                          packet_name,
-                                          channel_name,
-                                          std::nullopt,
-                                          header.correlation_id,
-                                          std::nullopt,
-                                          std::nullopt,
-                                          std::nullopt,
-                                          std::nullopt};
-          });
+        if (detail::message_flow_tracer_t (state->runtime->dispatch)
+              .enabled_for (message_flow_outcome_t::sent)) {
+            detail::message_flow_tracer_t (state->runtime->dispatch)
+              .trace (message_flow_outcome_t::sent, [&] {
+                  return message_flow_event_t{message_flow_outcome_t::sent,
+                                              dispatch_error_surface_t::route_mesh_channel,
+                                              dispatch_message_kind_t::request,
+                                              packet_name,
+                                              channel_name,
+                                              std::nullopt,
+                                              header.correlation_id,
+                                              std::nullopt,
+                                              std::nullopt,
+                                              std::nullopt,
+                                              std::nullopt};
+              });
+        }
         parts =
           codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
@@ -1937,20 +1964,24 @@ try {
                       return detail::propagate_failure<zlink::message_t> (
                         body, "RouteMesh channel reply body decode failed");
                   }
-                  detail::message_flow_tracer_t (state->runtime->dispatch)
-                    .trace (message_flow_outcome_t::reply_received, [&] {
-                        return message_flow_event_t{message_flow_outcome_t::reply_received,
-                                                    dispatch_error_surface_t::route_mesh_channel,
-                                                    dispatch_message_kind_t::response,
-                                                    packet_name,
-                                                    channel_name,
-                                                    std::nullopt,
-                                                    reply_header.value ().correlation_id,
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    std::nullopt};
-                    });
+                  if (detail::message_flow_tracer_t (state->runtime->dispatch)
+                        .enabled_for (message_flow_outcome_t::reply_received)) {
+                      detail::message_flow_tracer_t (state->runtime->dispatch)
+                        .trace (message_flow_outcome_t::reply_received, [&] {
+                            return message_flow_event_t{
+                              message_flow_outcome_t::reply_received,
+                              dispatch_error_surface_t::route_mesh_channel,
+                              dispatch_message_kind_t::response,
+                              packet_name,
+                              channel_name,
+                              std::nullopt,
+                              reply_header.value ().correlation_id,
+                              std::nullopt,
+                              std::nullopt,
+                              std::nullopt,
+                              std::nullopt};
+                        });
+                  }
                   return result_t<zlink::message_t>::success (body.value ());
               }
               catch (const framework_exception_t &error) {
@@ -2023,20 +2054,23 @@ try {
         auto header = codec.create_envelope (runtime::messaging::message_kind_t::request,
                                              router_channel_id, packet_name, effective_timeout);
         header.metadata = std::move (metadata);
-        detail::message_flow_tracer_t (state->runtime->dispatch)
-          .trace (message_flow_outcome_t::sent, [&] {
-              return message_flow_event_t{message_flow_outcome_t::sent,
-                                          dispatch_error_surface_t::spot_route,
-                                          dispatch_message_kind_t::request,
-                                          packet_name,
-                                          router_channel_id,
-                                          std::nullopt,
-                                          header.correlation_id,
-                                          target_node_rid.to_string (),
-                                          target_spot_id,
-                                          std::nullopt,
-                                          std::nullopt};
-          });
+        if (detail::message_flow_tracer_t (state->runtime->dispatch)
+              .enabled_for (message_flow_outcome_t::sent)) {
+            detail::message_flow_tracer_t (state->runtime->dispatch)
+              .trace (message_flow_outcome_t::sent, [&] {
+                  return message_flow_event_t{message_flow_outcome_t::sent,
+                                              dispatch_error_surface_t::spot_route,
+                                              dispatch_message_kind_t::request,
+                                              packet_name,
+                                              router_channel_id,
+                                              std::nullopt,
+                                              header.correlation_id,
+                                              target_node_rid.to_string (),
+                                              target_spot_id,
+                                              std::nullopt,
+                                              std::nullopt};
+              });
+        }
         parts =
           codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
@@ -2136,20 +2170,23 @@ try {
                         body.error_kind (), body.error () ? body.error ()->what ()
                                                           : "route spot reply body decode failed");
                   }
-                  detail::message_flow_tracer_t (state->runtime->dispatch)
-                    .trace (message_flow_outcome_t::reply_received, [&] {
-                        return message_flow_event_t{message_flow_outcome_t::reply_received,
-                                                    dispatch_error_surface_t::spot_route,
-                                                    dispatch_message_kind_t::response,
-                                                    packet_name,
-                                                    router_channel_id,
-                                                    std::nullopt,
-                                                    reply_header.value ().correlation_id,
-                                                    target_node_rid.to_string (),
-                                                    spot_id,
-                                                    std::nullopt,
-                                                    std::nullopt};
-                    });
+                  if (detail::message_flow_tracer_t (state->runtime->dispatch)
+                        .enabled_for (message_flow_outcome_t::reply_received)) {
+                      detail::message_flow_tracer_t (state->runtime->dispatch)
+                        .trace (message_flow_outcome_t::reply_received, [&] {
+                            return message_flow_event_t{message_flow_outcome_t::reply_received,
+                                                        dispatch_error_surface_t::spot_route,
+                                                        dispatch_message_kind_t::response,
+                                                        packet_name,
+                                                        router_channel_id,
+                                                        std::nullopt,
+                                                        reply_header.value ().correlation_id,
+                                                        target_node_rid.to_string (),
+                                                        spot_id,
+                                                        std::nullopt,
+                                                        std::nullopt};
+                        });
+                  }
                   return result_t<zlink::message_t>::success (body.value ());
               }
               catch (const framework_exception_t &error) {

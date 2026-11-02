@@ -6,6 +6,7 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
+#include <chrono>
 #include <functional>
 #include <optional>
 
@@ -17,13 +18,14 @@ class channel_packet_dispatcher_t
   public:
     explicit channel_packet_dispatcher_t (channel_runtime_t runtime);
 
-    result_t<runtime::messaging::message_parts_t>
-    dispatch_server_message (std::string channel_name,
-                             runtime::messaging::message_parts_t parts,
-                             service_provider_t &services,
-                             serializer_registry_t &serializers,
-                             const handler_registry_t &handlers,
-                             std::function<void ()> before_application_handler = {}) const;
+    result_t<runtime::messaging::message_parts_t> dispatch_server_message (
+      std::string channel_name,
+      runtime::messaging::message_parts_t parts,
+      service_provider_t &services,
+      serializer_registry_t &serializers,
+      const handler_registry_t &handlers,
+      std::function<void ()> before_application_handler = {},
+      std::chrono::system_clock::time_point received_at = std::chrono::system_clock::now ()) const;
 
     task_t<runtime::messaging::message_parts_t> dispatch_server_message_in_handler (
       std::string channel_name,
@@ -35,7 +37,8 @@ class channel_packet_dispatcher_t
       std::optional<service_scope_t> scope = {},
       runtime::offload_executor_t *executor = nullptr,
       std::function<void (const result_t<runtime::messaging::message_parts_t> &,
-                          const runtime::messaging::message_parts_t &)> complete = {}) const;
+                          const runtime::messaging::message_parts_t &)> complete = {},
+      std::chrono::system_clock::time_point received_at = std::chrono::system_clock::now ()) const;
 
   private:
     channel_runtime_t _runtime;
