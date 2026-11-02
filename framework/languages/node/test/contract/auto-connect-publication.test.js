@@ -165,6 +165,93 @@ test('stop cancels startup publication without waiting for an unresponsive Store
   }
 });
 
+function lifecycleTimerFixture() {
+  const ticks = [];
+  const tickWaiters = [];
+  const timers = new Set();
+  const reconciler = {
+    localPublicationReady: true,
+    storeFailed: false,
+    tick() {
+      const completion = deferred();
+      ticks.push(completion);
+      tickWaiters.shift()?.resolve(completion);
+      return completion.promise;
+    },
+    disconnectPeers() {},
+    async unpublishLocal() {}
+  };
+  const loop = new ZLinkAutoConnectLoop({
+    local: { meshName: 'publication' },
+    reconciler,
+    options: { pollingIntervalMs: 1 },
+    setTimer(callback) {
+      const timer = { callback };
+      timers.add(timer);
+      return timer;
+    },
+    clearTimer(timer) { timers.delete(timer); }
+  });
+  return {
+    loop,
+    ticks,
+    timers,
+    waitForTick() {
+      const entered = deferred();
+      tickWaiters.push(entered);
+      return entered.promise;
+    }
+  };
+}
+
+test('one polling timer remains when startup ticks overlap across stop and start', async () => {
+  const f = lifecycleTimerFixture();
+  const tick1Started = f.waitForTick();
+  const starting1 = f.loop.start();
+  const tick1 = await tick1Started;
+
+  const tick2Started = f.waitForTick();
+  const stopping1 = f.loop.stop();
+  const starting2 = f.loop.start();
+  tick1.resolve();
+  const tick2 = await tick2Started;
+  tick2.resolve();
+  await Promise.all([starting1, starting2, stopping1]);
+
+  assert.equal(f.timers.size, 1, 'only the current lifecycle may arm a polling timer');
+  await f.loop.stop();
+  assert.equal(f.timers.size, 0, 'stop clears the current lifecycle timer');
+});
+
+test('one polling timer remains when a periodic tick overlaps across stop and start', async () => {
+  const f = lifecycleTimerFixture();
+  const tick1Started = f.waitForTick();
+  const starting1 = f.loop.start();
+  const tick1 = await tick1Started;
+  tick1.resolve();
+  await starting1;
+  assert.equal(f.timers.size, 1);
+
+  const [timer] = f.timers;
+  f.timers.delete(timer);
+  const tick2Started = f.waitForTick();
+  timer.callback();
+  const tick2 = await tick2Started;
+
+  const tick3Started = f.waitForTick();
+  const stopping1 = f.loop.stop();
+  const starting2 = f.loop.start();
+  tick2.resolve();
+  const tick3 = await tick3Started;
+  tick3.resolve();
+  await Promise.all([starting2, stopping1]);
+  await nextTurn();
+
+  assert.equal(f.timers.size, 1, 'only the current lifecycle may arm a polling timer');
+  await f.loop.stop();
+  assert.equal(f.timers.size, 0, 'stop clears the current lifecycle timer');
+});
+
 for (const lateStatus of [
   internal.ZLinkLocationWriteStatus.Stored,
   internal.ZLinkLocationWriteStatus.RejectedConflict

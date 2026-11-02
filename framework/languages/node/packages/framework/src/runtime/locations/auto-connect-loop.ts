@@ -46,14 +46,15 @@ export class ZLinkAutoConnectLoop {
   async start(signal?: AbortSignal): Promise<void> {
     if (this.controller !== undefined) return;
     // Reserve the lifecycle before yielding so stop also owns the first publication.
-    this.controller = new AbortController();
+    const controller = new AbortController();
+    this.controller = controller;
     try {
       await this.tick(signal);
     } catch (error) {
       await this.prepareTransportShutdown();
       throw error;
     }
-    this.scheduleNext();
+    this.scheduleNext(controller);
   }
 
   async requestPeerReconcile(meshName: string, _peerRid: string): Promise<void> {
@@ -149,15 +150,15 @@ export class ZLinkAutoConnectLoop {
     return this.lastTickFailed;
   }
 
-  private scheduleNext(): void {
-    if (this.controller === undefined || this.controller.signal.aborted) {
+  private scheduleNext(controller: AbortController): void {
+    if (this.controller !== controller || controller.signal.aborted) {
       return;
     }
     this.timer = this.setTimer(() => {
       this.timer = undefined;
-      void this.tick(this.controller?.signal)
+      void this.tick(controller.signal)
         .catch(() => undefined)
-        .finally(() => this.scheduleNext());
+        .finally(() => this.scheduleNext(controller));
     }, this.options.pollingIntervalMs);
   }
 }
