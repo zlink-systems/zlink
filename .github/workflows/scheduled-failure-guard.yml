@@ -6,7 +6,9 @@ on:
       - Framework Format
       - Framework Node
       - Framework .NET
-      - Framework C++ Verify
+      # workflow_run names are filter patterns; '+' must be escaped or GitHub
+      # rejects the trigger and every run ends in startup_failure.
+      - 'Framework C\+\+ Verify'
       - Framework Java
       - Examples smoke
     types:

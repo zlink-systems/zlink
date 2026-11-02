@@ -15,4 +15,5 @@ object Control {
     val MESSAGE_FOLLOW: Duration = Duration.ofSeconds(30)
     val SAFE_OBSERVATION: Duration = MESSAGE_FOLLOW.plus(HOST_DEADLINE)
     const val PROCESS_SECONDS = 35L
+    const val THREAD_DUMP_SECONDS = 3L
 }

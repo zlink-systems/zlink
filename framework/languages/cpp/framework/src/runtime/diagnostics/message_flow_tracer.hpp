@@ -30,8 +30,9 @@ namespace zlink::framework::detail
 //
 // PERFORMANCE: the tracer only borrows dispatch_options (no copy), and the mode
 // gate is a single relaxed atomic load + compare. Callers MUST build the event
-// behind `enabled(...)` (or use the lazy trace overload) so that when tracing is
-// off there is ZERO allocation on the dispatch hot path.
+// behind a live `enabled(...)` check, including lazy builder creation on
+// per-message paths. Rare failure/drop transitions may use the lazy overload
+// alone (message-flow tracing §5).
 //
 // Mode gating (modes are ordered off < errors < normal < detailed):
 //   * received / admitted / dispatched / replied / sent / reply_received require normal+.
@@ -70,6 +71,19 @@ class message_flow_tracer_t
         return enabled (required_mode (outcome));
     }
 
+    bool enabled_for (message_flow_outcome_t outcome, message_flow_result_t result) const noexcept
+    {
+        return enabled (result == message_flow_result_t::succeeded
+                          ? required_mode (outcome)
+                          : message_flow_log_mode_t::errors);
+    }
+
+    bool enabled_for (message_flow_outcome_t outcome,
+                      const std::optional<message_flow_result_t> &result) const noexcept
+    {
+        return enabled_for (outcome, result.value_or (message_flow_result_t::succeeded));
+    }
+
     /* flow-correlation §2.2: host entry points create new flow ids only when
      * tracing is not fully off. */
     bool capture_enabled () const noexcept
@@ -103,18 +117,14 @@ class message_flow_tracer_t
                 message_flow_result_t result,
                 Fn &&build_event) const noexcept
     {
-        const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
-        const auto required = result == message_flow_result_t::succeeded
-                                ? required_mode (outcome)
-                                : message_flow_log_mode_t::errors;
-        if (rank (effective_mode) < rank (required)
-            || !process_telemetry_has_provider (*_options, telemetry_event_kind_t::message_flow)
+        if (!enabled_for (outcome, result)
             || (result == message_flow_result_t::succeeded
                 && outcome != message_flow_outcome_t::dropped
                 && outcome != message_flow_outcome_t::backpressured
                 && !sample_current (std::nullopt))) {
             return;
         }
+        const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
         try {
             auto event = build_event ();
             event.result = result;
@@ -194,14 +204,10 @@ class message_flow_tracer_t
     // doing any work, but the caller has already paid to build the event.
     void trace (message_flow_event_t event) const noexcept
     {
-        const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
-        const auto required = event.result && *event.result != message_flow_result_t::succeeded
-                                ? message_flow_log_mode_t::errors
-                                : required_mode (event.outcome);
-        if (rank (effective_mode) < rank (required)
-            || !process_telemetry_has_provider (*_options, telemetry_event_kind_t::message_flow)) {
+        if (!enabled_for (event.outcome, event.result)) {
             return;
         }
+        const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
         stamp_flow (event, effective_mode);
         if (event.outcome != message_flow_outcome_t::dropped
             && event.outcome != message_flow_outcome_t::backpressured
