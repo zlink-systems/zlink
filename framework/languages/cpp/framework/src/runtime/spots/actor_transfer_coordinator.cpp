@@ -879,27 +879,12 @@ std::optional<removed_actor_message_follow_t> actor_transfer_coordinator_t::remo
   const runtime::protocol::actor_route_fence_t &source_fence,
   const runtime::protocol::actor_route_fence_t &target_fence)
 {
-    auto result =
-      _lane
-        .run ([&] { return remove_message_follow_on_lane (actor_key, source_fence, target_fence); })
-        .get ();
-    return std::move (result.first);
+    return _lane
+      .run ([&] { return remove_message_follow_on_lane (actor_key, source_fence, target_fence); })
+      .get ();
 }
 
-task_t<actor_transfer_coordinator_t::remove_message_follow_result_t>
-actor_transfer_coordinator_t::remove_message_follow_async (
-  std::string actor_key,
-  runtime::protocol::actor_route_fence_t source_fence,
-  runtime::protocol::actor_route_fence_t target_fence)
-{
-    return _lane.run_task (
-      [this, actor_key = std::move (actor_key), source_fence = std::move (source_fence),
-       target_fence = std::move (target_fence)] () -> remove_message_follow_result_t {
-          return remove_message_follow_on_lane (actor_key, source_fence, target_fence);
-      });
-}
-
-actor_transfer_coordinator_t::remove_message_follow_result_t
+std::optional<removed_actor_message_follow_t>
 actor_transfer_coordinator_t::remove_message_follow_on_lane (
   const std::string &actor_key,
   const runtime::protocol::actor_route_fence_t &source_fence,
@@ -908,13 +893,13 @@ actor_transfer_coordinator_t::remove_message_follow_on_lane (
     assert (_lane.is_on_lane ());
     const auto found = _message_follow_routes.find (actor_key);
     if (found == _message_follow_routes.end ())
-        return {std::nullopt, false};
+        return std::nullopt;
     auto &routes = found->second;
     const auto route = std::find_if (routes.begin (), routes.end (), [&] (const auto &candidate) {
         return candidate.source_fence == source_fence && candidate.target_fence == target_fence;
     });
     if (route == routes.end ())
-        return {std::nullopt, has_message_follow_route_on_lane (actor_key)};
+        return std::nullopt;
     removed_actor_message_follow_t removed{actor_key, route->source_fence, route->transfer_id,
                                            route->target_route,
                                            route->target_actor.object_generation ()};
@@ -922,7 +907,7 @@ actor_transfer_coordinator_t::remove_message_follow_on_lane (
     routes.erase (route);
     if (routes.empty ())
         _message_follow_routes.erase (found);
-    return {std::move (removed), has_message_follow_route_on_lane (actor_key)};
+    return removed;
 }
 
 bool actor_transfer_coordinator_t::blocks_dispatch_on_lane (const std::string &actor_key) const

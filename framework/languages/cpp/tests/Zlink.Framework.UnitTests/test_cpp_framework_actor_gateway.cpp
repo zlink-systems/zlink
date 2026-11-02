@@ -5254,8 +5254,11 @@ int known_generation_source_leave_claims_transfer ()
     spot_node_runtime_t spots (node);
     const auto fence = runtime::protocol::actor_route_fence_t{
       "known-leave-actor", 7, zlink::routing_id_t::from ("actor-b").to_bytes (), 1, 5, 9};
-    const auto result = spots.submit_remote_actor_leave (transfer_id, actor, entry_spot->spot_id, 7,
-                                                         spot_id_t ("spot-b-target"), fence);
+    const auto result = spots
+                          .submit_remote_actor_leave_async (transfer_id, actor, entry_spot->spot_id,
+                                                            7, spot_id_t ("spot-b-target"), fence)
+                          .result ()
+                          .value ();
     if (!result || node->pending_remote_actor_leaves.size () != 1
         || !node->actor_spot_ids.contains (key))
         return 2;
@@ -5300,8 +5303,11 @@ int known_generation_source_leave_claims_transfer ()
             || follow->target_fence.authority_owner_generation != 28)
             return 6;
         if (duplicate == 0
-            && !spots.submit_remote_actor_leave (transfer_id, actor, entry_spot->spot_id, 7,
-                                                 spot_id_t ("spot-b-target"), fence))
+            && !spots
+                  .submit_remote_actor_leave_async (transfer_id, actor, entry_spot->spot_id, 7,
+                                                    spot_id_t ("spot-b-target"), fence)
+                  .result ()
+                  .value ())
             return 7;
     }
 

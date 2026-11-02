@@ -5651,8 +5651,11 @@ bool verify_relocation_abort_does_not_hold_receive_worker ()
     std::promise<void> following_frame;
     auto following = following_frame.get_future ();
     std::thread receiver ([&] {
-        owner.abort_relocation_materialization (
-          {{.kind = runtime::stateful::object_kind_t::user_spot, .key = "abort-target"}});
+        owner
+          .abort_relocation_materialization_async (
+            {{.kind = runtime::stateful::object_kind_t::user_spot, .key = "abort-target"}})
+          .result ()
+          .value ();
         owner.dispatch_wire_actor_join_admission (
           spot_id_t ("following-target"), std::string_view{}, [] () -> task_t<void> { co_return; },
           [&] (result_t<void>) { following_frame.set_value (); });
@@ -6752,9 +6755,13 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     if (!dispatcher.can_handle_send (spot_actor_commit_route_request_t::packet_name)) {
         return false;
     }
-    const auto submitted = dispatcher.dispatch_send (
-      route_received_packet_t{zlink::routing_id_t::from ("source-node"), 1, parts}, header,
-      provider);
+    const auto submitted =
+      dispatcher
+        .dispatch_send (
+          route_received_packet_t{zlink::routing_id_t::from ("source-node"), 1, parts}, header,
+          provider)
+        .result ()
+        .value ();
     const auto join_completion_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (1);
     while (!join_completion_entered.load (std::memory_order_acquire)

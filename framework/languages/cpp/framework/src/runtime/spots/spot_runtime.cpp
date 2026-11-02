@@ -7455,28 +7455,6 @@ task_t<bool> spot_node_runtime_t::activate_session_relocation_route (const std::
       zlink::routing_id_t::from (route.session_owner_node_routing_id), std::move (route));
 }
 
-bool spot_node_runtime_t::remove_actor_message_follow (
-  const actor_ref_t &actor_ref,
-  const runtime::protocol::actor_route_fence_t &source_fence,
-  const runtime::protocol::actor_route_fence_t &target_fence)
-{
-    const auto remove = [&] () -> task_t<bool> {
-        const auto key = actor_key (actor_ref);
-        const auto [removed, retained_follow_route] =
-          co_await _state->actor_transfer_coordinator->remove_message_follow_async (
-            key, source_fence, target_fence);
-        if (!removed)
-            co_return true;
-        co_await _state->lane.run_task (
-          [&] { erase_retired_actor_route_on_lane (*_state, *removed, retained_follow_route); });
-        if (actor_transfer_marker_enabled ())
-            emit_actor_transfer_marker ("message_follow_route_removed", actor_ref,
-                                        removed->transfer_id.empty () ? key : removed->transfer_id);
-        co_return true;
-    };
-    return remove ().result ().value ();
-}
-
 std::vector<handoff_packet_t>
 spot_node_runtime_t::take_actor_handoff_backlog (const actor_ref_t &actor_ref)
 {
@@ -7789,7 +7767,7 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
   std::stop_token cancellation)
 {
     // MeshNode §5.1: a relocation target's Restore holds one activation admission until the
-    // target commit or abort (commit_/abort_relocation_materialization) or its failure here.
+    // target commit or asynchronous materialization abort, or its failure here.
     const auto admission_key = activation_admission_t::spot_key (target.key);
     if (!_state->activation_admission->try_enter (admission_key))
         return false;
@@ -7973,14 +7951,6 @@ std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare 
     return prepare.target.target_node_generation == target_node_generation;
 }
 
-bool spot_node_runtime_t::consume_actor_join_recovery (
-  runtime::stateful::frozen_object_state_t &frozen,
-  const runtime::stateful::object_ref_t &target,
-  const runtime::protocol::relocation_prepare_t &prepare)
-{
-    return consume_actor_join_recovery_async (frozen, target, prepare).result ().value ();
-}
-
 task_t<bool> spot_node_runtime_t::consume_actor_join_recovery_async (
   runtime::stateful::frozen_object_state_t &frozen,
   runtime::stateful::object_ref_t target,
@@ -8098,27 +8068,15 @@ discard_actor_join_recovery_on_node_async (std::shared_ptr<spot_node_builder_sta
         co_return discarded;
     co_await node->lane.run_task ([&] {
         const auto found = node->actor_join_relocation_recoveries.find (key);
-        if (found != node->actor_join_relocation_recoveries.end ()) {
-            if (!handoff || found->second.handoff_id != *handoff)
-                return;
+        if (found != node->actor_join_relocation_recoveries.end () && handoff
+            && found->second.handoff_id == *handoff)
             node->actor_join_relocation_recoveries.erase (found);
-        }
         if (discard_materialization)
             discard_materialization ();
     });
     co_return discarded;
 }
 } // namespace
-
-void spot_node_runtime_t::discard_actor_join_recovery (
-  const std::string &stable_type, const runtime::stateful::object_ref_t &target) noexcept
-{
-    try {
-        discard_actor_join_recovery_async (stable_type, target).result ().value ();
-    }
-    catch (...) {
-    }
-}
 
 task_t<void>
 spot_node_runtime_t::discard_actor_join_recovery_async (std::string stable_type,
@@ -9135,12 +9093,6 @@ task_t<void> spot_node_runtime_t::retire_relocation_source_in (
             report_failure (source);
         }
     }
-}
-
-void spot_node_runtime_t::abort_relocation_materialization (
-  const std::vector<runtime::stateful::object_ref_t> &targets) noexcept
-{
-    abort_relocation_materialization_async (targets).result ().value ();
 }
 
 task_t<void> spot_node_runtime_t::abort_relocation_materialization_async (
@@ -10175,23 +10127,6 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
         settle_after_delivery (result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                         "Actor Join completion callback failed"));
     }
-}
-
-result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
-  const std::string &transfer_id,
-  const actor_ref_t &source_actor,
-  const spot_id_t &source_spot_id,
-  std::uint64_t source_spot_generation,
-  const spot_id_t &target_spot_id,
-  const runtime::protocol::actor_route_fence_t &target_fence,
-  std::function<void ()> transfer_owner_reservation,
-  std::size_t transferred_owner_byte_cost)
-{
-    return submit_remote_actor_leave_async (
-             transfer_id, source_actor, source_spot_id, source_spot_generation, target_spot_id,
-             target_fence, std::move (transfer_owner_reservation), transferred_owner_byte_cost)
-      .result ()
-      .value ();
 }
 
 task_t<result_t<void>> spot_node_runtime_t::submit_remote_actor_leave_async (
@@ -15493,21 +15428,19 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                          : std::make_optional (std::to_string (operation_low)));
                 }
             };
-            if (transfer_actor_leave_owner_reservation) {
-                auto dispatched = dispatcher.dispatch_actor_leave_async (
-                  std::move (received), std::move (deferred_terminal),
-                  record.transferred_owner_byte_cost);
-                detail::observe_task_completion (
-                  dispatched, [report] (const result_t<result_t<void>> &terminal) {
-                      report (terminal ? terminal.value ()
-                                       : detail::propagate_failure<void> (
-                                           terminal, "Actor leave dispatch failed"));
-                  });
-                if (terminal_deferred)
-                    *terminal_deferred = true;
-            } else {
-                report (dispatcher.dispatch_send (received, header, services));
-            }
+            auto dispatched = transfer_actor_leave_owner_reservation
+                                ? dispatcher.dispatch_actor_leave_async (
+                                    std::move (received), std::move (deferred_terminal),
+                                    record.transferred_owner_byte_cost)
+                                : dispatcher.dispatch_send (received, header, services);
+            detail::observe_task_completion (
+              dispatched, [report] (const result_t<result_t<void>> &terminal) {
+                  report (terminal ? terminal.value ()
+                                   : detail::propagate_failure<void> (
+                                       terminal, "SPOT route send dispatch failed"));
+              });
+            if (transfer_actor_leave_owner_reservation && terminal_deferred)
+                *terminal_deferred = true;
             return true;
         }
         if (route_request && dispatcher.can_handle_request (header.message_name)) {

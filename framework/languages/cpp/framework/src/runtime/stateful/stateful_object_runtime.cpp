@@ -2191,13 +2191,6 @@ stateful_error_t stateful_object_runtime_t::commit_relocation_restore_aggregate 
       .get ();
 }
 
-stateful_error_t
-stateful_object_runtime_t::abort_relocation_restore (const object_ref_t &target,
-                                                     const relocation_restore_identity_t &identity)
-{
-    return abort_relocation_restore_async (target, identity).result ().value ();
-}
-
 task_t<stateful_error_t>
 stateful_object_runtime_t::abort_relocation_restore_async (object_ref_t target,
                                                            relocation_restore_identity_t identity)
@@ -2242,12 +2235,6 @@ stateful_object_runtime_t::abort_relocation_restore_async (object_ref_t target,
         notify_quiescence ();
         return stateful_error_t::none;
     });
-}
-
-stateful_error_t stateful_object_runtime_t::abort_relocation_restore_aggregate (
-  const std::vector<object_ref_t> &targets, const relocation_restore_identity_t &identity)
-{
-    return abort_relocation_restore_aggregate_async (targets, identity).result ().value ();
 }
 
 task_t<stateful_error_t> stateful_object_runtime_t::abort_relocation_restore_aggregate_async (

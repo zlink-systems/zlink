@@ -216,8 +216,6 @@ class actor_transfer_coordinator_t
     using backlog_result_t = std::shared_ptr<std::vector<handoff_packet_t>>;
     using begin_commit_result_t =
       std::pair<std::optional<pending_actor_admission_t>, backlog_result_t>;
-    using remove_message_follow_result_t =
-      std::pair<std::optional<removed_actor_message_follow_t>, bool>;
 
     // Task values carry the owner turn's decision. The backlog holder carries
     // packet storage without copying packets when a task copies its result.
@@ -225,10 +223,6 @@ class actor_transfer_coordinator_t
       std::string actor_key,
       zlink::routing_id_t node,
       runtime::protocol::actor_route_fence_t source_fence = {}) const;
-    task_t<remove_message_follow_result_t>
-    remove_message_follow_async (std::string actor_key,
-                                 runtime::protocol::actor_route_fence_t source_fence,
-                                 runtime::protocol::actor_route_fence_t target_fence);
     task_t<bool> matches_source_remote_transfer_async (std::string actor_key,
                                                        std::string transfer_id) const;
     task_t<std::optional<pending_actor_admission_t>>
@@ -430,6 +424,7 @@ class actor_transfer_coordinator_t
     std::string next_transfer_id (const std::string &node_rid);
 
   private:
+    friend struct actor_transfer_coordinator_test_access_t;
     std::optional<actor_message_follow_target_t> message_follow_target_on_lane (
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence) const;
@@ -441,7 +436,7 @@ class actor_transfer_coordinator_t
                                                  const std::string &transfer_id) const;
     std::optional<pending_actor_admission_t>
     admission_on_lane (const std::string &transfer_id) const;
-    remove_message_follow_result_t
+    std::optional<removed_actor_message_follow_t>
     remove_message_follow_on_lane (const std::string &actor_key,
                                    const runtime::protocol::actor_route_fence_t &source_fence,
                                    const runtime::protocol::actor_route_fence_t &target_fence);

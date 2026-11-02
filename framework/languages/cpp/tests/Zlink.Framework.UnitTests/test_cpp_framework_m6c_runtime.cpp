@@ -1260,9 +1260,12 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
             } else {
                 source->admission_sealed = true;
             }
-            const auto submitted = spot_runtime.submit_remote_actor_leave (
-              transfer_id, actor_ref, source_id, source->object_generation, target_id,
-              target_fence);
+            const auto submitted = spot_runtime
+                                     .submit_remote_actor_leave_async (
+                                       transfer_id, actor_ref, source_id, source->object_generation,
+                                       target_id, target_fence)
+                                     .result ()
+                                     .value ();
             if (cancel_source) {
                 if (cleanup_before_cancel) {
                     spot_runtime.cleanup_expired_actor_admissions_at (
@@ -1316,9 +1319,11 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
                             && leave_callbacks.load (std::memory_order_acquire) == 0
                             && diagnostics->failed == 1,
                           "terminal source leave failure must remove registry and diagnose once");
-            spot_runtime.submit_remote_actor_leave (transfer_id, actor_ref, source_id,
-                                                    source->object_generation, target_id,
-                                                    target_fence);
+            spot_runtime
+              .submit_remote_actor_leave_async (transfer_id, actor_ref, source_id,
+                                                source->object_generation, target_id, target_fence)
+              .result ()
+              .value ();
             spot_runtime.cleanup_expired_actor_admissions_at (cleanup_boundary);
             zlink::framework::test::acknowledge_delivery ();
             test.require (leave_callbacks.load (std::memory_order_acquire) == 0
@@ -7662,9 +7667,11 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
     }
     const auto returned = returning.result ().value ();
     if (delayed_source_completion) {
-        (void) runtime.submit_remote_actor_leave ("return-a-b", source_actor, entry_id, 1,
-                                                  zlink::framework::spot_id_t ("spot-b"),
-                                                  target_fence);
+        (void) runtime
+          .submit_remote_actor_leave_async ("return-a-b", source_actor, entry_id, 1,
+                                            zlink::framework::spot_id_t ("spot-b"), target_fence)
+          .result ()
+          .value ();
         zlink::framework::detail::spot_context_access_t::state (entry_created.context)
           ->run_serial_task ("after-late-source-leave",
                              [] () -> zlink::framework::task_t<void> { co_return; })
@@ -8577,7 +8584,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     abort_condition.notify_all ();
     abort_restoring.join ();
     test.require (abort_restore_result == stateful_error_t::none
-                    && target_abort.abort_relocation_restore (abort_target, abort_identity)
+                    && target_abort.abort_relocation_restore_async (abort_target, abort_identity)
+                           .result ()
+                           .value ()
                          == stateful_error_t::none
                     && !target_abort.find (abort_target.kind, abort_target.key),
                   "target relocation abort must discard its temporary hold and object reservation");

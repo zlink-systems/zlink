@@ -91,48 +91,35 @@ bool spot_route_internal_dispatcher_t::can_handle_request (std::string_view pack
            || packet_name == spot_actor_packet_route_request_t::packet_name;
 }
 
-result_t<void> spot_route_internal_dispatcher_t::dispatch_send (
+task_t<result_t<void>> spot_route_internal_dispatcher_t::dispatch_send (
   const route_received_packet_t &received,
   const runtime::messaging::envelope_header_t &header,
   service_provider_t &services) const
 {
-    return dispatch_send (received, header, services, {}, 0);
-}
-
-result_t<void> spot_route_internal_dispatcher_t::dispatch_send (
-  const route_received_packet_t &received,
-  const runtime::messaging::envelope_header_t &header,
-  service_provider_t &services,
-  std::function<void ()> transfer_owner_reservation,
-  std::size_t transferred_owner_byte_cost) const
-{
     if (header.message_name == spot_actor_leave_route_command_t::packet_name)
-        return dispatch_actor_leave_async (received, std::move (transfer_owner_reservation),
-                                           transferred_owner_byte_cost)
-          .result ()
-          .value ();
+        co_return co_await dispatch_actor_leave_async (received, {}, 0);
 
     (void) services;
     auto body = runtime::messaging::envelope_codec_t{}.decode_body (received.parts);
     if (!body) {
-        return result_t<void>::failure (body.error_kind (), body.error ()
-                                                              ? body.error ()->what ()
-                                                              : "actor route send body missing");
+        co_return result_t<void>::failure (body.error_kind (), body.error ()
+                                                                 ? body.error ()->what ()
+                                                                 : "actor route send body missing");
     }
     try {
         if (header.message_name == spot_actor_commit_route_request_t::packet_name) {
             auto request = _serializers->get<spot_actor_commit_route_request_t> ().deserialize (
               detail::encoded_payload_from_raw (body.value ()));
             if (!request.finalize || request.prepare) {
-                return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                                "remote Actor cutover command shape is invalid");
+                co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                                   "remote Actor cutover command shape is invalid");
             }
             dispatch_actor_commit_request (
               std::move (request), received, header, services, [] (result_t<zlink::message_t>) {
                   // Cutover is one-way. Target lifecycle/completion owns the
                   // terminal Actor Join outcome; there is no source reply leg.
               });
-            return result_t<void>::success ();
+            co_return result_t<void>::success ();
         }
         auto request = _serializers->get<actor_bound_session_route_request_t> ().deserialize (
           detail::encoded_payload_from_raw (body.value ()));
@@ -140,22 +127,22 @@ result_t<void> spot_route_internal_dispatcher_t::dispatch_send (
         auto actor_gateway = _actor_gateway;
         auto updated = actor_gateway.update_actor_ref (actor_ref);
         if (!updated) {
-            return result_t<void>::failure (updated.error_kind (), updated.error ()
-                                                                     ? updated.error ()->what ()
-                                                                     : "actor ref update failed");
+            co_return result_t<void>::failure (updated.error_kind (),
+                                               updated.error () ? updated.error ()->what ()
+                                                                : "actor ref update failed");
         }
         auto dispatched = actor_gateway.dispatch_bound_session_send (
           actor_ref, request.packet_name_value, request.codec,
           zlink::message_t::from (request.payload));
-        return dispatched;
+        co_return dispatched;
     }
     catch (const framework_exception_t &error) {
-        return detail::result_access_t::failure<void> (error);
+        co_return detail::result_access_t::failure<void> (error);
     }
     catch (const std::exception &error) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        std::string ("actor route send decode failed: ")
-                                          + error.what ());
+        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                           std::string ("actor route send decode failed: ")
+                                             + error.what ());
     }
 }
 

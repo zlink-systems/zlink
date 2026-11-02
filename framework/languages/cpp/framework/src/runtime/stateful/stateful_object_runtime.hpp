@@ -523,11 +523,7 @@ class stateful_object_runtime_t
     task_t<stateful_error_t>
     abort_relocation_restore_aggregate_async (std::vector<object_ref_t> targets,
                                               relocation_restore_identity_t identity);
-    stateful_error_t abort_relocation_restore (const object_ref_t &target,
-                                               const relocation_restore_identity_t &identity);
-    stateful_error_t
-    abort_relocation_restore_aggregate (const std::vector<object_ref_t> &targets,
-                                        const relocation_restore_identity_t &identity);
+
 
   private:
     std::pair<stateful_error_t, object_ref_t>

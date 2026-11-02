@@ -4,7 +4,7 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
-#include <zlink/framework/detail/infrastructure_wait_context.hpp>
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #endif
 
 #include <atomic>
@@ -283,9 +283,8 @@ class state_lane_t
     }
 
     // The caller executes its own synchronous work in FIFO order. A contended
-    // external caller may wait for its turn. Workers holding a state lane or
-    // using this executor must chain run_task instead (execution gate section
-    // 10, serial executor 6.5).
+    // caller may wait for its turn. Debug diagnoses infrastructure dependencies
+    // through the existing wait guard (execution gate 10, serial executor 6.5).
     template <typename Work>
     auto run_sync (Work &&work) -> std::invoke_result_t<std::decay_t<Work> &>
     {
@@ -317,11 +316,6 @@ class state_lane_t
             }
         };
         if (!schedule_drain (true, invoke_work)) {
-            const auto worker = offload_executor_t::current_worker_executor ();
-            if (worker && (worker == &_executor || current () != nullptr)
-                && !_closed.load (std::memory_order_acquire))
-                throw std::logic_error (
-                  "a state lane worker must chain run_task instead of waiting for another lane");
             auto grant = std::make_shared<std::promise<void>> ();
             auto granted = grant->get_future ();
             if (!enqueue ({}, [grant] (std::exception_ptr error) {
@@ -332,6 +326,18 @@ class state_lane_t
                 }))
                 throw std::runtime_error ("state lane is closed");
             schedule_drain (true);
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+            if (offload_executor_t::current_worker_executor () == &_executor || current ()) {
+                infrastructure_wait_guard::infrastructure_scope_t scope (this);
+                infrastructure_wait_guard::before_condition_wait (
+                  infrastructure_wait_guard::wait_relation_t::dependent_completion,
+                  [&] {
+                      return granted.wait_for (std::chrono::seconds::zero ())
+                             == std::future_status::ready;
+                  },
+                  "state-lane/run_sync");
+            }
+#endif
             granted.get ();
             {
                 const current_scope_t scope (this);
