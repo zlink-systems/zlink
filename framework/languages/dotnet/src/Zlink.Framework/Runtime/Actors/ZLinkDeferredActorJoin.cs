@@ -116,7 +116,7 @@ internal sealed class ZLinkDeferredActorJoin(
     // that callback is captured here and re-entered in RunAsync.
     private readonly ZLinkFlowValue? _flow = ZLinkFlowContext.Current;
 
-    private ZLinkActorSerialExecutor.BarrierReservation? _barrier;
+    internal ZLinkActorSerialExecutor.BarrierReservation? _barrier;
     private Task? _targetCompletion;
 
     public void ReserveBarrier()

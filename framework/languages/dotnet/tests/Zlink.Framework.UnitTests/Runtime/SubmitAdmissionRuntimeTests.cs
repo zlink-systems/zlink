@@ -119,9 +119,6 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
             "typed-completion",
             directRequestSocket: socket
         );
-        const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var nodeType = typeof(ZLinkManagedMeshNode);
         MeshReceiveRecord? terminal = null;
         node.SetCompletionHandlerCore(
             (record, parts) =>
@@ -131,37 +128,8 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
                 return true;
             }
         );
-        var create = nodeType.GetMethod(
-            "CreateOperation",
-            flags,
-            [
-                typeof(MeshOperationKind),
-                typeof(MeshOperationId),
-                typeof(ulong).MakeByRefType(),
-                typeof(ZLinkManagedMeshNode.PendingOperation).MakeByRefType(),
-                typeof(bool),
-                typeof(TimeSpan?),
-                typeof(TimeSpan?),
-                typeof(ZLinkRequestAdmission),
-                typeof(ulong?),
-            ]
-        )!;
-        object?[] arguments =
-        [
-            MeshOperationKind.ActorRequest,
-            node.AllocateOperationId(),
-            0UL,
-            null,
-            awaited,
-            TimeSpan.FromSeconds(5),
-            null,
-            null,
-            null,
-        ];
         var target = RoutingId.From("peer");
-        var peers =
-            (Dictionary<RoutingId, ZLinkMeshPeer>)
-                nodeType.GetField("_peersByRid", flags)!.GetValue(node)!;
+        var peers = node._peersByRid;
         peers.Add(
             target,
             new ZLinkMeshPeer(1)
@@ -173,41 +141,28 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
                 State = MeshPeerState.Admitted,
             }
         );
-        (
-            (ZLinkMeshSelectedRoutes)nodeType.GetField("_selectedRoutes", flags)!.GetValue(node)!
-        ).Apply([new RouterRoute(target, 1)]);
-        (
-            (ZLinkMeshChannelSelection)
-                nodeType.GetField("_channelSelection", flags)!.GetValue(node)!
-        ).PrepareRouterTargets(peers);
+        node._selectedRoutes.Apply([new RouterRoute(target, 1)]);
+        node._channelSelection.PrepareRouterTargets(peers);
         // Capture the original caller task before the dispatcher clears its receiver.
-        var callerTask = (Task?)create.Invoke(node, arguments);
-        var pending = (ZLinkManagedMeshNode.PendingOperation)arguments[3]!;
-        await (Task)
-            nodeType
-                .GetMethod("CompleteNativeDurableRequestAsync", flags)!
-                .Invoke(
-                    node,
-                    [
-                        target,
-                        0UL,
-                        pending,
-                        new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
-                        (Action<
-                            ZLinkManagedMeshNode.PendingOperation,
-                            RequestResult,
-                            IReadOnlyList<Message>
-                        >)(
-                            (_, _, _) =>
-                                throw new Xunit.Sdk.XunitException(
-                                    "Rejected submission completed as a reply."
-                                )
-                        ),
-                        default(CancellationToken),
-                        null,
-                        null,
-                    ]
-                )!;
+        var callerTask = node.CreateOperation(
+            MeshOperationKind.ActorRequest,
+            node.AllocateOperationId(),
+            out _,
+            out var pending,
+            awaited,
+            TimeSpan.FromSeconds(5)
+        );
+        await node.CompleteNativeDurableRequestAsync(
+            target,
+            0UL,
+            pending,
+            new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
+            (_, _, _) =>
+                throw new Xunit.Sdk.XunitException("Rejected submission completed as a reply."),
+            default,
+            null,
+            null
+        );
         if (awaited)
         {
             var task = callerTask!;
@@ -215,22 +170,14 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
             Assert.Same(expected, failure);
             Assert.Null(terminal);
             var callbacks = 0;
-            await (Task)
-                nodeType
-                    .GetMethod("DeliverRequestCompletionAsync", flags)!
-                    .Invoke(
-                        node,
-                        [
-                            task,
-                            (ZLinkBackendRequestCallback)(
-                                (_, parts) =>
-                                {
-                                    callbacks++;
-                                    Assert.Empty(parts);
-                                }
-                            ),
-                        ]
-                    )!;
+            await node.DeliverRequestCompletionAsync(
+                task,
+                (_, parts) =>
+                {
+                    callbacks++;
+                    Assert.Empty(parts);
+                }
+            );
             Assert.Equal(1, callbacks);
         }
         else
@@ -261,43 +208,20 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
         );
         // Access only Framework state. The socket double implements the public
         // binding contracts and never accesses binding implementation details.
-        const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var nodeType = typeof(ZLinkManagedMeshNode);
         using var payload = Message.From("request");
-        var method = nodeType.GetMethod(
-            "RequestDirectWireAsync",
-            flags,
-            [
-                typeof(RoutingId),
-                encodedWire
-                    ? typeof(IReadOnlyList<ReadOnlyMemory<byte>>)
-                    : typeof(IReadOnlyList<Message>),
-                typeof(TimeSpan),
-                typeof(CancellationToken),
-                typeof(ZLinkServiceLiveness),
-                typeof(ZLinkRequestAdmission),
-                typeof(TimeSpan?),
-                typeof(MeshOperationId),
-            ]
-        )!;
-        var request =
-            (ValueTask<IReadOnlyList<Message>>)
-                method.Invoke(
-                    node,
-                    [
-                        RoutingId.From("peer"),
-                        encodedWire
-                            ? new ReadOnlyMemory<byte>[] { "request"u8.ToArray() }
-                            : new[] { payload },
-                        TimeSpan.FromSeconds(5),
-                        default(CancellationToken),
-                        null,
-                        null,
-                        null,
-                        default(MeshOperationId),
-                    ]
-                )!;
+        var request = encodedWire
+            ? node.RequestDirectWireAsync(
+                RoutingId.From("peer"),
+                new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
+                TimeSpan.FromSeconds(5),
+                default
+            )
+            : node.RequestDirectWireAsync(
+                RoutingId.From("peer"),
+                new[] { payload },
+                TimeSpan.FromSeconds(5),
+                default
+            );
         var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => request.AsTask());
         Assert.Same(expected, failure);
         Assert.Equal(1, socket.Submissions);
@@ -1166,66 +1090,17 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
     [Fact]
     public void NativeRequestPathHasNoCtsCreationSites()
     {
-        var flags =
-            System.Reflection.BindingFlags.Static
-            | System.Reflection.BindingFlags.Instance
-            | System.Reflection.BindingFlags.Public
-            | System.Reflection.BindingFlags.NonPublic;
-        var opcodes = typeof(System.Reflection.Emit.OpCodes)
-            .GetFields()
-            .Where(field => field.FieldType == typeof(System.Reflection.Emit.OpCode))
-            .Select(field => (System.Reflection.Emit.OpCode)field.GetValue(null)!)
-            .ToDictionary(code => unchecked((ushort)code.Value));
-        var types = new[]
+        var repository = Common.FrameworkTestEnvironment.GetRepoRoot();
+        var sources = new[]
         {
-            typeof(ZLinkRequestSubmissionOutcome),
-            typeof(ZLinkRequestDeadlineIndex),
-        }.SelectMany(type => new[] { type }.Concat(type.GetNestedTypes(flags)));
-        var creationSites = 0;
-        foreach (var method in types.SelectMany(type => type.GetMethods(flags)))
+            "framework/languages/dotnet/src/Zlink.Framework/Runtime/Messaging/ZLinkRequestSubmissionOutcome.cs",
+            "framework/languages/dotnet/src/Zlink.Framework/Runtime/Messaging/ZLinkRequestDeadlineIndex.cs",
+        };
+        foreach (var source in sources)
         {
-            var il = method.GetMethodBody()?.GetILAsByteArray();
-            if (il is null)
-                continue;
-            for (var offset = 0; offset < il.Length; )
-            {
-                ushort value = il[offset++];
-                if (value == 0xfe)
-                    value = (ushort)(0xfe00 | il[offset++]);
-                var opcode = opcodes[value];
-                if (
-                    opcode == System.Reflection.Emit.OpCodes.Call
-                    || opcode == System.Reflection.Emit.OpCodes.Newobj
-                )
-                {
-                    var called = method.Module.ResolveMethod(BitConverter.ToInt32(il, offset));
-                    if (
-                        called?.DeclaringType == typeof(CancellationTokenSource)
-                        && (
-                            called.IsConstructor
-                            || called.Name
-                                == nameof(CancellationTokenSource.CreateLinkedTokenSource)
-                        )
-                    )
-                        creationSites++;
-                }
-                offset += opcode.OperandType switch
-                {
-                    System.Reflection.Emit.OperandType.InlineNone => 0,
-                    System.Reflection.Emit.OperandType.ShortInlineBrTarget
-                    or System.Reflection.Emit.OperandType.ShortInlineI
-                    or System.Reflection.Emit.OperandType.ShortInlineVar => 1,
-                    System.Reflection.Emit.OperandType.InlineVar => 2,
-                    System.Reflection.Emit.OperandType.InlineI8
-                    or System.Reflection.Emit.OperandType.InlineR => 8,
-                    System.Reflection.Emit.OperandType.InlineSwitch => 4
-                        + 4 * BitConverter.ToInt32(il, offset),
-                    _ => 4,
-                };
-            }
+            var text = File.ReadAllText(Path.Combine(repository, source));
+            Assert.DoesNotContain(nameof(CancellationTokenSource), text, StringComparison.Ordinal);
         }
-        Console.WriteLine($"native_request_cts_creation_sites={creationSites}");
-        Assert.Equal(0, creationSites);
     }
 
     private sealed class FixedSubmissionOperation(RequestSubmission submission)
