@@ -121,7 +121,12 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                                                         .build())
                                         .thenCompose(
                                                 ignored -> {
-                                                    if (observation.hasReward())
+                                                    if (!"Finished"
+                                                                    .equals(
+                                                                            observation
+                                                                                    .getState()
+                                                                                    .getStatus())
+                                                            && observation.hasReward())
                                                         return announceReward(
                                                                 observation.getReward());
                                                     context.relocationReady().defer();
@@ -448,15 +453,35 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
             return;
         }
         switch (event.kind()) {
-            case PLAYER_JOINED ->
-                    recipient.push(
-                            BingoMessages.playerJoinedNotify(
-                                    event.state().getRoomId(),
-                                    event.joinedActorId(),
-                                    event.joinedDisplayName(),
-                                    event.seat(),
-                                    event.host(),
-                                    event.state()));
+            case PLAYER_JOINED -> {
+                var notification =
+                        BingoMessages.playerJoinedNotify(
+                                event.state().getRoomId(),
+                                event.joinedActorId(),
+                                event.joinedDisplayName(),
+                                event.seat(),
+                                event.host(),
+                                event.state());
+                try {
+                    recipient
+                            .push(notification)
+                            .whenComplete(
+                                    (ignored, error) -> {
+                                        if (error != null)
+                                            logger.warn(
+                                                    "bingo-player-joined-notify-failed room={} recipient={}",
+                                                    event.state().getRoomId(),
+                                                    recipient.actorId(),
+                                                    error);
+                                    });
+                } catch (ZLinkFrameworkException error) {
+                    logger.warn(
+                            "bingo-player-joined-notify-failed room={} recipient={}",
+                            event.state().getRoomId(),
+                            recipient.actorId(),
+                            error);
+                }
+            }
             case GAME_STARTED ->
                     recipient.push(BingoMessages.bingoGameStartedNotify(event.state()));
             case NUMBER_DRAWN ->
