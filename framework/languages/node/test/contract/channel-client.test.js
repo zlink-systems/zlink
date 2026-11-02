@@ -1611,6 +1611,88 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
   }
 });
 
+test('ZLinkChannelClient keeps an unawaited request independent from a following send', async () => {
+  const ctx = zlink.createContext();
+  const router = zlink.createRouterSocket(ctx);
+  const dealer = zlink.createDealerSocket(ctx);
+  let routerMonitor;
+  let dealerMonitor;
+  let request;
+  let send;
+  const completionPoller = ownCompletions(ctx, dealer);
+
+  try {
+    routerMonitor = router.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
+    dealerMonitor = dealer.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
+    router.bind(ANY_LOOPBACK_PORT);
+    const endpoint = router.options.lastEndpoint;
+    dealer.connect(endpoint);
+    await waitForMonitorConnectionReady(routerMonitor, 'mixed channel request router connection');
+    await waitForMonitorConnectionReady(dealerMonitor, 'mixed channel request dealer connection');
+    routerMonitor.close();
+    routerMonitor = null;
+    dealerMonitor.close();
+    dealerMonitor = null;
+
+    const registration = framework.createFrameworkRegistration({
+      channels: { api: { client: { manualConnections: [endpoint] } } }
+    });
+    const client = new framework.DefaultZLinkChannelClient(
+      registration,
+      new framework.ZLinkDealerChannelClientTransport(dealer)
+    );
+
+    let requestSettled = false;
+    const requestPromise = client
+      .requestToChannel('api', typedPacket('Ping', { value: 'pending' }))
+      .timeout(1000)
+      .submit();
+    void requestPromise.then(
+      () => { requestSettled = true; },
+      () => { requestSettled = true; }
+    );
+    await requestPromise.admitted;
+    request = await recvRouterMessage(router);
+    const requestEnvelope = decodeDotnetEnvelope(request.parts);
+    assert.equal(requestEnvelope.header.kind, 1);
+    assert.equal(requestEnvelope.header.messageName, 'Ping');
+    assert.equal(requestSettled, false);
+
+    await client.sendToChannel('api', typedPacket('Greeting', 'after-request')).submit();
+    send = await recvRouterMessage(router);
+    const sendEnvelope = decodeDotnetEnvelope(send.parts);
+    assert.equal(sendEnvelope.header.kind, 3);
+    assert.equal(sendEnvelope.header.messageName, 'Greeting');
+    assert.equal(sendEnvelope.body, 'after-request');
+    assert.equal(requestSettled, false);
+
+    submitRawReplyMultipart(
+      router.reply(request.routingId, request.replyToken),
+      encodeDotnetEnvelope({
+        ...requestEnvelope.header,
+        kind: 2,
+        deadline: null,
+        topic: null,
+        errorCode: null,
+        errorMessage: null
+      }, { value: 'completed' })
+    );
+    assert.deepEqual(
+      await withTimeout(requestPromise, 1000, 'mixed channel request reply'),
+      { value: 'completed' }
+    );
+  } finally {
+    request?.close();
+    send?.close();
+    completionPoller.close();
+    dealerMonitor?.close();
+    routerMonitor?.close();
+    dealer.close();
+    router.close();
+    ctx.close();
+  }
+});
+
 test('route raw SPOT requests await independent binding request promises', async () => {
   let active = 0;
   let maxActive = 0;
