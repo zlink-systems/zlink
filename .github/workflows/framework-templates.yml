@@ -30,7 +30,6 @@ on:
     branches: [main]
     paths:
       - 'framework/languages/*/templates/**'
-      - 'framework/languages/java/templates/**'
       - 'scripts/templates/**'
       - '.github/workflows/framework-templates.yml'
 
@@ -252,14 +251,14 @@ jobs:
         shell: bash
         # ConanCenter recipes fetch upstream sources (m4 from ftp.gnu.org); fall back to
         # ConanCenter's backup of the same sha256 when the upstream mirror is unreachable.
+        # The Conan home lives in this job's work directory: other jobs on the shared
+        # self-hosted runner must not see or race on its cache.
         run: |
           set -euo pipefail
           python -m pip install "conan==${CONAN_VERSION}"
-          conan_home="$(conan config home)"
-          mkdir -p "${conan_home}"
-          # The Conan home survives on a self-hosted runner; add the line once.
-          grep -qs 'core.sources:download_urls' "${conan_home}/global.conf" \
-            || echo 'core.sources:download_urls=["origin", "https://c3i.jfrog.io/artifactory/conan-center-backup-sources/"]' >> "${conan_home}/global.conf"
+          echo "CONAN_HOME=${WORK}/conan-home" >>"${GITHUB_ENV}"
+          mkdir -p "${WORK}/conan-home"
+          echo 'core.sources:download_urls=["origin", "https://c3i.jfrog.io/artifactory/conan-center-backup-sources/"]' >> "${WORK}/conan-home/global.conf"
 
       - name: Install Linux build tools
         id: tools

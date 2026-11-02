@@ -19,6 +19,15 @@ mkdir -p "$(dirname "$game")" "$result_dir"
 cp -R "$repo_root/$path" "$game"
 mkdir -p "$game/.logs"
 
+# The Docker build compiles inside the container, where the workflow's
+# CMAKE_BUILD_PARALLEL_LEVEL does not reach; without a limit it starts a compiler per core
+# on the shared self-hosted build machine.
+if [ "$package" = cpp ]; then
+  sed -i "s#^FROM \${UBUNTU_IMAGE} AS build\$#&\nENV CMAKE_BUILD_PARALLEL_LEVEL=$CMAKE_BUILD_PARALLEL_LEVEL#" "$game/Dockerfile"
+  grep -q "^ENV CMAKE_BUILD_PARALLEL_LEVEL=$CMAKE_BUILD_PARALLEL_LEVEL\$" "$game/Dockerfile" \
+    || { echo "run-template: no build stage in $game/Dockerfile" >&2; exit 1; }
+fi
+
 if [ "$TEMPLATE_SOURCE" = local ]; then
   binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/$package/VERSION")"
   python3 "$repo_root/scripts/templates/use-local-packages.py" \
