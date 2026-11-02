@@ -1,8 +1,8 @@
 plugins { kotlin("jvm") version "2.3.21" apply false }
 
-extra["frameworkVersion"] = "0.31.0"
+extra["frameworkVersion"] = "0.32.0"
 
-extra["bindingVersion"] = "1.21.0"
+extra["bindingVersion"] = "1.22.0"
 
 subprojects {
     apply(plugin = "org.jetbrains.kotlin.jvm")
