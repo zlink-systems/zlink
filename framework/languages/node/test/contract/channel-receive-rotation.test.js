@@ -2,12 +2,43 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
-const { ZLinkChannelReceiveLoop, ZLinkReceiveRoundRobinCoordinator } = require('../../packages/framework/dist/runtime/channels/channel-receive-loops');
+const { createChannelApplicationDispatchQueue, ZLinkChannelReceiveLoop, ZLinkReceiveRoundRobinCoordinator } = require('../../packages/framework/dist/runtime/channels/channel-receive-loops');
 const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
+const { currentApplicationJobPermit, releaseApplicationJobPermitBeforeHandler } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
 
 function queueWithLimit(limit) {
   return new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: BigInt(limit) }, () => 1n));
 }
+
+test('channel dispatch queue carries the existing permit context into its shared worker', async () => {
+  let beforeHandler = 0;
+  let afterDispatch = 0;
+  const permit = {
+    releaseBeforeHandler() { beforeHandler++; },
+    releaseAfterInternalProcessing() { afterDispatch++; }
+  };
+  const queue = createChannelApplicationDispatchQueue();
+  const scheduleWorker = global.queueMicrotask;
+  let workerWakes = 0;
+  global.queueMicrotask = (callback) => {
+    workerWakes++;
+    scheduleWorker(callback);
+  };
+  try {
+    await queue.submitPreAdmitted(() => {
+      assert.equal(currentApplicationJobPermit(), permit);
+      releaseApplicationJobPermitBeforeHandler();
+      return Promise.resolve();
+    }, undefined, permit);
+
+    assert.equal(beforeHandler, 1);
+    assert.equal(afterDispatch, 1);
+    assert.equal(workerWakes, 1);
+  } finally {
+    global.queueMicrotask = scheduleWorker;
+    await queue.close();
+  }
+});
 
 test('one readiness reserves one count for two ordinary claims', async t => {
   t.mock.method(performance, 'now', () => 0);
