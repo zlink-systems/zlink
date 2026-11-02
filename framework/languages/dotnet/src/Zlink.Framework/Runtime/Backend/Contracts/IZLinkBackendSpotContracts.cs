@@ -400,7 +400,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     // records, so the MeshNode builder's registered route/channel handlers receiver
     // inbound traffic. Requests reply through the record's held reply token.
     void OnNodeRoute(
-        Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler,
+        Action<IReadOnlyList<ZLinkBackendRouteReceived>, List<Task>, CancellationToken> handler,
         ZLinkRuntimeTaskRunner taskRunner
     );
 }

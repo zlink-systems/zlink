@@ -22,13 +22,19 @@ internal static class ZLinkSpotReplySubmitter
         }
     }
 
-    public static async ValueTask SubmitDirectAsync(
+    public static ValueTask SubmitDirectAsync(
         ZLinkBackendRouteReceived received,
-        IReadOnlyList<Message> replyParts,
-        CancellationToken cancellationToken
+        IReadOnlyList<Message> replyParts
     )
     {
-        SubmitAndDispose(received, replyParts);
-        await ValueTask.CompletedTask;
+        try
+        {
+            SubmitAndDispose(received, replyParts);
+            return ValueTask.CompletedTask;
+        }
+        catch (Exception error)
+        {
+            return ValueTask.FromException(error);
+        }
     }
 }

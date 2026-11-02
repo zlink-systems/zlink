@@ -209,7 +209,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
         CancellationToken cancellationToken
     )
     {
-        return ZLinkSpotReplySubmitter.SubmitDirectAsync(received, replyParts, cancellationToken);
+        return ZLinkSpotReplySubmitter.SubmitDirectAsync(received, replyParts);
     }
 
     private ValueTask ReplyErrorAsync(

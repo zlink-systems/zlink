@@ -86,7 +86,7 @@ internal sealed class ZLinkRouteHandlerInvoker(
         }
     }
 
-    public async ValueTask<ZLinkRouteHandlerReply> InvokeRequestAsync(
+    public ValueTask<ZLinkRouteHandlerReply> InvokeRequestAsync(
         ZLinkRouteHandlerDescriptor descriptor,
         string routerChannelId,
         RoutingId sourceRid,
@@ -102,19 +102,19 @@ internal sealed class ZLinkRouteHandlerInvoker(
             header.ContentType,
             codecs
         );
-        return await InvokeRequestAsync(
-                descriptor,
-                routerChannelId,
-                sourceRid,
-                header,
-                message,
-                cancellationToken,
-                metadata
-            )
-            .ConfigureAwait(false);
+        return InvokeRequestAsync(
+            descriptor,
+            routerChannelId,
+            sourceRid,
+            header,
+            message,
+            cancellationToken,
+            metadata,
+            ownedRequest: null
+        );
     }
 
-    internal async ValueTask<ZLinkRouteHandlerReply> InvokeRequestAsync(
+    internal ValueTask<ZLinkRouteHandlerReply> InvokeRequestAsync(
         ZLinkRouteHandlerDescriptor descriptor,
         string routerChannelId,
         RoutingId sourceRid,
@@ -130,25 +130,16 @@ internal sealed class ZLinkRouteHandlerInvoker(
             header.ContentType,
             codecs
         );
-        try
-        {
-            var reply = await InvokeRequestAsync(
-                    descriptor,
-                    routerChannelId,
-                    sourceRid,
-                    header,
-                    message,
-                    cancellationToken,
-                    metadata
-                )
-                .ConfigureAwait(false);
-            return reply with { OwnedRequest = message as Message };
-        }
-        catch
-        {
-            (message as Message)?.Dispose();
-            throw;
-        }
+        return InvokeRequestAsync(
+            descriptor,
+            routerChannelId,
+            sourceRid,
+            header,
+            message,
+            cancellationToken,
+            metadata,
+            message as Message
+        );
     }
 
     private async ValueTask<ZLinkRouteHandlerReply> InvokeRequestAsync(
@@ -158,34 +149,43 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkEnvelopeHeader header,
         object? message,
         CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata
+        ZLinkMessageMetadata? metadata,
+        Message? ownedRequest
     )
     {
-        var context = new ZLinkRouteMessageContext(
-            routerChannelId,
-            null,
-            sourceRid,
-            header.MessageName!,
-            header.ContentType,
-            metadata,
-            header.CorrelationId
-        );
-        var dispatch = await dispatcher
-            .DispatchRouteAsync(
-                descriptor,
-                message,
-                context,
-                ZLinkHandlerDispatchKind.NodeDirectRequest,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (!dispatch.HandlerInvoked)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                $"A handler filter rejected '{header.MessageName}'."
+        try
+        {
+            var context = new ZLinkRouteMessageContext(
+                routerChannelId,
+                null,
+                sourceRid,
+                header.MessageName!,
+                header.ContentType,
+                metadata,
+                header.CorrelationId
             );
+            var dispatch = await dispatcher
+                .DispatchRouteAsync(
+                    descriptor,
+                    message,
+                    context,
+                    ZLinkHandlerDispatchKind.NodeDirectRequest,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (!dispatch.HandlerInvoked)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Rejected,
+                    $"A handler filter rejected '{header.MessageName}'."
+                );
 
-        return new ZLinkRouteHandlerReply(dispatch.Value, descriptor.ReplyType);
+            return new ZLinkRouteHandlerReply(dispatch.Value, descriptor.ReplyType, ownedRequest);
+        }
+        catch
+        {
+            ownedRequest?.Dispose();
+            throw;
+        }
     }
 }
 

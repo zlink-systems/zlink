@@ -54,6 +54,7 @@
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Support/PerCallAllocation.cs"/>
+        <Compile Include="Support/MeshDispatchTestSupport.cs"/>
         <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
         <Compile Include="Runtime/InstanceIntentAuthorityFollowTests.cs"/>
@@ -229,6 +230,7 @@
         <Compile Include="Runtime/MeshCompletionTableConvergenceTests.cs"/>
         <Compile Include="Runtime/CompletionDispatcherIsolationTests.cs"/>
         <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
+        <Compile Include="Runtime/TargetNodeRouteCostTests.cs"/>
         <Compile Include="Runtime/MeshNodeRouteBatchAdmissionTests.cs"/>
         <Compile Include="Runtime/MeshNodeShutdownSealTests.cs"/>
         <Compile Include="Runtime/MeshNodeLifecycleStateTests.cs"/>

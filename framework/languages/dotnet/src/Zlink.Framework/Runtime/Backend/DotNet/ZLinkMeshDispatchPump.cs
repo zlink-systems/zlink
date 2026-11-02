@@ -29,10 +29,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     > _requestSources = new();
     private IZLinkBackendRequestSourceAcceptance? _requestSourceAcceptance;
 
-    private Func<
+    private Action<
         IReadOnlyList<ZLinkBackendRouteReceived>,
-        CancellationToken,
-        ValueTask
+        List<Task>,
+        CancellationToken
     >? _nodeRouteHandler;
     private ZLinkRuntimeTaskRunner? _applicationTaskRunner;
     private readonly ZLinkStateLane _lane = new();
@@ -258,7 +258,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     // queue. They are delivered to this single node-level consumer, which routes
     // them to the MeshNode builder's registered route/channel handlers.
     public void SetNodeRouteHandler(
-        Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler,
+        Action<IReadOnlyList<ZLinkBackendRouteReceived>, List<Task>, CancellationToken> handler,
         ZLinkRuntimeTaskRunner? taskRunner = null
     )
     {
@@ -572,11 +572,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             // Start this owner's records in claim order. A suspended handler's
             // result remains with the worker, while the claim returns for the
             // next bounded batch and other owners run on their own workers.
-            var dispatch = DispatchNodeRoutes(nodeRoutes, cancellationToken);
-            // The asynchronous handler owns this list until its result completes.
-            // Clearing it here invalidates an enumerator suspended inside the handler.
+            DispatchNodeRoutes(nodeRoutes, pending, cancellationToken);
             nodeRoutes = null;
-            ObserveDispatchResult(dispatch, pending);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (ObjectDisposedException) { }
@@ -751,22 +748,23 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         (nodeRoutes ??= new(batch.Count)).Add(received);
     }
 
-    private ValueTask DispatchNodeRoutes(
+    private void DispatchNodeRoutes(
         List<ZLinkBackendRouteReceived>? nodeRoutes,
+        List<Task> pending,
         CancellationToken cancellationToken
     )
     {
         if (nodeRoutes is null)
-            return ValueTask.CompletedTask;
+            return;
         var handler = _nodeRouteHandler;
         if (handler is not null)
         {
-            return handler(nodeRoutes, cancellationToken);
+            handler(nodeRoutes, pending, cancellationToken);
+            return;
         }
 
         foreach (var received in nodeRoutes)
             received.Dispose();
-        return ValueTask.CompletedTask;
     }
 
     private void EnqueueSubscribe(

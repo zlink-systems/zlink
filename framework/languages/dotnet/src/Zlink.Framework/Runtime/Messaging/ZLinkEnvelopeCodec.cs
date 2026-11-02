@@ -340,6 +340,34 @@ internal static class ZLinkEnvelopeCodec
         if (cached is not null)
             return ValidateDecodedFlow(cached, validateFlow);
 
+        var header = ReadValidatedProtocolHeader(bytes, validateFlow);
+        // Correlated, deadline-stamped, or flow-stamped headers are byte-unique
+        // per message (correlation ids come from a counter), so caching them
+        // guarantees misses while evicting the repeatable command/publish
+        // entries this cache exists for. Populated metadata is skipped so the
+        // shared cached dictionary instance never carries per-message entries.
+        if (
+            header.CorrelationId is null
+            && header.Deadline is null
+            && header.FlowId is null
+            && header.Metadata is not { Count: > 0 }
+        )
+            AddDecodedHeaderCacheEntry(bytes, hash, header);
+        return ValidateDecodedFlow(header, validateFlow);
+    }
+
+    // Correlated headers are excluded from the repeatable-header cache. A
+    // target request can use the same parser without hashing/scanning that cache.
+    internal static ZLinkEnvelopeHeader DecodeRequestHeader(
+        ReadOnlySpan<byte> bytes,
+        bool validateFlow
+    ) => ValidateDecodedFlow(ReadValidatedProtocolHeader(bytes, validateFlow), validateFlow);
+
+    private static ZLinkEnvelopeHeader ReadValidatedProtocolHeader(
+        ReadOnlySpan<byte> bytes,
+        bool validateFlow
+    )
+    {
         ZLinkEnvelopeHeader header;
         try
         {
@@ -356,19 +384,7 @@ internal static class ZLinkEnvelopeCodec
             );
         }
         ValidateProtocolHeader(header, validateFlow);
-        // Correlated, deadline-stamped, or flow-stamped headers are byte-unique
-        // per message (correlation ids come from a counter), so caching them
-        // guarantees misses while evicting the repeatable command/publish
-        // entries this cache exists for. Populated metadata is skipped so the
-        // shared cached dictionary instance never carries per-message entries.
-        if (
-            header.CorrelationId is null
-            && header.Deadline is null
-            && header.FlowId is null
-            && header.Metadata is not { Count: > 0 }
-        )
-            AddDecodedHeaderCacheEntry(bytes, hash, header);
-        return ValidateDecodedFlow(header, validateFlow);
+        return header;
     }
 
     private static ZLinkEnvelopeHeader ReadProtocolHeader(ReadOnlySpan<byte> bytes)

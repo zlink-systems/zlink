@@ -1497,7 +1497,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     }
 
     public void OnNodeRoute(
-        Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler,
+        Action<IReadOnlyList<ZLinkBackendRouteReceived>, List<Task>, CancellationToken> handler,
         ZLinkRuntimeTaskRunner taskRunner
     )
     {

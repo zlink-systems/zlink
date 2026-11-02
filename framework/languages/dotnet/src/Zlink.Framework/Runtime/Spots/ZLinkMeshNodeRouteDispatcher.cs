@@ -214,86 +214,98 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
             await queue.DisposeAsync().ConfigureAwait(false);
     }
 
-    // Pump entry point (invoked on the single node drain loop). Dispatch runs on a
-    // detached runtime task, mirroring the per-spot route plane; the record retains
-    // its own message parts, so the pump can release the Core claim immediately.
+    // Local submissions need their own application execution. Native ingress
+    // already runs on the pump worker and enters through DispatchBatch.
     public void Dispatch(ZLinkBackendRouteReceived received)
     {
         if (!TryDispatch(received))
             received.Dispose();
     }
 
-    internal async ValueTask DispatchBatchAsync(
+    // The pump's existing worker owns every suspended result. A second batch
+    // task would retain another pending list and aggregate the same lifetimes.
+    internal void DispatchBatch(
         IReadOnlyList<ZLinkBackendRouteReceived> batch,
+        List<Task> pending,
         CancellationToken cancellationToken
     )
     {
-        List<Task>? pending = null;
         for (var index = 0; index < batch.Count; index++)
         {
-            var received = batch[index];
-            ZLinkEnvelopeHeader? header = null;
-            if (received.PartCount > 0)
-            {
-                try
-                {
-                    header = received.ApplicationPayloadView is { } view
-                        ? ZLinkEnvelopeCodec.DecodeHeader(view, _dispatchErrors.Flow.CaptureEnabled)
-                        : ZLinkEnvelopeCodec.DecodeHeader(
-                            received.Parts,
-                            _dispatchErrors.Flow.CaptureEnabled
-                        );
-                }
-                catch
-                {
-                    // Normal dispatch owns malformed-frame reporting.
-                }
-            }
-
-            var invocation =
-                received.ChannelName is { } channelName
-                && _channelQueues.TryGetValue(channelName, out var channelQueue)
-                    ? QueueChannelAsync(channelQueue, received, header, cancellationToken)
-                : header is not null
-                && TryGetOrderedActorRelayKey(received, header, out var actorId)
-                    ? DispatchOrderedActorRelayAsync(actorId, received, header, cancellationToken)
-                : DispatchAsync(received, header, cancellationToken);
+            var invocation = DispatchReceivedAsync(batch[index], cancellationToken);
             if (invocation.IsCompletedSuccessfully)
                 invocation.GetAwaiter().GetResult();
             else
-                (pending ??= []).Add(invocation.AsTask());
+                pending.Add(invocation.AsTask());
         }
-
-        if (pending is not null)
-            await Task.WhenAll(pending).ConfigureAwait(false);
     }
 
     internal bool TryDispatch(ZLinkBackendRouteReceived received) =>
         _taskRunner.TryRunDetached(
             "mesh-node-route-dispatch",
-            ct => DispatchBatchAsync([received], ct)
+            ct => DispatchReceivedAsync(received, ct)
         );
+
+    private ValueTask DispatchReceivedAsync(
+        ZLinkBackendRouteReceived received,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            ZLinkEnvelopeHeader header;
+            try
+            {
+                if (received.PartCount == 0)
+                    throw ZLinkEnvelopeCodec.MissingHeader();
+                var bytes = received.ApplicationPayloadView is { } view
+                    ? view.GetSpan(0)
+                    : received.Parts[0].AsReadOnlySpan();
+                header = received.CanReply
+                    ? ZLinkEnvelopeCodec.DecodeRequestHeader(
+                        bytes,
+                        _dispatchErrors.Flow.CaptureEnabled
+                    )
+                    : ZLinkEnvelopeCodec.DecodeHeader(bytes, _dispatchErrors.Flow.CaptureEnabled);
+            }
+            catch (ZLinkEnvelopeProtocolException protocolError)
+            {
+                using (received)
+                    HandleProtocolError(received, protocolError);
+                return ValueTask.CompletedTask;
+            }
+
+            return received.ChannelName is { } channelName
+                && _channelQueues.TryGetValue(channelName, out var channelQueue)
+                    ? QueueChannelAsync(channelQueue, received, header, cancellationToken)
+                : TryGetOrderedActorRelayKey(received, header, out var actorId)
+                    ? DispatchOrderedActorRelayAsync(actorId, received, header, cancellationToken)
+                : DispatchAsync(received, header, cancellationToken);
+        }
+        catch (Exception error)
+        {
+            received.Dispose();
+            return ValueTask.FromException(error);
+        }
+    }
 
     private async ValueTask QueueChannelAsync(
         ZLinkChannelApplicationDispatchQueue<ChannelDispatchWork> queue,
         ZLinkBackendRouteReceived received,
-        ZLinkEnvelopeHeader? header,
+        ZLinkEnvelopeHeader header,
         CancellationToken cancellationToken
     )
     {
         using (
             var flow = ZLinkFlowContext.Enter(
-                header?.FlowId,
-                header?.FlowOrigin,
+                header.FlowId,
+                header.FlowOrigin,
                 _dispatchErrors.Flow.CaptureEnabled,
                 ZLinkFlowOrigin.Inbound
             )
         )
         {
-            if (
-                header is not null
-                && header.Kind is ZLinkMessageKind.Command or ZLinkMessageKind.Request
-            )
+            if (header.Kind is ZLinkMessageKind.Command or ZLinkMessageKind.Request)
             {
                 if (ZLinkFlowContext.Current is { } current)
                 {
@@ -349,7 +361,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
 
     private readonly record struct ChannelDispatchWork(
         ZLinkBackendRouteReceived Received,
-        ZLinkEnvelopeHeader? Header,
+        ZLinkEnvelopeHeader Header,
         TaskCompletionSource Completion
     );
 
@@ -472,7 +484,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
 
     private async ValueTask DispatchAsync(
         ZLinkBackendRouteReceived received,
-        ZLinkEnvelopeHeader? decodedHeader,
+        ZLinkEnvelopeHeader header,
         CancellationToken cancellationToken
     )
     {
@@ -481,28 +493,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
             : null;
         using (received)
         {
-            if (received.PartCount == 0)
-            {
-                HandleProtocolError(received, ZLinkEnvelopeCodec.MissingHeader());
-                return;
-            }
-
-            ZLinkEnvelopeHeader header;
             try
             {
-                header =
-                    decodedHeader
-                    ?? (
-                        received.ApplicationPayloadView is { } view
-                            ? ZLinkEnvelopeCodec.DecodeHeader(
-                                view,
-                                _dispatchErrors.Flow.CaptureEnabled
-                            )
-                            : ZLinkEnvelopeCodec.DecodeHeader(
-                                received.Parts,
-                                _dispatchErrors.Flow.CaptureEnabled
-                            )
-                    );
                 ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
             }
             catch (ZLinkEnvelopeProtocolException protocolError)
@@ -877,7 +869,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
             return ValueTask.CompletedTask;
 
         var replyParts = ZLinkEnvelopeCodec.EncodeParts(header, body, bodyType, _codecs);
-        return ZLinkSpotReplySubmitter.SubmitDirectAsync(received, replyParts, cancellationToken);
+        return ZLinkSpotReplySubmitter.SubmitDirectAsync(received, replyParts);
     }
 
     private void SubmitEnvelopeUnreserved(
