@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   ServiceStatefulRuntime
-} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+} = require('../../packages/framework/dist/internal');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const {
   encodeApplicationPayload

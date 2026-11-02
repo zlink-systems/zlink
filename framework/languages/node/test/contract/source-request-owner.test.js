@@ -225,7 +225,7 @@ test('SourceRequestOwner propagates programming errors from Store reads', async 
 
 const {
   ServiceStatefulRuntime
-} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   ReceiveKind
 } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');

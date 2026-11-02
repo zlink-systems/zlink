@@ -58,7 +58,7 @@ const {
 } = require('../../packages/framework/dist/runtime/locations/actor-location-claims');
 const {
   ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   encodeServiceUserSpotAuthorityPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-authority-payload-codec');

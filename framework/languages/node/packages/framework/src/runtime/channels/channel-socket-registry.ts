@@ -156,7 +156,7 @@ export class ZLinkChannelSocketRegistry {
       readonly lifecycleGeneration: bigint;
     }
   >();
-  private readonly clientServerConnections = new Map<string, ClientServerPhysicalConnection>();
+  readonly clientServerConnections = new Map<string, ClientServerPhysicalConnection>();
   private readonly clientServerDiscovery = new ServiceDiscoveryRegistry();
   private readonly clientServerReadyIdentities = new Map<
     string,
@@ -1455,7 +1455,7 @@ export class ZLinkChannelSocketRegistry {
     }
   }
 
-  private applyClientServerDescriptorUpdate(
+  applyClientServerDescriptorUpdate(
     connectionId: string,
     connection: { readonly channelName: string; readonly physicalConnectionId: symbol },
     admission: ZLinkClientServerAdmission
@@ -1518,7 +1518,7 @@ export class ZLinkChannelSocketRegistry {
     this.clientServerLivenessTimer.unref();
   }
 
-  private drainSocketMonitors(): void {
+  drainSocketMonitors(): void {
     for (const monitor of this.ownedResources) if ('drain' in monitor) monitor.drain();
   }
 

@@ -68,7 +68,7 @@ import {
   type ServiceAsyncInstanceActivationAuthority,
   type ServiceInstanceActivationAuthority,
   type ServiceSessionOwnerToken
-} from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
+} from '../../packages/framework/src/internal';
 import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,

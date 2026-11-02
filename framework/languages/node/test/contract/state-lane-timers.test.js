@@ -3,8 +3,8 @@ const { AsyncResource, AsyncLocalStorage } = require('node:async_hooks');
 const test = require('node:test');
 const {
   ZLinkActorSessionBindingRegistry
-} = require('../../packages/framework/dist/runtime/streams/actor-session-binding-registry');
-const { ZLinkManagedTimer } = require('../../packages/framework/dist/runtime/spots/spot-timer');
+} = require('../../packages/framework/dist/internal');
+const { ZLinkManagedTimer } = require('../../packages/framework/dist/internal');
 const { ZLinkTimerOverrunPolicy } = require('../../packages/framework/dist/contracts');
 
 // Node mock timers invoke callbacks in the tick caller's context. Capture the

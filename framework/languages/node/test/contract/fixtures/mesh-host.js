@@ -1,4 +1,4 @@
-const { ZLinkFrameworkRuntimeHost } = require('../../../packages/framework/dist/runtime/host');
+const { ZLinkFrameworkRuntimeHost } = require('../../../packages/framework/dist/internal');
 
 // The test owns its injected MeshNode collaborator. Host fields remain private.
 function createMeshHost(options, internalOptions) {

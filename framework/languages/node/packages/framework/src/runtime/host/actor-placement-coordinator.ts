@@ -82,7 +82,7 @@ export interface ZLinkActorPlacementCoordinatorOptions {
 }
 
 export class ZLinkActorPlacementCoordinator {
-  constructor(private readonly options: ZLinkActorPlacementCoordinatorOptions) {}
+  constructor(readonly options: ZLinkActorPlacementCoordinatorOptions) {}
 
   async create(
     actorId: string,

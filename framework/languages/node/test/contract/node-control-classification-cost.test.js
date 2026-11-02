@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const { ReceiveKind } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
 function record(...payloads) {

@@ -28,7 +28,7 @@ export type ZLinkActorPacketTurnDispatch = (
 export class ZLinkSpotSerialExecutor {
   private readonly actorSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
   private readonly timerSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
-  private readonly actorExecutors = new Map<string, ZLinkActorSerialExecutor>();
+  readonly actorExecutors = new Map<string, ZLinkActorSerialExecutor>();
   private executionBarrier: ZLinkExecutionBarrier | undefined;
   private closing = false;
   private closePromise: Promise<void> | undefined;

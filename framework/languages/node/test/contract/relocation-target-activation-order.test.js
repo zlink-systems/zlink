@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+} = require('../../packages/framework/dist/internal');
 
 function target() {
   const runtime = new ZLinkHostServiceRelocationRuntime({});
