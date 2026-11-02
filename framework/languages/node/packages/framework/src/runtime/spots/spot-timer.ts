@@ -522,7 +522,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   private pendingScheduledIndex: bigint | undefined;
   private timeout: unknown;
   /** The dispatch in flight, from its timer callback until `completeFireCore`. */
-  private running: Promise<void> | undefined;
+  running: Promise<void> | undefined;
   private dispatchFailure: { readonly cause: unknown } | undefined;
   private finalization: ZLinkTimerFinalization | undefined;
 

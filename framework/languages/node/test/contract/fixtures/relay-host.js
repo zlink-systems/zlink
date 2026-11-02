@@ -2,7 +2,7 @@ const {
   ZLinkRouteMeshRuntimeCoordinator
 } = require('../../../packages/framework/dist/runtime/host/route-mesh-runtime');
 const { ZLinkRuntimeAdmissionGate } = require('../../../packages/framework/dist/runtime/admission');
-const { ZLinkFrameworkRuntimeHost } = require('../../../packages/framework/dist/runtime/host');
+const { ZLinkFrameworkRuntimeHost } = require('../../../packages/framework/dist/internal');
 const {
   ZLinkBoundSessionRelay
 } = require('../../../packages/framework/dist/runtime/host/bound-session-relay');

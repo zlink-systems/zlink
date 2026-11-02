@@ -1342,11 +1342,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
   }
 
-  private notifyIfStale(
-    result: ZLinkLocationWriteResult,
-    kind: ZLinkLocationKind,
-    key: string
-  ): void {
+  notifyIfStale(result: ZLinkLocationWriteResult, kind: ZLinkLocationKind, key: string): void {
     if (result.status !== ZLinkLocationWriteStatus.IgnoredStale) {
       return;
     }

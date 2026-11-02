@@ -437,13 +437,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     });
   }
 
-  private readonly targetStages = new Map<string, LocalStage>();
+  readonly targetStages = new Map<string, LocalStage>();
   private readonly terminalTargets = new BoundedReplayMap<string, string>(
     RELOCATION_TARGET_TOMBSTONE_LIMIT
   );
-  private readonly targetPrepareOperations = new Map<string, TargetPrepareOperation>();
+  readonly targetPrepareOperations = new Map<string, TargetPrepareOperation>();
   private readonly pendingReplyRelays = new Map<string, PendingRelocationReplyRelay>();
-  private readonly pendingSessionRelocations = new Map<string, PendingSessionRelocation>();
+  readonly pendingSessionRelocations = new Map<string, PendingSessionRelocation>();
   private readonly terminalSessionRelocations = new BoundedReplayMap<
     string,
     TerminalSessionRelocationControl
@@ -457,7 +457,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     SERVICE_CONTROL_TERMINAL_CAPACITY
   );
   private readonly sourceRelocationIds = new Set<string>();
-  private readonly targetAssemblies = new Map<string, TargetPayloadAssembly>();
+  readonly targetAssemblies = new Map<string, TargetPayloadAssembly>();
   /**
    * Terminal restore failures (assembly/checksum/factory/restore error): the
    * target already sent relocationFailed (command 53) once. An exact-identity
@@ -484,7 +484,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   private readonly terminalActorJoinSourceLeaves = new BoundedReplayMap<string, string>(
     SERVICE_CONTROL_TERMINAL_CAPACITY
   );
-  private readonly codec = new ServiceRelocationAuthorityPayloadCodec();
+  readonly codec = new ServiceRelocationAuthorityPayloadCodec();
   /**
    * Set once dispose() starts tearing assemblies down. A payload() rejection
    * observed after this point is the shutdown itself, not a chunk-assembly or
@@ -493,7 +493,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   private disposed = false;
   private readonly targetPreparationStop = new AbortController();
 
-  constructor(private readonly options: ZLinkHostRelocationOptions) {}
+  constructor(readonly options: ZLinkHostRelocationOptions) {}
 
   async relocateActorJoin(
     input: Parameters<ZLinkActorJoinRelocation['relocateActorJoin']>[0]
@@ -1129,7 +1129,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   /** Sends the Ready reply once the async restore finished; failures replay on resend. */
-  private async deliverTargetReady(
+  async deliverTargetReady(
     meshName: string,
     operationKey: string,
     request: ServiceMaintenanceRelocationPrepare,
@@ -1681,7 +1681,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private async relocateSpotAggregate(
+  async relocateSpotAggregate(
     meshName: string,
     activation: ZLinkSpotActivation,
     kind: 'user_spot' | 'instance_spot',
@@ -2041,7 +2041,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private async relocateStandaloneActor(
+  async relocateStandaloneActor(
     meshName: string,
     state: ZLinkActorRuntimeState,
     target: ZLinkMeshNodeDescriptor | undefined,
@@ -2158,7 +2158,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private async relocatePerActorSpotShell(
+  async relocatePerActorSpotShell(
     meshName: string,
     activation: ZLinkSpotActivation,
     target: ZLinkMeshNodeDescriptor | undefined,
@@ -2473,7 +2473,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     this.sourceRelocationIds.add(id);
   }
 
-  private async runCoordinator(
+  async runCoordinator(
     meshName: string,
     target: ZLinkMeshNodeDescriptor,
     primary: ZLinkAuthoritySnapshot,
@@ -2864,10 +2864,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   /** Pre-seal admission wait — a full budget delays the next unit before seal. */
-  private async waitForRelocationBudgetHeadroom(
-    targetRid: string,
-    signal?: AbortSignal
-  ): Promise<void> {
+  async waitForRelocationBudgetHeadroom(targetRid: string, signal?: AbortSignal): Promise<void> {
     await this.requireNodePayloadBudget().waitForHeadroom(signal);
     await this.requirePeerPayloadBudget(targetRid).waitForHeadroom(signal);
   }
@@ -2954,7 +2951,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   /** Relocation flow §4.4: replay the whole batch on a different ready route. */
-  private async resendSourceCutover(window: SourceCutoverWindow): Promise<void> {
+  async resendSourceCutover(window: SourceCutoverWindow): Promise<void> {
     const frames = window.frames;
     if (frames === undefined) return;
     const route = this.requireMeshNode(window.meshName).observePeerRoute?.(window.targetNodeRid);
@@ -2986,7 +2983,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
    * A committed later owner has no Follow snapshot (Location runtime §10). An uncertain
    * Store or lease result keeps the work retained and repeats the same decision.
    */
-  private async settleSourceAuthority(
+  async settleSourceAuthority(
     envelope: ServiceRelocationEnvelope,
     primary: ZLinkAuthoritySnapshot,
     target: ServiceWireRelocationTarget,
@@ -3098,7 +3095,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return this.sourceCutoverWindows.size === 0;
   }
 
-  private async releaseParticipantAuthorities(
+  async releaseParticipantAuthorities(
     envelope: ServiceRelocationEnvelope,
     primaryKey: string,
     signal?: AbortSignal
@@ -3132,7 +3129,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   /** Restores the hidden object and its saved-work prefix before Ready. */
-  private async handlePrepareControl(
+  async handlePrepareControl(
     meshName: string,
     stagingId: string,
     request: ServiceMaintenanceRelocationPrepare,
@@ -3390,7 +3387,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
    * whole (the retransmission always resends the entire batch, so the exact
    * span is the staged suffix of `boundaryRecordCount` records).
    */
-  private reconcileBoundaryRelay(
+  reconcileBoundaryRelay(
     stage: LocalStage,
     request: ServiceMaintenanceRelocationCutover,
     stagingId: string
@@ -3421,7 +3418,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
   }
 
-  private beginTargetFinalize(
+  beginTargetFinalize(
     meshName: string,
     stagingId: string,
     stage: LocalStage,
@@ -3438,7 +3435,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return finalize;
   }
 
-  private async finalizeTargetStage(
+  async finalizeTargetStage(
     meshName: string,
     stagingId: string,
     stage: LocalStage,
@@ -3569,7 +3566,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
   }
 
-  private async finalizeActorJoinProfiles(
+  async finalizeActorJoinProfiles(
     meshName: string,
     stage: LocalStage,
     signal?: AbortSignal
@@ -3602,7 +3599,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private async submitActorJoinSourceLeave(
+  async submitActorJoinSourceLeave(
     meshName: string,
     sourceNodeRid: RoutingId,
     relocationId: string,
@@ -3628,7 +3625,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private acceptActorJoinSourceLeave(input: {
+  acceptActorJoinSourceLeave(input: {
     readonly transferId: string;
     readonly actorId: string;
     readonly succeeded: boolean;
@@ -3668,7 +3665,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
   }
 
-  private async submitControlFrame(
+  async submitControlFrame(
     meshName: string,
     targetNodeRid: RoutingId,
     frame: Buffer,
@@ -3682,7 +3679,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private async clearTargetRelocationPublication(
+  async clearTargetRelocationPublication(
     stage: LocalStage,
     primary: ZLinkAuthoritySnapshot,
     signal?: AbortSignal
@@ -3796,7 +3793,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private async sendReplyRelay(
+  async sendReplyRelay(
     meshName: string,
     ackTargetNodeRid: RoutingId,
     request: ServiceMaintenanceReplyRelay,
@@ -3914,7 +3911,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private targetReplyRelayCoordinator(
+  targetReplyRelayCoordinator(
     meshName: string,
     stage: LocalStage,
     authority: ZLinkAuthoritySnapshot
@@ -3940,7 +3937,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     };
   }
 
-  private async relayTerminalReply(
+  async relayTerminalReply(
     meshName: string,
     stage: LocalStage,
     coordinator: ServiceWireRelocationCoordinatorFence,
@@ -3990,9 +3987,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
   }
 
-  private async publishSessionRoutes(
-    staging: ServiceObjectRelocationStaging<LocalHidden>
-  ): Promise<void> {
+  async publishSessionRoutes(staging: ServiceObjectRelocationStaging<LocalHidden>): Promise<void> {
     for (const [key, hidden] of staging.hidden) {
       if (hidden.actor === undefined) continue;
       // The Session seal travels with the relocation envelope, not the Actor.
@@ -4004,7 +3999,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private async sendControl(
+  async sendControl(
     meshName: string,
     targetNodeRid: RoutingId,
     request: ZLinkServiceRelocationControlRequest,
@@ -4135,7 +4130,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return authorities;
   }
 
-  private async reserveTargetForPrepare(
+  async reserveTargetForPrepare(
     meshName: string,
     prepare: ServiceMaintenanceRelocationPrepare,
     envelope: ServiceRelocationEnvelope,
@@ -4209,7 +4204,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     };
   }
 
-  private authorityPayloadForPublication(
+  authorityPayloadForPublication(
     payload: Uint8Array,
     publication: ServiceRelocationPublication,
     target?: {
@@ -4340,7 +4335,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private async commitTargetReservation(
+  async commitTargetReservation(
     stage: LocalStage,
     reservation: TargetRelocationReservation,
     signal?: AbortSignal
@@ -4415,7 +4410,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
-  private async readAggregateForCommitRetry(
+  async readAggregateForCommitRetry(
     prepared: ServicePreparedRelocationAggregate,
     signal?: AbortSignal
   ): Promise<
@@ -4463,7 +4458,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return source === prepared.plan.participants.length ? { kind: 'source' } : { kind: 'stale' };
   }
 
-  private async materializeTargetEnvelope(
+  async materializeTargetEnvelope(
     meshName: string,
     envelope: ServiceRelocationEnvelope,
     signal?: AbortSignal
@@ -4481,7 +4476,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   /** Maps schema ordinals to the authoritative Location Store inventory. */
-  private async resolveTargetParticipantInventory(
+  async resolveTargetParticipantInventory(
     meshName: string,
     request: ServiceMaintenanceRelocationPrepare,
     envelope: ServiceRelocationEnvelope,
@@ -4638,7 +4633,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return value;
   }
 
-  private async captureApplication<T>(
+  async captureApplication<T>(
     policy: { readonly kind: 'disabled' | 'recreate' | 'snapshot'; readonly adapterType?: Type },
     value: T,
     signal?: AbortSignal
@@ -4779,11 +4774,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return value;
   }
 
-  private afterSpotCloseDecision<T>(
-    meshName: string,
-    spotId: RoutingId,
-    seal: () => T
-  ): T | Promise<T> {
+  afterSpotCloseDecision<T>(meshName: string, spotId: RoutingId, seal: () => T): T | Promise<T> {
     const manager = this.requireSpotManager();
     const sealAfterDecision = (): T => {
       if (manager.isSpotClosing(meshName, spotId)) {

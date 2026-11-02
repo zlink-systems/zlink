@@ -8,7 +8,7 @@ const {
 } = require('../../packages/framework/dist/runtime/execution/state-lane');
 const { ZLinkSerialExecutionQueue } = require('../../packages/framework/dist/runtime/execution/serial-execution-queue');
 const { DefaultZLinkSessionContext } = require('../../packages/framework/dist/runtime/streams/session-context');
-const { ZLinkActorRuntimeState } = require('../../packages/framework/dist/runtime/actors/actor-runtime-state');
+const { ZLinkActorRuntimeState } = require('../../packages/framework/dist/internal');
 
 test('debug guard rejects a state lane waiting on another state lane through a helper', async () => {
   const outer = new ZLinkStateLane();

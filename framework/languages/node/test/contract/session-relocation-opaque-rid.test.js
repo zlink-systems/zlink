@@ -5,10 +5,10 @@ const framework = require('../../packages/framework/dist/internal');
 const { RoutingId } = require('@zlink-systems/zlink');
 const {
   ZLinkActorTransferRuntime
-} = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+} = require('../../packages/framework/dist/internal');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const { encodeRoutingIdStorageHex } = require('../../packages/framework/dist/runtime/routing-id');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');

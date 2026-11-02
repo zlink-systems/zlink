@@ -3,13 +3,13 @@ const test = require('node:test');
 const { ZLinkUserSpotExecutionMode } = require('../../packages/framework/dist/contracts');
 const {
   ZLinkSpotSerialExecutor
-} = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkSpotSerialTurnExecutor
-} = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkSerialExecutionQueue
-} = require('../../packages/framework/dist/runtime/execution/serial-execution-queue');
+} = require('../../packages/framework/dist/internal');
 
 function deferred() {
   let resolve;

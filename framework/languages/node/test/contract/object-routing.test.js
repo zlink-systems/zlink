@@ -272,7 +272,7 @@ test('Closing Spot authority retains the owner route without caching it as Ready
 
 test('target owner maps absent direct Spot to NotFound', () => {
   const { ServiceStatefulRuntime } = require(
-    '../../packages/framework/dist/runtime/foundation/service-stateful-runtime'
+    '../../packages/framework/dist/internal'
   );
   const runtime = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
   const fence = {
@@ -289,7 +289,7 @@ test('target owner maps absent direct Spot to NotFound', () => {
 
 test('cached Ready direct Spot route applies host admission before Spot Close seal', async () => {
   const { ServiceStatefulRuntime } = require(
-    '../../packages/framework/dist/runtime/foundation/service-stateful-runtime'
+    '../../packages/framework/dist/internal'
   );
   class Lookup {}
   let authorityState = 'ready';
@@ -369,7 +369,7 @@ test('cached Ready direct Spot route applies host admission before Spot Close se
 
 test('owner ingress admits a direct request before the Close authority commit', async () => {
   const { ServiceStatefulRuntime } = require(
-    '../../packages/framework/dist/runtime/foundation/service-stateful-runtime'
+    '../../packages/framework/dist/internal'
   );
   const owner = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
   const fence = {
@@ -390,7 +390,7 @@ test('owner ingress admits a direct request before the Close authority commit', 
 
 test('local loopback Spot request admits before the Close authority commit', async () => {
   const { ServiceStatefulRuntime } = require(
-    '../../packages/framework/dist/runtime/foundation/service-stateful-runtime'
+    '../../packages/framework/dist/internal'
   );
   const { encodeSpotHeader } = require(
     '../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec'
