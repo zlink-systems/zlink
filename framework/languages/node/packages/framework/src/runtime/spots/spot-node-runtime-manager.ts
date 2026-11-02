@@ -304,6 +304,8 @@ export class ZLinkSpotNodeRuntimeManager {
       const node = meshAdapter.createMeshNode(this.options.context, {
         meshName: spotNodeName,
         routingId,
+        sendHighWaterMark: spotNode.router?.sendHighWaterMark,
+        receiveHighWaterMark: spotNode.router?.receiveHighWaterMark,
         receiveTimeoutMs: spotNode.router?.receiveTimeoutMs,
         applicationJobQueue: this.applicationJobQueue,
         infrastructureTaskRunner: this.options.detachedTaskRunner,
