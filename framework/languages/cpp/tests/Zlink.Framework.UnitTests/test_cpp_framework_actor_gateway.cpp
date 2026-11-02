@@ -5129,7 +5129,8 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
             runtime::messaging::envelope_codec_t{}.decode_header (received.parts, false);
           if (!header)
               co_return zlink::submit_result_t::internal_error;
-          const auto dispatched = dispatcher.dispatch_send (received, header.value (), provider);
+          const auto dispatched =
+            co_await dispatcher.dispatch_send (received, header.value (), provider);
           co_return dispatched ? zlink::submit_result_t::ok
                                : zlink::submit_result_t::internal_error;
       });
