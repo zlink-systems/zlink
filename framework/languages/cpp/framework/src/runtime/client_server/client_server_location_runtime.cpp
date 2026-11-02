@@ -1401,7 +1401,8 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
          * The worker consumes its header and the native payload. */
         auto &request_envelope = record.envelope_header;
         const auto &message = record.parts[1];
-        detail::inbound_message_context_t inbound;
+        detail::inbound_message_context_t inbound{
+          .message = {.received_at = record.received_at.value ()}};
         inbound.before_application_handler = record.before_application_handler;
         inbound.message.channel_name = record.owner;
         inbound.message.packet_name = request_envelope.message_name;

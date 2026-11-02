@@ -42,7 +42,9 @@ public sealed class ZLinkRouteMessageContext : IZLinkMessageContext
         string packetName,
         string? contentType,
         ZLinkMessageMetadata? metadata,
-        string? correlationId
+        string? correlationId,
+        DateTimeOffset? receivedAt = null,
+        TimeProvider? timeProvider = null
     )
     {
         MeshName = meshName;
@@ -52,6 +54,9 @@ public sealed class ZLinkRouteMessageContext : IZLinkMessageContext
         ContentType = contentType;
         Metadata = metadata ?? ZLinkMessageMetadata.Empty;
         CorrelationId = correlationId;
+        ReceivedAt = (
+            receivedAt ?? (timeProvider ?? TimeProvider.System).GetUtcNow()
+        ).ToUniversalTime();
     }
 
     public string? MeshName { get; }
@@ -66,6 +71,8 @@ public sealed class ZLinkRouteMessageContext : IZLinkMessageContext
 
     public string? CorrelationId { get; }
 
+    public DateTimeOffset ReceivedAt { get; }
+
     public RoutingId SourceNodeRid { get; }
 }
 
@@ -79,7 +86,9 @@ public sealed class ZLinkPublishMessageContext : IZLinkMessageContext
         ZLinkMessageMetadata? metadata,
         string? correlationId,
         string topic,
-        string? source
+        string? source,
+        DateTimeOffset? receivedAt = null,
+        TimeProvider? timeProvider = null
     )
     {
         MeshName = meshName;
@@ -88,6 +97,9 @@ public sealed class ZLinkPublishMessageContext : IZLinkMessageContext
         ContentType = contentType;
         Metadata = metadata ?? ZLinkMessageMetadata.Empty;
         CorrelationId = correlationId;
+        ReceivedAt = (
+            receivedAt ?? (timeProvider ?? TimeProvider.System).GetUtcNow()
+        ).ToUniversalTime();
         Topic = topic;
         Source = source;
     }
@@ -103,6 +115,8 @@ public sealed class ZLinkPublishMessageContext : IZLinkMessageContext
     public ZLinkMessageMetadata Metadata { get; }
 
     public string? CorrelationId { get; }
+
+    public DateTimeOffset ReceivedAt { get; }
 
     public string Topic { get; }
 

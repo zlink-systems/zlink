@@ -22,9 +22,10 @@ namespace
 /// see the same universal fields.
 inbound_message_context_t make_inbound_context (const std::string &channel_name,
                                                 runtime::messaging::envelope_header_t &header,
-                                                std::function<void ()> before_application_handler)
+                                                std::function<void ()> before_application_handler,
+                                                std::chrono::system_clock::time_point received_at)
 {
-    inbound_message_context_t inbound;
+    inbound_message_context_t inbound{.message = {.received_at = received_at}};
     inbound.message.channel_name = channel_name;
     inbound.message.packet_name = header.message_name;
     inbound.message.content_type = header.content_type;
@@ -51,11 +52,12 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
   service_provider_t &services,
   serializer_registry_t &serializers,
   const handler_registry_t &handlers,
-  std::function<void ()> before_application_handler) const
+  std::function<void ()> before_application_handler,
+  std::chrono::system_clock::time_point received_at) const
 {
-    return dispatch_server_message_in_handler (std::move (channel_name), std::move (parts),
-                                               services, serializers, handlers,
-                                               std::move (before_application_handler))
+    return dispatch_server_message_in_handler (
+             std::move (channel_name), std::move (parts), services, serializers, handlers,
+             std::move (before_application_handler), {}, nullptr, {}, received_at)
       .result ();
 }
 
@@ -70,7 +72,8 @@ channel_packet_dispatcher_t::dispatch_server_message_in_handler (
   std::optional<service_scope_t> incoming_scope,
   runtime::offload_executor_t *executor,
   std::function<void (const result_t<runtime::messaging::message_parts_t> &,
-                      const runtime::messaging::message_parts_t &)> incoming_complete) const
+                      const runtime::messaging::message_parts_t &)> incoming_complete,
+  std::chrono::system_clock::time_point received_at) const
 {
     runtime::offload_executor_t::retained_work_t physical_work;
     // Frame/promise allocation has succeeded. Consume the input before any
@@ -185,7 +188,8 @@ channel_packet_dispatcher_t::dispatch_server_message_in_handler (
                 auto pending = _runtime.dispatch_request_in_handler (
                   channel_name, header.value ().topic.value_or (""), header.value ().message_name,
                   invocation_services, serializers, handlers, body.value (),
-                  make_inbound_context (channel_name, header.value (), before_application_handler));
+                  make_inbound_context (channel_name, header.value (), before_application_handler,
+                                        received_at));
                 if (!pending.await_ready () && executor)
                     physical_work = executor->retain_internal_work ();
                 reply = result_t<zlink::message_t>::success (co_await pending);
@@ -254,7 +258,8 @@ channel_packet_dispatcher_t::dispatch_server_message_in_handler (
                 auto pending = _runtime.dispatch_send_in_handler (
                   channel_name, header.value ().topic.value_or (""), header.value ().message_name,
                   invocation_services, serializers, handlers, body.value (),
-                  make_inbound_context (channel_name, header.value (), before_application_handler));
+                  make_inbound_context (channel_name, header.value (), before_application_handler,
+                                        received_at));
                 if (!pending.await_ready () && executor)
                     physical_work = executor->retain_internal_work ();
                 static_cast<void> (co_await pending);

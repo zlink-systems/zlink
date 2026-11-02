@@ -448,7 +448,8 @@ class channel_host_service_t::server_loop_t
             auto pending = _dispatcher.dispatch_server_message_in_handler (
               _channel_name, std::move (parts), *_services, *_serializers, *_handlers,
               std::move (record.before_application_handler), std::move (scope),
-              _handler_executor.get (), std::move (finish));
+              _handler_executor.get (), std::move (finish),
+              record.received_at.value_or (std::chrono::system_clock::now ()));
         }
         catch (...) {
             report_dispatch_failure (parts, std::current_exception ());
@@ -768,6 +769,7 @@ class channel_host_service_t::subscriber_loop_t
     void dispatch_async (std::shared_ptr<zlink::topic_message_t> message,
                          application_job_queue_t::permit_t permit)
     {
+        const auto received_at = std::chrono::system_clock::now ();
         auto application_job =
           std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
         application_job->mark_queued ();
@@ -776,15 +778,16 @@ class channel_host_service_t::subscriber_loop_t
         auto shared_parts =
           std::make_shared<zlink::framework::runtime::messaging::message_parts_t> (
             std::move (parts));
-        auto work = [this, message = std::move (message), shared_parts,
-                     application_job] () mutable {
+        auto work = [this, message = std::move (message), shared_parts, application_job,
+                     received_at] () mutable {
             try {
                 detail::channel_packet_dispatcher_t dispatcher (_runtime);
                 auto scope = detail::service_scope_t::create (
                   *_services, detail::service_scope_kind_t::handler_invocation);
                 (void) dispatcher.dispatch_server_message (
                   _channel_name, std::move (*shared_parts), scope.provider (), *_serializers,
-                  *_handlers, [application_job] { application_job->release_for_handler_entry (); });
+                  *_handlers, [application_job] { application_job->release_for_handler_entry (); },
+                  received_at);
             }
             catch (...) {
             }

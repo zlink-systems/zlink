@@ -301,7 +301,28 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
 {
     auto source = std::make_shared<task_completion_source_t<raw_request_completion_t>> ();
     auto result = source->task ();
-    observe_raw_request_admission_failure (result, admitted);
+    request (
+      target_routing_id, std::move (parts), timeout,
+      [source] (result_t<raw_request_completion_t> completion) {
+          source->complete (std::move (completion));
+      },
+      std::move (admission), std::move (admitted));
+    return result;
+}
+
+void raw_route_port_t::request (const raw_bytes_t &target_routing_id,
+                                raw_message_t parts,
+                                std::chrono::milliseconds timeout,
+                                std::function<void (result_t<raw_request_completion_t>)> completion,
+                                runtime::mesh::service_liveness_registry_t::connection_t admission,
+                                std::shared_ptr<task_completion_source_t<void>> admitted)
+{
+    auto finish = [completion = std::move (completion),
+                   admitted] (result_t<raw_request_completion_t> result) mutable {
+        if (admitted && (!result || result.value ().terminal != zlink::request_result_t::ok))
+            admitted->complete (raw_request_admission_failure (result));
+        completion (std::move (result));
+    };
     // Route selection happens synchronously inside .async(). Keep that initial
     // admission boundary separate from the pending terminal: the same errno
     // has different meaning after Core has issued a WRITABLE wait token.
@@ -314,9 +335,9 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
         {
             std::lock_guard lock (*_socket_mutex);
             if (_socket == nullptr) {
-                source->complete (result_t<raw_request_completion_t>::success (
+                finish (result_t<raw_request_completion_t>::success (
                   raw_request_completion_t{zlink::request_result_t::terminated, {}}));
-                return result;
+                return;
             }
             if (!admission && _request_receive_source)
                 admission = _request_receive_source (target_routing_id);
@@ -330,17 +351,15 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
             stages.emplace (submit_request_once (
               [&] { return std::move (operation).timeout (timeout).async (); }));
         }
-        observe_request_completion (std::move (*stages), source, std::move (admission), admitted);
+        observe_request_completion (std::move (*stages), finish, std::move (admission), admitted);
     }
     catch (const std::exception &error) {
-        source->complete (
-          raw_request_failure_result (error, raw_request_failure_phase_t::initial_admission));
+        finish (raw_request_failure_result (error, raw_request_failure_phase_t::initial_admission));
     }
     catch (...) {
-        source->complete (result_t<raw_request_completion_t>::failure (
+        finish (result_t<raw_request_completion_t>::failure (
           framework_error_kind_t::internal_failure, "raw route request submission failed"));
     }
-    return result;
 }
 
 std::optional<zlink::poll_event_flag_t> raw_route_port_t::poll (std::chrono::milliseconds timeout,
@@ -377,10 +396,11 @@ std::optional<zlink::poll_event_flag_t> raw_route_port_t::poll (std::chrono::mil
             _wake_timer.consume ();
             wake = true;
         } else if (events[index].slot == _poller_slot) {
-            readiness =
-              static_cast<zlink::poll_event_flag_t> (static_cast<short> (readiness)
-                                                     | (static_cast<short> (events[index].revents)
-                                                        & static_cast<short> (_receive_events)));
+            readiness = static_cast<zlink::poll_event_flag_t> (
+              static_cast<short> (readiness)
+              | (static_cast<short> (events[index].revents)
+                 & static_cast<short> (_receive_events
+                                       | zlink::poll_event_flag_t::pollcompletion)));
         } else {
             // Other shared-poller sources wake management;
             // their owner drains them without claiming ordinary records.

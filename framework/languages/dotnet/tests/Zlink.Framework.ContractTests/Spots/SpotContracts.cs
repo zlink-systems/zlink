@@ -376,7 +376,8 @@ public sealed class SpotContracts
             nameof(IZLinkMessageContext.CorrelationId),
             nameof(IZLinkMessageContext.MeshName),
             nameof(IZLinkMessageContext.Metadata),
-            nameof(IZLinkMessageContext.PacketName)
+            nameof(IZLinkMessageContext.PacketName),
+            nameof(IZLinkMessageContext.ReceivedAt)
         );
 
         AssertContextProperties<ZLinkRouteMessageContext>(
@@ -386,7 +387,8 @@ public sealed class SpotContracts
             nameof(ZLinkRouteMessageContext.MeshName),
             nameof(ZLinkRouteMessageContext.Metadata),
             nameof(ZLinkRouteMessageContext.PacketName),
-            nameof(ZLinkRouteMessageContext.SourceNodeRid)
+            nameof(ZLinkRouteMessageContext.SourceNodeRid),
+            nameof(ZLinkRouteMessageContext.ReceivedAt)
         );
 
         AssertContextProperties<ZLinkPublishMessageContext>(
@@ -397,7 +399,8 @@ public sealed class SpotContracts
             nameof(ZLinkPublishMessageContext.Metadata),
             nameof(ZLinkPublishMessageContext.PacketName),
             nameof(ZLinkPublishMessageContext.Source),
-            nameof(ZLinkPublishMessageContext.Topic)
+            nameof(ZLinkPublishMessageContext.Topic),
+            nameof(ZLinkPublishMessageContext.ReceivedAt)
         );
 
         Assert.Null(typeof(IZLinkMessageContext).GetProperty("ActorId"));

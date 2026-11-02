@@ -69,7 +69,8 @@ internal static class ZLinkFrameworkRuntimeComponentFactory
                     registration.Codecs,
                     () => channelDispatchErrors.Flow.CaptureEnabled,
                     channelDispatchErrors
-                )
+                ),
+                registration.TimeProvider
             ),
             services.GetService<ZLinkFanoutRuntimeService>()
                 ?? new ZLinkFanoutRuntimeService(registration),

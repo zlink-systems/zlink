@@ -87,6 +87,12 @@ context provides the current message's nullable
 a message is sent to — PacketName, ContentType, immutable Metadata, and a nullable
 CorrelationId stored as UTF-8 bytes verbatim. CorrelationId is null on a send and non-null on a request.
 
+`receivedAt` is the UTC wall-clock time when Framework accepts the message submission. For a remote
+message, Framework records it immediately after accepting the packet and before submitting it to an
+Actor or Spot serial executor. For a local submission, Framework records the time it accepts the
+submission. This value is not a monotonic clock and doesn't change while the message waits in a later
+executor queue.
+
 MeshName is non-null on RouteMesh and Spot/Actor dispatch, and null on
 ClientServer/STREAM.
 
