@@ -490,24 +490,7 @@ public final class ZLinkChannelEnvelope {
             return cached;
         }
 
-        DecodedHeader decoded;
-        try (JsonParser json = JSON.createNonBlockingByteBufferParser()) {
-            ByteBufferFeeder input = (ByteBufferFeeder) json.getNonBlockingInputFeeder();
-            input.feedInput(headerPart);
-            input.endOfInput();
-            decoded = decodeHeader(json, captureFlow);
-            headerPart.position(limit);
-        } catch (Exception ex) {
-            if (ex instanceof ZLinkFrameworkException frameworkError) {
-                throw frameworkError;
-            }
-            throw protocolError("invalid ZLink envelope header: " + ex.getMessage(), ex);
-        }
-
-        if (cacheableSize && decoded.repeatable()) {
-            addDecodedHeaderCacheEntry(headerPart, start, limit, decoded.header());
-        }
-        return decoded.header();
+        return decodeHeader(headerPart, captureFlow, start, limit, cacheableSize);
     }
 
     private static Header findDecodedHeaderCacheEntry(ByteBuffer bytes) {
@@ -706,283 +689,308 @@ public final class ZLinkChannelEnvelope {
         };
     }
 
-    private static DecodedHeader decodeHeader(JsonParser json, boolean captureFlow)
-            throws IOException {
-        if (json.nextToken() != JsonToken.START_OBJECT) {
-            throw protocolError("ZLink envelope header must be a JSON object", null);
-        }
-
-        int marker = 0;
-        int kind = 0;
-        boolean kindIsInt = false;
-        String channelName = null;
-        boolean channelNameIsString = false;
-        String messageName = null;
-        boolean messageNameIsString = false;
-        String contentType = null;
-        boolean contentTypeIsStringOrNull = true;
+    private static Header decodeHeader(
+            ByteBuffer headerPart,
+            boolean captureFlow,
+            int start,
+            int limit,
+            boolean cacheableSize) {
         String correlationId = null;
-        boolean correlationIdIsStringOrNull = true;
         String deadline = null;
-        boolean deadlineIsStringOrNull = true;
-        String topic = null;
-        boolean topicIsStringOrNull = true;
-        String errorCode = null;
-        boolean errorCodeIsStringOrNull = true;
-        String errorMessage = null;
-        boolean errorMessageIsStringOrNull = true;
-        String source = null;
-        boolean sourceIsStringOrNull = true;
         Map<String, String> metadata = Map.of();
-        boolean metadataIsValid = true;
-        String flowId = null;
-        boolean flowIdIsStringOrNull = true;
-        int flowOriginValue = 0;
-        boolean flowOriginIsIntOrNull = true;
-        boolean hasFlowOrigin = false;
         boolean hasFlowValue = false;
-        int seenFields = 0;
+        Header header;
 
-        try {
-            while (json.nextToken() != JsonToken.END_OBJECT) {
-                if (json.currentToken() != JsonToken.FIELD_NAME) {
-                    throw new IOException("expected an envelope header field name");
-                }
-                String field = json.currentName();
-                JsonToken value = json.nextToken();
-                if (value == null) {
-                    throw new IOException("unexpected end of envelope header");
-                }
-                switch (field) {
-                    case "formatMarker" -> {
-                        marker =
-                                value == JsonToken.VALUE_NUMBER_INT
-                                                && json.getNumberType() == JsonParser.NumberType.INT
-                                        ? json.getIntValue()
-                                        : 0;
-                        json.skipChildren();
+        try (JsonParser json = JSON.createNonBlockingByteBufferParser()) {
+            ByteBufferFeeder input = (ByteBufferFeeder) json.getNonBlockingInputFeeder();
+            input.feedInput(headerPart);
+            input.endOfInput();
+            if (json.nextToken() != JsonToken.START_OBJECT) {
+                throw protocolError("ZLink envelope header must be a JSON object", null);
+            }
+
+            int marker = 0;
+            int kind = 0;
+            boolean kindIsInt = false;
+            String channelName = null;
+            boolean channelNameIsString = false;
+            String messageName = null;
+            boolean messageNameIsString = false;
+            String contentType = null;
+            boolean contentTypeIsStringOrNull = true;
+            boolean correlationIdIsStringOrNull = true;
+            boolean deadlineIsStringOrNull = true;
+            String topic = null;
+            boolean topicIsStringOrNull = true;
+            String errorCode = null;
+            boolean errorCodeIsStringOrNull = true;
+            String errorMessage = null;
+            boolean errorMessageIsStringOrNull = true;
+            String source = null;
+            boolean sourceIsStringOrNull = true;
+            boolean metadataIsValid = true;
+            String flowId = null;
+            boolean flowIdIsStringOrNull = true;
+            int flowOriginValue = 0;
+            boolean flowOriginIsIntOrNull = true;
+            boolean hasFlowOrigin = false;
+            int seenFields = 0;
+
+            try {
+                while (json.nextToken() != JsonToken.END_OBJECT) {
+                    if (json.currentToken() != JsonToken.FIELD_NAME) {
+                        throw new IOException("expected an envelope header field name");
                     }
-                    case "kind" -> {
-                        kindIsInt =
-                                value == JsonToken.VALUE_NUMBER_INT
-                                        && json.getNumberType() == JsonParser.NumberType.INT;
-                        if (kindIsInt) {
-                            kind = json.getIntValue();
-                        }
-                        json.skipChildren();
+                    String field = json.currentName();
+                    JsonToken value = json.nextToken();
+                    if (value == null) {
+                        throw new IOException("unexpected end of envelope header");
                     }
-                    case "channelName" -> {
-                        channelNameIsString = value == JsonToken.VALUE_STRING;
-                        channelName = channelNameIsString ? json.getText() : null;
-                        json.skipChildren();
-                    }
-                    case "messageName" -> {
-                        messageNameIsString = value == JsonToken.VALUE_STRING;
-                        messageName = messageNameIsString ? json.getText() : null;
-                        json.skipChildren();
-                    }
-                    case "contentType" -> {
-                        contentTypeIsStringOrNull = isStringOrNull(value);
-                        contentType = value == JsonToken.VALUE_STRING ? json.getText() : null;
-                        json.skipChildren();
-                    }
-                    case "correlationId" -> {
-                        correlationIdIsStringOrNull = isStringOrNull(value);
-                        correlationId = value == JsonToken.VALUE_STRING ? json.getText() : null;
-                        json.skipChildren();
-                    }
-                    case "deadline" -> {
-                        deadlineIsStringOrNull = isStringOrNull(value);
-                        deadline = value == JsonToken.VALUE_STRING ? json.getText() : null;
-                        json.skipChildren();
-                    }
-                    case "topic" -> {
-                        topicIsStringOrNull = isStringOrNull(value);
-                        topic = value == JsonToken.VALUE_STRING ? json.getText() : null;
-                        json.skipChildren();
-                    }
-                    case "errorCode" -> {
-                        errorCodeIsStringOrNull = isStringOrNull(value);
-                        errorCode = value == JsonToken.VALUE_STRING ? json.getText() : null;
-                        json.skipChildren();
-                    }
-                    case "errorMessage" -> {
-                        errorMessageIsStringOrNull = isStringOrNull(value);
-                        errorMessage = value == JsonToken.VALUE_STRING ? json.getText() : null;
-                        json.skipChildren();
-                    }
-                    case "source" -> {
-                        sourceIsStringOrNull = isStringOrNull(value);
-                        source = value == JsonToken.VALUE_STRING ? json.getText() : null;
-                        json.skipChildren();
-                    }
-                    case "metadata" -> {
-                        metadata = Map.of();
-                        metadataIsValid = true;
-                        if (value == JsonToken.START_OBJECT) {
-                            Map<String, String> values = null;
-                            while (json.nextToken() != JsonToken.END_OBJECT) {
-                                if (json.currentToken() != JsonToken.FIELD_NAME) {
-                                    throw new IOException(
-                                            "expected an envelope metadata field name");
-                                }
-                                String key = json.currentName();
-                                JsonToken metadataValue = json.nextToken();
-                                if (metadataValue == null) {
-                                    throw new IOException("unexpected end of envelope metadata");
-                                }
-                                if (values == null) {
-                                    values = new LinkedHashMap<>();
-                                }
-                                if (values.containsKey(key)) {
-                                    throw protocolError("duplicate envelope metadata key", null);
-                                }
-                                values.put(
-                                        key,
-                                        metadataValue == JsonToken.VALUE_STRING
-                                                ? json.getText()
-                                                : null);
-                                json.skipChildren();
-                            }
-                            if (values != null) {
-                                metadata = values;
-                                for (String metadataValue : values.values()) {
-                                    if (metadataValue == null) {
-                                        metadataIsValid = false;
-                                        break;
-                                    }
-                                }
-                            }
-                        } else {
-                            metadataIsValid = false;
+                    switch (field) {
+                        case "formatMarker" -> {
+                            marker =
+                                    value == JsonToken.VALUE_NUMBER_INT
+                                                    && json.getNumberType()
+                                                            == JsonParser.NumberType.INT
+                                            ? json.getIntValue()
+                                            : 0;
                             json.skipChildren();
                         }
-                    }
-                    case "flowId" -> {
-                        hasFlowValue |= value != JsonToken.VALUE_NULL;
-                        if (captureFlow) {
-                            flowIdIsStringOrNull = isStringOrNull(value);
-                            flowId = value == JsonToken.VALUE_STRING ? json.getText() : null;
+                        case "kind" -> {
+                            kindIsInt =
+                                    value == JsonToken.VALUE_NUMBER_INT
+                                            && json.getNumberType() == JsonParser.NumberType.INT;
+                            if (kindIsInt) {
+                                kind = json.getIntValue();
+                            }
+                            json.skipChildren();
                         }
-                        json.skipChildren();
-                    }
-                    case "flowOrigin" -> {
-                        hasFlowValue |= value != JsonToken.VALUE_NULL;
-                        if (captureFlow) {
-                            hasFlowOrigin = value != JsonToken.VALUE_NULL;
-                            flowOriginIsIntOrNull =
-                                    value == JsonToken.VALUE_NULL
-                                            || (value == JsonToken.VALUE_NUMBER_INT
-                                                    && json.getNumberType()
-                                                            == JsonParser.NumberType.INT);
-                            if (flowOriginIsIntOrNull && hasFlowOrigin) {
-                                flowOriginValue = json.getIntValue();
+                        case "channelName" -> {
+                            channelNameIsString = value == JsonToken.VALUE_STRING;
+                            channelName = channelNameIsString ? json.getText() : null;
+                            json.skipChildren();
+                        }
+                        case "messageName" -> {
+                            messageNameIsString = value == JsonToken.VALUE_STRING;
+                            messageName = messageNameIsString ? json.getText() : null;
+                            json.skipChildren();
+                        }
+                        case "contentType" -> {
+                            contentTypeIsStringOrNull = isStringOrNull(value);
+                            contentType = value == JsonToken.VALUE_STRING ? json.getText() : null;
+                            json.skipChildren();
+                        }
+                        case "correlationId" -> {
+                            correlationIdIsStringOrNull = isStringOrNull(value);
+                            correlationId = value == JsonToken.VALUE_STRING ? json.getText() : null;
+                            json.skipChildren();
+                        }
+                        case "deadline" -> {
+                            deadlineIsStringOrNull = isStringOrNull(value);
+                            deadline = value == JsonToken.VALUE_STRING ? json.getText() : null;
+                            json.skipChildren();
+                        }
+                        case "topic" -> {
+                            topicIsStringOrNull = isStringOrNull(value);
+                            topic = value == JsonToken.VALUE_STRING ? json.getText() : null;
+                            json.skipChildren();
+                        }
+                        case "errorCode" -> {
+                            errorCodeIsStringOrNull = isStringOrNull(value);
+                            errorCode = value == JsonToken.VALUE_STRING ? json.getText() : null;
+                            json.skipChildren();
+                        }
+                        case "errorMessage" -> {
+                            errorMessageIsStringOrNull = isStringOrNull(value);
+                            errorMessage = value == JsonToken.VALUE_STRING ? json.getText() : null;
+                            json.skipChildren();
+                        }
+                        case "source" -> {
+                            sourceIsStringOrNull = isStringOrNull(value);
+                            source = value == JsonToken.VALUE_STRING ? json.getText() : null;
+                            json.skipChildren();
+                        }
+                        case "metadata" -> {
+                            metadata = Map.of();
+                            metadataIsValid = true;
+                            if (value == JsonToken.START_OBJECT) {
+                                Map<String, String> values = null;
+                                while (json.nextToken() != JsonToken.END_OBJECT) {
+                                    if (json.currentToken() != JsonToken.FIELD_NAME) {
+                                        throw new IOException(
+                                                "expected an envelope metadata field name");
+                                    }
+                                    String key = json.currentName();
+                                    JsonToken metadataValue = json.nextToken();
+                                    if (metadataValue == null) {
+                                        throw new IOException(
+                                                "unexpected end of envelope metadata");
+                                    }
+                                    if (values == null) {
+                                        values = new LinkedHashMap<>();
+                                    }
+                                    if (values.containsKey(key)) {
+                                        throw protocolError(
+                                                "duplicate envelope metadata key", null);
+                                    }
+                                    values.put(
+                                            key,
+                                            metadataValue == JsonToken.VALUE_STRING
+                                                    ? json.getText()
+                                                    : null);
+                                    json.skipChildren();
+                                }
+                                if (values != null) {
+                                    metadata = values;
+                                    for (String metadataValue : values.values()) {
+                                        if (metadataValue == null) {
+                                            metadataIsValid = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                            } else {
+                                metadataIsValid = false;
+                                json.skipChildren();
                             }
                         }
-                        json.skipChildren();
+                        case "flowId" -> {
+                            hasFlowValue |= value != JsonToken.VALUE_NULL;
+                            if (captureFlow) {
+                                flowIdIsStringOrNull = isStringOrNull(value);
+                                flowId = value == JsonToken.VALUE_STRING ? json.getText() : null;
+                            }
+                            json.skipChildren();
+                        }
+                        case "flowOrigin" -> {
+                            hasFlowValue |= value != JsonToken.VALUE_NULL;
+                            if (captureFlow) {
+                                hasFlowOrigin = value != JsonToken.VALUE_NULL;
+                                flowOriginIsIntOrNull =
+                                        value == JsonToken.VALUE_NULL
+                                                || (value == JsonToken.VALUE_NUMBER_INT
+                                                        && json.getNumberType()
+                                                                == JsonParser.NumberType.INT);
+                                if (flowOriginIsIntOrNull && hasFlowOrigin) {
+                                    flowOriginValue = json.getIntValue();
+                                }
+                            }
+                            json.skipChildren();
+                        }
+                        default -> {
+                            json.skipChildren();
+                            continue;
+                        }
                     }
-                    default -> {
-                        json.skipChildren();
-                        continue;
+                    int fieldBit = HEADER_FIELD_BITS.get(field);
+                    if ((seenFields & fieldBit) != 0) {
+                        throw protocolError("duplicate envelope header field", null);
+                    }
+                    seenFields |= fieldBit;
+                }
+
+                if (json.nextToken() != null) {
+                    throw new IOException("ZLink envelope header must contain one JSON object");
+                }
+                if (marker != FORMAT_MARKER) {
+                    throw protocolError("ZLink envelope format marker is invalid", null);
+                }
+                if (!kindIsInt || kind < KIND_REQUEST || kind > KIND_ERROR) {
+                    throw protocolError("ZLink envelope kind is invalid", null);
+                }
+                if (!channelNameIsString) {
+                    throw protocolError("ZLink envelope channelName must be a string", null);
+                }
+                if (!messageNameIsString) {
+                    throw protocolError("ZLink envelope messageName must be a string", null);
+                }
+                validateOptionalString("contentType", contentTypeIsStringOrNull);
+                validateOptionalString("correlationId", correlationIdIsStringOrNull);
+                validateOptionalString("deadline", deadlineIsStringOrNull);
+                validateOptionalString("topic", topicIsStringOrNull);
+                validateOptionalString("errorCode", errorCodeIsStringOrNull);
+                validateOptionalString("errorMessage", errorMessageIsStringOrNull);
+                validateOptionalString("source", sourceIsStringOrNull);
+                if (!metadataIsValid) {
+                    throw protocolError("ZLink envelope metadata values must be strings", null);
+                }
+                writeMetadata(metadata, null, 0);
+
+                ZLinkFlowOrigin flowOrigin = null;
+                if (captureFlow) {
+                    validateOptionalString("flowId", flowIdIsStringOrNull);
+                    if (!flowOriginIsIntOrNull) {
+                        throw protocolError("ZLink envelope flow origin is invalid", null);
+                    }
+                    if (hasFlowOrigin) {
+                        flowOrigin = flowOriginFromWire(flowOriginValue);
+                    }
+                    if ((flowId == null) != (flowOrigin == null)) {
+                        throw protocolError(
+                                "ZLink envelope flow id and origin must be present together", null);
+                    }
+                    if (flowId != null && !ZLinkFlowContext.isValidFlowId(flowId)) {
+                        throw protocolError("ZLink envelope flow id must be UUIDv7", null);
                     }
                 }
-                int fieldBit = HEADER_FIELD_BITS.get(field);
-                if ((seenFields & fieldBit) != 0) {
-                    throw protocolError("duplicate envelope header field", null);
-                }
-                seenFields |= fieldBit;
-            }
-
-            if (json.nextToken() != null) {
-                throw new IOException("ZLink envelope header must contain one JSON object");
-            }
-            if (marker != FORMAT_MARKER) {
-                throw protocolError("ZLink envelope format marker is invalid", null);
-            }
-            if (!kindIsInt || kind < KIND_REQUEST || kind > KIND_ERROR) {
-                throw protocolError("ZLink envelope kind is invalid", null);
-            }
-            if (!channelNameIsString) {
-                throw protocolError("ZLink envelope channelName must be a string", null);
-            }
-            if (!messageNameIsString) {
-                throw protocolError("ZLink envelope messageName must be a string", null);
-            }
-            validateOptionalString("contentType", contentTypeIsStringOrNull);
-            validateOptionalString("correlationId", correlationIdIsStringOrNull);
-            validateOptionalString("deadline", deadlineIsStringOrNull);
-            validateOptionalString("topic", topicIsStringOrNull);
-            validateOptionalString("errorCode", errorCodeIsStringOrNull);
-            validateOptionalString("errorMessage", errorMessageIsStringOrNull);
-            validateOptionalString("source", sourceIsStringOrNull);
-            if (!metadataIsValid) {
-                throw protocolError("ZLink envelope metadata values must be strings", null);
-            }
-            writeMetadata(metadata, null, 0);
-
-            ZLinkFlowOrigin flowOrigin = null;
-            if (captureFlow) {
-                validateOptionalString("flowId", flowIdIsStringOrNull);
-                if (!flowOriginIsIntOrNull) {
-                    throw protocolError("ZLink envelope flow origin is invalid", null);
-                }
-                if (hasFlowOrigin) {
-                    flowOrigin = flowOriginFromWire(flowOriginValue);
-                }
-                if ((flowId == null) != (flowOrigin == null)) {
+                header =
+                        new Header(
+                                kind,
+                                channelName,
+                                messageName,
+                                contentType,
+                                correlationId,
+                                deadline,
+                                topic,
+                                errorCode,
+                                errorMessage,
+                                source,
+                                metadata,
+                                flowId,
+                                flowOrigin);
+                if (correlationId != null && !header.canCorrelateReply()) {
                     throw protocolError(
-                            "ZLink envelope flow id and origin must be present together", null);
+                            "ZLink envelope correlationId must be 1..64 byte ASCII", null);
                 }
-                if (flowId != null && !ZLinkFlowContext.isValidFlowId(flowId)) {
-                    throw protocolError("ZLink envelope flow id must be UUIDv7", null);
-                }
+            } catch (IOException | ZLinkFrameworkException invalidHeader) {
+                // Only a complete JSON object can retain reply identifiers. Invalid
+                // metadata and flow fields cannot be copied into the error reply.
+                Header rejectedHeader =
+                        invalidHeader instanceof IOException
+                                ? null
+                                : new Header(
+                                        kind,
+                                        channelName,
+                                        messageName,
+                                        contentType,
+                                        correlationId,
+                                        null,
+                                        null,
+                                        null,
+                                        null,
+                                        null,
+                                        Map.of(),
+                                        null,
+                                        null);
+                throw new HeaderDecodeException(rejectedHeader, invalidHeader);
             }
-            Header header =
-                    new Header(
-                            kind,
-                            channelName,
-                            messageName,
-                            contentType,
-                            correlationId,
-                            deadline,
-                            topic,
-                            errorCode,
-                            errorMessage,
-                            source,
-                            metadata,
-                            flowId,
-                            flowOrigin);
-            if (correlationId != null && !header.canCorrelateReply()) {
-                throw protocolError("ZLink envelope correlationId must be 1..64 byte ASCII", null);
+
+            headerPart.position(limit);
+        } catch (Exception ex) {
+            if (ex instanceof ZLinkFrameworkException frameworkError) {
+                throw frameworkError;
             }
-            boolean repeatable =
-                    correlationId == null
-                            && deadline == null
-                            && !hasFlowValue
-                            && metadata.isEmpty();
-            return new DecodedHeader(header, repeatable);
-        } catch (IOException | ZLinkFrameworkException invalidHeader) {
-            // Only a complete JSON object can retain reply identifiers. Invalid
-            // metadata and flow fields cannot be copied into the error reply.
-            Header rejectedHeader =
-                    invalidHeader instanceof IOException
-                            ? null
-                            : new Header(
-                                    kind,
-                                    channelName,
-                                    messageName,
-                                    contentType,
-                                    correlationId,
-                                    null,
-                                    null,
-                                    null,
-                                    null,
-                                    null,
-                                    Map.of(),
-                                    null,
-                                    null);
-            throw new HeaderDecodeException(rejectedHeader, invalidHeader);
+            throw protocolError("invalid ZLink envelope header: " + ex.getMessage(), ex);
         }
+
+        if (cacheableSize
+                && correlationId == null
+                && deadline == null
+                && !hasFlowValue
+                && metadata.isEmpty()) {
+            addDecodedHeaderCacheEntry(headerPart, start, limit, header);
+        }
+        return header;
     }
 
     private static boolean isStringOrNull(JsonToken token) {
@@ -1016,8 +1024,6 @@ public final class ZLinkChannelEnvelope {
     static ZLinkStateLane headerCacheLane() {
         return CACHE_LANE;
     }
-
-    private record DecodedHeader(Header header, boolean repeatable) {}
 
     private record HeaderCacheEntry(ByteBuffer bytes, Header header) {}
 

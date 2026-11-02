@@ -893,7 +893,7 @@ export function decodeChannelHeader(
   if (parts.length === 0) {
     throw new ZLinkConfigurationException('Channel envelope header part is missing.');
   }
-  return validateChannelHeader(parseChannelHeaderBytes(parts[0].data()), flowEnabled);
+  return validateChannelHeader(parseChannelHeaderBytes(parts[0].data(), flowEnabled), flowEnabled);
 }
 
 const CHANNEL_JSON_PARSE_OPTIONS = Object.freeze({ rejectPropertyName: isPrototypeKey });
@@ -902,7 +902,8 @@ function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
   return parseFrameworkJsonV1(payload, CHANNEL_JSON_PARSE_OPTIONS, schema);
 }
 
-const CHANNEL_HEADER_FIELDS = new Set([
+const CHANNEL_HEADER_FIELD_NAMES = [
+  '',
   'formatMarker',
   'kind',
   'channelName',
@@ -917,48 +918,52 @@ const CHANNEL_HEADER_FIELDS = new Set([
   'flowId',
   'flowOrigin',
   'metadata'
-]);
+] as const;
+const CHANNEL_HEADER_FIELD_COUNT = CHANNEL_HEADER_FIELD_NAMES.length - 1;
+const CHANNEL_HEADER_INVALID_VALUE = Symbol('invalid channel header value');
+const CANONICAL_CHANNEL_HEADER_PREFIX = '{"formatMarker":242,"kind":';
 
-function parseChannelHeaderBytes(payload: Buffer): unknown {
-  const reader = new CanonicalChannelHeaderReader(payload);
-  const canonical = tryParseCanonicalChannelHeader(reader);
-  // An all-ASCII canonical header is valid UTF-8 by construction; any other
-  // header is checked before it is decoded.
-  if (canonical !== undefined && !reader.sawNonAscii) return canonical;
+function parseChannelHeaderBytes(payload: Buffer, flowEnabled: boolean): unknown {
+  if (startsWithJson(payload, CANONICAL_CHANNEL_HEADER_PREFIX)) {
+    const reader = new CanonicalChannelHeaderReader(
+      payload,
+      CANONICAL_CHANNEL_HEADER_PREFIX.length
+    );
+    const canonical = tryParseCanonicalChannelHeader(reader, flowEnabled);
+    // Canonical ASCII headers need no UTF-8 pass; all other paths are checked
+    // before byte slices are decoded.
+    if (canonical !== undefined && !reader.sawNonAscii) return canonical;
+    if (canonical !== undefined) {
+      if (!isUtf8(payload)) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.ProtocolError,
+          'Channel envelope header must contain valid UTF-8.'
+        );
+      }
+      return canonical;
+    }
+  }
   if (!isUtf8(payload)) {
     throw new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.ProtocolError,
       'Channel envelope header must contain valid UTF-8.'
     );
   }
-  return (
-    canonical ??
-    parseFrameworkJsonV1(payload.toString(), {
-      onDuplicateProperty(name, path) {
-        const reason =
-          path.length === 0 && CHANNEL_HEADER_FIELDS.has(name)
-            ? 'duplicate envelope header field'
-            : path.length === 1 && path[0] === 'metadata'
-              ? 'duplicate envelope metadata key'
-              : undefined;
-        if (reason !== undefined) {
-          throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ProtocolError, reason);
-        }
-      }
-    })
-  );
+  return new ChannelHeaderJsonReader(payload, flowEnabled).parse();
 }
 
-/**
- * Accept the byte layout emitted by writeChannelHeader without materializing
- * the enclosing JSON text. Any variation falls through to the established
- * framework-json-v1 parser, which remains the sole authority for JSON
- * failures and unknown properties. Header metadata accepts every valid string key.
- */
+function startsWithJson(bytes: Buffer, value: string): boolean {
+  if (bytes.length < value.length) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (bytes[index] !== value.charCodeAt(index)) return false;
+  }
+  return true;
+}
+
 function tryParseCanonicalChannelHeader(
-  reader: CanonicalChannelHeaderReader
+  reader: CanonicalChannelHeaderReader,
+  flowEnabled: boolean
 ): Record<string, unknown> | undefined {
-  if (!reader.consume('{"formatMarker":242,"kind":')) return undefined;
   const kind = reader.readSingleDigit();
   if (kind === undefined || !reader.consume(',"channelName":')) return undefined;
   const channelName = reader.readString();
@@ -995,9 +1000,12 @@ function tryParseCanonicalChannelHeader(
   if (!reader.readOptionalNullableString(CANONICAL_ERROR_MESSAGE, 'errorMessage', header))
     return undefined;
   if (!reader.readOptionalNullableString(CANONICAL_SOURCE, 'source', header)) return undefined;
+  const metadata = reader.readMetadata();
+  if (metadata === undefined) return undefined;
   // Empty metadata validates to the shared empty record.
-  if (!reader.consume(',"metadata":{}')) return undefined;
-  if (!reader.readOptionalString(CANONICAL_FLOW_ID, 'flowId', header)) return undefined;
+  if (metadata !== NULL_JSON_STRING) header.metadata = metadata;
+  if (!reader.readOptionalString(CANONICAL_FLOW_ID, 'flowId', header, flowEnabled))
+    return undefined;
   if (!reader.readOptionalSingleDigit(CANONICAL_FLOW_ORIGIN, 'flowOrigin', header))
     return undefined;
   return reader.consume('}') && reader.atEnd() ? header : undefined;
@@ -1016,7 +1024,12 @@ class CanonicalChannelHeaderReader {
   /** A string held a byte outside ASCII, so the caller must still check UTF-8. */
   sawNonAscii = false;
 
-  constructor(private readonly bytes: Buffer) {}
+  constructor(
+    private readonly bytes: Buffer,
+    initialIndex = 0
+  ) {
+    this.index = initialIndex;
+  }
 
   atEnd(): boolean {
     return this.index === this.bytes.length;
@@ -1085,6 +1098,37 @@ class CanonicalChannelHeaderReader {
     return this.readString();
   }
 
+  readMetadata(): Record<string, unknown> | symbol | undefined {
+    if (!this.consume(',"metadata":{')) return undefined;
+    if (this.consume('}')) return NULL_JSON_STRING;
+    const metadata: Record<string, unknown> = {};
+    for (;;) {
+      const key = this.readString();
+      if (key === undefined) return undefined;
+      if (Object.prototype.hasOwnProperty.call(metadata, key)) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.ProtocolError,
+          'duplicate envelope metadata key'
+        );
+      }
+      if (!this.consume(':')) return undefined;
+      const value = this.readString();
+      if (value === undefined) return undefined;
+      if (key === '__proto__') {
+        Object.defineProperty(metadata, key, {
+          configurable: true,
+          enumerable: true,
+          value,
+          writable: true
+        });
+      } else {
+        metadata[key] = value;
+      }
+      if (this.consume('}')) return metadata;
+      if (!this.consume(',')) return undefined;
+    }
+  }
+
   readOptionalNullableString(
     token: string,
     name: string,
@@ -1097,12 +1141,51 @@ class CanonicalChannelHeaderReader {
     return true;
   }
 
-  readOptionalString(token: string, name: string, target: Record<string, unknown>): boolean {
+  readOptionalString(
+    token: string,
+    name: string,
+    target: Record<string, unknown>,
+    decode = true
+  ): boolean {
     if (!this.consume(token)) return true;
+    if (!decode) return this.skipString();
     const value = this.readString();
     if (value === undefined) return false;
     target[name] = value;
     return true;
+  }
+
+  private skipString(): boolean {
+    if (this.bytes[this.index] !== 0x22) return false;
+    this.index += 1;
+    while (this.index < this.bytes.length) {
+      const value = this.bytes[this.index++]!;
+      if (value === 0x22) return true;
+      if (value < 0x20) return false;
+      if (value >= 0x80) this.sawNonAscii = true;
+      if (value !== 0x5c) continue;
+      if (this.index === this.bytes.length) return false;
+      const escaped = this.bytes[this.index++]!;
+      if (escaped === 0x75) {
+        for (let count = 0; count < 4; count += 1) {
+          if (this.index === this.bytes.length || !isHexDigit(this.bytes[this.index]!))
+            return false;
+          this.index += 1;
+        }
+      } else if (
+        escaped !== 0x22 &&
+        escaped !== 0x5c &&
+        escaped !== 0x2f &&
+        escaped !== 0x62 &&
+        escaped !== 0x66 &&
+        escaped !== 0x6e &&
+        escaped !== 0x72 &&
+        escaped !== 0x74
+      ) {
+        return false;
+      }
+    }
+    return false;
   }
 
   readOptionalSingleDigit(token: string, name: string, target: Record<string, unknown>): boolean {
@@ -1120,6 +1203,418 @@ function isHexDigit(value: number): boolean {
     (value >= 0x41 && value <= 0x46) ||
     (value >= 0x61 && value <= 0x66)
   );
+}
+
+/** Reads a noncanonical channel header directly from its UTF-8 bytes. */
+class ChannelHeaderJsonReader {
+  private index = 0;
+  private propertyName = '';
+  private stringStart = 0;
+  private stringEnd = 0;
+  private stringHasEscapes = false;
+
+  constructor(
+    private readonly bytes: Buffer,
+    private readonly flowEnabled: boolean
+  ) {}
+
+  parse(): unknown {
+    if (
+      this.bytes.length >= 3 &&
+      this.bytes[0] === 0xef &&
+      this.bytes[1] === 0xbb &&
+      this.bytes[2] === 0xbf
+    ) {
+      throw new SyntaxError('framework-json-v1 does not allow a UTF-8 BOM.');
+    }
+    this.skipWhitespace();
+    if (this.bytes[this.index] !== 0x7b) {
+      this.skipValue();
+      this.skipWhitespace();
+      if (this.index !== this.bytes.length) this.fail('trailing data');
+      return CHANNEL_HEADER_INVALID_VALUE;
+    }
+
+    const header: Record<string, unknown> = {};
+    let seenFields = 0;
+    this.index += 1;
+    this.skipWhitespace();
+    if (this.consumeByte(0x7d)) return this.finish(header);
+
+    for (;;) {
+      const field = this.readPropertyName(true);
+      const propertyName = this.propertyName;
+      this.skipWhitespace();
+      this.expectByte(0x3a, "':' after object property");
+      this.skipWhitespace();
+
+      if (field !== 0) {
+        const bit = 1 << field;
+        if ((seenFields & bit) !== 0) {
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.ProtocolError,
+            'duplicate envelope header field'
+          );
+        }
+        seenFields |= bit;
+        const name = CHANNEL_HEADER_FIELD_NAMES[field]!;
+        if (!this.flowEnabled && (field === 12 || field === 13)) {
+          this.skipValue();
+          header[name] = undefined;
+        } else if (field === 14) {
+          header[name] = this.readMetadata();
+        } else {
+          header[name] = this.readValue(field === 1 || field === 2 || field === 13);
+        }
+      } else {
+        const value = this.readValue();
+        if (propertyName === '__proto__') {
+          Object.defineProperty(header, propertyName, {
+            configurable: true,
+            enumerable: true,
+            value,
+            writable: true
+          });
+        } else {
+          header[propertyName] = value;
+        }
+      }
+
+      this.skipWhitespace();
+      if (this.consumeByte(0x7d)) break;
+      this.expectByte(0x2c, "',' or '}' after object property");
+      this.skipWhitespace();
+    }
+    return this.finish(header);
+  }
+
+  private finish(header: Record<string, unknown>): Record<string, unknown> {
+    this.skipWhitespace();
+    if (this.index !== this.bytes.length) this.fail('trailing data');
+    return header;
+  }
+
+  private readMetadata(): unknown {
+    if (this.bytes[this.index] !== 0x7b) return this.readValue();
+    this.index += 1;
+    this.skipWhitespace();
+    if (this.consumeByte(0x7d)) return undefined;
+    const metadata: Record<string, unknown> = {};
+
+    for (;;) {
+      const key = this.readString();
+      if (Object.prototype.hasOwnProperty.call(metadata, key)) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.ProtocolError,
+          'duplicate envelope metadata key'
+        );
+      }
+      this.skipWhitespace();
+      this.expectByte(0x3a, "':' after object property");
+      this.skipWhitespace();
+      const value = this.readValue();
+      if (key === '__proto__') {
+        Object.defineProperty(metadata, key, {
+          configurable: true,
+          enumerable: true,
+          value,
+          writable: true
+        });
+      } else {
+        metadata[key] = value;
+      }
+      this.skipWhitespace();
+      if (this.consumeByte(0x7d)) return metadata;
+      this.expectByte(0x2c, "',' or '}' after object property");
+      this.skipWhitespace();
+    }
+  }
+
+  private readPropertyName(materializeUnknown = false): number {
+    this.scanString();
+    let field = 0;
+    let decoded: string | undefined;
+    if (this.stringHasEscapes) {
+      decoded = this.decodeString();
+      for (let candidate = 1; candidate <= CHANNEL_HEADER_FIELD_COUNT; candidate += 1) {
+        if (CHANNEL_HEADER_FIELD_NAMES[candidate] === decoded) {
+          field = candidate;
+          break;
+        }
+      }
+    } else {
+      for (let candidate = 1; candidate <= CHANNEL_HEADER_FIELD_COUNT; candidate += 1) {
+        if (
+          this.matchesAscii(
+            this.stringStart + 1,
+            this.stringEnd - 1,
+            CHANNEL_HEADER_FIELD_NAMES[candidate]!
+          )
+        ) {
+          field = candidate;
+          break;
+        }
+      }
+    }
+    this.propertyName =
+      field !== 0
+        ? CHANNEL_HEADER_FIELD_NAMES[field]!
+        : (decoded ??
+          (materializeUnknown
+            ? this.bytes.toString('utf8', this.stringStart + 1, this.stringEnd - 1)
+            : ''));
+    return field;
+  }
+
+  private readValue(integerOnly = false): unknown {
+    const value = this.bytes[this.index];
+    if (value === 0x22) return this.readString();
+    if (value === 0x7b) return this.readObject();
+    if (value === 0x5b) return this.readArray();
+    if (value === 0x74) {
+      this.readLiteral('true');
+      return true;
+    }
+    if (value === 0x66) {
+      this.readLiteral('false');
+      return false;
+    }
+    if (value === 0x6e) {
+      this.readLiteral('null');
+      return null;
+    }
+    return this.readNumber(integerOnly);
+  }
+
+  private readObject(): Record<string, unknown> {
+    this.index += 1;
+    this.skipWhitespace();
+    const object: Record<string, unknown> = {};
+    if (this.consumeByte(0x7d)) return object;
+    for (;;) {
+      const key = this.readString();
+      this.skipWhitespace();
+      this.expectByte(0x3a, "':' after object property");
+      this.skipWhitespace();
+      const value = this.readValue();
+      if (key === '__proto__') {
+        Object.defineProperty(object, key, {
+          configurable: true,
+          enumerable: true,
+          value,
+          writable: true
+        });
+      } else {
+        object[key] = value;
+      }
+      this.skipWhitespace();
+      if (this.consumeByte(0x7d)) return object;
+      this.expectByte(0x2c, "',' or '}' after object property");
+      this.skipWhitespace();
+    }
+  }
+
+  private readArray(): unknown[] {
+    this.index += 1;
+    this.skipWhitespace();
+    const array: unknown[] = [];
+    if (this.consumeByte(0x5d)) return array;
+    for (;;) {
+      array.push(this.readValue());
+      this.skipWhitespace();
+      if (this.consumeByte(0x5d)) return array;
+      this.expectByte(0x2c, "',' or ']' after array item");
+      this.skipWhitespace();
+    }
+  }
+
+  private skipValue(): void {
+    const value = this.bytes[this.index];
+    if (value === 0x22) {
+      this.scanString();
+      return;
+    }
+    if (value === 0x7b) return this.skipObject();
+    if (value === 0x5b) return this.skipArray();
+    if (value === 0x74) return this.readLiteral('true');
+    if (value === 0x66) return this.readLiteral('false');
+    if (value === 0x6e) return this.readLiteral('null');
+    this.readNumber();
+  }
+
+  private skipObject(): void {
+    this.index += 1;
+    this.skipWhitespace();
+    if (this.consumeByte(0x7d)) return;
+    for (;;) {
+      this.readPropertyName();
+      this.skipWhitespace();
+      this.expectByte(0x3a, "':' after object property");
+      this.skipWhitespace();
+      this.skipValue();
+      this.skipWhitespace();
+      if (this.consumeByte(0x7d)) return;
+      this.expectByte(0x2c, "',' or '}' after object property");
+      this.skipWhitespace();
+    }
+  }
+
+  private skipArray(): void {
+    this.index += 1;
+    this.skipWhitespace();
+    if (this.consumeByte(0x5d)) return;
+    for (;;) {
+      this.skipValue();
+      this.skipWhitespace();
+      if (this.consumeByte(0x5d)) return;
+      this.expectByte(0x2c, "',' or ']' after array item");
+      this.skipWhitespace();
+    }
+  }
+
+  private readString(): string {
+    this.scanString();
+    return this.decodeString();
+  }
+
+  private scanString(): void {
+    if (this.bytes[this.index] !== 0x22) this.fail('string');
+    this.stringStart = this.index++;
+    this.stringHasEscapes = false;
+    while (this.index < this.bytes.length) {
+      const value = this.bytes[this.index++]!;
+      if (value === 0x22) {
+        this.stringEnd = this.index;
+        return;
+      }
+      if (value < 0x20) this.fail('valid string character');
+      if (value !== 0x5c) continue;
+      this.stringHasEscapes = true;
+      if (this.index === this.bytes.length) this.fail('valid string escape');
+      const escaped = this.bytes[this.index++]!;
+      if (escaped === 0x75) {
+        for (let count = 0; count < 4; count += 1) {
+          if (this.index === this.bytes.length || !isHexDigit(this.bytes[this.index]!))
+            this.fail('four hexadecimal digits after \\u');
+          this.index += 1;
+        }
+      } else if (
+        escaped !== 0x22 &&
+        escaped !== 0x5c &&
+        escaped !== 0x2f &&
+        escaped !== 0x62 &&
+        escaped !== 0x66 &&
+        escaped !== 0x6e &&
+        escaped !== 0x72 &&
+        escaped !== 0x74
+      ) {
+        this.fail('valid string escape');
+      }
+    }
+    this.fail('terminated string');
+  }
+
+  private decodeString(): string {
+    return this.stringHasEscapes
+      ? (JSON.parse(this.bytes.toString('utf8', this.stringStart, this.stringEnd)) as string)
+      : this.bytes.toString('utf8', this.stringStart + 1, this.stringEnd - 1);
+  }
+
+  private readNumber(integerOnly = false): number {
+    const start = this.index;
+    let hasFractionOrExponent = false;
+    if (this.bytes[this.index] === 0x2d) this.index += 1;
+    if (this.bytes[this.index] === 0x30) {
+      this.index += 1;
+    } else if (this.isDigitOneToNine(this.bytes[this.index])) {
+      while (this.isDigit(this.bytes[this.index])) this.index += 1;
+    } else {
+      this.fail('JSON value');
+    }
+    if (this.bytes[this.index] === 0x2e) {
+      hasFractionOrExponent = true;
+      this.index += 1;
+      if (!this.isDigit(this.bytes[this.index])) this.fail('digit after decimal point');
+      while (this.isDigit(this.bytes[this.index])) this.index += 1;
+    }
+    if (this.bytes[this.index] === 0x65 || this.bytes[this.index] === 0x45) {
+      hasFractionOrExponent = true;
+      this.index += 1;
+      if (this.bytes[this.index] === 0x2b || this.bytes[this.index] === 0x2d) this.index += 1;
+      if (!this.isDigit(this.bytes[this.index])) this.fail('digit in exponent');
+      while (this.isDigit(this.bytes[this.index])) this.index += 1;
+    }
+    if (integerOnly && hasFractionOrExponent) {
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.ProtocolError,
+        'Channel envelope integer fields must use an integer literal.'
+      );
+    }
+    if (integerOnly) {
+      const negative = this.bytes[start] === 0x2d;
+      const digitsStart = start + (negative ? 1 : 0);
+      if (this.index - digitsStart <= 3) {
+        let integer = 0;
+        for (let offset = digitsStart; offset < this.index; offset += 1) {
+          integer = integer * 10 + this.bytes[offset]! - 0x30;
+        }
+        return negative ? -integer : integer;
+      }
+    }
+    const number = Number(this.bytes.toString('ascii', start, this.index));
+    if (!Number.isFinite(number)) {
+      throw new TypeError('framework-json-v1 only accepts finite JSON numbers.');
+    }
+    return number;
+  }
+
+  private readLiteral(value: 'true' | 'false' | 'null'): void {
+    for (let offset = 0; offset < value.length; offset += 1) {
+      if (this.bytes[this.index + offset] !== value.charCodeAt(offset)) this.fail(value);
+    }
+    this.index += value.length;
+  }
+
+  private matchesAscii(start: number, end: number, value: string): boolean {
+    if (end - start !== value.length) return false;
+    for (let offset = 0; offset < value.length; offset += 1) {
+      if (this.bytes[start + offset] !== value.charCodeAt(offset)) return false;
+    }
+    return true;
+  }
+
+  private isDigit(value: number | undefined): boolean {
+    return value !== undefined && value >= 0x30 && value <= 0x39;
+  }
+
+  private isDigitOneToNine(value: number | undefined): boolean {
+    return value !== undefined && value >= 0x31 && value <= 0x39;
+  }
+
+  private skipWhitespace(): void {
+    while (
+      this.bytes[this.index] === 0x20 ||
+      this.bytes[this.index] === 0x09 ||
+      this.bytes[this.index] === 0x0a ||
+      this.bytes[this.index] === 0x0d
+    ) {
+      this.index += 1;
+    }
+  }
+
+  private consumeByte(value: number): boolean {
+    if (this.bytes[this.index] !== value) return false;
+    this.index += 1;
+    return true;
+  }
+
+  private expectByte(value: number, expected: string): void {
+    if (!this.consumeByte(value)) this.fail(expected);
+  }
+
+  private fail(expected: string): never {
+    throw new SyntaxError(`framework-json-v1 expected ${expected} at offset ${this.index}.`);
+  }
 }
 
 function schemaForInboundChannelEnvelope(

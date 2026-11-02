@@ -657,7 +657,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                             header,
                             sendView,
                             cancellationToken,
-                            received.Metadata
+                            received.Metadata,
+                            received.ReceivedAt
                         )
                         .ConfigureAwait(false);
                 else
@@ -669,7 +670,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                             header,
                             parts,
                             cancellationToken,
-                            received.Metadata
+                            received.Metadata,
+                            received.ReceivedAt
                         )
                         .ConfigureAwait(false);
                 scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
@@ -694,7 +696,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                         header,
                         requestView,
                         cancellationToken,
-                        received.Metadata
+                        received.Metadata,
+                        received.ReceivedAt
                     )
                     .ConfigureAwait(false)
                 : await _routeInvoker
@@ -705,7 +708,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                         header,
                         parts,
                         cancellationToken,
-                        received.Metadata
+                        received.Metadata,
+                        received.ReceivedAt
                     )
                     .ConfigureAwait(false);
         }
@@ -769,7 +773,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                                 ),
                             cancellationToken,
                             received.Metadata,
-                            received.SourceNodeRid
+                            received.SourceNodeRid,
+                            received.ReceivedAt
                         )
                         .ConfigureAwait(false);
                 else
@@ -797,7 +802,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                                 ),
                             cancellationToken,
                             received.Metadata,
-                            received.SourceNodeRid
+                            received.SourceNodeRid,
+                            received.ReceivedAt
                         )
                         .ConfigureAwait(false);
                 return;
@@ -810,7 +816,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                             header,
                             cancellationToken,
                             received.Metadata,
-                            received.SourceNodeRid
+                            received.SourceNodeRid,
+                            received.ReceivedAt
                         )
                         .ConfigureAwait(false);
                 else
@@ -821,7 +828,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                             header,
                             cancellationToken,
                             received.Metadata,
-                            received.SourceNodeRid
+                            received.SourceNodeRid,
+                            received.ReceivedAt
                         )
                         .ConfigureAwait(false);
                 return;

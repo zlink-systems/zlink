@@ -12,6 +12,8 @@ const nodeRoot = path.resolve(__dirname, '../..');
 const generator = path.join(nodeRoot, 'scripts/generate-framework-json-schemas.mjs');
 const fixtureDirectory = path.join(__dirname, 'fixtures');
 const frameworkJson = require('../../packages/framework/dist/runtime/messaging/framework-json-v1');
+const streamWireJson = require('../../packages/stream-wire/dist/internal/framework-json-v1');
+const { ZLinkPacket } = require('../../packages/framework/dist/contracts/Handlers/Attributes');
 const packetContracts = require('../../packages/framework/dist/contracts/Handlers/JsonContract');
 
 test('build-time schema generator emits server and browser registries from TS DTOs', async () => {
@@ -26,7 +28,7 @@ test('build-time schema generator emits server and browser registries from TS DT
     );
 
     const server = require(serverOutput);
-    assert.deepEqual(Object.keys(server.packetContracts), ['ClassPacket', 'FixturePacket']);
+    assert.deepEqual(Object.keys(server.packetContracts), ['ClassPacket', 'FixturePacket', 'RequiredPresence']);
     assert.equal(typeof server.register, 'function');
     assert.deepEqual(server.packetContracts.ClassPacket.payload, {
       type: 'object',
@@ -67,6 +69,63 @@ test('build-time schema generator emits server and browser registries from TS DT
       },
       required: ['bytes', 'nested', 'nullable', 'required', 'sequence', 'status', 'values']
     });
+    assert.deepEqual(server.packetContracts.RequiredPresence.payload, {
+      type: 'object',
+      properties: {
+        code: { type: 'string' },
+        accessToken: { type: 'nullable', value: { type: 'string' } },
+        accountId: { type: 'int32' },
+        attempts: { type: 'int32' }
+      },
+      required: ['accessToken', 'accountId', 'code']
+    });
+
+    const requiredPresenceSchema = server.packetContracts.RequiredPresence.payload;
+    class StreamRequiredPresencePacket {}
+    ZLinkPacket('FrameworkJsonRequiredPresenceFixture', {
+      payload: requiredPresenceSchema
+    })(StreamRequiredPresencePacket);
+    const { ZlinkStreamCodec } = await import('@zlink-systems/stream-wire');
+    const streamConnectorJson = await import(
+      pathToFileURL(path.join(nodeRoot, 'packages/stream-connector/dist/Contracts/ZlinkStreamJsonCodec.js')).href
+    );
+    const requiredPresenceFixture = fs.readFileSync(
+      path.join(nodeRoot, '../../runtime/protocol/golden/framework-json-required-presence.txt'),
+      'utf8'
+    );
+    for (const line of requiredPresenceFixture.trimEnd().split(/\r?\n/u)) {
+      const [expected, json] = line.split('\t', 2);
+      if (expected === 'valid') {
+        for (const codec of [frameworkJson, streamWireJson]) {
+          const decoded = codec.parseFrameworkJsonV1(json, {}, requiredPresenceSchema);
+          if (json.includes('"attempts"')) assert.equal(decoded.attempts, 12);
+          else assert.equal(Object.hasOwn(decoded, 'attempts'), false);
+        }
+        const connectorDecoded = streamConnectorJson.fromJson({
+          codec: ZlinkStreamCodec.Json,
+          payload: Buffer.from(json, 'utf8'),
+          messageType: StreamRequiredPresencePacket
+        });
+        if (json.includes('"attempts"')) assert.equal(connectorDecoded.attempts, 12);
+        else assert.equal(Object.hasOwn(connectorDecoded, 'attempts'), false);
+      } else {
+        for (const codec of [frameworkJson, streamWireJson]) {
+          assert.throws(
+            () => codec.parseFrameworkJsonV1(json, {}, requiredPresenceSchema),
+            /required property.*missing|must be an int32 JSON number/u
+          );
+        }
+        assert.throws(
+          () =>
+            streamConnectorJson.fromJson({
+              codec: ZlinkStreamCodec.Json,
+              payload: Buffer.from(json, 'utf8'),
+              messageType: StreamRequiredPresencePacket
+            }),
+          /required property.*missing|must be an int32 JSON number/u
+        );
+      }
+    }
 
     const registered = packetContracts.readZLinkPacketJsonContract('FixturePacket');
     assert.deepEqual(registered, server.packetContracts.FixturePacket);

@@ -1729,7 +1729,7 @@ void route_client_t::submit_request_reply_message_erased (
   payload_encoder_t encode_payload,
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata,
-  detail::request_receiver_t<zlink::message_t> receiver)
+  detail::request_receiver_t<encoded_payload_t> receiver)
 {
     const auto request_started = std::chrono::steady_clock::now ();
     // Retain the runtime through the physical reply conversion.
@@ -1746,7 +1746,7 @@ void route_client_t::submit_request_reply_message_erased (
     runtime::messaging::message_parts_t parts;
     auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
     if (!transport)
-        detail::propagate_failure<zlink::message_t> (transport, "node transport lookup failed")
+        detail::propagate_failure<encoded_payload_t> (transport, "node transport lookup failed")
           .value ();
     const auto route =
       std::get_if<std::shared_ptr<detail::route_channel_runtime_t>> (&transport.value ());
@@ -1797,32 +1797,32 @@ void route_client_t::submit_request_reply_message_erased (
         auto decode = [state, transport = transport.value (), packet_name = std::move (packet_name),
                        router_channel_id = std::move (router_channel_id),
                        target_owner] (const result_t<runtime::messaging::message_parts_t> &reply)
-          -> result_t<zlink::message_t> {
+          -> result_t<encoded_payload_t> {
             // Retain the selected callable and its borrowed target until terminal.
             (void) transport;
             try {
                 runtime::messaging::envelope_codec_t envelope;
                 if (!reply)
-                    return detail::propagate_failure<zlink::message_t> (reply,
-                                                                        "route request failed");
+                    return detail::propagate_failure<encoded_payload_t> (reply,
+                                                                         "route request failed");
                 auto reply_header = envelope.decode_header (reply.value (), false);
                 if (!reply_header) {
-                    return result_t<zlink::message_t>::failure (
+                    return result_t<encoded_payload_t>::failure (
                       reply_header.error_kind (), reply_header.error ()
                                                     ? reply_header.error ()->what ()
                                                     : "route reply header decode failed");
                 }
                 if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
                     runtime::messaging::request_failure_mapper_t failure_mapper;
-                    return detail::result_access_t::failure<zlink::message_t> (
+                    return detail::result_access_t::failure<encoded_payload_t> (
                       failure_mapper.error_header_exception (
                         reply_header.value ().error_code.value_or ("request_failed"),
                         reply_header.value ().error_message.value_or ("route request failed"),
                         "route request"));
                 }
-                auto body = envelope.decode_body (reply.value ());
+                auto body = envelope.decode_body_view (reply.value ());
                 if (!body)
-                    return detail::propagate_failure<zlink::message_t> (
+                    return detail::propagate_failure<encoded_payload_t> (
                       body, "route reply body decode failed");
                 detail::message_flow_tracer_t (state->runtime->dispatch)
                   .trace (message_flow_outcome_t::reply_received, [&] {
@@ -1838,13 +1838,13 @@ void route_client_t::submit_request_reply_message_erased (
                                                   std::nullopt,
                                                   std::nullopt};
                   });
-                return result_t<zlink::message_t>::success (body.value ());
+                return result_t<encoded_payload_t>::success (std::move (body.value ()));
             }
             catch (const framework_exception_t &error) {
-                return detail::result_access_t::failure<zlink::message_t> (error);
+                return detail::result_access_t::failure<encoded_payload_t> (error);
             }
             catch (const std::exception &error) {
-                return result_t<zlink::message_t>::failure (
+                return result_t<encoded_payload_t>::failure (
                   framework_error_kind_t::internal_failure, error.what ());
             }
         };

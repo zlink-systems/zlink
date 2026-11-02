@@ -317,7 +317,7 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         nativeSpot.ReplyActorJoin(joinRequest, 1, emptyReply);
     }
 
-    private void ReplyCanonicalAdmission(
+    internal void ReplyCanonicalAdmission(
         ZLinkBackendActorJoinRequest joinRequest,
         ZLinkRemoteActorAdmissionReply admission
     )

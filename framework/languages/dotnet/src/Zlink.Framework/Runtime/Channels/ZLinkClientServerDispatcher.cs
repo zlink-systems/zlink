@@ -15,7 +15,9 @@ internal sealed class ZLinkClientServerDispatcher(
         ZLinkChannelReplyGate replyGate,
         uint maximumMessageBytes,
         CancellationToken cancellationToken,
-        (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error)? decodedEnvelope = null
+        (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error)? decodedEnvelope =
+            null,
+        DateTimeOffset? receivedAt = null
     )
     {
         var envelope = decodedEnvelope ?? ReadHeader(received.Parts);
@@ -62,7 +64,14 @@ internal sealed class ZLinkClientServerDispatcher(
         {
             case ZLinkMessageKind.Command:
                 await commandPipeline
-                    .DispatchAsync(channelName, received.Parts, header, cancellationToken, metadata)
+                    .DispatchAsync(
+                        channelName,
+                        received.Parts,
+                        header,
+                        cancellationToken,
+                        metadata,
+                        receivedAt: receivedAt
+                    )
                     .ConfigureAwait(false);
                 break;
             case ZLinkMessageKind.Request:
@@ -101,7 +110,8 @@ internal sealed class ZLinkClientServerDispatcher(
                             return ValueTask.CompletedTask;
                         },
                         cancellationToken,
-                        metadata
+                        metadata,
+                        receivedAt: receivedAt
                     )
                     .ConfigureAwait(false);
                 break;

@@ -1,4 +1,3 @@
-using System.Reflection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.UnitTests;
@@ -30,18 +29,13 @@ public sealed class MeshNodeLifecycleStateTests
         Assert.Equal(MeshNodeState.Stopped, node.Status().State);
         // Deliver the already-received control record after the close turn.
         // No socket, receive loop, clock advancement or waiting is involved.
-        typeof(ZLinkManagedMeshNode)
-            .GetMethod("ProcessAdmission", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(
-                node,
-                [
-                    RoutingId.From("late-hello-peer"),
-                    1UL,
-                    ServiceWireConstants.Command.Hello,
-                    admission,
-                    null,
-                ]
-            );
+        node.ProcessAdmission(
+            RoutingId.From("late-hello-peer"),
+            1UL,
+            ServiceWireConstants.Command.Hello,
+            admission,
+            null
+        );
         Assert.Equal(MeshNodeState.Stopped, node.Status().State);
     }
 

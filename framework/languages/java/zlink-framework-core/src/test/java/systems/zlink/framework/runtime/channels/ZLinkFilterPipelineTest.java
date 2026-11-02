@@ -312,6 +312,11 @@ final class ZLinkFilterPipelineTest {
             }
 
             @Override
+            public java.time.Instant receivedAt() {
+                return java.time.Instant.EPOCH;
+            }
+
+            @Override
             public ZLinkHandlerDispatchKind dispatchKind() {
                 return kind;
             }

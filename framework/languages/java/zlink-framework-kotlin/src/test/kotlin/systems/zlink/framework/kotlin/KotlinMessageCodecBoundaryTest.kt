@@ -3,6 +3,7 @@ package systems.zlink.framework.kotlin
 import java.nio.charset.StandardCharsets
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import systems.zlink.contracts.messaging.Message
 import systems.zlink.framework.ZLinkEncodedPayload
@@ -58,6 +59,40 @@ final class KotlinMessageCodecBoundaryTest {
     }
 
     @Test
+    fun applicationDtoRequiredPresenceMatchesSharedVectors() {
+        val serializer = ZLinkJsonMessageSerializer()
+        val fixture =
+            requireNotNull(javaClass.getResourceAsStream("/framework-json-required-presence.txt")) {
+                "framework-json-required-presence fixture is missing"
+            }
+        fixture.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
+            lines
+                .filter { it.isNotBlank() }
+                .forEach { line ->
+                    val parts = line.split('\t', limit = 2)
+                    assertEquals(2, parts.size, line)
+                    val expectedValid = parts[0] == "valid"
+                    val payload =
+                        ZLinkEncodedPayload.from(parts[1].toByteArray(StandardCharsets.UTF_8))
+                    if (!expectedValid) {
+                        assertThrows(IllegalArgumentException::class.java) {
+                            serializer.deserialize(
+                                payload,
+                                KotlinRequiredPresencePayload::class.java,
+                            )
+                        }
+                        return@forEach
+                    }
+
+                    val decoded =
+                        serializer.deserialize(payload, KotlinRequiredPresencePayload::class.java)
+                    assertEquals(if (parts[1].contains("\"attempts\"")) 12 else 5, decoded.attempts)
+                    assertTrue(decoded.accessToken == null)
+                }
+        }
+    }
+
+    @Test
     fun defaultJsonSerializerUsesEnumNamesAndRejectsOrdinals() {
         val serializer = ZLinkJsonMessageSerializer()
         val expected = KotlinProfileReportReq(ProfileReportReason.profile)
@@ -93,6 +128,13 @@ data class KotlinBoundaryPayload(val value: String)
 data class KotlinAcronymPayload(val xActorId: String)
 
 data class KotlinProfileReportReq(val reasonId: ProfileReportReason)
+
+data class KotlinRequiredPresencePayload(
+    val code: String,
+    val accessToken: String?,
+    val accountId: Int,
+    val attempts: Int = 5,
+)
 
 enum class ProfileReportReason {
     nickname,

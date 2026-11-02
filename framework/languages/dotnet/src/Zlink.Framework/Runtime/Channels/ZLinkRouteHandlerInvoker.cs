@@ -12,7 +12,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkEnvelopeHeader header,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null
+        ZLinkMessageMetadata? metadata = null,
+        DateTimeOffset? receivedAt = null
     )
     {
         var message = ZLinkEnvelopeCodec.DecodeBody(
@@ -29,7 +30,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
             header.MessageName!,
             header.ContentType,
             metadata,
-            header.CorrelationId
+            header.CorrelationId,
+            receivedAt
         );
         await dispatcher
             .DispatchRouteAsync(
@@ -49,7 +51,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkEnvelopeHeader header,
         ZLinkMultipartPayloadView parts,
         CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null
+        ZLinkMessageMetadata? metadata = null,
+        DateTimeOffset? receivedAt = null
     )
     {
         var message = ZLinkEnvelopeCodec.DecodeBody(
@@ -68,7 +71,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
                 header.MessageName!,
                 header.ContentType,
                 metadata,
-                header.CorrelationId
+                header.CorrelationId,
+                receivedAt
             );
             await dispatcher
                 .DispatchRouteAsync(
@@ -93,7 +97,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkEnvelopeHeader header,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null
+        ZLinkMessageMetadata? metadata = null,
+        DateTimeOffset? receivedAt = null
     )
     {
         var message = ZLinkEnvelopeCodec.DecodeBody(
@@ -109,7 +114,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
                 header,
                 message,
                 cancellationToken,
-                metadata
+                metadata,
+                receivedAt
             )
             .ConfigureAwait(false);
     }
@@ -121,7 +127,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkEnvelopeHeader header,
         ZLinkMultipartPayloadView parts,
         CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null
+        ZLinkMessageMetadata? metadata = null,
+        DateTimeOffset? receivedAt = null
     )
     {
         var message = ZLinkEnvelopeCodec.DecodeBody(
@@ -139,7 +146,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
                     header,
                     message,
                     cancellationToken,
-                    metadata
+                    metadata,
+                    receivedAt
                 )
                 .ConfigureAwait(false);
             return reply with { OwnedRequest = message as Message };
@@ -158,7 +166,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkEnvelopeHeader header,
         object? message,
         CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata
+        ZLinkMessageMetadata? metadata,
+        DateTimeOffset? receivedAt
     )
     {
         var context = new ZLinkRouteMessageContext(
@@ -168,7 +177,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
             header.MessageName!,
             header.ContentType,
             metadata,
-            header.CorrelationId
+            header.CorrelationId,
+            receivedAt
         );
         var dispatch = await dispatcher
             .DispatchRouteAsync(

@@ -683,43 +683,16 @@ public sealed partial class RelocationBehaviorConformanceTests
     public async Task Sweeping_completed_aborts_keeps_active_empty_target_attempt_open()
     {
         var owner = new ZLinkStandaloneActorRelocationRuntime(null!, null!, null!);
-        var ownerType = owner.GetType();
-        var keyType = ownerType.GetNestedType("AttemptKey", BindingFlags.NonPublic)!;
-        var key = Activator.CreateInstance(keyType, 1UL, 2UL, 1UL)!;
-        var acquire = ownerType.GetMethod(
-            "AcquireTargetAttempt",
-            BindingFlags.Instance | BindingFlags.NonPublic
-        )!;
-        var lease = Assert.IsAssignableFrom<IDisposable>(acquire.Invoke(owner, [key]));
+        var key = new ZLinkStandaloneActorRelocationRuntime.AttemptKey(1, 2, 1);
+        var lease = owner.AcquireTargetAttempt(key);
         try
         {
-            var slot = lease
-                .GetType()
-                .GetProperty("Slot", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(lease)!;
-            var sweep = ownerType.GetMethod(
-                "SweepCompletedTargetAbortsAsync",
-                BindingFlags.Instance | BindingFlags.NonPublic
-            )!;
-            await Assert.IsType<ValueTask>(sweep.Invoke(owner, null)).AsTask();
+            var slot = lease.Slot;
+            await owner.SweepCompletedTargetAbortsAsync();
 
-            Assert.True(
-                Assert.IsType<bool>(
-                    slot.GetType()
-                        .GetMethod("TryAcquire", BindingFlags.Instance | BindingFlags.NonPublic)!
-                        .Invoke(slot, null)
-                )
-            );
-            slot.GetType()
-                .GetMethod("Release", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(slot, null);
-            Assert.False(
-                Assert.IsType<bool>(
-                    slot.GetType()
-                        .GetProperty("CanRemove", BindingFlags.Instance | BindingFlags.NonPublic)!
-                        .GetValue(slot)
-                )
-            );
+            Assert.True(slot.TryAcquire());
+            slot.Release();
+            Assert.False(slot.CanRemove);
         }
         finally
         {
@@ -2091,23 +2064,12 @@ public sealed partial class RelocationBehaviorConformanceTests
             // (location runtime §10), so the target Join terminal above does
             // not order the source relocation terminal. The source releases
             // its Deferred Join barrier only after that terminal's finally.
-            var deferredJoinPending = typeof(ZLinkActorRuntimeState).GetField(
-                "_deferredJoinPending",
-                BindingFlags.Instance | BindingFlags.NonPublic
-            )!;
-            await WaitUntilAsync(() => (int)deferredJoinPending.GetValue(sourceState)! == 0);
+            await WaitUntilAsync(() => sourceState._deferredJoinPending == 0);
             var node = (
                 (ZLinkBackendSpotNodeWrapper)
                     source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName).Node
             ).NativeNode;
-            var replies = (System.Collections.IEnumerable)
-                typeof(ZLinkManagedMeshNode)
-                    .GetField(
-                        "_sessionRelocationSealReplyTerminals",
-                        BindingFlags.Instance | BindingFlags.NonPublic
-                    )!
-                    .GetValue(node)!;
-            Assert.Empty(replies);
+            Assert.Empty(node._sessionRelocationSealReplyTerminals);
             Assert.True(target.Runtime.TryGetActorState(actorId, out var targetState));
             Assert.False(targetState.TryGetBoundSessionForInbound(out _));
             // Release the one notification retained with the removed binding.
@@ -2690,13 +2652,7 @@ public sealed partial class RelocationBehaviorConformanceTests
         CancellationToken cancellationToken
     )
     {
-        var reset =
-            typeof(ZLinkFrameworkRuntime).GetMethod(
-                "ResetActorRuntimeGenerationAsync",
-                BindingFlags.Instance | BindingFlags.NonPublic
-            ) ?? throw new InvalidOperationException("Actor generation reset owner was not found.");
-        var operation = Assert.IsType<ValueTask>(reset.Invoke(runtime, [cancellationToken, null]));
-        return operation.AsTask();
+        return runtime.ResetActorRuntimeGenerationAsync(cancellationToken, null).AsTask();
     }
 
     private static (int Count, int Staged, int Closing) GetTargetAttemptState(
@@ -2704,42 +2660,15 @@ public sealed partial class RelocationBehaviorConformanceTests
     )
     {
         var owner = runtime.StandaloneActorRelocationRuntime;
-        var attemptsField =
-            owner
-                .GetType()
-                .GetField("_targetAttempts", BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException("Target attempt owner was not found.");
-        var attempts =
-            attemptsField.GetValue(owner)
-            ?? throw new InvalidOperationException("Target attempt owner is unavailable.");
-        var type = attempts.GetType();
-        var count = Assert.IsType<int>(type.GetProperty("Count")!.GetValue(attempts));
-        var values = Assert.IsAssignableFrom<System.Collections.IEnumerable>(
-            type.GetProperty("Values")!.GetValue(attempts)
-        );
+        var attempts = owner._targetAttempts;
+        var count = attempts.Count;
         var staged = 0;
         var closing = 0;
-        foreach (var slot in values)
+        foreach (var slot in attempts.Values)
         {
-            var slotType = slot!.GetType();
-            if (
-                slotType
-                    .GetProperty("Stage", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(slot)
-                is not null
-            )
+            if (slot.Stage is not null)
                 staged++;
-            var leases = slotType
-                .GetField("_leases", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(slot)!;
-            if (
-                Assert.IsType<bool>(
-                    leases
-                        .GetType()
-                        .GetField("_closing", BindingFlags.Instance | BindingFlags.NonPublic)!
-                        .GetValue(leases)
-                )
-            )
+            if (slot._leases._closing)
                 closing++;
         }
         return (count, staged, closing);

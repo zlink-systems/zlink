@@ -408,7 +408,8 @@ export class ZLinkSpotActorDispatcher {
       packetName,
       contentType: context?.contentType,
       metadata: context?.metadata ?? ZLinkMessageMetadataEmpty,
-      correlationId: context?.correlationId
+      correlationId: context?.correlationId,
+      receivedAt: context?.receivedAt ?? new Date()
     };
   }
 }

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Reflection;
-using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.AspNetCore;
@@ -280,8 +279,9 @@ public sealed partial class StatefulServiceRuntimeTests
             Assert.Same(
                 unrelated,
                 Assert.Throws<InvalidOperationException>(() =>
-                    ZLinkManagedMeshNode.DisconnectPhysicalPeer(proxy, rid)
-                )
+                {
+                    ZLinkManagedMeshNode.DisconnectPhysicalPeer(proxy, rid);
+                })
             );
             Assert.Equal(1, calls);
         }
@@ -412,24 +412,13 @@ public sealed partial class StatefulServiceRuntimeTests
             State = MeshPeerState.Admitted,
         };
         peers.Add(rid, peer);
-        SetLivenessField(owner, "_socket", socket);
+        owner._socket = socket;
         var delivered = 0;
-        typeof(ZLinkManagedMeshNode)
-            .GetEvent(
-                "PeerConnectionIntentRemoved",
-                BindingFlags.Instance | BindingFlags.NonPublic
-            )!
-            .GetAddMethod(nonPublic: true)!
-            .Invoke(
-                owner,
-                [
-                    new Func<RoutingId, Action?>(removed =>
-                    {
-                        Assert.Equal(rid, removed);
-                        return () => delivered++;
-                    }),
-                ]
-            );
+        owner.PeerConnectionIntentRemoved += removed =>
+        {
+            Assert.Equal(rid, removed);
+            return () => delivered++;
+        };
         try
         {
             // A closed concrete socket exercises failure before logical removal.
@@ -445,7 +434,7 @@ public sealed partial class StatefulServiceRuntimeTests
         }
         finally
         {
-            SetLivenessField(owner, "_socket", null);
+            owner._socket = null;
         }
     }
 
@@ -486,26 +475,8 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.True(delivered);
     }
 
-    private static void TickLiveness(ZLinkManagedMeshNode node, long now)
-    {
-        try
-        {
-            typeof(ZLinkManagedMeshNode)
-                .GetMethod("ProcessInfrastructure", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(node, [now]);
-        }
-        catch (TargetInvocationException error) when (error.InnerException is not null)
-        {
-            ExceptionDispatchInfo.Capture(error.InnerException).Throw();
-            throw;
-        }
-    }
-
-    private static void SetLivenessField(object owner, string name, object? value) =>
-        owner
-            .GetType()
-            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(owner, value);
+    private static void TickLiveness(ZLinkManagedMeshNode node, long now) =>
+        node.ProcessInfrastructure(now);
 
     private static async Task ObserveAsync(Func<bool> condition)
     {

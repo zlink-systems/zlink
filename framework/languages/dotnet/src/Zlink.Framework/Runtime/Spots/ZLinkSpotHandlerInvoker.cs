@@ -11,7 +11,8 @@ internal sealed class ZLinkSpotHandlerInvoker(
     ZLinkCodecRegistryBuilder codecs,
     IZlinkStreamCompressionCodec? compressionCodec,
     ZLinkSpotActivation? activation = null,
-    Func<IZLinkActor, ValueTask<ZLinkScopedHandlerInstanceOwner>>? actorHandlerInstances = null
+    Func<IZLinkActor, ValueTask<ZLinkScopedHandlerInstanceOwner>>? actorHandlerInstances = null,
+    TimeProvider? timeProvider = null
 )
 {
     internal ZLinkSpotHandlerInvoker(
@@ -164,7 +165,8 @@ internal sealed class ZLinkSpotHandlerInvoker(
         IZLinkActor actor,
         ZlinkStreamHeader header,
         Message body,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        DateTimeOffset? receivedAt = null
     )
     {
         EnsureActorType(
@@ -181,7 +183,7 @@ internal sealed class ZLinkSpotHandlerInvoker(
             codecs,
             compressionCodec
         );
-        var context = CreateSendContext(header, cancellationToken);
+        var context = CreateSendContext(header, cancellationToken, receivedAt);
         var handler = await ResolveActorHandlerAsync(descriptor.HandlerType, actor)
             .ConfigureAwait(false);
         using var joins = ZLinkDeferredActorJoinHandlerScope.Open(spot is not IZLinkInstanceSpot);
@@ -206,7 +208,8 @@ internal sealed class ZLinkSpotHandlerInvoker(
         IZLinkActor actor,
         ZlinkStreamHeader header,
         Message body,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        DateTimeOffset? receivedAt = null
     )
     {
         if (descriptor.ReplyType is null)
@@ -228,7 +231,7 @@ internal sealed class ZLinkSpotHandlerInvoker(
             codecs,
             compressionCodec
         );
-        var context = CreateMessageContext(header);
+        var context = CreateMessageContext(header, receivedAt);
         var handler = await ResolveActorHandlerAsync(descriptor.HandlerType, actor)
             .ConfigureAwait(false);
         using var joins = ZLinkDeferredActorJoinHandlerScope.Open(spot is not IZLinkInstanceSpot);
@@ -267,13 +270,17 @@ internal sealed class ZLinkSpotHandlerInvoker(
 
     private ZLinkMessageContext CreateSendContext(
         ZlinkStreamHeader header,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        DateTimeOffset? receivedAt
     )
     {
-        return CreateMessageContext(header);
+        return CreateMessageContext(header, receivedAt);
     }
 
-    private ZLinkMessageContext CreateMessageContext(ZlinkStreamHeader header)
+    private ZLinkMessageContext CreateMessageContext(
+        ZlinkStreamHeader header,
+        DateTimeOffset? receivedAt = null
+    )
     {
         return new ZLinkMessageContext(
             meshName,
@@ -281,7 +288,9 @@ internal sealed class ZLinkSpotHandlerInvoker(
             header.Name!,
             ZLinkEnvelopeCodec.DefaultContentType,
             CreateMessageMetadata(header),
-            header.CorrelationId
+            header.CorrelationId,
+            receivedAt,
+            timeProvider
         );
     }
 

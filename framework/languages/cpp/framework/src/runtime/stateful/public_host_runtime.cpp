@@ -3246,16 +3246,31 @@ try {
     operation.prepare_for_registration ();
     operation.id = next_operation ();
     const auto host = shared_from_this ();
-    auto target_bytes = target.to_bytes ();
-    auto accepted = _transport->request_to_node (
-      target_bytes, encode_application (std::move (parts)), timeout,
-      [host,
-       operation] (foundation::operation_terminal_t terminal,
-                   ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
-          auto payload = std::move (completion_payload.value ());
+    return request_to_node (
+      target, std::move (parts), timeout,
+      [host, operation] (foundation::operation_terminal_t terminal,
+                         result_t<zlink::message_t> completion_payload) mutable {
           host->complete_operation (operation, operation_kind_t::none, terminal,
-                                    std::move (payload));
+                                    std::move (completion_payload.value ()));
       });
+}
+catch (...) {
+    return task_t<zlink::submit_result_t> (
+      detail::current_exception_result<zlink::submit_result_t> ());
+}
+
+task_t<zlink::submit_result_t>
+public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
+                                        std::vector<zlink::message_t> parts,
+                                        std::chrono::milliseconds timeout,
+                                        foundation::operation_registry_t::callback_t completion,
+                                        std::shared_ptr<task_completion_source_t<void>> admitted)
+try {
+    const auto host = shared_from_this ();
+    auto target_bytes = target.to_bytes ();
+    auto accepted =
+      _transport->request_to_node (target_bytes, encode_application (std::move (parts)), timeout,
+                                   std::move (completion), {}, std::move (admitted));
     auto classify = [host, target_bytes = std::move (target_bytes)] (const result_t<bool> &result) {
         if (!result)
             return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
@@ -7363,7 +7378,8 @@ bool public_host_runtime_t::dispatch_bound_session_send (
 task_t<std::size_t>
 public_host_runtime_t::dispatch_ready (mesh::service_mailbox_t::application_dispatch_t dispatch,
                                        bool accept_application_receive,
-                                       std::function<bool ()> next_application_receive)
+                                       std::function<bool ()> next_application_receive,
+                                       std::optional<zlink::poll_event_flag_t> waited)
 {
     if (!dispatch) {
         throw std::invalid_argument ("framework public host dispatch callback is required");
@@ -7389,7 +7405,12 @@ public_host_runtime_t::dispatch_ready (mesh::service_mailbox_t::application_disp
     receive_batch_budget_t budget;
     // One poll per receive turn; the turn then reads records until the ROUTER
     // reports none or the budget ends (08-messaging-hot-path I2).
-    const auto readiness = _transport->begin_receive_turn ();
+    const auto readiness = _transport->begin_receive_turn (waited);
+    if (readiness
+        && (static_cast<short> (*readiness)
+            & static_cast<short> (zlink::poll_event_flag_t::pollcompletion))
+             != 0)
+        ++count;
     const bool receive_ready =
       readiness && accept_application_receive
       && (static_cast<short> (*readiness) & static_cast<short> (zlink::poll_event_flag_t::pollin))
@@ -8443,7 +8464,7 @@ public_host_runtime_t::dispatch_application_owner (
     }
 }
 
-bool public_host_runtime_t::wait_for_dispatch_activity (
+std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_dispatch_activity (
   std::chrono::milliseconds timeout,
   bool accept_application_receive,
   std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept
@@ -8462,7 +8483,7 @@ bool public_host_runtime_t::wait_for_dispatch_activity (
     }
     catch (...) {
         _options.mesh.runtime_failures->report (std::current_exception ());
-        return false;
+        return std::nullopt;
     }
 }
 
@@ -9654,36 +9675,63 @@ bool public_host_runtime_t::complete_local_request (const pending_operation_t &o
     return enqueue_completion (operation, std::move (completion), parts);
 }
 
+result_t<receive_record_t>
+public_host_runtime_t::decode_operation_record (call_id_t operation,
+                                                operation_kind_t kind,
+                                                foundation::operation_terminal_t terminal,
+                                                const zlink::message_t &payload) const
+{
+    if (terminal == foundation::operation_terminal_t::shutdown)
+        return detail::boundary_failure<receive_record_t> (detail::boundary_error_t::shutdown,
+                                                           "MeshNode operation owner is closed");
+    receive_record_t record;
+    record.kind = record_kind_t::completion;
+    record.domain = ready_domain_t::infrastructure;
+    record.operation_id = operation;
+    record.operation_kind = kind;
+    record.source_node_rid = zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
+    switch (terminal) {
+        case foundation::operation_terminal_t::completed:
+            record.terminal_result = 0;
+            break;
+        case foundation::operation_terminal_t::timed_out:
+            record.terminal_result = static_cast<int> (zlink::request_result_t::timed_out);
+            break;
+        case foundation::operation_terminal_t::route_unavailable:
+            record.terminal_result = static_cast<int> (zlink::request_result_t::not_connected);
+            break;
+        default:
+            record.terminal_result = static_cast<int> (zlink::request_result_t::internal_error);
+            break;
+    }
+    if (record.terminal_result != 0 && !payload.is_empty ()) {
+        try {
+            const auto reply = protocol::decode_reply_header (protocol::message_bytes (payload));
+            record.terminal_result = static_cast<int> (reply.terminal_result);
+            record.failure_errno = static_cast<int> (reply.failure_code);
+        }
+        catch (const protocol::service_wire_error_t &) {
+            record.terminal_result = static_cast<int> (zlink::request_result_t::protocol_error);
+            record.failure_errno = 0;
+        }
+    }
+    return result_t<receive_record_t>::success (std::move (record));
+}
+
 void public_host_runtime_t::complete_operation (const pending_operation_t &operation,
                                                 operation_kind_t kind,
                                                 foundation::operation_terminal_t terminal,
                                                 zlink::message_t payload)
 {
     try {
-        receive_record_t record;
-        record.kind = record_kind_t::completion;
-        record.domain = ready_domain_t::infrastructure;
-        record.operation_id = operation.id;
-        record.operation_kind = kind;
-        record.source_node_rid =
-          zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
-        switch (terminal) {
-            case foundation::operation_terminal_t::completed:
-                record.terminal_result = 0;
-                break;
-            case foundation::operation_terminal_t::timed_out:
-                record.terminal_result = static_cast<int> (zlink::request_result_t::timed_out);
-                break;
-            case foundation::operation_terminal_t::route_unavailable:
-                record.terminal_result = static_cast<int> (zlink::request_result_t::not_connected);
-                break;
-            case foundation::operation_terminal_t::shutdown:
-                record.terminal_result = static_cast<int> (zlink::request_result_t::terminated);
-                break;
-            default:
-                record.terminal_result = static_cast<int> (zlink::request_result_t::internal_error);
-                break;
+        auto decoded_record = decode_operation_record (operation.id, kind, terminal, payload);
+        if (!decoded_record) {
+            operation.completion->complete (
+              detail::result_access_t::failure<operation_completion_t> (
+                decoded_record.exception ()));
+            return;
         }
+        auto record = std::move (decoded_record.value ());
         std::vector<zlink::message_t> parts;
         if (record.terminal_result == 0) {
             try {
@@ -9692,25 +9740,9 @@ void public_host_runtime_t::complete_operation (const pending_operation_t &opera
             catch (const protocol::service_wire_error_t &) {
                 record.terminal_result = static_cast<int> (zlink::request_result_t::protocol_error);
             }
-        } else if (!payload.is_empty ()) {
-            try {
-                const auto reply =
-                  protocol::decode_reply_header (protocol::message_bytes (payload));
-                record.terminal_result = static_cast<int> (reply.terminal_result);
-                record.failure_errno = static_cast<int> (reply.failure_code);
-            }
-            catch (const protocol::service_wire_error_t &) {
-                record.terminal_result = static_cast<int> (zlink::request_result_t::protocol_error);
-                record.failure_errno = 0;
-            }
         }
-        if (terminal == foundation::operation_terminal_t::shutdown) {
-            operation.completion->complete (detail::boundary_failure<operation_completion_t> (
-              detail::boundary_error_t::shutdown, "MeshNode operation owner is closed"));
-        } else {
-            operation.completion->complete (result_t<operation_completion_t>::success (
-              operation_completion_t{std::move (record), std::move (parts)}));
-        }
+        operation.completion->complete (result_t<operation_completion_t>::success (
+          operation_completion_t{std::move (record), std::move (parts)}));
     }
     catch (const std::exception &error) {
         operation.completion->complete (result_t<operation_completion_t>::failure (

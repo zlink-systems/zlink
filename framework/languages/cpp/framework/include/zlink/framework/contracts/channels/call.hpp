@@ -203,11 +203,11 @@ class channel_request_call_t
             if (const auto *submit = std::get_if<1> (&_submit)) {
                 // Prepare the final reply before submission. The receiver owns every
                 // decoder until physical delivery, including after admission failure.
-                return detail::request_task_access_t::receive_public<TReply, zlink::message_t> (
+                return detail::request_task_access_t::receive_public<TReply, encoded_payload_t> (
                   [&] (auto receiver) {
                       (*submit) (_packet_name, _timeout, _metadata, std::move (receiver));
                   },
-                  [serializers = _serializers] (const result_t<zlink::message_t> &reply) {
+                  [serializers = _serializers] (const result_t<encoded_payload_t> &reply) {
                       return decode<TReply> (serializers, reply.value ());
                   });
             }
@@ -228,13 +228,19 @@ class channel_request_call_t
     static result_t<TReply> decode (serializer_registry_t *serializers,
                                     const zlink::message_t &reply)
     {
+        return decode<TReply> (serializers, detail::encoded_payload_from_raw (reply));
+    }
+
+    template <typename TReply>
+    static result_t<TReply> decode (serializer_registry_t *serializers,
+                                    const encoded_payload_t &reply)
+    {
         if (serializers == nullptr) {
             return result_t<TReply>::failure (framework_error_kind_t::protocol_error,
                                               "channel request has no serializer registry");
         }
         try {
-            return result_t<TReply>::success (
-              serializers->get<TReply> ().deserialize (detail::encoded_payload_from_raw (reply)));
+            return result_t<TReply>::success (serializers->get<TReply> ().deserialize (reply));
         }
         catch (const framework_exception_t &) {
             return detail::current_exception_result<TReply> ();
@@ -250,7 +256,12 @@ class channel_request_call_t
         if (const auto *submit = std::get_if<1> (&_submit)) {
             return detail::request_task_access_t::receive_internal<zlink::message_t> (
               [&] (auto receiver) {
-                  (*submit) (_packet_name, _timeout, _metadata, std::move (receiver));
+                  (*submit) (_packet_name, _timeout, _metadata,
+                             receiver.template project<encoded_payload_t> (
+                               [] (const result_t<encoded_payload_t> &reply) {
+                                   return result_t<zlink::message_t>::success (
+                                     detail::encoded_payload_to_raw (reply.value ()));
+                               }));
               });
         }
         return std::get<submit_fn_t> (_submit) (_packet_name, _timeout, _metadata);
@@ -264,10 +275,11 @@ class channel_request_call_t
   private:
     friend class route_client_t;
     friend class spot_request_call_t;
-    using receiver_submit_fn_t = std::function<void (const std::string &,
-                                                     std::chrono::milliseconds,
-                                                     const metadata_map_t &,
-                                                     detail::request_receiver_t<zlink::message_t>)>;
+    using receiver_submit_fn_t =
+      std::function<void (const std::string &,
+                          std::chrono::milliseconds,
+                          const metadata_map_t &,
+                          detail::request_receiver_t<encoded_payload_t>)>;
 
     channel_request_call_t (detail::request_projection_t,
                             std::string packet_name,

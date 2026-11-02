@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <atomic>
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -161,6 +162,7 @@ struct service_mailbox_record_t
     service_mailbox_settlement_t transferred;
     // Read once by the publication owner before the mailbox accepts the record.
     std::optional<request_source_t> source_original = std::nullopt;
+    std::optional<std::chrono::system_clock::time_point> received_at;
 
     // Reply callbacks retain routing metadata without copying an owned original.
     std::shared_ptr<const service_mailbox_record_t> reply_source () const;
@@ -176,7 +178,13 @@ struct service_mailbox_slot_t
 class service_mailbox_t
 {
   public:
+    using utc_clock_t = std::function<std::chrono::system_clock::time_point ()>;
     service_mailbox_t () = default;
+    explicit service_mailbox_t (utc_clock_t utc_clock) :
+        _utc_clock (utc_clock ? std::move (utc_clock)
+                              : utc_clock_t{[] { return std::chrono::system_clock::now (); }})
+    {
+    }
     service_mailbox_t (const service_mailbox_t &) = delete;
     service_mailbox_t &operator= (const service_mailbox_t &) = delete;
 
@@ -355,6 +363,7 @@ class service_mailbox_t
     static void notify_application_ready_owned (const std::shared_ptr<state_t> &state);
     static application_ready_batch_t take_application_ready_locked (state_t &state);
     std::shared_ptr<state_t> _state = std::make_shared<state_t> ();
+    utc_clock_t _utc_clock = [] { return std::chrono::system_clock::now (); };
 };
 
 // One claim of an owner's FIFO prefix. records views the claimed slots until the

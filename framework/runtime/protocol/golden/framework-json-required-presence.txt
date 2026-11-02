@@ -1,0 +1,6 @@
+valid	{"code":"FORBIDDEN","accessToken":null,"accountId":7}
+valid	{"code":"FORBIDDEN","accessToken":null,"accountId":7,"attempts":12}
+invalid	{"code":"FORBIDDEN","accessToken":null}
+invalid	{"code":"FORBIDDEN","accountId":7}
+invalid	{"code":"FORBIDDEN","accessToken":null,"accountId":null}
+invalid	{"code":"FORBIDDEN","accessToken":null,"accountId":7,"attempts":null}
