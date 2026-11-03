@@ -52,6 +52,26 @@ final class ZLinkStreamReceiveDispatcher {
 
     void dispatch(byte[] encodedHeader, byte[] payload) {
         ZLinkStreamWireProtocol.Header header = ZLinkStreamWireProtocol.decodeHeader(encodedHeader);
+        if (header.kind() == ZLinkStreamWireProtocol.KIND_CONTROL) {
+            if (DefaultZLinkStreamConnector.traceEnabled()) {
+                DefaultZLinkStreamConnector.trace(
+                        () ->
+                                "connector read-frame endpoint="
+                                        + configuration.endpoint()
+                                        + " kind="
+                                        + header.kind()
+                                        + " name="
+                                        + header.name()
+                                        + " requestSeq="
+                                        + header.requestSeq()
+                                        + " bytes="
+                                        + payload.length
+                                        + " correlation="
+                                        + header.correlationId());
+            }
+            dispatchControl(header, payload);
+            return;
+        }
         byte[] decodedPayload;
         ZLinkStreamActorRegistry.DefaultActor actor;
         try {
@@ -92,10 +112,6 @@ final class ZLinkStreamReceiveDispatcher {
                                     + decodedPayload.length
                                     + " correlation="
                                     + header.correlationId());
-        }
-        if (header.kind() == ZLinkStreamWireProtocol.KIND_CONTROL) {
-            dispatchControl(header, decodedPayload);
-            return;
         }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_ERROR) {
             dispatchError(header, decodedPayload);
@@ -141,18 +157,25 @@ final class ZLinkStreamReceiveDispatcher {
                                         + reason.name().toLowerCase());
                 sessionClosing.accept(reason);
             }
-            case HEARTBEAT_PING, HEARTBEAT_PONG, UNKNOWN -> {
-                if (payload.length != 0) {
-                    throw new IllegalArgumentException(
-                            "heartbeat control packet payload must be empty");
-                }
-                if (control == Control.HEARTBEAT_PING) {
-                    controlSender.apply(HEARTBEAT_PONG_NAME);
-                } else if (control == Control.UNKNOWN) {
+            case HEARTBEAT_PING -> {
+                if (payload.length != 0) traceIgnoredControl(header.name(), payload.length);
+                controlSender.apply(HEARTBEAT_PONG_NAME);
+            }
+            case HEARTBEAT_PONG -> {
+                if (payload.length != 0) traceIgnoredControl(header.name(), payload.length);
+            }
+            case UNKNOWN -> {
+                if (!header.name().startsWith("$zlink.")) {
                     throw new IllegalArgumentException("unknown control packet");
                 }
+                traceIgnoredControl(header.name(), payload.length);
             }
         }
+    }
+
+    private static void traceIgnoredControl(String name, int payloadLength) {
+        DefaultZLinkStreamConnector.trace(
+                () -> "Ignored STREAM control name=" + name + " payloadBytes=" + payloadLength);
     }
 
     private void completeResponse(ZLinkStreamWireProtocol.Header header, byte[] payload) {

@@ -416,6 +416,80 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
+    public async Task UnknownControlExtensionsAndHeartbeatVersionsKeepTheConnectionOpen()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var endpoint = (IPEndPoint)listener.LocalEndpoint;
+        var codec = new ZlinkStreamHeaderCodec();
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseServer = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var server = Task.Run(async () =>
+        {
+            using var tcp = await listener.AcceptTcpClientAsync();
+            await using var stream = tcp.GetStream();
+            await WritePacketAsync(stream, ControlHeader(codec, "$zlink.future.control"), [7, 8]);
+            await WritePacketAsync(stream, ControlHeader(codec, "$zlink.heartbeat.ping"), [2, 3]);
+            var pong = await ReadPacketAsync(stream).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("$zlink.heartbeat.pong", codec.Decode(pong.Header).Name);
+            Assert.Empty(pong.Payload);
+            await WritePacketAsync(stream, ControlHeader(codec, "$zlink.heartbeat.pong"), [2]);
+            var stillConnected = new ZlinkStreamHeader(
+                ZlinkStreamMessageKind.Send,
+                ZlinkStreamCodec.Raw,
+                ZlinkStreamHeaderFlags.None,
+                null,
+                "still-connected",
+                ZlinkStreamMetadata.Empty
+            );
+            await WritePacketAsync(stream, codec.Encode(stillConnected).ToArray(), [1]);
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await releaseServer.Task;
+        });
+
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            }
+        );
+        using var subscription = connector.On(
+            "still-connected",
+            (_, _) =>
+            {
+                received.TrySetResult();
+                return ValueTask.CompletedTask;
+            }
+        );
+
+        try
+        {
+            await connector.Connect.Async();
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(ZlinkStreamConnectionState.Connected, connector.State);
+            releaseServer.TrySetResult();
+            await server;
+        }
+        finally
+        {
+            releaseServer.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task UnprefixedUnknownControlEndsConnectionAsFrameDecodeFailed()
+    {
+        await AssertActorProtocolErrorAsync(
+            (stream, codec) => WritePacketAsync(stream, ControlHeader(codec, "future.control"), [])
+        );
+    }
+
+    [Fact]
     public async Task DuplicateActorBoundEndsConnectionAsFrameDecodeFailed()
     {
         await AssertActorProtocolErrorAsync(

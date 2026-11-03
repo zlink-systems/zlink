@@ -14,8 +14,13 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ConnectorDispatchTest {
     @Test
@@ -23,6 +28,101 @@ final class ConnectorDispatchTest {
         assertEquals(
                 List.of("MANUAL", "IMMEDIATE"),
                 Arrays.stream(ZLinkStreamDispatchMode.values()).map(Enum::name).toList());
+    }
+
+    @Test
+    void futureControlsAndUnknownHeartbeatVersionsKeepTheConnectionOpen() throws Exception {
+        Logger logger = Logger.getLogger(DefaultZLinkStreamConnector.class.getName());
+        List<String> lines = new CopyOnWriteArrayList<>();
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        lines.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        Level oldLevel = logger.getLevel();
+        boolean oldParentHandlers = logger.getUseParentHandlers();
+        logger.addHandler(handler);
+        logger.setLevel(Level.FINE);
+        logger.setUseParentHandlers(false);
+        try {
+            try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+                ZLinkStreamConnector connector =
+                        ZLinkStreamConnectorFactory.create(
+                                server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+                try {
+                    AtomicInteger received = new AtomicInteger();
+                    connector.on(
+                            "StillConnected",
+                            message -> {
+                                received.incrementAndGet();
+                                message.payload().payload().close();
+                                return CompletableFuture.completedFuture(null);
+                            });
+                    ConnectorTestAwait.await(connector.connect());
+                    server.sendAsync(control("$zlink.future.control"), new byte[] {7, 8}).join();
+                    server.sendAsync(control("$zlink.heartbeat.ping"), new byte[] {2, 3}).join();
+
+                    TcpStreamConnectorTestServer.ReceivedFrame pong =
+                            server.readFrameAsync().get(5, TimeUnit.SECONDS);
+                    assertEquals("$zlink.heartbeat.pong", pong.header().name());
+                    assertEquals(0, pong.payload().length);
+
+                    server.sendAsync(control("$zlink.heartbeat.pong"), new byte[] {2}).join();
+                    server.sendAsync(
+                                    send("StillConnected"),
+                                    TcpStreamConnectorTestServer.bytes("ok"))
+                            .join();
+                    TcpStreamConnectorTestServer.awaitCondition(() -> received.get() == 1);
+                    assertEquals(ZLinkStreamConnectionState.CONNECTED, connector.state());
+                } finally {
+                    ConnectorTestAwait.await(connector.close());
+                }
+            }
+
+            List<String> ignoredControlLines =
+                    lines.stream().filter(line -> line.contains("Ignored STREAM control")).toList();
+            if (DefaultZLinkStreamConnector.traceEnabled()) {
+                assertEquals(
+                        List.of(
+                                "[zlink-java-stream-trace] Ignored STREAM control name=$zlink.future.control payloadBytes=2",
+                                "[zlink-java-stream-trace] Ignored STREAM control name=$zlink.heartbeat.ping payloadBytes=2",
+                                "[zlink-java-stream-trace] Ignored STREAM control name=$zlink.heartbeat.pong payloadBytes=1"),
+                        ignoredControlLines);
+            } else {
+                assertEquals(List.of(), ignoredControlLines);
+            }
+        } finally {
+            logger.removeHandler(handler);
+            logger.setLevel(oldLevel);
+            logger.setUseParentHandlers(oldParentHandlers);
+        }
+    }
+
+    @Test
+    void unprefixedUnknownControlEndsTheConnection() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    ZLinkStreamConnectorFactory.create(
+                            server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            try {
+                ConnectorTestAwait.await(connector.connect());
+                server.sendAsync(control("future.control"), new byte[0]).join();
+                TcpStreamConnectorTestServer.awaitCondition(
+                        () ->
+                                connector.closeReason().orElse(null)
+                                        == ZLinkStreamCloseReason.PROTOCOL_ERROR);
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
     }
 
     @Test
@@ -481,5 +581,27 @@ final class ConnectorDispatchTest {
 
     private static ZLinkStreamEncodedPayload payload(String packetName, String body) {
         return new ZLinkStreamEncodedPayload(packetName, Message.from(body), Map.of());
+    }
+
+    private static ZLinkStreamWireProtocol.Header control(String name) {
+        return new ZLinkStreamWireProtocol.Header(
+                ZLinkStreamWireProtocol.KIND_CONTROL,
+                ZLinkStreamWireProtocol.CODEC_RAW,
+                0,
+                null,
+                name,
+                Map.of(),
+                null);
+    }
+
+    private static ZLinkStreamWireProtocol.Header send(String name) {
+        return new ZLinkStreamWireProtocol.Header(
+                ZLinkStreamWireProtocol.KIND_SEND,
+                ZLinkStreamWireProtocol.CODEC_RAW,
+                0,
+                null,
+                name,
+                Map.of(),
+                null);
     }
 }

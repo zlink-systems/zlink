@@ -901,6 +901,7 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
             }
             // Keep the existing read claim until this batch has been consumed.
             // Request submission cannot start another reader while the codec runs.
+            const auto payload_bytes = value.payload.size ();
             lock.unlock ();
             auto packet = decode_inbound_packet (*state, header, std::move (value.payload),
                                                  observed_connection);
@@ -919,7 +920,8 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                 return std::string (
                   "seq="
                   + (header.request_seq ? std::to_string (*header.request_seq) : std::string ("-"))
-                  + " name=" + header.name + " kind=" + message_kind_name (header.kind));
+                  + " name=" + header.name + " kind=" + message_kind_name (header.kind)
+                  + " payloadBytes=" + std::to_string (payload_bytes));
             });
             /* §5.2: pending request 매칭은 request_seq가 정본이다. packet name은 대조
        * 조건이 아니므로 이름이 달라도 응답을 버리지 않는다. */
