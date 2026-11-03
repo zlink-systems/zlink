@@ -883,12 +883,40 @@ public sealed class StreamSessionForcedCleanupTests
             "test"
         );
         var badPeer = RoutingId.From("malformed-peer");
+        var badControlPeer = RoutingId.From("malformed-control-peer");
         var goodPeer = RoutingId.From("good-peer");
         try
         {
             node.Start();
             socket.EnqueuePacket(badPeer, [], new byte[(64 * 1024) + 1]);
             await socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            monitor.Emit(
+                new ZLinkBackendSocketMonitorEvent(
+                    ZLinkSocketNativeEventType.ConnectionReady,
+                    badControlPeer,
+                    "local-control",
+                    "remote-control",
+                    0,
+                    MonitorEventFlags.ConnectionReadyEdge
+                )
+            );
+            await lifetime.WaitConnectedAsync(badControlPeer);
+            var malformedControlHeader = ZLinkStreamProtocolDefaults
+                .EncodeHeader(
+                    new ZlinkStreamHeader(
+                        ZlinkStreamMessageKind.Control,
+                        ZlinkStreamCodec.Raw,
+                        ZlinkStreamHeaderFlags.None,
+                        null,
+                        "$zlink.future.header",
+                        ZlinkStreamMetadata.Empty
+                    )
+                )
+                .ToArray();
+            malformedControlHeader[0] = 0;
+            socket.EnqueuePacket(badControlPeer, malformedControlHeader, []);
+            await socket.SecondDisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             monitor.Emit(
                 new ZLinkBackendSocketMonitorEvent(
@@ -903,7 +931,7 @@ public sealed class StreamSessionForcedCleanupTests
             EmitJson(socket, goodPeer, new SessionOrderingMessage());
 
             await lifetime.WaitDispatchCompletedAsync(goodPeer);
-            Assert.Equal(1, socket.DisconnectCount);
+            Assert.Equal(2, socket.DisconnectCount);
             Assert.Equal(
                 new[] { "connected", "dispatch-start", "dispatch-end" },
                 lifetime.Events(goodPeer)
@@ -3009,6 +3037,8 @@ public sealed class StreamSessionForcedCleanupTests
 
         public TaskCompletionSource DisconnectStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondDisconnectStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource AllowDisconnect { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -3137,6 +3167,8 @@ public sealed class StreamSessionForcedCleanupTests
         {
             DisconnectCount++;
             DisconnectStarted.TrySetResult();
+            if (DisconnectCount == 2)
+                SecondDisconnectStarted.TrySetResult();
             if (BlockDisconnect)
                 AllowDisconnect.Task.GetAwaiter().GetResult();
             if (DisconnectFailure is not null)
