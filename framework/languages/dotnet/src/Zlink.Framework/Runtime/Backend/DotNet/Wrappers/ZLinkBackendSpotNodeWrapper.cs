@@ -1385,7 +1385,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         CancellationToken cancellationToken,
         Func<IReadOnlyList<Message>, TReply> decodeReply,
         Func<Exception, Exception> mapFailure,
-        ZLinkRequestAdmission? requestAdmission = null
+        ZLinkRequestAdmission? requestAdmission = null,
+        Action<Exception>? physicalFailure = null
     ) =>
         new(
             _node.RequestToActorAsync<TReply>(
@@ -1395,7 +1396,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
                 cancellationToken,
                 decodeReply,
                 mapFailure,
-                requestAdmission
+                requestAdmission,
+                physicalFailure
             )
         );
 

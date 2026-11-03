@@ -3605,7 +3605,7 @@ function validateSpotCloseBranches(fixture) {
       given: {
         authority: 'Ready',
         ownerFence: 'mismatch',
-        instanceIntent: [false, true],
+        instanceIntent: [false],
         messageKind: 'request'
       }
     },

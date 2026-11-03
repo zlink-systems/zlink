@@ -144,6 +144,12 @@ Redis) on every call; this cache reduces that cost.
 | Relay notification | [Message Follow](../00-foundation/02-glossary.en.md#message-follow) forwards a message that still arrives at the previous owner after an Actor or Spot has moved to a different MeshNode to the new owner, then notifies the original sending runtime. The notified runtime removes that entry and re-queries the owner on the next call. |
 | Runtime setting change | The `RouteCacheMaxAge` runtime-change rule is defined by [Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner). |
 
+When a failure indicating that the Actor is not at that location or that the location is stale is delivered to the Framework,
+the current entry is removed only if it matches the route fence used by that request or one-way send,
+preserving a newer route stored afterwards. For a request, the prepared final consumer in
+[Submit and Completion §9](../01-execution/01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget)
+decides cache invalidation independently of the public result.
+
 The lifetime and invalidation of a positive Actor route cache entry are limited
 to the conditions in the table above. Operations that must verify authority read
 the Location Store directly without first removing the cache entry to force a

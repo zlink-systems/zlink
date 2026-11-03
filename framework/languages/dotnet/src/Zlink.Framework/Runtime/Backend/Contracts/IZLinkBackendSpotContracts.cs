@@ -287,7 +287,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         CancellationToken cancellationToken,
         Func<IReadOnlyList<Message>, TReply> decodeReply,
         Func<Exception, Exception> mapFailure,
-        ZLinkRequestAdmission? requestAdmission = null
+        ZLinkRequestAdmission? requestAdmission = null,
+        Action<Exception>? physicalFailure = null
     );
 
     bool ReplyActorNoBind(

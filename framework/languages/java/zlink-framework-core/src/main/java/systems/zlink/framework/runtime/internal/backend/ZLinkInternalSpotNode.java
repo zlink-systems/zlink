@@ -641,7 +641,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                         ZLinkCompletionBridge.completeOrDiscard(
                                 completion, decodeReply.apply(messages), discardReply);
                     } catch (RuntimeException | Error error) {
-                        completion.completeExceptionally(error);
+                        completion.completeExceptionally(mapFailure.apply(error));
                     }
                 });
     }
