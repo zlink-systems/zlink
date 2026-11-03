@@ -47,7 +47,7 @@ final class ZLinkActorContextStateRelocationTest {
                             }
                         });
         assertNull(state.boundSessionRoute());
-        assertTrue(state.clearBoundSession(token));
+        assertTrue(state.clearBoundSession(token, null));
     }
 
     @Test
@@ -156,7 +156,7 @@ final class ZLinkActorContextStateRelocationTest {
         var imported = state.boundSessionRoute();
         assertEquals(41, imported.bindingGeneration());
         assertNotEquals(41, localBindingToken);
-        assertTrue(state.clearBoundSession(localBindingToken));
+        assertTrue(state.clearBoundSession(localBindingToken, null));
     }
 
     @Test
@@ -169,10 +169,10 @@ final class ZLinkActorContextStateRelocationTest {
                         new ZLinkBackendActorRef(node, "actor-a", 7), "mesh", "entry-a");
         long first = bindWithRecord(state, node, firstSession);
         long second = bindWithRecord(state, node, secondSession);
-        assertFalse(state.clearBoundSession(first));
+        assertFalse(state.clearBoundSession(first, null));
         assertEquals(secondSession, state.boundSessionRoute().sessionRid());
-        assertTrue(state.clearBoundSession(second));
-        assertFalse(state.clearBoundSession(second));
+        assertTrue(state.clearBoundSession(second, null));
+        assertFalse(state.clearBoundSession(second, null));
     }
 
     @Test

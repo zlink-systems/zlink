@@ -4,7 +4,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.actors.ZLinkBoundSession;
 import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.backend.*;
@@ -22,7 +21,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
+final class ZLinkBoundSessionRuntime implements ZLinkSessionBoundSession {
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
     private final ZLinkBackendStreamSocket stream;
     private final ZLinkInternalSpotNode spotNode;
@@ -60,6 +59,11 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
 
     ZLinkInternalSpotNode spotNode() {
         return spotNode;
+    }
+
+    @Override
+    public RoutingId sessionRid() {
+        return sessionRid;
     }
 
     void setActorSlot(int actorSlot) {

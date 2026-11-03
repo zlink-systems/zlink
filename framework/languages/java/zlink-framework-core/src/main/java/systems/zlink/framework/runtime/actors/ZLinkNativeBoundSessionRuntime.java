@@ -4,7 +4,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.actors.ZLinkBoundSession;
 import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -19,7 +18,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
+final class ZLinkNativeBoundSessionRuntime implements ZLinkSessionBoundSession {
     private final ZLinkInternalSpotNode spotNode;
     private ZLinkBackendActorRef actorRef;
     private final ZLinkMessageSerializer serializer;
@@ -57,6 +56,11 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
 
     ZLinkInternalSpotNode spotNode() {
         return spotNode;
+    }
+
+    @Override
+    public RoutingId sessionRid() {
+        return sourceSessionRid;
     }
 
     void updateActorRef(ZLinkBackendActorRef actorRef) {
