@@ -66,19 +66,104 @@ struct auto_connect_cache_test_access_t
 
 struct location_auto_connect_test_access_t
 {
-    template <typename Route>
-    static task_t<void> finish_probe (location_auto_connect_host_service_t *service, Route *route)
+    static location_auto_connect_host_service_t::target_t peer_target ()
     {
-        if constexpr (requires {
-                          route->connect_async (zlink::routing_id_t::from ("remote"),
-                                                std::string{});
-                      })
-            (void) co_await route->connect_async (zlink::routing_id_t::from ("remote"),
-                                                  "inproc://l4-peer");
+        location_auto_connect_host_service_t::target_t target;
+        target.node_rid = zlink::routing_id_t::from ("remote");
+        target.endpoint = "inproc://l4-peer";
+        target.lifecycle_generation = 1;
+        target.security_identity = "default";
+        return target;
+    }
+
+    static task_t<void> route_target (location_auto_connect_host_service_t &service,
+                                      detail::route_channel_runtime_t &route,
+                                      bool remove)
+    {
+        return service.update_route_target (&service, &route, {}, peer_target (), remove);
+    }
+
+    static task_t<void> mesh_target (std::shared_ptr<detail::mesh_node_runtime_t> node, bool remove)
+    {
+        return location_auto_connect_host_service_t::update_mesh_target (std::move (node),
+                                                                         peer_target (), remove);
+    }
+
+    static void register_stop_probe (location_auto_connect_host_service_t &service,
+                                     detail::route_channel_runtime_t &route,
+                                     std::shared_ptr<detail::mesh_node_runtime_t> node,
+                                     bool mesh)
+    {
+        if (mesh)
+            service.add_mesh_loop (node);
         else
-            (void) route->connect (zlink::routing_id_t::from ("remote"), "inproc://l4-peer");
+            service.add_route_loop (route, std::nullopt, std::nullopt, false, {});
+        service._loops.front ().active.emplace ("remote", peer_target ());
+    }
+
+    static task_t<void> finish_probe (location_auto_connect_host_service_t *service,
+                                      detail::route_channel_runtime_t *route,
+                                      location_auto_connect_host_service_t::target_t target)
+    {
+        co_await service->update_route_target (service, route, {}, std::move (target), false);
         service->_stop_requested.request_stop ();
-        co_return;
+    }
+
+    static void check_stop_between_targets (location_auto_connect_host_service_t &service,
+                                            int operation)
+    {
+        auto completion = std::make_shared<task_completion_source_t<void>> ();
+        unsigned calls = 0;
+        service.add_loop (
+          "l4-mesh", std::nullopt, {}, std::nullopt, false,
+          [&] (auto) {
+              ++calls;
+              return completion->task ();
+          },
+          [&] (auto) {
+              ++calls;
+              return completion->task ();
+          },
+          [] (const auto &) {});
+        auto &loop = service._loops.front ();
+        auto sources = std::make_shared<live_location_reader_t::mesh_sources_t> ();
+        for (auto name : {"remote", "remote-two"}) {
+            auto target = peer_target ();
+            target.key = name;
+            target.node_rid = zlink::routing_id_t::from (name);
+            auto descriptor = std::make_shared<mesh_node_descriptor_t> ();
+            descriptor->mesh_name = "l4-mesh";
+            descriptor->rid = target.node_rid;
+            descriptor->endpoint = target.endpoint + name;
+            descriptor->owner_id = "remote-owner";
+            descriptor->lease_generation = 1;
+            descriptor->lifecycle_generation = 1;
+            descriptor->state = framework_runtime_state_t::serving;
+            target.original = descriptor;
+            target.endpoint = descriptor->endpoint;
+            sources->push_back (
+              {*descriptor, std::chrono::steady_clock::now () + std::chrono::hours (1)});
+        }
+        if (operation != 0)
+            loop.active = service.compute_desired (loop, sources);
+        if (operation == 1)
+            sources->clear ();
+        if (operation == 2)
+            for (auto &source : *sources)
+                source.descriptor.endpoint += "-replacement";
+        auto pending = service.reconcile (&loop, sources, true);
+        ASSERT_FALSE (pending.await_ready ());
+        ASSERT_EQ (1u, calls);
+        service._stop_requested.request_stop ();
+        // Model stop's cleanup while the target task is suspended. The loop
+        // must leave without using its earlier active iterator or adding a target.
+        loop.active.clear ();
+        completion->complete (result_t<void>::success ());
+        const auto result = pending.result_for (std::chrono::seconds (5));
+        ASSERT_TRUE (result);
+        EXPECT_TRUE (*result);
+        EXPECT_EQ (1u, calls);
+        EXPECT_TRUE (loop.active.empty ());
     }
 
     static void configure_probe (location_auto_connect_host_service_t &service,
@@ -96,7 +181,7 @@ struct location_auto_connect_test_access_t
         service._route_cache = cache;
         service.add_loop (
           "l4-mesh", std::nullopt, {}, std::nullopt, false,
-          [&service, &route, &calls, &runtime, later, cache] (const auto &) {
+          [&service, &route, &calls, &runtime, later, cache] (const auto &target) {
               ++calls;
               if (cache) {
                   service._stop_requested.request_stop ();
@@ -106,9 +191,10 @@ struct location_auto_connect_test_access_t
                   runtime.peer_reconcile_requester () ({});
                   return task_t<void> (result_t<void>::success ());
               }
-              return finish_probe (&service, &route);
+              return finish_probe (&service, &route, target);
           },
-          [] (const auto &) { return task_t<void> (result_t<void>::success ()); });
+          [] (const auto &) { return task_t<void> (result_t<void>::success ()); },
+          [] (const auto &) {});
         service._loops.front ().recovering_from_store_failure = cache != nullptr;
     }
 
@@ -146,7 +232,8 @@ struct location_auto_connect_test_access_t
           [disconnected] (const auto &) {
               disconnected ();
               return task_t<void> (result_t<void>::success ());
-          });
+          },
+          [disconnected] (const auto &) { disconnected (); });
     }
 };
 
@@ -1957,23 +2044,6 @@ using namespace zlink::framework;
 using namespace zlink::framework::runtime;
 constexpr auto auto_connect_wait = std::chrono::seconds (5);
 
-// The old synchronous implementation is normalized only at the test boundary.
-template <typename Route> task_t<void> route_auto_update (Route *route, bool remove)
-{
-    const auto rid = zlink::routing_id_t::from ("remote");
-    if constexpr (requires { route->connect_async (rid, std::string{}); }) {
-        if (remove)
-            EXPECT_TRUE (co_await route->disconnect_async (rid, "inproc://l4-peer"));
-        else
-            EXPECT_TRUE (co_await route->connect_async (rid, "inproc://l4-peer"));
-    } else {
-        if (remove)
-            EXPECT_TRUE (route->disconnect (rid, "inproc://l4-peer"));
-        else
-            EXPECT_TRUE (route->connect (rid, "inproc://l4-peer"));
-    }
-}
-
 template <typename Cache> task_t<void> recover_auto_cache (Cache *cache)
 {
     if constexpr (requires { cache->invalidate_all_routes_after_store_recovery_async (); })
@@ -2060,13 +2130,41 @@ void check_auto_owner_wait (state_lane_t &lane, std::function<task_t<void> ()> w
     EXPECT_TRUE (*result);
 }
 
+struct production_auto_fixture_t
+{
+    decltype (test::runtime_failure_builder ()) builder{test::runtime_failure_builder ()};
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    std::shared_ptr<runtime_failure_collector_t> failures =
+      std::make_shared<runtime_failure_collector_t> ();
+    location_auto_connect_host_service_t service;
+
+    explicit production_auto_fixture_t (
+      std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes = {}) :
+        service (
+          failures,
+          builder.message_bus (),
+          {},
+          handlers,
+          serializers,
+          [] { return framework_runtime_state_t::serving; },
+          {},
+          {},
+          {},
+          std::move (nodes))
+    {
+    }
+};
+
 void check_auto_route (bool remove)
 {
     detail::route_channel_runtime_t route ("l4-mesh");
     if (remove)
         ASSERT_TRUE (route.connect (zlink::routing_id_t::from ("remote"), "inproc://l4-peer"));
-    check_auto_owner_wait (auto_connect_owner_lane (route),
-                           [&] { return route_auto_update (&route, remove); });
+    production_auto_fixture_t fixture;
+    check_auto_owner_wait (auto_connect_owner_lane (route), [&] {
+        return location_auto_connect_test_access_t::route_target (fixture.service, route, remove);
+    });
     EXPECT_EQ (remove ? 0u : 1u, route.list_connections ().size ());
 }
 
@@ -2079,6 +2177,60 @@ void check_auto_raw (int operation)
     check_auto_owner_wait (auto_connect_owner_lane (raw),
                            [&] { return raw_auto_update (&raw, operation); });
 }
+void check_production_identity ()
+{
+    auto state = test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("l4-mesh");
+    auto node = std::make_shared<detail::mesh_node_runtime_t> (state);
+    production_auto_fixture_t fixture ({node});
+    detail::route_channel_runtime_t route ("l4-mesh");
+    check_auto_owner_wait (state->lane, [&] {
+        return location_auto_connect_test_access_t::route_target (fixture.service, route, false);
+    });
+}
+
+void check_mesh_and_host_async_wrappers ()
+{
+    auto state = test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("l4-mesh");
+    state->routing_id = zlink::routing_id_t::from ("local");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    auto node = std::make_shared<detail::mesh_node_runtime_t> (state);
+    node->start ();
+    auto &host = node->native_node ();
+    auto &raw_lane = auto_connect_owner_lane (host.transport ());
+    const auto rid = zlink::routing_id_t::from ("remote");
+    const std::string endpoint = "inproc://l4-peer";
+    const std::pair<const char *, std::function<task_t<void> ()>> wrappers[] = {
+      {"mesh.connect_peer_async",
+       [&] { return node->connect_peer_async (rid, endpoint, 1, "default", true); }},
+      {"mesh.expect_peer_async",
+       [&] { return node->expect_peer_async (rid, endpoint, 1, "default"); }},
+      {"mesh.forget_peer_async", [&] { return node->forget_peer_async (rid, endpoint); }},
+      {"mesh.disconnect_peer_async.raw",
+       [&] { return node->disconnect_peer_async (rid, endpoint, true); }},
+      {"host.expect_peer_async",
+       [&] { return host.expect_peer_async (endpoint, rid, 1, "default"); }},
+      {"host.forget_peer_async", [&] { return host.forget_peer_async (endpoint, rid); }}};
+    for (const auto &[name, work] : wrappers) {
+        SCOPED_TRACE (name);
+        check_auto_owner_wait (raw_lane, work);
+    }
+    check_auto_owner_wait (state->lane,
+                           [&] { return node->disconnect_peer_async (rid, endpoint, true); });
+    production_auto_fixture_t fixture ({node});
+    detail::route_channel_runtime_t route ("l4-mesh");
+    for (bool remove : {false, true}) {
+        SCOPED_TRACE (remove);
+        check_auto_owner_wait (raw_lane, [&] {
+            return location_auto_connect_test_access_t::route_target (fixture.service, route,
+                                                                      remove);
+        });
+        check_auto_owner_wait (raw_lane, [&] {
+            return location_auto_connect_test_access_t::mesh_target (node, remove);
+        });
+    }
+    node->stop ();
+}
+
 class ready_auto_store_t : public in_memory_location_repository_t
 {
   public:
@@ -2220,6 +2372,26 @@ void check_auto_stale_peer ()
     EXPECT_EQ (replacement, targets.front ().peer_rid);
 }
 
+}
+
+TEST (AutoConnectLaneDeathTest, ProductionRouteCallbackReleasesIdentityWorker)
+{
+    ASSERT_EXIT (
+      {
+          check_production_identity ();
+          std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
+      },
+      ::testing::ExitedWithCode (0), "");
+}
+
+TEST (AutoConnectLaneDeathTest, MeshAndHostAsyncWrappersReleaseWorker)
+{
+    ASSERT_EXIT (
+      {
+          check_mesh_and_host_async_wrappers ();
+          std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
+      },
+      ::testing::ExitedWithCode (0), "");
 }
 
 TEST (AutoConnectLaneDeathTest, RouteConnectionAddReleasesWorker)
@@ -2404,6 +2576,26 @@ void check_sync_owner_wait (const char *name, state_lane_t &lane, std::function<
     EXPECT_EQ (std::future_status::ready, returned);
 }
 
+void check_synchronous_stop (bool mesh, bool raw_owner)
+{
+    auto state = test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("l4-mesh");
+    state->routing_id = zlink::routing_id_t::from ("local");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    auto node = std::make_shared<detail::mesh_node_runtime_t> (state);
+    node->start ();
+    production_auto_fixture_t fixture ({node});
+    detail::route_channel_runtime_t route ("l4-mesh");
+    route.connect (zlink::routing_id_t::from ("remote"), "inproc://l4-peer");
+    location_auto_connect_test_access_t::register_stop_probe (fixture.service, route, node, mesh);
+    auto &lane = raw_owner ? auto_connect_owner_lane (node->native_node ().transport ())
+                           : (mesh ? state->lane : auto_connect_owner_lane (route));
+    check_sync_owner_wait ("auto-connect.stop", lane, [&] { fixture.service.stop (); });
+    if (!mesh)
+        EXPECT_TRUE (route.list_connections ().empty ());
+    fixture.failures->rethrow_if_failed ();
+    node->stop ();
+}
+
 void check_synchronous_auto_wrappers ()
 {
     detail::route_channel_runtime_t route ("l4-mesh");
@@ -2461,6 +2653,32 @@ void check_synchronous_auto_wrappers ()
     node.stop ();
 }
 } // namespace
+
+TEST (AutoConnectSyncDeathTest, ReconcileStopsBeforeTouchingActiveAfterTargetCompletion)
+{
+    ASSERT_EXIT (
+      {
+          for (int operation : {0, 1, 2}) {
+              production_auto_fixture_t fixture;
+              location_auto_connect_test_access_t::check_stop_between_targets (fixture.service,
+                                                                               operation);
+          }
+          std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
+      },
+      ::testing::ExitedWithCode (0), "");
+}
+
+TEST (AutoConnectSyncDeathTest, StopCompletesWithoutCompletionDispatcher)
+{
+    ASSERT_EXIT (
+      {
+          for (bool mesh : {false, true})
+              for (bool raw_owner : {false, true})
+                  check_synchronous_stop (mesh, raw_owner);
+          std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
+      },
+      ::testing::ExitedWithCode (0), "");
+}
 
 TEST (AutoConnectSyncDeathTest, ContendedWrappersCompleteWithoutCompletionDispatcher)
 {

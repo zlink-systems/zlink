@@ -419,7 +419,8 @@ int main ()
                     && location_auto_connect.find ("update_peer") == std::string::npos,
                   "IMP-CP-05", "RouteMesh discovery still uses legacy peer rows");
     gate.require (
-      location_auto_connect.find ("const bool manual_endpoint") != std::string::npos
+      location_auto_connect.find ("const bool automatic = automatic_route_target (manual, target)")
+          != std::string::npos
         && location_auto_connect.find ("Manual routes still refresh admission") != std::string::npos
         && location_auto_connect.find ("co_await node->expect_peer_async") != std::string::npos,
       "CPP-TOPO-001", "manual RouteMesh endpoints do not install descriptor admission fences");

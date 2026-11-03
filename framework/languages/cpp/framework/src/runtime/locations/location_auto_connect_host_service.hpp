@@ -191,29 +191,14 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                     break;
                 }
             }
-            add_loop (
-              route.router_channel_id (), std::move (local_rid), route.bind_endpoint (),
-              local_object_role, local_has_server_channel,
-              [this, &route, manual] (target_t target) {
-                  return update_route_target (this, &route, manual, std::move (target), false);
-              },
-              [this, &route, manual] (target_t target) {
-                  return update_route_target (this, &route, manual, std::move (target), true);
-              });
+            add_route_loop (route, std::move (local_rid), local_object_role,
+                            local_has_server_channel, manual);
         }
 
         for (const auto &mesh_node : _mesh_nodes) {
             if (!mesh_node || configured_meshes.contains (mesh_node->mesh_name ()))
                 continue;
-            add_loop (
-              mesh_node->mesh_name (), mesh_node->routing_id (), mesh_node->listen_endpoint (),
-              mesh_node->object_role (), !mesh_node->channel_weights ().empty (),
-              [mesh_node] (target_t target) {
-                  return update_mesh_target (mesh_node, std::move (target), false);
-              },
-              [mesh_node] (target_t target) {
-                  return update_mesh_target (mesh_node, std::move (target), true);
-              });
+            add_mesh_loop (mesh_node);
         }
 
         if (!_loops.empty ())
@@ -284,7 +269,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         for (auto &loop : _loops) {
             std::erase_if (loop.active, [&] (const auto &entry) {
                 return _runtime_failures->capture (
-                  [&] { disconnect (&loop, entry.second).result ().value (); });
+                  [&] { loop.disconnect_target_sync (entry.second); });
             });
         }
         std::erase_if (_loops, [] (const auto &loop) { return loop.active.empty (); });
@@ -318,6 +303,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         std::map<std::string, target_t> last_desired;
         std::function<task_t<void> (target_t)> connect_target;
         std::function<task_t<void> (target_t)> disconnect_target;
+        std::function<void (const target_t &)> disconnect_target_sync;
         bool recovering_from_store_failure = false;
         std::optional<std::chrono::steady_clock::time_point> failure_started_at;
         std::optional<std::chrono::steady_clock::time_point> recovery_started_at;
@@ -348,7 +334,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                    std::optional<object_role_t> local_object_role,
                    bool local_has_server_channel,
                    std::function<task_t<void> (target_t)> connect_target,
-                   std::function<task_t<void> (target_t)> disconnect_target)
+                   std::function<task_t<void> (target_t)> disconnect_target,
+                   std::function<void (const target_t &)> disconnect_target_sync)
     {
         loop_t loop;
         loop.mesh_name = std::move (mesh_name);
@@ -358,7 +345,75 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         loop.local_has_server_channel = local_has_server_channel;
         loop.connect_target = std::move (connect_target);
         loop.disconnect_target = std::move (disconnect_target);
+        loop.disconnect_target_sync = std::move (disconnect_target_sync);
         _loops.push_back (std::move (loop));
+    }
+
+    void add_route_loop (detail::route_channel_runtime_t &route,
+                         std::optional<zlink::routing_id_t> local_rid,
+                         std::optional<object_role_t> local_object_role,
+                         bool local_has_server_channel,
+                         const std::vector<std::string> &manual)
+    {
+        add_loop (
+          route.router_channel_id (), std::move (local_rid), route.bind_endpoint (),
+          local_object_role, local_has_server_channel,
+          [this, &route, manual] (target_t target) {
+              return update_route_target (this, &route, manual, std::move (target), false);
+          },
+          [this, &route, manual] (target_t target) {
+              return update_route_target (this, &route, manual, std::move (target), true);
+          },
+          [this, &route, manual] (const target_t &target) {
+              disconnect_route_target (this, route, manual, target);
+          });
+    }
+
+    void add_mesh_loop (const std::shared_ptr<detail::mesh_node_runtime_t> &mesh_node)
+    {
+        add_loop (
+          mesh_node->mesh_name (), mesh_node->routing_id (), mesh_node->listen_endpoint (),
+          mesh_node->object_role (), !mesh_node->channel_weights ().empty (),
+          [mesh_node] (target_t target) {
+              return update_mesh_target (mesh_node, std::move (target), false);
+          },
+          [mesh_node] (target_t target) {
+              return update_mesh_target (mesh_node, std::move (target), true);
+          },
+          [mesh_node] (const target_t &target) { disconnect_mesh_target (*mesh_node, target); });
+    }
+
+    // Stop is a synchronous compatibility boundary. These wrappers finish at
+    // their owner turns and do not depend on the task completion dispatcher.
+    static void disconnect_mesh_target (detail::mesh_node_runtime_t &node, const target_t &target)
+    {
+        node.forget_peer (target.node_rid, target.endpoint);
+        if (target.initiates_connection)
+            node.disconnect_peer (target.node_rid, target.endpoint, true);
+    }
+
+    static bool automatic_route_target (const std::vector<std::string> &manual,
+                                        const target_t &target)
+    {
+        return target.initiates_connection
+               && std::find (manual.begin (), manual.end (), target.endpoint) == manual.end ();
+    }
+
+    static void disconnect_route_target (location_auto_connect_host_service_t *service,
+                                         detail::route_channel_runtime_t &route,
+                                         const std::vector<std::string> &manual,
+                                         const target_t &target)
+    {
+        const bool automatic = automatic_route_target (manual, target);
+        for (const auto &node : service->_mesh_nodes) {
+            if (!node || node->mesh_name () != route.router_channel_id ())
+                continue;
+            node->forget_peer (target.node_rid, target.endpoint);
+            if (automatic)
+                node->disconnect_peer (target.node_rid, target.endpoint, true);
+        }
+        if (automatic)
+            (void) route.disconnect (target.node_rid, target.endpoint);
     }
 
     static task_t<void> update_mesh_target (std::shared_ptr<detail::mesh_node_runtime_t> node,
@@ -386,8 +441,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                                              target_t target,
                                              bool remove)
     {
-        const bool manual_endpoint =
-          std::find (manual.begin (), manual.end (), target.endpoint) != manual.end ();
+        const bool automatic = automatic_route_target (manual, target);
         for (const auto &node : service->_mesh_nodes) {
             if (!node)
                 continue;
@@ -396,7 +450,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 continue;
             if (remove) {
                 co_await node->forget_peer_async (target.node_rid, target.endpoint);
-                if (target.initiates_connection && !manual_endpoint)
+                if (automatic)
                     co_await node->disconnect_peer_async (target.node_rid, target.endpoint, true);
             } else {
                 // Manual routes still refresh admission, but retain their pipe.
@@ -409,7 +463,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                                                        target.security_identity, true);
             }
         }
-        if (target.initiates_connection && !manual_endpoint) {
+        if (automatic) {
             if (remove)
                 (void) co_await route->disconnect_async (target.node_rid, target.endpoint);
             else
@@ -561,6 +615,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 co_await _route_cache->invalidate_all_routes_after_store_recovery_async ();
         }
 
+        if (_stop_requested.stop_requested ())
+            co_return;
         auto desired = select_endpoint_winners (compute_desired (loop, std::move (descriptors)));
         loop.last_desired.clear ();
         for (const auto &[key, target] : desired) {
@@ -573,6 +629,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                < _runtime->options ().owner_lease_ttl;
         std::set<std::string> released_endpoints;
         for (auto it = loop.active.begin (); it != loop.active.end ();) {
+            if (_stop_requested.stop_requested ())
+                co_return;
             if (!desired.contains (it->first)) {
                 if (defer_missing_target_removal) {
                     ++it;
@@ -580,12 +638,16 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 }
                 released_endpoints.insert (it->second.endpoint);
                 co_await disconnect (state, it->second);
+                if (_stop_requested.stop_requested ())
+                    co_return;
                 it = loop.active.erase (it);
             } else {
                 ++it;
             }
         }
         for (const auto &[key, target] : desired) {
+            if (_stop_requested.stop_requested ())
+                co_return;
             const auto current = loop.active.find (key);
             if (current == loop.active.end ()) {
                 /* Draining removes a descriptor from new-work selection, but
@@ -601,11 +663,15 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 if (released_endpoints.contains (target.endpoint))
                     continue;
                 co_await connect (state, target);
+                if (_stop_requested.stop_requested ())
+                    co_return;
                 loop.active[key] = target;
             } else if (current->second.endpoint != target.endpoint
                        || current->second.original->owner_id != target.original->owner_id
                        || current->second.lifecycle_generation != target.lifecycle_generation) {
                 co_await disconnect (state, current->second);
+                if (_stop_requested.stop_requested ())
+                    co_return;
                 /* A descriptor replacement is a two-phase lifecycle change.
                  * The disconnect command only schedules physical pipe
                  * teardown in the binding runtime. Connecting the new
@@ -714,8 +780,12 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                  > _runtime->options ().store_failure_grace)
             co_return;
         for (const auto &[key, target] : loop.last_desired) {
+            if (_stop_requested.stop_requested ())
+                co_return;
             if (!loop.active.contains (key)) {
                 co_await connect (state, target);
+                if (_stop_requested.stop_requested ())
+                    co_return;
                 loop.active[key] = target;
             }
         }
