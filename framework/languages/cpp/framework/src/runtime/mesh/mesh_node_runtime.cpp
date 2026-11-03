@@ -4126,6 +4126,20 @@ catch (...) {
 
 }
 
+void mesh_node_runtime_t::prepare_actor_request_reply (
+  host::pending_operation_t &operation,
+  request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver)
+{
+    operation.receiver = [receiver] (const auto &result) mutable {
+        receiver.complete (decode_request_reply (result, "Actor request"));
+    };
+    auto completion = operation.completion->task ();
+    observe_task_terminal (completion, [fail = receiver.fail_public] (const auto &result) {
+        if (auto failure = request_completion_failure (result, "Actor request"))
+            fail (std::move (failure));
+    });
+}
+
 void mesh_node_runtime_t::observe_request_failure (
   const host::pending_operation_t &operation,
   const std::shared_ptr<task_completion_source_t<void>> &admitted,

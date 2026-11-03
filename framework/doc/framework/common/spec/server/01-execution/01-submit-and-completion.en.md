@@ -362,7 +362,7 @@ The one-shot [reply token](../00-foundation/02-glossary.en.md#reply-token) rules
 
 A request prepares its final result consumer before submission. The existing terminal owner delivers its settled result through value conversions owned by the codecs to one final typed publisher. No separate asynchronous results or observation links are introduced solely for conversions between internal layers.
 
-Early completion of the public result does not release the final consumer prepared before submission or the resources it needs until physical-result processing finishes. This also applies when admission fails. A successful physical reply delivered to that consumer passes through each codec owner's conversion once, regardless of whether the public result has completed. The conversion's value or failure does not change an already settled public result, and the payload is cleaned up exactly once. [Cancellation and Shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the handling of late native replies that are not delivered to the final consumer because the correlation is closed.
+Early completion of the public result does not release the final consumer prepared before submission or the resources it needs until physical-result processing finishes. This also applies when admission fails. That consumer owns the handling of delivered physical failures and their route-cache effects, regardless of whether the public result has completed ([Routing §2.2](../03-spot-actor/08-routing.en.md#22-the-condition-for-using-a-recent-ready-route)). A successful physical reply delivered to that consumer passes through each codec owner's conversion once, regardless of whether the public result has completed. The value or failure from this processing does not change or re-complete an already settled public result, and the payload is cleaned up exactly once. [Cancellation and Shutdown §3](03-cancellation-and-shutdown.en.md#3-handling-the-cancellation-race) owns the handling of late native replies that are not delivered to the final consumer because the correlation is closed.
 
 The caller of a request observes exactly one result: whichever of reply, remote error, timeout,
 cancellation, or shutdown is decided first. Timeout and cancellation end the caller's wait,
@@ -379,7 +379,7 @@ flowchart LR
     W -->|timeout| C3["Completes as an exception<br/>(remote handler is not rolled back)"]
     W -->|cancellation| C4["Completes as an exception"]
     W -->|shutdown| C5["Completes as an exception"]
-    C1 -.->|any other result that arrives late| D["Discarded, only correlation state is cleaned up"]
+    C1 -.->|any other result that arrives late| D["Public result unchanged<br/>Delivered results handled by the consumer"]
     C2 -.-> D
     C3 -.-> D
     C4 -.-> D
@@ -394,7 +394,7 @@ owner turn is also taken out of that deadline. No stage starts a new timeout. Th
 outbound admission is the remaining request timeout, and it is not combined with a socket send
 timeout. When a timeout or cancellation ends the caller's wait, that does not mean the request was
 not sent — a request that ended before admission can still be sent later by a resubmission the
-binding already started, and its reply is discarded because the correlation is closed. The resubmission boundary for a request after timeout or connection failure is defined by
+binding already started, and a reply the binding discards on a closed correlation is not delivered to the Framework. The resubmission boundary for a request after timeout or connection failure is defined by
 [§5](#5-backpressure-and-error-classification). The wait for connection readiness in §5 is part of outbound admission
 and uses the same request timeout. If the deadline is reached before any binding operation starts, the result is
 still `DeadlineExceeded`.

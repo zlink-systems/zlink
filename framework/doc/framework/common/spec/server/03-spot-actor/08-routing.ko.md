@@ -127,6 +127,12 @@ Location Store를 왕복하면 대부분 다른 process(Redis 등)를 오가는 
 | Relay 통지 | Actor나 Spot이 다른 MeshNode로 옮겨진 뒤에도 이전 owner에 도착한 message를 새 owner에게 대신 전달하는 [Message Follow](../00-foundation/02-glossary.ko.md#message-follow) relay가 message를 새 owner로 넘기면 원 송신 runtime에 통지한다. 통지를 받은 runtime은 해당 entry를 제거하고 다음 call에서 owner를 다시 조회한다. |
 | 실행 중 설정 변경 | `RouteCacheMaxAge`의 실행 중 변경 규칙은 [Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)이 정한다. |
 
+Actor가 해당 위치에 없거나 위치가 stale이라는 실패가 Framework에 전달되면,
+현재 entry가 그 request나 one-way send가 사용한 route fence와 일치할 때만 제거하며,
+그 뒤 저장된 더 새로운 route는 제거하지 않는다. Request의 cache 무효화는
+[Submit과 completion §9](../01-execution/01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)의
+준비된 최종 수신자가 public 결과와 관계없이 판정한다.
+
 Positive Actor route cache의 수명 종료와 무효화는 위 표의 조건으로 한정한다.
 Authority를 확인해야 하는 operation은 Location Store를 직접 읽으며, cache를 먼저
 지워 조회를 강제하지 않는다. Join·relocation 완료라는 사실만으로 entry를 제거하지

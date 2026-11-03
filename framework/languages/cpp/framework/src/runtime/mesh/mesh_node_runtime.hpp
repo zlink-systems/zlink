@@ -258,6 +258,9 @@ class mesh_node_runtime_t
     send_to_node (const zlink::routing_id_t &target,
                   const std::vector<zlink::message_t> &parts,
                   const std::map<std::string, std::string> &metadata);
+    void prepare_actor_request_reply (
+      host::pending_operation_t &operation,
+      request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
     void compose_node_request_reply (
       host::pending_operation_t operation,
       task_t<zlink::submit_result_t> submission,
