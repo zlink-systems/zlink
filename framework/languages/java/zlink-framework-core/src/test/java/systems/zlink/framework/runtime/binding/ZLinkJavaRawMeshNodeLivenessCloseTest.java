@@ -111,17 +111,73 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
 
     @Test
     void expiryRemovesPhysicalTargetAndSettlesPendingSendOnce() throws Exception {
-        verify(false, false);
+        verify(false);
     }
 
     @Test
     void currentReceiveKeepsPhysicalTarget() throws Exception {
-        verify(true, false);
+        verify(true);
     }
 
     @Test
     void retiredDeadlineDoesNotCloseReplacementAdmission() throws Exception {
-        verify(false, true);
+        try (var context = Zlink.createContext()) {
+            var port = new ZLinkJavaRawServicePort(context);
+            var local = descriptor(RoutingId.from("replacement-local"));
+            var peer = RoutingId.from("replacement-peer");
+            var topology = new ZLinkServiceTopologyRegistry(local, port.stateLane());
+            var disconnected = new java.util.ArrayList<RoutingId>();
+            var router =
+                    (systems.zlink.contracts.sockets.RouterSocket)
+                            java.lang.reflect.Proxy.newProxyInstance(
+                                    systems.zlink.contracts.sockets.RouterSocket.class
+                                            .getClassLoader(),
+                                    new Class<?>[] {
+                                        systems.zlink.contracts.sockets.RouterSocket.class
+                                    },
+                                    (proxy, method, args) -> {
+                                        if (method.getName().equals("disconnectRid")) {
+                                            disconnected.add((RoutingId) args[0]);
+                                            return null;
+                                        }
+                                        if (method.getName().equals("close")) return null;
+                                        throw new AssertionError(method.getName());
+                                    });
+            try (var node =
+                    ZLinkJavaRawMeshNodeTesting.create(
+                            "liveness-close",
+                            port,
+                            router,
+                            local,
+                            topology,
+                            java.util.Map.of(),
+                            Runnable::run)) {
+                var liveness = node.livenessForTest();
+                topology.admit(descriptor(peer), "route:11", ServiceWireConstants.COMMAND_HELLO);
+                topology.bindLiveness(peer, liveness.admit(peer, "route:11", 0));
+                topology.admit(descriptor(peer), "route:12", ServiceWireConstants.COMMAND_HELLO);
+                topology.bindLiveness(
+                        peer, liveness.admit(peer, "route:12", Duration.ofSeconds(14).toNanos()));
+
+                assertEquals(1, liveness.tick(Duration.ofSeconds(14).toNanos()).probes().size());
+
+                node.tickLiveness(Duration.ofSeconds(15).toNanos());
+
+                assertTrue(topology.peer(peer).isPresent());
+                assertEquals(1, liveness.size());
+                assertTrue(
+                        disconnected.isEmpty(),
+                        "the retired deadline must not disconnect its replacement");
+
+                node.tickLiveness(Duration.ofSeconds(29).toNanos());
+
+                assertTrue(topology.peer(peer).isEmpty());
+                assertEquals(0, liveness.size());
+                assertEquals(List.of(peer), disconnected);
+                node.tickLiveness(Duration.ofSeconds(30).toNanos());
+                assertEquals(List.of(peer), disconnected);
+            }
+        }
     }
 
     @Test
@@ -170,7 +226,7 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
         }
     }
 
-    private static void verify(boolean receive, boolean replacement) throws Exception {
+    private static void verify(boolean receive) throws Exception {
         var local = RoutingId.from("liveness-local");
         var peer = RoutingId.from("liveness-peer");
         try (var context = Zlink.createContext();
@@ -216,13 +272,8 @@ final class ZLinkJavaRawMeshNodeLivenessCloseTest {
             var terminals = new AtomicInteger();
             var observed = pending.whenComplete((ignored, failure) -> terminals.incrementAndGet());
             if (receive) retired.recordReceived(Duration.ofSeconds(14).toNanos());
-            if (replacement) {
-                topology.admit(descriptor(peer), "route:12", ServiceWireConstants.COMMAND_HELLO);
-                topology.bindLiveness(
-                        peer, liveness.admit(peer, "route:12", Duration.ofSeconds(14).toNanos()));
-            }
             node.tickLiveness(Duration.ofSeconds(15).toNanos());
-            if (receive || replacement) {
+            if (receive) {
                 assertTrue(topology.peer(peer).isPresent());
                 assertEquals(1, source.routesSnapshot().size());
                 assertFalse(pending.toCompletableFuture().isDone());
