@@ -2081,7 +2081,7 @@ void route_client_t::submit_spot_request_reply_message_erased (
   payload_encoder_t encode_payload,
   std::chrono::steady_clock::time_point deadline,
   std::map<std::string, std::string> metadata,
-  detail::request_receiver_t<zlink::message_t> receiver)
+  detail::request_receiver_t<encoded_payload_t> receiver)
 {
     // The reply owns this copy: the referenced state lives in the caller.
     const auto state = state_ref;
@@ -2143,7 +2143,7 @@ void route_client_t::submit_spot_request_reply_message_erased (
     try {
         auto decode = [state, requester = mesh_requester, packet_name, router_channel_id,
                        target] (const result_t<runtime::messaging::message_parts_t> &reply)
-          -> result_t<zlink::message_t> {
+          -> result_t<encoded_payload_t> {
             (void) requester;
             const auto &target_node_rid = target->first;
             const auto &spot_id = target->second;
@@ -2170,12 +2170,12 @@ void route_client_t::submit_spot_request_reply_message_erased (
                                                : std::exception_ptr{}};
                           });
                     }
-                    return detail::propagate_failure<zlink::message_t> (
+                    return detail::propagate_failure<encoded_payload_t> (
                       reply, "route spot request failed");
                 }
                 auto reply_header = envelope.decode_header (reply.value (), false);
                 if (!reply_header) {
-                    return result_t<zlink::message_t>::failure (
+                    return result_t<encoded_payload_t>::failure (
                       reply_header.error_kind (), reply_header.error ()
                                                     ? reply_header.error ()->what ()
                                                     : "route spot reply header decode failed");
@@ -2186,7 +2186,7 @@ void route_client_t::submit_spot_request_reply_message_erased (
                        * (zlink.origin=framework marker) may drive route-cache
                        * invalidation. Unmarked remote errors came from the application
                        * handler and are classified so the caller skips invalidation. */
-                    return detail::result_access_t::failure<zlink::message_t> (
+                    return detail::result_access_t::failure<encoded_payload_t> (
                       detail::with_error_origin (
                         failure_mapper.error_header_exception (
                           reply_header.value ().error_code.value_or ("request_failed"),
@@ -2197,9 +2197,9 @@ void route_client_t::submit_spot_request_reply_message_erased (
                           ? detail::error_origin_t::framework
                           : detail::error_origin_t::application));
                 }
-                auto body = envelope.decode_body (reply.value ());
+                auto body = envelope.decode_body_view (reply.value ());
                 if (!body) {
-                    return result_t<zlink::message_t>::failure (
+                    return result_t<encoded_payload_t>::failure (
                       body.error_kind (), body.error () ? body.error ()->what ()
                                                         : "route spot reply body decode failed");
                 }
@@ -2220,13 +2220,13 @@ void route_client_t::submit_spot_request_reply_message_erased (
                                                       std::nullopt};
                       });
                 }
-                return result_t<zlink::message_t>::success (body.value ());
+                return body;
             }
             catch (const framework_exception_t &error) {
-                return detail::result_access_t::failure<zlink::message_t> (error);
+                return detail::result_access_t::failure<encoded_payload_t> (error);
             }
             catch (const std::exception &error) {
-                return result_t<zlink::message_t>::failure (
+                return result_t<encoded_payload_t>::failure (
                   framework_error_kind_t::internal_failure, error.what ());
             }
         };
@@ -2336,7 +2336,7 @@ task_t<void> route_client_t::submit_spot_id_request_reply_message_erased (
   payload_encoder_t encode_payload,
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata,
-  detail::request_receiver_t<zlink::message_t> receiver)
+  detail::request_receiver_t<encoded_payload_t> receiver)
 {
     const auto request_started = std::chrono::steady_clock::now ();
     try {
@@ -2358,11 +2358,15 @@ task_t<void> route_client_t::submit_spot_id_request_reply_message_erased (
         const auto deadline = request_started + effective_timeout;
         auto address = co_await detail::resolve_request_spot_address (
           state->runtime, resolver, target, intent.instance, deadline);
-        receiver = receiver.project<zlink::message_t> (
-          [resolver, target] (const result_t<zlink::message_t> &terminal) {
-              if (!terminal)
+        receiver = receiver.project<encoded_payload_t> (
+          [resolver, target] (const result_t<encoded_payload_t> &terminal) {
+              if (!terminal) {
                   invalidate_stale_spot_route (*resolver, target, terminal.error ());
-              return terminal;
+                  return detail::result_access_t::failure<encoded_payload_t> (
+                    terminal.exception ());
+              }
+              return result_t<encoded_payload_t>::success (
+                detail::encoded_payload_from_raw (terminal.value ().bytes ()));
           });
 
         if (intent.instance) {
@@ -2396,8 +2400,9 @@ task_t<void> route_client_t::submit_spot_id_request_reply_message_erased (
                       accepted, [source = receiver.admitted] (const auto &terminal) {
                           source->complete (terminal);
                       });
-                    receiver.complete (result_t<zlink::message_t>::success (
-                      co_await detail::request_task_access_t::physical_reply (pending)));
+                    receiver.complete (
+                      result_t<encoded_payload_t>::success (detail::encoded_payload_from_raw (
+                        co_await detail::request_task_access_t::physical_reply (pending))));
                     co_return;
                 }
                 catch (const framework_exception_t &error) {
@@ -2430,7 +2435,7 @@ task_t<void> route_client_t::submit_spot_id_request_reply_message_erased (
           std::move (encode_payload), deadline, std::move (metadata), receiver);
     }
     catch (...) {
-        const auto failure = detail::current_exception_result<zlink::message_t> ();
+        const auto failure = detail::current_exception_result<encoded_payload_t> ();
         receiver.admitted->complete (detail::result_access_t::failure<void> (failure.exception ()));
         receiver.complete (failure);
     }

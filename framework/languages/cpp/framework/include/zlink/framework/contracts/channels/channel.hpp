@@ -941,11 +941,7 @@ class route_client_t
                     return serializers.template get<TRequest> ().serialize_with_content_type (
                       *request_value);
                 },
-                timeout, metadata,
-                receiver.project<zlink::message_t> ([] (const result_t<zlink::message_t> &reply) {
-                    return result_t<encoded_payload_t>::success (
-                      detail::encoded_payload_from_raw (reply.value ()));
-                }));
+                timeout, metadata, std::move (receiver));
           },
           intent);
     }
@@ -1024,7 +1020,7 @@ class route_client_t
       payload_encoder_t encode_payload,
       std::chrono::steady_clock::time_point deadline,
       std::map<std::string, std::string> metadata,
-      detail::request_receiver_t<zlink::message_t> receiver);
+      detail::request_receiver_t<encoded_payload_t> receiver);
 
     static task_t<void>
     submit_spot_id_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
@@ -1044,7 +1040,7 @@ class route_client_t
       payload_encoder_t encode_payload,
       std::chrono::milliseconds timeout,
       std::map<std::string, std::string> metadata,
-      detail::request_receiver_t<zlink::message_t> receiver);
+      detail::request_receiver_t<encoded_payload_t> receiver);
 
     std::shared_ptr<detail::route_client_state_t> _state;
     serializer_registry_t *_serializers = nullptr;
