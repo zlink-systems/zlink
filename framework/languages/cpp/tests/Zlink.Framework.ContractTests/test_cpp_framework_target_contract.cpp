@@ -7,6 +7,7 @@
  * build keeps compiling while target signatures are still missing. */
 
 #include "../support/read_text_file.hpp"
+#include "../support/capturing_coroutine_scan.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1227,6 +1228,21 @@ int main ()
     const auto ungated_flow_calls = ungated_message_flow_calls (root / "framework/src");
     for (const auto &site : ungated_flow_calls)
         gate.require (false, "CPP-OBS-004", "ungated per-message trace: " + site);
+
+    // CP.51: captures read after suspension depend on the closure lifetime.
+    for (const auto &entry :
+         std::filesystem::recursive_directory_iterator (root / "framework/src")) {
+        const auto ext = entry.path ().extension ();
+        if (!entry.is_regular_file () || (ext != ".hpp" && ext != ".h" && ext != ".cpp"))
+            continue;
+        const auto source = read_text_file (entry.path ());
+        for (const auto offset : zlink::framework::tests::capturing_coroutine_reads (source)) {
+            const auto line = 1 + std::count (source.begin (), source.begin () + offset, '\n');
+            gate.require (false, "CPP-CP51-001",
+                          "capture read after suspension: " + entry.path ().string () + ":"
+                            + std::to_string (line));
+        }
+    }
 
     /* CPP-ASYNC-003 — a STREAM-to-Actor relay keeps its completion and wrapper
      * closure alive until target completion, preserving both per-Actor order and

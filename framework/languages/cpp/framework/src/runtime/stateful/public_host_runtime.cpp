@@ -5467,16 +5467,16 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         co_return;
     }
     const auto authority_key = spot_authority_key (request.target.spot_id);
-    const auto reject_activation = [&] (std::optional<instance_spot_activation_result_t> result =
-                                          std::nullopt) {
-        if (result) {
-            reply_terminal (std::move (*result));
-            return;
-        }
-        const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
-          framework_error_kind_t::unavailable);
-        reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
-    };
+    const auto reject_activation =
+      [reply_terminal] (std::optional<instance_spot_activation_result_t> result = std::nullopt) {
+          if (result) {
+              reply_terminal (std::move (*result));
+              return;
+          }
+          const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+            framework_error_kind_t::unavailable);
+          reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
+      };
     const auto resume_missing = [weak = weak_from_this (), command = owned_command,
                                  mailbox_record] (std::function<void ()> &terminal_sink) {
         auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
@@ -5557,169 +5557,203 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
               throw framework_exception_t (framework_error_kind_t::protocol_error,
                                            "Instance route does not match the stored activation");
       };
-    const auto join_existing =
-      [&] (const authority_read_result_t &current,
-           std::optional<instance_spot_authority_payload_t> ready_state) -> task_t<bool> {
-        const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
-        if (request.target.authority_owner_generation != 0) {
-            // Authority generations identify owner changes within one incarnation.
-            if (snapshot && snapshot->allocation.state == placement_allocation_state_t::active
-                && snapshot->object_generation < request.target.object_generation) {
-                const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
-                  framework_error_kind_t::invalid_operation,
-                  static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale));
-                reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
-                co_return true;
+    struct join_existing_instance_t
+    {
+        static task_t<bool>
+        run (std::decay_t<decltype (lifetime)> self,
+             std::decay_t<decltype (owned_command)> owned_command,
+             std::decay_t<decltype (instance_metric)> instance_metric,
+             std::decay_t<decltype (reply_terminal)> reply_terminal,
+             std::decay_t<decltype (instance_materializer)> instance_materializer,
+             std::decay_t<decltype (resume_missing)> resume_missing,
+             std::decay_t<decltype (accept_activation)> accept_activation,
+             std::decay_t<decltype (accepted_activation)> accepted_activation,
+             std::decay_t<decltype (reject_activation)> reject_activation,
+             authority_read_result_t current,
+             std::optional<instance_spot_authority_payload_t> ready_state)
+        {
+            auto &request = owned_command->activation;
+
+            const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
+            if (request.target.authority_owner_generation != 0) {
+                // Authority generations identify owner changes within one incarnation.
+                if (snapshot && snapshot->allocation.state == placement_allocation_state_t::active
+                    && snapshot->object_generation < request.target.object_generation) {
+                    const auto failure =
+                      messaging::request_failure_mapper_t{}.target_failure_reply (
+                        framework_error_kind_t::invalid_operation,
+                        static_cast<std::uint32_t> (
+                          protocol::framework_error_code::spotGenerationStale));
+                    reply_terminal (
+                      {failure->terminal_result, failure->failure_code, std::nullopt});
+                    co_return true;
+                }
+                if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
+                    || (snapshot->object_generation == request.target.object_generation
+                        && snapshot->authority_owner_generation
+                             != request.target.authority_owner_generation)
+                    || snapshot->owner.owner_id != request.target.owner_id
+                    || static_cast<std::uint64_t> (snapshot->owner.lease_generation)
+                         != request.target.owner_lease_generation
+                    || snapshot->allocation.target.node_lifecycle_generation
+                         != request.target.target_node_generation
+                    || snapshot->allocation.target.node_rid.value ()
+                         != zlink::routing_id_t::from (request.target.target_node_routing_id)
+                              .to_string ()) {
+                    if (instance_metric)
+                        instance_metric->conflict (
+                          runtime::instance_spot_admission_metrics_t::conflict_reason_t::authority);
+                    // Refused before admission: spotMoving tells the caller that no
+                    // message was accepted (Spot address messaging §9, failover §4.4).
+                    const auto failure =
+                      messaging::request_failure_mapper_t{}.target_failure_reply (
+                        framework_error_kind_t::unavailable,
+                        static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
+                    reply_terminal (
+                      {failure->terminal_result, failure->failure_code, std::nullopt});
+                    co_return true;
+                }
+                request.target.stable_type = snapshot->allocation.stable_type;
+                request.target.mesh_name = snapshot->allocation.target.mesh_name;
             }
-            if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
-                || (snapshot->object_generation == request.target.object_generation
-                    && snapshot->authority_owner_generation
-                         != request.target.authority_owner_generation)
-                || snapshot->owner.owner_id != request.target.owner_id
-                || static_cast<std::uint64_t> (snapshot->owner.lease_generation)
-                     != request.target.owner_lease_generation
-                || snapshot->allocation.target.node_lifecycle_generation
-                     != request.target.target_node_generation
-                || snapshot->allocation.target.node_rid.value ()
-                     != zlink::routing_id_t::from (request.target.target_node_routing_id)
-                          .to_string ()) {
+            if (!snapshot)
+                co_return false;
+            if (snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
+                || snapshot->allocation.stable_type != request.target.stable_type) {
                 if (instance_metric)
                     instance_metric->conflict (
-                      runtime::instance_spot_admission_metrics_t::conflict_reason_t::authority);
-                // Refused before admission: spotMoving tells the caller that no
-                // message was accepted (Spot address messaging §9, failover §4.4).
-                const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
-                  framework_error_kind_t::unavailable,
-                  static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
-                reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
+                      snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
+                        ? runtime::instance_spot_admission_metrics_t::conflict_reason_t::spot_kind
+                        : runtime::instance_spot_admission_metrics_t::conflict_reason_t::spot_type);
+                reply_terminal (
+                  {107,
+                   static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch),
+                   std::nullopt});
                 co_return true;
             }
-            request.target.stable_type = snapshot->allocation.stable_type;
-            request.target.mesh_name = snapshot->allocation.target.mesh_name;
-        }
-        if (!snapshot)
-            co_return false;
-        if (snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
-            || snapshot->allocation.stable_type != request.target.stable_type) {
-            if (instance_metric)
-                instance_metric->conflict (
-                  snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
-                    ? runtime::instance_spot_admission_metrics_t::conflict_reason_t::spot_kind
-                    : runtime::instance_spot_admission_metrics_t::conflict_reason_t::spot_type);
-            reply_terminal (
-              {107, static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch),
-               std::nullopt});
-            co_return true;
-        }
-        if (snapshot->allocation.state == placement_allocation_state_t::active) {
-            if (!ready_state) {
-                if (const auto closing = decode_instance_closing_state (snapshot->payload);
-                    closing && closing->stable_type == request.target.stable_type
-                    && closing->spot_id == request.target.spot_id
-                    && closing->object_generation == snapshot->object_generation
-                    && closing->authority_owner_generation
-                         == snapshot->authority_owner_generation) {
-                    ready_state = instance_spot_authority_payload_t{
-                      .state = instance_spot_authority_state_t::closing,
-                      .stable_type = closing->stable_type,
-                      .spot_id = closing->spot_id,
-                      .owner_id = snapshot->owner.owner_id,
-                      .owner_lease_generation =
-                        static_cast<std::uint64_t> (snapshot->owner.lease_generation),
-                      .mesh_name = snapshot->allocation.target.mesh_name,
-                      .node_rid = snapshot->allocation.target.node_rid,
-                      .node_generation = snapshot->allocation.target.node_lifecycle_generation};
-                }
+            if (snapshot->allocation.state == placement_allocation_state_t::active) {
                 if (!ready_state) {
+                    if (const auto closing = decode_instance_closing_state (snapshot->payload);
+                        closing && closing->stable_type == request.target.stable_type
+                        && closing->spot_id == request.target.spot_id
+                        && closing->object_generation == snapshot->object_generation
+                        && closing->authority_owner_generation
+                             == snapshot->authority_owner_generation) {
+                        ready_state = instance_spot_authority_payload_t{
+                          .state = instance_spot_authority_state_t::closing,
+                          .stable_type = closing->stable_type,
+                          .spot_id = closing->spot_id,
+                          .owner_id = snapshot->owner.owner_id,
+                          .owner_lease_generation =
+                            static_cast<std::uint64_t> (snapshot->owner.lease_generation),
+                          .mesh_name = snapshot->allocation.target.mesh_name,
+                          .node_rid = snapshot->allocation.target.node_rid,
+                          .node_generation = snapshot->allocation.target.node_lifecycle_generation};
+                    }
+                    if (!ready_state) {
+                        reply_terminal ({105,
+                                         static_cast<std::uint32_t> (
+                                           protocol::framework_error_code::requestFailed),
+                                         std::nullopt});
+                        co_return true;
+                    }
+                }
+                if ((ready_state->state != instance_spot_authority_state_t::ready
+                     && ready_state->state != instance_spot_authority_state_t::closing)
+                    || ready_state->stable_type != snapshot->allocation.stable_type
+                    || ready_state->spot_id != request.target.spot_id) {
                     reply_terminal (
                       {105,
                        static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
                        std::nullopt});
                     co_return true;
                 }
-            }
-            if ((ready_state->state != instance_spot_authority_state_t::ready
-                 && ready_state->state != instance_spot_authority_state_t::closing)
-                || ready_state->stable_type != snapshot->allocation.stable_type
-                || ready_state->spot_id != request.target.spot_id) {
-                reply_terminal (
-                  {105, static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
-                   std::nullopt});
+                if (ready_state->state == instance_spot_authority_state_t::closing
+                    && request.target.authority_owner_generation != 0
+                    && !request.target.instance_intent) {
+                    if (instance_metric)
+                        instance_metric->conflict (
+                          runtime::instance_spot_admission_metrics_t::conflict_reason_t::closing);
+                    const auto failure =
+                      messaging::request_failure_mapper_t{}.target_failure_reply (
+                        framework_error_kind_t::not_found);
+                    reply_terminal (
+                      {failure->terminal_result, failure->failure_code, std::nullopt});
+                    co_return true;
+                }
+                const auto local = self->status ();
+                const auto current_rid = zlink::routing_id_t::from (
+                  std::string (snapshot->allocation.target.node_rid.value ()));
+                if (current_rid.to_bytes () != local.routing_id ().to_bytes ()) {
+                    reject_activation ();
+                    co_return true;
+                }
+                auto activation_terminal = std::make_shared<activation_terminal_t> ();
+                bool prepared = false;
+                std::exception_ptr preparation_error;
+                try {
+                    prepared = ready_state->state == instance_spot_authority_state_t::closing
+                               || instance_materializer->prepare (request, *snapshot,
+                                                                  activation_terminal->preparation);
+                }
+                catch (...) {
+                    preparation_error = std::current_exception ();
+                }
+                if (!prepared) {
+                    co_await activation_terminal->finish (false);
+                    if (preparation_error)
+                        std::rethrow_exception (preparation_error);
+                    reply_terminal ({105,
+                                     static_cast<std::uint32_t> (
+                                       protocol::framework_error_code::spotCreateFailed),
+                                     std::nullopt});
+                    co_return true;
+                }
+                auto running = std::make_shared<task_t<instance_spot_activation_result_t>> (
+                  instance_materializer->dispatch (owned_command, resume_missing,
+                                                   accept_activation (*snapshot)));
+                detail::observe_task_terminal (
+                  *running, [running, reply_terminal, activation_terminal, accepted_activation] (
+                              const result_t<instance_spot_activation_result_t> &result) {
+                      if (result) {
+                          auto terminal = result.value ();
+                          activation_terminal->accepted =
+                            std::move (terminal.accepted_turn_terminal);
+                          terminal.accepted_turn_terminal = [activation_terminal,
+                                                             accepted_activation] {
+                              activation_terminal->finish (accepted_activation ());
+                          };
+                          reply_terminal (std::move (terminal));
+                      } else {
+                          auto cleanup =
+                            std::make_shared<task_t<void>> (activation_terminal->finish (false));
+                          detail::observe_task_terminal (
+                            *cleanup, [cleanup, reply_terminal] (const result_t<void> &cleaned) {
+                                if (!cleaned)
+                                    trace_mesh_host ("instance-activation-terminal",
+                                                     cleaned.error ()->what ());
+                                reply_terminal ({105,
+                                                 static_cast<std::uint32_t> (
+                                                   protocol::framework_error_code::requestFailed),
+                                                 std::nullopt});
+                            });
+                      }
+                  });
                 co_return true;
             }
-            if (ready_state->state == instance_spot_authority_state_t::closing
-                && request.target.authority_owner_generation != 0
-                && !request.target.instance_intent) {
-                if (instance_metric)
-                    instance_metric->conflict (
-                      runtime::instance_spot_admission_metrics_t::conflict_reason_t::closing);
-                const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
-                  framework_error_kind_t::not_found);
-                reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
-                co_return true;
-            }
-            const auto local = status ();
-            const auto current_rid = zlink::routing_id_t::from (
-              std::string (snapshot->allocation.target.node_rid.value ()));
-            if (current_rid.to_bytes () != local.routing_id ().to_bytes ()) {
-                reject_activation ();
-                co_return true;
-            }
-            auto activation_terminal = std::make_shared<activation_terminal_t> ();
-            bool prepared = false;
-            std::exception_ptr preparation_error;
-            try {
-                prepared = ready_state->state == instance_spot_authority_state_t::closing
-                           || instance_materializer->prepare (request, *snapshot,
-                                                              activation_terminal->preparation);
-            }
-            catch (...) {
-                preparation_error = std::current_exception ();
-            }
-            if (!prepared) {
-                co_await activation_terminal->finish (false);
-                if (preparation_error)
-                    std::rethrow_exception (preparation_error);
-                reply_terminal (
-                  {105,
-                   static_cast<std::uint32_t> (protocol::framework_error_code::spotCreateFailed),
-                   std::nullopt});
-                co_return true;
-            }
-            auto running = std::make_shared<task_t<instance_spot_activation_result_t>> (
-              instance_materializer->dispatch (owned_command, resume_missing,
-                                               accept_activation (*snapshot)));
-            detail::observe_task_terminal (
-              *running, [running, reply_terminal, activation_terminal, accepted_activation] (
-                          const result_t<instance_spot_activation_result_t> &result) {
-                  if (result) {
-                      auto terminal = result.value ();
-                      activation_terminal->accepted = std::move (terminal.accepted_turn_terminal);
-                      terminal.accepted_turn_terminal = [activation_terminal, accepted_activation] {
-                          activation_terminal->finish (accepted_activation ());
-                      };
-                      reply_terminal (std::move (terminal));
-                  } else {
-                      auto cleanup =
-                        std::make_shared<task_t<void>> (activation_terminal->finish (false));
-                      detail::observe_task_terminal (
-                        *cleanup, [cleanup, reply_terminal] (const result_t<void> &cleaned) {
-                            if (!cleaned)
-                                trace_mesh_host ("instance-activation-terminal",
-                                                 cleaned.error ()->what ());
-                            reply_terminal ({105,
-                                             static_cast<std::uint32_t> (
-                                               protocol::framework_error_code::requestFailed),
-                                             std::nullopt});
-                        });
-                  }
-              });
+            // Local Creating work is joined through its target admission owner.
+            // An authority without that owner cannot authorize a second local Reserve.
+            reject_activation ();
             co_return true;
         }
-        // Local Creating work is joined through its target admission owner.
-        // An authority without that owner cannot authorize a second local Reserve.
-        reject_activation ();
-        co_return true;
+    };
+    const auto join_existing =
+      [&] (const authority_read_result_t &current,
+           std::optional<instance_spot_authority_payload_t> ready_state) -> task_t<bool> {
+        return join_existing_instance_t::run (lifetime, owned_command, instance_metric,
+                                              reply_terminal, instance_materializer, resume_missing,
+                                              accept_activation, accepted_activation,
+                                              reject_activation, current, std::move (ready_state));
     };
     authority_read_result_t current;
     if (previous_admission) {
@@ -5965,11 +5999,26 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     if (!accepted_activation ()) {
         if (dispatch_result)
             activation_terminal->accepted = dispatch_result.value ().accepted_turn_terminal;
+        struct release_failed_activation_t
+        {
+            static task_t<void>
+            run (std::decay_t<decltype (activation_terminal)> activation_terminal,
+                 std::decay_t<decltype (store)> store,
+                 std::decay_t<decltype (authority_key)> authority_key,
+                 std::decay_t<decltype (ready_snapshot)> ready_snapshot,
+                 std::decay_t<decltype (instance_relocations)> instance_relocations,
+                 std::decay_t<decltype (recovery_root)> recovery_root)
+            {
+                co_await activation_terminal->finish (false);
+                (void) co_await release_authority_async (store, authority_key,
+                                                         ready_snapshot.store_version, {});
+                instance_relocations->remove (recovery_root.reference);
+            }
+        };
         const auto release_failed_activation = [&] () -> task_t<void> {
-            co_await activation_terminal->finish (false);
-            (void) co_await release_authority_async (store, authority_key,
-                                                     ready_snapshot.store_version, {});
-            instance_relocations->remove (recovery_root.reference);
+            return release_failed_activation_t::run (activation_terminal, store, authority_key,
+                                                     ready_snapshot, instance_relocations,
+                                                     recovery_root);
         };
         const auto cleanup = co_await await_result (release_failed_activation ());
         if (!cleanup) {
@@ -6117,6 +6166,1171 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
     }
 }
 
+task_t<std::pair<std::size_t, receive_batch_budget_t>>
+public_host_runtime_t::dispatch_user_spot_batch (
+  std::shared_ptr<location_repository_t> store,
+  user_spot_materializer_t materializer,
+  user_spot_closer_t user_spot_closer,
+  actor_create_operation_target_t actor_create_target,
+  actor_join_operation_target_t actor_join_target,
+  std::function<std::optional<location_owner_token_t> ()> session_route_owner_resolver,
+  std::function<void (const protocol::message_follow_notice_t &)> message_follow_handler,
+  bound_session_operations_t bound_session_operations,
+  std::function<void (const protocol::session_relocation_route_t &)>
+    late_session_route_update_reporter,
+  receive_batch_budget_t infrastructure_budget,
+  std::size_t count,
+  std::shared_ptr<mesh::service_mailbox_claim_t> claim)
+{
+    for (std::size_t index = 0; index < claim->claimed_messages; ++index) {
+        auto original = _transport->mailbox ().take ({claim, index});
+        if (!original)
+            continue;
+        auto &mailbox_record = *original;
+        std::size_t record_bytes = 0;
+        for (const auto &part : mailbox_record.parts)
+            record_bytes = part.size () > std::numeric_limits<std::size_t>::max () - record_bytes
+                             ? std::numeric_limits<std::size_t>::max ()
+                             : record_bytes + part.size ();
+        infrastructure_budget.account (record_bytes);
+        ++count;
+        activation_terminal_t preparation_terminal;
+        std::optional<std::pair<std::uint32_t, std::uint32_t>> dispatch_failure;
+        try {
+            const auto wire =
+              protocol::decode_header (protocol::message_bytes (mailbox_record.parts.front ()));
+            if (wire.kind == protocol::command::messageFollow) {
+                if (mailbox_record.parts.size () != 1 || mailbox_record.source_node_generation == 0)
+                    continue;
+                const auto notice = protocol::decode_message_follow (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                if (message_follow_handler) {
+                    try {
+                        message_follow_handler (notice);
+                    }
+                    catch (...) {
+                        _options.mesh.runtime_failures->report (std::current_exception ());
+                    }
+                }
+                continue;
+            }
+            if (wire.kind == protocol::command::boundSessionBind) {
+                const auto bind = protocol::decode_bound_session_bind (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                const auto local = status ();
+                const auto actor = co_await _objects.find_async (stateful::object_kind_t::actor,
+                                                                 bind.actor.actor_id);
+                const auto authority_matches = bound_session_bind_actor_matches (
+                  bind.actor, actor, local.routing_id (), local.lifecycle_generation ());
+                const auto admission = classify_bound_session_bind_admission (authority_matches);
+                trace_mesh_host ("bound-session-bind-admission",
+                                 "actor=" + bind.actor.actor_id + " admission="
+                                   + (admission == bound_session_bind_admission_t::ready ? "ready"
+                                      : admission == bound_session_bind_admission_t::stale_route
+                                        ? "stale_route"
+                                        : "actor_not_ready")
+                                   + " requested_authority="
+                                   + std::to_string (bind.actor.authority_owner_generation)
+                                   + " requested_lease="
+                                   + std::to_string (bind.actor.owner_lease_generation)
+                                   + " authority_matches=" + (authority_matches ? "true" : "false")
+                                   + " local_actor=" + (actor ? "found" : "missing"));
+                bound_session_bind_operation_result_t operation_result{
+                  stateful::stateful_error_t::conflict, std::nullopt};
+                bool terminal_replied = false;
+                const auto session_owner_rid =
+                  zlink::routing_id_t::from (mailbox_record.source_routing_id);
+                std::optional<location_owner_token_t> session_owner;
+                if (admission == bound_session_bind_admission_t::ready
+                    && bound_session_operations.bind && bound_session_operations.session_owner)
+                    session_owner = co_await bound_session_operations.session_owner (
+                      session_owner_rid, mailbox_record.source_node_generation);
+                if (admission == bound_session_bind_admission_t::ready && session_owner) {
+                    operation_result = co_await bound_session_operations.bind (
+                      bind, session_owner_rid, mailbox_record.source_node_generation,
+                      *session_owner,
+                      [this, &mailbox_record,
+                       &terminal_replied] (std::uint32_t terminal, std::uint32_t failure,
+                                           std::optional<protocol::stream_bind_reply_tail_t> tail) {
+                          terminal_replied = _transport->reply_bound_session_bind (
+                            mailbox_record, terminal, failure, std::move (tail));
+                          return terminal_replied;
+                      });
+                }
+                // One terminal per bind. Session-Actor binding §4: without the Session
+                // owner descriptor the bind is Unavailable.
+                using terminal_t = protocol::request_terminal_result;
+                using code_t = protocol::framework_error_code;
+                const auto [terminal, code] =
+                  operation_result.terminal_result
+                    ? std::pair{static_cast<terminal_t> (*operation_result.terminal_result),
+                                static_cast<code_t> (operation_result.failure_code)}
+                  : operation_result.error == stateful::stateful_error_t::none
+                    ? std::pair{terminal_t::ok, code_t::none}
+                  : admission == bound_session_bind_admission_t::stale_route
+                    ? std::pair{terminal_t::conflict, code_t::actorLocationStale}
+                  : admission == bound_session_bind_admission_t::actor_not_ready
+                    ? std::pair{terminal_t::busy, code_t::none}
+                    : std::pair{terminal_t::internalError, code_t::routeNotConnected};
+                const auto replied =
+                  terminal_replied
+                  || _transport->reply_bound_session_bind (
+                    mailbox_record, static_cast<std::uint32_t> (terminal),
+                    static_cast<std::uint32_t> (code), operation_result.reply_tail);
+                if (replied && operation_result.replacement) {
+                    (void) co_await _transport->send_bound_session_replaced (
+                      operation_result.replacement->retired_session.session_owner_node_routing_id,
+                      *operation_result.replacement);
+                }
+                continue;
+            }
+            if (wire.kind == protocol::command::boundSessionClose) {
+                const auto request = protocol::decode_bound_session_close (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                const auto local = status ();
+                // Session-Actor binding §4: compare with this host's current
+                // descriptor identity.
+                const auto owner =
+                  session_route_owner_resolver ? session_route_owner_resolver () : std::nullopt;
+                auto closed = result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                       "Session owner has no live descriptor");
+                if (owner && owner->lease_generation > 0)
+                    closed = co_await runtime::await_result (_sessions.close_current (
+                      request, {local.routing_id ().to_bytes (),
+                                local.lifecycle_generation (),
+                                owner->owner_id,
+                                static_cast<std::uint64_t> (owner->lease_generation),
+                                {},
+                                0}));
+                const auto failure =
+                  closed
+                    ? std::optional<messaging::request_wire_failure_t>{}
+                    : messaging::request_failure_mapper_t{}.target_failure_reply (*closed.error ());
+                _transport->reply_bound_session_bind (
+                  mailbox_record,
+                  failure ? failure->terminal_result
+                          : static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+                  failure ? failure->failure_code
+                          : static_cast<std::uint32_t> (protocol::framework_error_code::none));
+                continue;
+            }
+            if (wire.kind == protocol::command::boundSessionReplaced) {
+                const auto replacement = protocol::decode_bound_session_replaced (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                trace_mesh_host ("bound-session-replacement-received",
+                                 "actor=" + replacement.actor_authority.actor_id);
+                if (bound_session_operations.replaced)
+                    bound_session_operations.replaced (replacement);
+                continue;
+            }
+            if (wire.kind == protocol::command::relocationPrepare) {
+                if (mailbox_record.parts.empty () || !mailbox_record.reply_token
+                    || !session_route_owner_resolver)
+                    continue;
+                const auto control = protocol::decode_relocation_control (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                const auto *prepare = std::get_if<protocol::relocation_prepare_t> (&control);
+                const auto local = status ();
+                const auto owner = session_route_owner_resolver ();
+                if (!prepare || !owner
+                    || prepare->initiator_role != protocol::relocation_role_t::source
+                    || prepare->target.target_node_routing_id != local.routing_id ().to_bytes ()
+                    || prepare->target.target_node_generation != local.lifecycle_generation ()
+                    || prepare->target.target_owner_id != owner->owner_id
+                    || prepare->target.target_owner_lease_generation
+                         != static_cast<std::uint64_t> (owner->lease_generation)
+                    || prepare->source_node_routing_id != mailbox_record.source_routing_id
+                    || prepare->source_node_generation != mailbox_record.source_node_generation)
+                    continue;
+
+                if (_actor_join_relocation_prepare_validator) {
+                    const auto join_prepare = _actor_join_relocation_prepare_validator (*prepare);
+                    if (join_prepare && !*join_prepare) {
+                        (void) _transport->reply_relocation_failed (
+                          mailbox_record,
+                          protocol::relocation_failed_t{
+                            prepare->relocation, prepare->target_attempt_generation,
+                            prepare->coordinator, prepare->target, prepare->object,
+                            protocol::relocation_role_t::target,
+                            messaging::request_failure_mapper_t{}.target_failure_code (
+                              framework_error_kind_t::protocol_error,
+                              static_cast<std::uint32_t> (
+                                protocol::framework_error_code::requestProtocolError))});
+                        continue;
+                    }
+                }
+
+                const relocation_attempt_key_t key{prepare->relocation.high,
+                                                   prepare->relocation.low,
+                                                   prepare->target_attempt_generation};
+                enum class prepare_state_t
+                {
+                    fresh,
+                    duplicate,
+                    conflict,
+                    rejected
+                };
+                const auto prepare_state =
+                  co_await _relocation_session_terminal_lane.run_task ([&] {
+                      using state_t =
+                        std::pair<prepare_state_t, std::shared_ptr<task_completion_source_t<void>>>;
+                      const auto attempt = _relocation_target_attempts.find (key);
+                      if (attempt != _relocation_target_attempts.end ())
+                          return attempt->second.prepare == *prepare && attempt->second.pending
+                                   ? state_t{prepare_state_t::duplicate,
+                                             attempt->second.pending->ready}
+                                   : state_t{prepare_state_t::conflict, nullptr};
+                      const auto assembly = _relocation_assemblies.find (key);
+                      if (assembly != _relocation_assemblies.end ()) {
+                          if (assembly->second.prepare != *prepare)
+                              return state_t{prepare_state_t::conflict, nullptr};
+                          assembly->second.expires_at =
+                            std::chrono::steady_clock::now () + relocation_assembly_retention;
+                          lower_relocation_next_due_on_lane (assembly->second.expires_at);
+                          return state_t{prepare_state_t::duplicate, assembly->second.ready};
+                      }
+                      if (prepare->payload_total_length == 0
+                          || prepare->payload_total_length > protocol::relocationLogicalBytes
+                          || prepare->payload_chunk_count == 0
+                          || prepare->payload_chunk_count > protocol::relocationChunkCount)
+                          return state_t{prepare_state_t::conflict, nullptr};
+                      if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
+                          || local.state == node_status_t::state_t::draining
+                          || local.state == node_status_t::state_t::stopped
+                          || local.state == node_status_t::state_t::error)
+                          return state_t{prepare_state_t::rejected, nullptr};
+                      lower_relocation_next_due_on_lane (relocation_due_now);
+                      _relocation_assemblies.emplace (
+                        key, pending_relocation_assembly_t{
+                               *prepare, std::move (mailbox_record),
+                               stateful::relocation_state_assembly_t{
+                                 prepare->relocation,
+                                 prepare->target_attempt_generation,
+                                 prepare->coordinator,
+                                 prepare->object,
+                                 {prepare->payload_total_length, prepare->payload_chunk_count,
+                                  prepare->payload_checksum_crc32c}},
+                               std::chrono::steady_clock::now () + relocation_assembly_retention});
+                      return state_t{prepare_state_t::fresh, nullptr};
+                  });
+                if (prepare_state.first == prepare_state_t::duplicate) {
+                    observe_relocation_ready (prepare_state.second, std::move (mailbox_record),
+                                              *prepare);
+                } else if (prepare_state.first != prepare_state_t::fresh) {
+                    const auto failure = prepare_state.first == prepare_state_t::conflict
+                                           ? framework_error_kind_t::protocol_error
+                                           : framework_error_kind_t::shutting_down;
+                    (void) _transport->reply_relocation_failed (
+                      mailbox_record,
+                      protocol::relocation_failed_t{
+                        prepare->relocation, prepare->target_attempt_generation,
+                        prepare->coordinator, prepare->target, prepare->object,
+                        protocol::relocation_role_t::target,
+                        messaging::request_failure_mapper_t{}.target_failure_code (failure)});
+                }
+                continue;
+            }
+            if (wire.kind == protocol::command::relocationState) {
+                if (mailbox_record.parts.size () != 1)
+                    continue;
+                const auto control = protocol::decode_relocation_control (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                const auto *state = std::get_if<protocol::relocation_state_t> (&control);
+                if (!state || state->sender_role != protocol::relocation_role_t::source
+                    || state->chunk_data.empty ())
+                    continue;
+                const relocation_attempt_key_t key{state->relocation.high, state->relocation.low,
+                                                   state->target_attempt_generation};
+                std::shared_ptr<pending_relocation_assembly_t> completed;
+                std::optional<pending_relocation_assembly_t> failed;
+                const auto assembly_current =
+                  _relocation_session_terminal_lane
+                    .run ([&] {
+                        const auto found = _relocation_assemblies.find (key);
+                        if (found == _relocation_assemblies.end ()
+                            || found->second.prepare.coordinator != state->coordinator
+                            || found->second.prepare.object != state->object
+                            || found->second.prepare.source_node_routing_id
+                                 != mailbox_record.source_routing_id
+                            || found->second.prepare.source_node_generation
+                                 != mailbox_record.source_node_generation)
+                            return false;
+                        const auto accepted = found->second.assembly.accept (*state);
+                        if (accepted == stateful::relocation_assembly_result_t::conflict) {
+                            failed.emplace (std::move (found->second));
+                            _relocation_assemblies.erase (found);
+                        } else if (accepted == stateful::relocation_assembly_result_t::completed) {
+                            completed = std::make_shared<pending_relocation_assembly_t> (
+                              std::move (found->second));
+                            relocation_target_attempt_t attempt;
+                            attempt.prepare = completed->prepare;
+                            attempt.pending = completed;
+                            attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
+                            lower_relocation_next_due_on_lane (relocation_due_now);
+                            _relocation_target_attempts.emplace (key, std::move (attempt));
+                            _relocation_assemblies.erase (found);
+                        }
+                        return true;
+                    })
+                    .get ();
+                if (!assembly_current)
+                    continue;
+                if (failed)
+                    reply_relocation_assembly_failure (
+                      *failed, protocol::framework_error_code::relocationDataLost);
+                if (completed)
+                    complete_relocation_assembly (key, std::move (completed));
+                continue;
+            }
+            if (wire.kind == protocol::command::relocationCutover) {
+                if (mailbox_record.parts.size () != 1)
+                    continue;
+                const auto control = protocol::decode_relocation_control (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                const auto *cutover = std::get_if<protocol::relocation_cutover_t> (&control);
+                if (!cutover || cutover->sender_role != protocol::relocation_role_t::source)
+                    continue;
+                const relocation_attempt_key_t key{cutover->relocation.high,
+                                                   cutover->relocation.low,
+                                                   cutover->target_attempt_generation};
+                std::optional<std::vector<
+                  std::tuple<stateful::object_ref_t, protocol::relocation_data_t, std::uint64_t>>>
+                  verified;
+                std::optional<relocation_target_attempt_t> mismatched;
+                _relocation_session_terminal_lane
+                  .run ([&] {
+                      const auto found = _relocation_target_attempts.find (key);
+                      if (found == _relocation_target_attempts.end ()
+                          || !relocation_target_wire_ready (found->second)
+                          || found->second.prepare.coordinator != cutover->coordinator
+                          || found->second.prepare.object != cutover->object
+                          || found->second.prepare.source_node_routing_id
+                               != mailbox_record.source_routing_id
+                          || found->second.prepare.source_node_generation
+                               != mailbox_record.source_node_generation
+                          || _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
+                          || found->second.cutover_received) {
+                          /* Late or duplicate cutover (28 §4.4): the
+                               * boundary already resolved and is never
+                               * re-verified or changed. */
+                          return;
+                      }
+                      /* The batch the source sent right before this
+                           * cutover on the ordered connection is the
+                           * received suffix of the declared length; a
+                           * retransmitted whole batch replaces any partial
+                           * earlier copy (28 §4.4). */
+                      auto &batch = found->second.boundary_batch;
+                      const auto count = cutover->boundary_record_count;
+                      bool matches = count <= batch.size ();
+                      if (matches) {
+                          stateful::relocation_crc32c_accumulator_t accumulator;
+                          for (auto record = batch.end () - static_cast<std::ptrdiff_t> (count);
+                               record != batch.end (); ++record)
+                              accumulator.update (
+                                protocol::encode_relocation_control (std::get<1> (*record)));
+                          matches = accumulator.value () == cutover->boundary_checksum_crc32c;
+                      }
+                      if (matches) {
+                          found->second.cutover_received = true;
+                          lower_relocation_next_due_on_lane (relocation_due_now);
+                          verified.emplace (std::make_move_iterator (
+                                              batch.end () - static_cast<std::ptrdiff_t> (count)),
+                                            std::make_move_iterator (batch.end ()));
+                          batch.clear ();
+                          return;
+                      }
+                      /* Ordered connection: a declared batch that does
+                           * not match what arrived before it is an
+                           * implementation defect, not a retryable
+                           * condition (28 §4.4) — no CAS on a possibly
+                           * incomplete batch; discard the staging. */
+                      mismatched = take_relocation_target_discard (found->second);
+                  })
+                  .get ();
+                if (verified) {
+                    bool staged = true;
+                    for (const auto &[target, data, participant_id] : *verified)
+                        if (staged)
+                            staged =
+                              co_await stage_relocation_record (target, data, participant_id);
+                    _relocation_session_terminal_lane
+                      .run ([&] {
+                          const auto found = _relocation_target_attempts.find (key);
+                          if (found == _relocation_target_attempts.end ())
+                              return;
+                          if (staged) {
+                              set_relocation_finalize_at_on_lane (
+                                found->second, std::chrono::steady_clock::now ());
+                              return;
+                          }
+                          mismatched = take_relocation_target_discard (found->second);
+                      })
+                      .get ();
+                    if (staged)
+                        (void) co_await try_finalize_relocation_target (key);
+                }
+                if (mismatched) {
+                    std::vector<relocation_target_attempt_t> cleanup;
+                    cleanup.push_back (std::move (*mismatched));
+                    co_await discard_relocation_target_attempts (std::move (cleanup));
+                }
+                continue;
+            }
+            if (wire.kind == protocol::command::relocationData
+                || wire.kind == protocol::command::replyRelay
+                || wire.kind == protocol::command::replyRelayAck) {
+                (void) co_await _relocation_wire->process (mailbox_record);
+                continue;
+            }
+            if (wire.kind != protocol::command::sessionRelocationSeal
+                && wire.kind != protocol::command::sessionRelocationRoute
+                && wire.kind != protocol::command::userSpotCreate
+                && wire.kind != protocol::command::userSpotClose
+                && wire.kind != protocol::command::actorCreate
+                && wire.kind != protocol::command::actorJoin
+                && wire.kind != protocol::command::instanceSpot)
+                throw protocol::service_wire_error_t ("unsupported infrastructure mailbox command");
+
+            if (wire.kind == protocol::command::sessionRelocationSeal) {
+                if (mailbox_record.parts.size () != 1)
+                    continue;
+                const auto seal = [&] {
+                    try {
+                        return protocol::decode_session_relocation_seal (
+                          protocol::message_bytes (mailbox_record.parts.front ()));
+                    }
+                    catch (const protocol::service_wire_error_t &) {
+                        detail::dispatch_error_reporter_t (_options.mesh.dispatch)
+                          .report_lazy ([&] {
+                              message_dispatch_error_event_t event{};
+                              event.surface = dispatch_error_surface_t::stream_session;
+                              event.message_kind = dispatch_message_kind_t::control;
+                              event.reason = detail::dispatch_reason_from_error (
+                                framework_error_kind_t::protocol_error);
+                              event.action = dispatch_error_action_t::drop;
+                              event.packet_name = "sessionRelocationSeal";
+                              event.source_rid =
+                                zlink::routing_id_t::from (mailbox_record.source_routing_id)
+                                  .to_hex ();
+                              event.exception = std::current_exception ();
+                              return event;
+                          });
+                        throw;
+                    }
+                }();
+                const auto owner =
+                  session_route_owner_resolver ? session_route_owner_resolver () : std::nullopt;
+                if (!owner) {
+                    detail::trace_session_binding_control_drop (
+                      _options.mesh.dispatch, mailbox_record.source_routing_id, seal.actor.actor_id,
+                      "sessionRelocationSeal", message_flow_reason_t::location_unavailable);
+                    continue;
+                }
+                const auto reconcile = _transport->peer_reconcile ();
+                const auto [accepted, immediate] = admit_session_relocation_seal (
+                  seal, *owner, mailbox_record.source_routing_id, {}, reconcile);
+                if (!accepted) {
+                    detail::trace_session_binding_control_drop (
+                      _options.mesh.dispatch, mailbox_record.source_routing_id, seal.actor.actor_id,
+                      "sessionRelocationSeal", message_flow_reason_t::stale_target);
+                    continue;
+                }
+                if (immediate)
+                    (void) co_await _transport->send_session_relocation_sealed (
+                      mailbox_record.source_routing_id, *immediate);
+                continue;
+            }
+
+            if (wire.kind == protocol::command::sessionRelocationRoute) {
+                if (mailbox_record.parts.size () != 1 || !session_route_owner_resolver) {
+                    continue;
+                }
+                const auto route = protocol::decode_session_relocation_route (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                const auto authenticated_sender =
+                  route.route.action == protocol::session_relocation_route_action_t::commit
+                    ? route.sender_role == protocol::relocation_role_t::target
+                        && mailbox_record.source_node_generation != 0
+                        && mailbox_record.source_routing_id == route.route.target_node_routing_id
+                        && mailbox_record.source_node_generation
+                             == route.route.target_node_generation
+                    : route.sender_role == protocol::relocation_role_t::source
+                        && mailbox_record.source_node_generation != 0
+                        && mailbox_record.source_routing_id == route.coordinator.node_routing_id
+                        && mailbox_record.source_node_generation
+                             == route.coordinator.node_generation;
+                if (!authenticated_sender) {
+                    continue;
+                }
+
+                const auto owner = session_route_owner_resolver ();
+                if (!owner || owner->owner_id != route.session_owner_id
+                    || route.session_owner_lease_generation
+                         > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())
+                    || owner->lease_generation
+                         != static_cast<std::int64_t> (route.session_owner_lease_generation)) {
+                    continue;
+                }
+
+                const auto relocation_key = session_relocation_key (route);
+                bool late_session_route_update = false;
+                const auto route_matches_seal =
+                  _relocation_session_terminal_lane
+                    .run ([&] {
+                        const auto sealed = _session_seal_terminals.find (relocation_key);
+                        if (sealed == _session_seal_terminals.end () || sealed->second.consumed
+                            || sealed->second.sealed.seal_result
+                                 == protocol::session_relocation_seal_result_t::binding_absent) {
+                            late_session_route_update = true;
+                            return true;
+                        }
+                        if (!sealed->second.ready
+                            || sealed->second.seal.relocation != route.relocation
+                            || sealed->second.seal.actor.actor_id != route.actor.actor_id
+                            || sealed->second.seal.actor.object_generation
+                                 != route.actor.object_generation
+                            || sealed->second.seal.session_owner_node_routing_id
+                                 != route.session_owner_node_routing_id
+                            || sealed->second.seal.session_owner_node_generation
+                                 != route.session_owner_node_generation
+                            || sealed->second.seal.session_owner_id != route.session_owner_id
+                            || sealed->second.seal.session_owner_lease_generation
+                                 != route.session_owner_lease_generation
+                            || sealed->second.seal.session_routing_id != route.session_routing_id
+                            || sealed->second.seal.binding_generation != route.binding_generation)
+                            return false;
+                        return true;
+                    })
+                    .get ();
+                if (!route_matches_seal)
+                    continue;
+                if (late_session_route_update) {
+                    if (late_session_route_update_reporter) {
+                        try {
+                            late_session_route_update_reporter (route);
+                        }
+                        catch (...) {
+                            _options.mesh.runtime_failures->report (std::current_exception ());
+                        }
+                    }
+                    continue;
+                }
+
+                const auto session_id = stateful::stream_session_registry_t::connection_key (
+                  zlink::routing_id_t::from (route.session_routing_id));
+                stateful::stream_route_admission_t admission;
+                if (route.route.action == protocol::session_relocation_route_action_t::commit) {
+                    const auto current = _sessions.current_binding (route.actor.actor_id);
+                    if (!current) {
+                        continue;
+                    }
+                    const auto target_node =
+                      zlink::routing_id_t::from (route.route.target_node_routing_id);
+                    auto target = current->actor;
+                    target.node_id = target_node.to_string ();
+                    target.authority_owner_generation =
+                      route.route.target_authority_owner_generation;
+                    stateful::stream_session_registry_t::route_terminal_commit_t commit_projection;
+                    if (bound_session_operations.commit_relocation_route) {
+                        commit_projection = [&route, &bound_session_operations,
+                                             previous = *current] (
+                                              const stateful::stream_route_admission_t &committed) {
+                            return committed.binding
+                                   && bound_session_operations.commit_relocation_route (
+                                     route, previous, *committed.binding);
+                        };
+                    }
+                    admission = _sessions.commit_remote_route (
+                      session_id, route.binding_generation, route.actor.actor_id,
+                      route.actor.object_generation, std::move (target),
+                      route.route.target_node_generation, route.route.target_owner_lease_generation,
+                      std::move (commit_projection));
+                } else {
+                    admission = _sessions.acknowledge_remote_abort (
+                      session_id, route.binding_generation, route.actor.actor_id,
+                      route.actor.object_generation);
+                }
+                if (admission.error != stateful::stateful_error_t::none || !admission.binding) {
+                    continue;
+                }
+
+                _relocation_session_terminal_lane
+                  .run ([&] {
+                      const auto sealed = _session_seal_terminals.find (relocation_key);
+                      if (sealed != _session_seal_terminals.end () && !sealed->second.consumed
+                          && sealed->second.ready)
+                          sealed->second.consumed = true;
+                  })
+                  .get ();
+                continue;
+            }
+
+            if (wire.kind == protocol::command::actorCreate) {
+                const auto request = protocol::decode_actor_create_header (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                if (!actor_create_target || request.deadline_unix_ms <= unix_milliseconds_now ()) {
+                    actor_create_operation_result_t result;
+                    result.reply.header.correlation = request.correlation;
+                    result.reply.header.terminal_result = actor_create_target ? 101u : 105u;
+                    result.reply.header.failure_code =
+                      actor_create_target ? 0u
+                                          : static_cast<std::uint32_t> (
+                                              protocol::framework_error_code::actorCreateFailed);
+                    (void) _transport->reply_actor_create (mailbox_record, result.reply,
+                                                           std::move (result.application_reply));
+                } else {
+                    auto completed = std::make_shared<std::atomic_bool> (false);
+                    auto reply = [weak = weak_from_this (),
+                                  reply_source = mailbox_record.reply_source (),
+                                  completed] (actor_create_operation_result_t result) mutable {
+                        if (completed->exchange (true, std::memory_order_acq_rel))
+                            return;
+                        const auto host = weak.lock ();
+                        if (!host)
+                            return;
+                        try {
+                            (void) host->_transport->reply_actor_create (
+                              *reply_source, result.reply, std::move (result.application_reply));
+                        }
+                        catch (...) {
+                            host->_options.mesh.runtime_failures->report (
+                              std::current_exception ());
+                        }
+                    };
+                    try {
+                        actor_create_target (request, reply);
+                    }
+                    catch (...) {
+                        actor_create_operation_result_t result;
+                        result.reply.header = {
+                          request.correlation, 105u,
+                          static_cast<std::uint32_t> (
+                            protocol::framework_error_code::actorCreateFailed)};
+                        reply (std::move (result));
+                    }
+                }
+                continue;
+            }
+
+            if (wire.kind == protocol::command::actorJoin) {
+                if (mailbox_record.parts.empty () || mailbox_record.parts.size () > 2)
+                    throw protocol::service_wire_error_t ("Actor join has an invalid part count");
+                const auto canonical = try_decode_canonical_actor_join (
+                  ::zlink::framework::detail::backend::copy_binding_parts (mailbox_record.parts));
+                if (!canonical)
+                    throw protocol::service_wire_error_t (
+                      "Actor join is not a canonical command-28 record");
+                const auto &request = canonical->request;
+                const auto &payload = canonical->payload;
+                if (!actor_join_target) {
+                    (void) _transport->reply_actor_join (
+                      mailbox_record, protocol::actor_join_result_t::rejected, std::nullopt, 0, 0);
+                    continue;
+                }
+                auto completed = std::make_shared<std::atomic_bool> (false);
+                auto reply = [weak = weak_from_this (),
+                              reply_source = mailbox_record.reply_source (),
+                              completed] (actor_join_operation_result_t result) mutable {
+                    if (completed->exchange (true, std::memory_order_acq_rel))
+                        return;
+                    const auto host = weak.lock ();
+                    if (!host)
+                        return;
+                    try {
+                        (void) host->_transport->reply_actor_join (
+                          *reply_source, result.join_result, result.spot, result.membership_epoch,
+                          result.receive_chunk_limit_bytes, result.terminal_result,
+                          result.failure_code, std::move (result.application_reply));
+                    }
+                    catch (...) {
+                        host->_options.mesh.runtime_failures->report (std::current_exception ());
+                    }
+                };
+                try {
+                    actor_join_target (request, payload, reply);
+                }
+                catch (...) {
+                    reply (actor_join_operation_result_t{});
+                }
+                continue;
+            }
+
+            if (wire.kind == protocol::command::instanceSpot) {
+                const auto request = protocol::decode_instance_spot_activation_header (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                const auto expected_parts = request.has_metadata ? 3u : 2u;
+                if (mailbox_record.parts.size () != expected_parts)
+                    throw protocol::service_wire_error_t (
+                      "Instance Spot activation has an invalid part count");
+                std::optional<std::vector<std::uint8_t>> metadata;
+                if (request.has_metadata)
+                    metadata = mailbox_record.parts[1].to_bytes ();
+                auto application = protocol::decode_application_payload (
+                  protocol::message_bytes (mailbox_record.parts[request.has_metadata ? 2 : 1]),
+                  capture_flow ());
+                auto reply_record = mailbox_record.reply_source ();
+                auto running = std::make_shared<task_t<void>> (dispatch_instance_spot_activation (
+                  {request, std::move (metadata), std::move (application)}, reply_record));
+                detail::observe_task_terminal (
+                  *running, [self = shared_from_this (), running] (const result_t<void> &result) {
+                      if (!result)
+                          self->_options.mesh.runtime_failures->report (result.exception ());
+                  });
+                continue;
+            }
+            if (wire.kind == protocol::command::userSpotCreate) {
+                const auto request = protocol::decode_user_spot_create_header (
+                  protocol::message_bytes (mailbox_record.parts.front ()));
+                auto fingerprint_request = request;
+                fingerprint_request.correlation = 1;
+                const auto request_fingerprint =
+                  protocol::encode_user_spot_create_header (fingerprint_request);
+                const auto operation_key =
+                  user_spot_operation_key (request.source_node_routing_id,
+                                           request.source_node_generation, request.operation);
+                std::optional<user_spot_terminal_record_t> cached;
+                _user_spot_terminal_lane
+                  .run ([&] {
+                      const auto now = unix_milliseconds_now ();
+                      std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
+                          return (!entry.second.header || !entry.second.header.value ().empty ())
+                                 && user_spot_operation_replay_expired (
+                                   entry.second.deadline_unix_ms, now,
+                                   _options.user_spot_operation_replay_retention);
+                      });
+                      const auto found = _user_spot_terminals.find (operation_key);
+                      if (found != _user_spot_terminals.end ())
+                          cached = found->second;
+                  })
+                  .get ();
+                if (cached) {
+                    if (cached->kind != protocol::command::userSpotCreate
+                        || cached->request_fingerprint != request_fingerprint)
+                        throw protocol::service_wire_error_t (
+                          "user spot operation identity was reused with a different request");
+                    if (!cached->header) {
+                        (void) _transport->reply_user_spot_create (
+                          mailbox_record,
+                          detail::propagate_failure<protocol::user_spot_create_reply_t> (
+                            cached->header, "User Spot creation failed"),
+                          std::nullopt);
+                        continue;
+                    }
+                    auto reply = protocol::decode_user_spot_create_reply (cached->header.value ());
+                    reply.header.correlation = request.correlation;
+                    (void) _transport->reply_user_spot_create (mailbox_record, reply,
+                                                               cached->application_reply);
+                    continue;
+                }
+                if (request.deadline_unix_ms <= unix_milliseconds_now ()) {
+                    protocol::user_spot_create_reply_t reply{
+                      {request.correlation, 101, 0},
+                      protocol::user_spot_create_result_t::rejected,
+                      {},
+                      0};
+                    (void) _transport->reply_user_spot_create (mailbox_record, reply, std::nullopt);
+                    continue;
+                }
+                auto terminal = [&] (
+                                  std::uint32_t terminal_result, std::uint32_t failure_code,
+                                  protocol::user_spot_create_result_t result,
+                                  const std::string &spot, std::uint64_t generation,
+                                  std::optional<protocol::application_payload_t> application_reply =
+                                    std::nullopt,
+                                  result_t<void> outcome = result_t<void>::success ()) {
+                    protocol::user_spot_create_reply_t reply{
+                      {request.correlation, terminal_result, failure_code},
+                      result,
+                      spot,
+                      generation};
+                    user_spot_terminal_record_t stored{
+                      protocol::command::userSpotCreate, request.deadline_unix_ms,
+                      request_fingerprint,
+                      outcome ? result_t<std::vector<std::uint8_t>>::success (
+                                  protocol::encode_user_spot_create_reply (
+                                    request.correlation, terminal_result, failure_code, result,
+                                    spot, generation))
+                              : detail::propagate_failure<std::vector<std::uint8_t>> (
+                                  outcome, "User Spot creation failed"),
+                      application_reply};
+                    _user_spot_terminal_lane
+                      .run ([&] {
+                          _user_spot_terminals.insert_or_assign (operation_key, std::move (stored));
+                      })
+                      .get ();
+                    (void) _transport->reply_user_spot_create (
+                      mailbox_record,
+                      outcome ? result_t<protocol::user_spot_create_reply_t>::success (reply)
+                              : detail::propagate_failure<protocol::user_spot_create_reply_t> (
+                                  outcome, "User Spot creation failed"),
+                      std::move (application_reply));
+                };
+                if (!store || !materializer) {
+                    terminal (
+                      static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+                      static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
+                      protocol::user_spot_create_result_t::rejected, {}, 0);
+                    continue;
+                }
+                if (request.deadline_unix_ms <= unix_milliseconds_now ()) {
+                    terminal (
+                      static_cast<std::uint32_t> (protocol::request_terminal_result::timedOut), 0,
+                      protocol::user_spot_create_result_t::rejected, {}, 0);
+                    continue;
+                }
+                const auto &global_id = request.spot_id;
+                const auto read =
+                  store->read_authority (spot_authority_key (global_id)).result ().value ();
+                const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+                const auto &reservation = request.reservation;
+                const auto exact =
+                  snapshot && snapshot->store_version == reservation.expected_store_version
+                  && snapshot->object_generation == reservation.object_generation
+                  && snapshot->authority_owner_generation == reservation.authority_owner_generation
+                  && snapshot->owner.owner_id == reservation.target_owner_id
+                  && snapshot->owner.lease_generation == reservation.target_owner_lease_generation
+                  && snapshot->allocation.object_kind == placement_object_kind_t::user_spot
+                  && snapshot->allocation.stable_type == request.stable_type
+                  && snapshot->allocation.target.node_rid.value ()
+                       == node_rid_t::from_string (
+                            zlink::routing_id_t::from (reservation.target_node_routing_id)
+                              .to_string ())
+                            .value ()
+                  && snapshot->allocation.target.node_lifecycle_generation
+                       == reservation.target_node_generation
+                  && snapshot->allocation.capacity_bundle.spot_slots
+                       == reservation.pending_capacity_delta;
+                if (!exact) {
+                    const auto stale =
+                      snapshot && snapshot->object_generation != reservation.object_generation;
+                    const auto type_mismatch =
+                      snapshot
+                      && snapshot->allocation.object_kind == placement_object_kind_t::user_spot
+                      && snapshot->allocation.stable_type != request.stable_type;
+                    terminal (
+                      static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
+                      static_cast<std::uint32_t> (
+                        stale           ? protocol::framework_error_code::spotGenerationStale
+                        : type_mismatch ? protocol::framework_error_code::spotTypeMismatch
+                                        : protocol::framework_error_code::spotMoving),
+                      protocol::user_spot_create_result_t::rejected, {}, 0);
+                    continue;
+                }
+                const auto fence = public_fence (reservation, snapshot->allocation.target.mesh_name,
+                                                 request.stable_type);
+                const auto &pending = snapshot->pending_creation;
+                if (!pending || pending->reservation_id != fence.reservation_id) {
+                    terminal (
+                      static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
+                      static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
+                      protocol::user_spot_create_result_t::rejected, {}, 0);
+                    continue;
+                }
+                const auto creation_payload = runtime::decode_inline_creation_content (
+                  pending->request_content_reference, pending->request_sha256,
+                  pending->request_encoded_size);
+                if (!creation_payload) {
+                    terminal (
+                      static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+                      static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
+                      protocol::user_spot_create_result_t::rejected, {}, 0);
+                    continue;
+                }
+                const stateful::object_ref_t exact_ref{
+                  stateful::object_kind_t::user_spot,
+                  request.spot_id,
+                  reservation.object_generation,
+                  reservation.authority_owner_generation,
+                  snapshot->allocation.target.mesh_name,
+                  std::string (snapshot->allocation.target.node_rid.value ())};
+                if (snapshot->allocation.state == placement_allocation_state_t::active) {
+                    const auto existing = co_await _objects.find_async (
+                      stateful::object_kind_t::user_spot, exact_ref.key);
+                    if (!existing || *existing != exact_ref) {
+                        terminal (static_cast<std::uint32_t> (
+                                    protocol::request_terminal_result::internalError),
+                                  static_cast<std::uint32_t> (
+                                    protocol::framework_error_code::requestFailed),
+                                  protocol::user_spot_create_result_t::rejected, {}, 0);
+                        continue;
+                    }
+                    terminal (static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
+                              protocol::user_spot_create_result_t::existing, request.spot_id,
+                              exact_ref.object_generation);
+                    continue;
+                }
+                auto local = co_await _objects.begin_reserved_object_async (
+                  exact_ref, request.stable_type, [&] {
+                      std::vector<std::uint8_t> bytes;
+                      bytes.reserve (creation_payload->size ());
+                      for (const auto value : *creation_payload)
+                          bytes.push_back (std::to_integer<std::uint8_t> (value));
+                      return bytes;
+                  }());
+                if (local.status == stateful::create_status_t::existing) {
+                    terminal (static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
+                              protocol::user_spot_create_result_t::existing, request.spot_id,
+                              exact_ref.object_generation);
+                    continue;
+                }
+                if (!local.factory_owner) {
+                    const auto [classified_terminal, classified_code] =
+                      stateful_failure_pair (local.error);
+                    terminal (classified_terminal, classified_code,
+                              protocol::user_spot_create_result_t::rejected, {}, 0);
+                    continue;
+                }
+                user_spot_materialize_result_t materialized;
+                try {
+                    materialized = materializer (exact_ref, request.stable_type, *creation_payload);
+                }
+                catch (...) {
+                    const auto failure = detail::current_exception_result<void> ();
+                    (void) _objects.abort_create (local.attempt);
+                    (void) store
+                      ->abort ({{placement_object_kind_t::user_spot, global_id},
+                                public_fence (reservation, snapshot->allocation.target.mesh_name,
+                                              request.stable_type)})
+                      .result ();
+                    terminal (
+                      static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+                      static_cast<std::uint32_t> (protocol::framework_error_code::spotCreateFailed),
+                      protocol::user_spot_create_result_t::rejected, {}, 0, std::nullopt, failure);
+                    continue;
+                }
+                preparation_terminal.preparation = std::move (materialized.preparation_terminal);
+                if (!materialized.accepted) {
+                    co_await preparation_terminal.finish (false);
+                    (void) store
+                      ->abort ({{placement_object_kind_t::user_spot, global_id}, fence}, {},
+                               std::chrono::system_clock::time_point (
+                                 std::chrono::milliseconds (request.deadline_unix_ms)))
+                      .result ()
+                      .value ();
+                    (void) _objects.abort_create (local.attempt);
+                    terminal (static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
+                              protocol::user_spot_create_result_t::rejected, request.spot_id,
+                              exact_ref.object_generation,
+                              std::move (materialized.application_reply));
+                    continue;
+                }
+                const auto committed =
+                  store
+                    ->commit ({{placement_object_kind_t::user_spot, global_id},
+                               fence,
+                               ready_user_spot_authority_payload (exact_ref, request.stable_type,
+                                                                  fence.target)},
+                              {},
+                              std::chrono::system_clock::time_point (
+                                std::chrono::milliseconds (request.deadline_unix_ms)))
+                    .result ()
+                    .value ();
+                const auto *ready = std::get_if<object_committed_t> (&committed);
+                const auto *already = std::get_if<object_already_committed_t> (&committed);
+                if (!ready && !already) {
+                    co_await preparation_terminal.finish (false);
+                    (void) _objects.abort_create (local.attempt);
+                    terminal (
+                      static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
+                      static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
+                      protocol::user_spot_create_result_t::rejected, {}, 0);
+                    continue;
+                }
+                auto local_commit = co_await _objects.commit_create_async (local.attempt);
+                if (local_commit != stateful::stateful_error_t::none) {
+                    std::vector<std::uint8_t> creation_bytes;
+                    creation_bytes.reserve (creation_payload->size ());
+                    for (const auto value : *creation_payload)
+                        creation_bytes.push_back (std::to_integer<std::uint8_t> (value));
+                    const auto reconciled = co_await _objects.begin_reserved_object_async (
+                      exact_ref, request.stable_type, std::move (creation_bytes));
+                    if (reconciled.status == stateful::create_status_t::existing
+                        && reconciled.object == exact_ref)
+                        local_commit = stateful::stateful_error_t::none;
+                    else if ((reconciled.status == stateful::create_status_t::reserved
+                              || reconciled.status == stateful::create_status_t::joined)
+                             && reconciled.attempt != 0)
+                        local_commit = co_await _objects.commit_create_async (reconciled.attempt);
+                }
+                if (local_commit != stateful::stateful_error_t::none) {
+                    co_await preparation_terminal.finish (false);
+                    terminal (
+                      static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+                      static_cast<std::uint32_t> (protocol::framework_error_code::spotCreateFailed),
+                      protocol::user_spot_create_result_t::rejected, {}, 0);
+                    continue;
+                }
+                co_await preparation_terminal.finish ();
+                terminal (static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
+                          protocol::user_spot_create_result_t::created, request.spot_id,
+                          exact_ref.object_generation, std::move (materialized.application_reply));
+                continue;
+            }
+
+            const auto request = protocol::decode_user_spot_close_header (
+              protocol::message_bytes (mailbox_record.parts.front ()));
+            auto fingerprint_request = request;
+            fingerprint_request.correlation = 1;
+            const auto request_fingerprint =
+              protocol::encode_user_spot_close_header (fingerprint_request);
+            const auto operation_key = user_spot_operation_key (
+              request.source_node_routing_id, request.source_node_generation, request.operation);
+            /* One operation ID has one terminal result (§7.1). The table
+                 * decides in one lane turn whether this record replays the
+                 * terminal, joins the running operation, or starts it. */
+            enum class admission_t
+            {
+                start,
+                replay,
+                joined,
+                expired
+            };
+            std::optional<user_spot_terminal_record_t> cached;
+            const auto admission =
+              _user_spot_terminal_lane
+                .run ([&] {
+                    const auto now = unix_milliseconds_now ();
+                    std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
+                        return (!entry.second.header || !entry.second.header.value ().empty ())
+                               && user_spot_operation_replay_expired (
+                                 entry.second.deadline_unix_ms, now,
+                                 _options.user_spot_operation_replay_retention);
+                    });
+                    const auto found = _user_spot_terminals.find (operation_key);
+                    if (found != _user_spot_terminals.end ()) {
+                        if (found->second.kind != protocol::command::userSpotClose
+                            || found->second.request_fingerprint != request_fingerprint)
+                            throw protocol::service_wire_error_t (
+                              "user spot operation identity was reused with a different "
+                              "request");
+                        if (found->second.header && found->second.header.value ().empty ()) {
+                            found->second.waiting.emplace_back (mailbox_record.reply_source (),
+                                                                request.correlation);
+                            return admission_t::joined;
+                        }
+                        cached = found->second;
+                        return admission_t::replay;
+                    }
+                    if (request.deadline_unix_ms <= now)
+                        return admission_t::expired;
+                    _user_spot_terminals.insert_or_assign (
+                      operation_key,
+                      user_spot_terminal_record_t{protocol::command::userSpotClose,
+                                                  request.deadline_unix_ms,
+                                                  request_fingerprint,
+                                                  result_t<std::vector<std::uint8_t>>::success ({}),
+                                                  std::nullopt,
+                                                  {}});
+                    return admission_t::start;
+                })
+                .get ();
+            if (admission == admission_t::joined)
+                continue;
+            if (admission == admission_t::replay) {
+                auto reply = protocol::decode_user_spot_close_reply (cached->header.value ());
+                reply.header.correlation = request.correlation;
+                (void) _transport->reply_user_spot_close (mailbox_record, reply);
+                continue;
+            }
+            if (admission == admission_t::expired) {
+                protocol::user_spot_close_reply_t reply{{request.correlation, 101, 0}, false};
+                (void) _transport->reply_user_spot_close (mailbox_record, reply);
+                continue;
+            }
+            auto terminal = [this, transport = _transport,
+                             reply_source = mailbox_record.reply_source (), operation_key,
+                             correlation = request.correlation] (std::uint32_t terminal_result,
+                                                                 std::uint32_t failure_code,
+                                                                 bool closed) {
+                std::vector<
+                  std::pair<std::shared_ptr<const mesh::service_mailbox_record_t>, std::uint64_t>>
+                  waiting;
+                _user_spot_terminal_lane
+                  .run ([&] {
+                      auto &stored = _user_spot_terminals[operation_key];
+                      stored.header = result_t<std::vector<std::uint8_t>>::success (
+                        protocol::encode_user_spot_close_reply (correlation, terminal_result,
+                                                                failure_code, closed));
+                      waiting = std::exchange (stored.waiting, {});
+                  })
+                  .get ();
+                waiting.emplace (waiting.begin (), reply_source, correlation);
+                for (const auto &[record, record_correlation] : waiting) {
+                    protocol::user_spot_close_reply_t reply{
+                      {record_correlation, terminal_result, failure_code}, closed};
+                    (void) transport->reply_user_spot_close (*record, reply);
+                }
+            };
+            if (!store) {
+                terminal (
+                  105, static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
+                  false);
+                continue;
+            }
+            // The owner runtime checks the authority and runs every Close
+            // step on the Spot lifecycle lane (Spot address messaging §7.1).
+            auto begin = [this, target = request.target] { return begin_user_spot_close (target); };
+            auto done = [terminal] (result_t<bool> result) {
+                if (result) {
+                    terminal (0, 0, result.value ());
+                    return;
+                }
+                const auto failure =
+                  messaging::request_failure_mapper_t{}.target_failure_reply (result.exception ());
+                terminal (failure->terminal_result, failure->failure_code, false);
+            };
+            // The started operation settles its terminal record once, also
+            // when the Close cannot be scheduled.
+            try {
+                if (user_spot_closer)
+                    user_spot_closer (
+                      request.target.spot_id, request.target.object_generation,
+                      messaging::request_deadline_utc_from_unix_ms (request.deadline_unix_ms),
+                      begin, done);
+                else
+                    run_authority_close (begin, done, {});
+            }
+            catch (...) {
+                done (detail::current_exception_result<bool> ());
+            }
+        }
+        catch (const protocol::service_wire_error_t &) {
+            dispatch_failure = {104, static_cast<std::uint32_t> (
+                                       protocol::framework_error_code::requestProtocolError)};
+        }
+        catch (const std::exception &) {
+            const auto failure = detail::current_exception_result<void> ();
+            const auto *error = failure.error ();
+            dispatch_failure =
+              error && error->kind () == framework_error_kind_t::deadline_exceeded
+                ? std::pair{static_cast<std::uint32_t> (
+                              protocol::request_terminal_result::timedOut),
+                            static_cast<std::uint32_t> (protocol::framework_error_code::none)}
+                : std::pair{
+                    static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+                    static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)};
+        }
+        catch (...) {
+            dispatch_failure = {
+              105, static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)};
+        }
+        if (dispatch_failure) {
+            const auto cleanup = co_await await_result (preparation_terminal.finish (false));
+            if (!cleanup) {
+                const auto failure =
+                  messaging::request_failure_mapper_t{}.target_failure_reply (*cleanup.error ());
+                if (failure)
+                    dispatch_failure = {failure->terminal_result, failure->failure_code};
+            }
+            if (mailbox_record.reply_token && mailbox_record.correlation)
+                (void) _transport->reply_failure (mailbox_record, dispatch_failure->first,
+                                                  dispatch_failure->second);
+        }
+    }
+    co_return std::pair{count, infrastructure_budget};
+}
+
 task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
   std::shared_ptr<mesh::service_mailbox_claim_t> &&first_claim,
   receive_batch_budget_t infrastructure_budget)
@@ -6151,1211 +7365,12 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
       .get ();
     std::size_t count = 0;
     // Record-processing storage belongs to a claimed infrastructure batch.
-    const auto dispatch_batch =
-      [&] (const std::shared_ptr<mesh::service_mailbox_claim_t> &claim) -> task_t<void> {
-        for (std::size_t index = 0; index < claim->claimed_messages; ++index) {
-            auto original = _transport->mailbox ().take ({claim, index});
-            if (!original)
-                continue;
-            auto &mailbox_record = *original;
-            std::size_t record_bytes = 0;
-            for (const auto &part : mailbox_record.parts)
-                record_bytes =
-                  part.size () > std::numeric_limits<std::size_t>::max () - record_bytes
-                    ? std::numeric_limits<std::size_t>::max ()
-                    : record_bytes + part.size ();
-            infrastructure_budget.account (record_bytes);
-            ++count;
-            activation_terminal_t preparation_terminal;
-            std::optional<std::pair<std::uint32_t, std::uint32_t>> dispatch_failure;
-            try {
-                const auto wire =
-                  protocol::decode_header (protocol::message_bytes (mailbox_record.parts.front ()));
-                if (wire.kind == protocol::command::messageFollow) {
-                    if (mailbox_record.parts.size () != 1
-                        || mailbox_record.source_node_generation == 0)
-                        continue;
-                    const auto notice = protocol::decode_message_follow (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    if (message_follow_handler) {
-                        try {
-                            message_follow_handler (notice);
-                        }
-                        catch (...) {
-                            _options.mesh.runtime_failures->report (std::current_exception ());
-                        }
-                    }
-                    continue;
-                }
-                if (wire.kind == protocol::command::boundSessionBind) {
-                    const auto bind = protocol::decode_bound_session_bind (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    const auto local = status ();
-                    const auto actor = co_await _objects.find_async (stateful::object_kind_t::actor,
-                                                                     bind.actor.actor_id);
-                    const auto authority_matches = bound_session_bind_actor_matches (
-                      bind.actor, actor, local.routing_id (), local.lifecycle_generation ());
-                    const auto admission =
-                      classify_bound_session_bind_admission (authority_matches);
-                    trace_mesh_host (
-                      "bound-session-bind-admission",
-                      "actor=" + bind.actor.actor_id + " admission="
-                        + (admission == bound_session_bind_admission_t::ready ? "ready"
-                           : admission == bound_session_bind_admission_t::stale_route
-                             ? "stale_route"
-                             : "actor_not_ready")
-                        + " requested_authority="
-                        + std::to_string (bind.actor.authority_owner_generation)
-                        + " requested_lease=" + std::to_string (bind.actor.owner_lease_generation)
-                        + " authority_matches=" + (authority_matches ? "true" : "false")
-                        + " local_actor=" + (actor ? "found" : "missing"));
-                    bound_session_bind_operation_result_t operation_result{
-                      stateful::stateful_error_t::conflict, std::nullopt};
-                    bool terminal_replied = false;
-                    const auto session_owner_rid =
-                      zlink::routing_id_t::from (mailbox_record.source_routing_id);
-                    std::optional<location_owner_token_t> session_owner;
-                    if (admission == bound_session_bind_admission_t::ready
-                        && bound_session_operations.bind && bound_session_operations.session_owner)
-                        session_owner = co_await bound_session_operations.session_owner (
-                          session_owner_rid, mailbox_record.source_node_generation);
-                    if (admission == bound_session_bind_admission_t::ready && session_owner) {
-                        operation_result = co_await bound_session_operations.bind (
-                          bind, session_owner_rid, mailbox_record.source_node_generation,
-                          *session_owner,
-                          [this, &mailbox_record, &terminal_replied] (
-                            std::uint32_t terminal, std::uint32_t failure,
-                            std::optional<protocol::stream_bind_reply_tail_t> tail) {
-                              terminal_replied = _transport->reply_bound_session_bind (
-                                mailbox_record, terminal, failure, std::move (tail));
-                              return terminal_replied;
-                          });
-                    }
-                    // One terminal per bind. Session-Actor binding §4: without the Session
-                    // owner descriptor the bind is Unavailable.
-                    using terminal_t = protocol::request_terminal_result;
-                    using code_t = protocol::framework_error_code;
-                    const auto [terminal, code] =
-                      operation_result.terminal_result
-                        ? std::pair{static_cast<terminal_t> (*operation_result.terminal_result),
-                                    static_cast<code_t> (operation_result.failure_code)}
-                      : operation_result.error == stateful::stateful_error_t::none
-                        ? std::pair{terminal_t::ok, code_t::none}
-                      : admission == bound_session_bind_admission_t::stale_route
-                        ? std::pair{terminal_t::conflict, code_t::actorLocationStale}
-                      : admission == bound_session_bind_admission_t::actor_not_ready
-                        ? std::pair{terminal_t::busy, code_t::none}
-                        : std::pair{terminal_t::internalError, code_t::routeNotConnected};
-                    const auto replied =
-                      terminal_replied
-                      || _transport->reply_bound_session_bind (
-                        mailbox_record, static_cast<std::uint32_t> (terminal),
-                        static_cast<std::uint32_t> (code), operation_result.reply_tail);
-                    if (replied && operation_result.replacement) {
-                        (void) co_await _transport->send_bound_session_replaced (
-                          operation_result.replacement->retired_session
-                            .session_owner_node_routing_id,
-                          *operation_result.replacement);
-                    }
-                    continue;
-                }
-                if (wire.kind == protocol::command::boundSessionClose) {
-                    const auto request = protocol::decode_bound_session_close (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    const auto local = status ();
-                    // Session-Actor binding §4: compare with this host's current
-                    // descriptor identity.
-                    const auto owner =
-                      session_route_owner_resolver ? session_route_owner_resolver () : std::nullopt;
-                    auto closed = result_t<void>::failure (framework_error_kind_t::unavailable,
-                                                           "Session owner has no live descriptor");
-                    if (owner && owner->lease_generation > 0)
-                        closed = co_await runtime::await_result (_sessions.close_current (
-                          request, {local.routing_id ().to_bytes (),
-                                    local.lifecycle_generation (),
-                                    owner->owner_id,
-                                    static_cast<std::uint64_t> (owner->lease_generation),
-                                    {},
-                                    0}));
-                    const auto failure =
-                      closed ? std::optional<messaging::request_wire_failure_t>{}
-                             : messaging::request_failure_mapper_t{}.target_failure_reply (
-                                 *closed.error ());
-                    _transport->reply_bound_session_bind (
-                      mailbox_record,
-                      failure ? failure->terminal_result
-                              : static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
-                      failure ? failure->failure_code
-                              : static_cast<std::uint32_t> (protocol::framework_error_code::none));
-                    continue;
-                }
-                if (wire.kind == protocol::command::boundSessionReplaced) {
-                    const auto replacement = protocol::decode_bound_session_replaced (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    trace_mesh_host ("bound-session-replacement-received",
-                                     "actor=" + replacement.actor_authority.actor_id);
-                    if (bound_session_operations.replaced)
-                        bound_session_operations.replaced (replacement);
-                    continue;
-                }
-                if (wire.kind == protocol::command::relocationPrepare) {
-                    if (mailbox_record.parts.empty () || !mailbox_record.reply_token
-                        || !session_route_owner_resolver)
-                        continue;
-                    const auto control = protocol::decode_relocation_control (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    const auto *prepare = std::get_if<protocol::relocation_prepare_t> (&control);
-                    const auto local = status ();
-                    const auto owner = session_route_owner_resolver ();
-                    if (!prepare || !owner
-                        || prepare->initiator_role != protocol::relocation_role_t::source
-                        || prepare->target.target_node_routing_id != local.routing_id ().to_bytes ()
-                        || prepare->target.target_node_generation != local.lifecycle_generation ()
-                        || prepare->target.target_owner_id != owner->owner_id
-                        || prepare->target.target_owner_lease_generation
-                             != static_cast<std::uint64_t> (owner->lease_generation)
-                        || prepare->source_node_routing_id != mailbox_record.source_routing_id
-                        || prepare->source_node_generation != mailbox_record.source_node_generation)
-                        continue;
-
-                    if (_actor_join_relocation_prepare_validator) {
-                        const auto join_prepare =
-                          _actor_join_relocation_prepare_validator (*prepare);
-                        if (join_prepare && !*join_prepare) {
-                            (void) _transport->reply_relocation_failed (
-                              mailbox_record,
-                              protocol::relocation_failed_t{
-                                prepare->relocation, prepare->target_attempt_generation,
-                                prepare->coordinator, prepare->target, prepare->object,
-                                protocol::relocation_role_t::target,
-                                messaging::request_failure_mapper_t{}.target_failure_code (
-                                  framework_error_kind_t::protocol_error,
-                                  static_cast<std::uint32_t> (
-                                    protocol::framework_error_code::requestProtocolError))});
-                            continue;
-                        }
-                    }
-
-                    const relocation_attempt_key_t key{prepare->relocation.high,
-                                                       prepare->relocation.low,
-                                                       prepare->target_attempt_generation};
-                    enum class prepare_state_t
-                    {
-                        fresh,
-                        duplicate,
-                        conflict,
-                        rejected
-                    };
-                    const auto prepare_state =
-                      co_await _relocation_session_terminal_lane.run_task ([&] {
-                          using state_t =
-                            std::pair<prepare_state_t,
-                                      std::shared_ptr<task_completion_source_t<void>>>;
-                          const auto attempt = _relocation_target_attempts.find (key);
-                          if (attempt != _relocation_target_attempts.end ())
-                              return attempt->second.prepare == *prepare && attempt->second.pending
-                                       ? state_t{prepare_state_t::duplicate,
-                                                 attempt->second.pending->ready}
-                                       : state_t{prepare_state_t::conflict, nullptr};
-                          const auto assembly = _relocation_assemblies.find (key);
-                          if (assembly != _relocation_assemblies.end ()) {
-                              if (assembly->second.prepare != *prepare)
-                                  return state_t{prepare_state_t::conflict, nullptr};
-                              assembly->second.expires_at =
-                                std::chrono::steady_clock::now () + relocation_assembly_retention;
-                              lower_relocation_next_due_on_lane (assembly->second.expires_at);
-                              return state_t{prepare_state_t::duplicate, assembly->second.ready};
-                          }
-                          if (prepare->payload_total_length == 0
-                              || prepare->payload_total_length > protocol::relocationLogicalBytes
-                              || prepare->payload_chunk_count == 0
-                              || prepare->payload_chunk_count > protocol::relocationChunkCount)
-                              return state_t{prepare_state_t::conflict, nullptr};
-                          if (_options.mesh.shutdown_admission_seal->load (
-                                std::memory_order_acquire)
-                              || local.state == node_status_t::state_t::draining
-                              || local.state == node_status_t::state_t::stopped
-                              || local.state == node_status_t::state_t::error)
-                              return state_t{prepare_state_t::rejected, nullptr};
-                          lower_relocation_next_due_on_lane (relocation_due_now);
-                          _relocation_assemblies.emplace (
-                            key,
-                            pending_relocation_assembly_t{
-                              *prepare, std::move (mailbox_record),
-                              stateful::relocation_state_assembly_t{
-                                prepare->relocation,
-                                prepare->target_attempt_generation,
-                                prepare->coordinator,
-                                prepare->object,
-                                {prepare->payload_total_length, prepare->payload_chunk_count,
-                                 prepare->payload_checksum_crc32c}},
-                              std::chrono::steady_clock::now () + relocation_assembly_retention});
-                          return state_t{prepare_state_t::fresh, nullptr};
-                      });
-                    if (prepare_state.first == prepare_state_t::duplicate) {
-                        observe_relocation_ready (prepare_state.second, std::move (mailbox_record),
-                                                  *prepare);
-                    } else if (prepare_state.first != prepare_state_t::fresh) {
-                        const auto failure = prepare_state.first == prepare_state_t::conflict
-                                               ? framework_error_kind_t::protocol_error
-                                               : framework_error_kind_t::shutting_down;
-                        (void) _transport->reply_relocation_failed (
-                          mailbox_record,
-                          protocol::relocation_failed_t{
-                            prepare->relocation, prepare->target_attempt_generation,
-                            prepare->coordinator, prepare->target, prepare->object,
-                            protocol::relocation_role_t::target,
-                            messaging::request_failure_mapper_t{}.target_failure_code (failure)});
-                    }
-                    continue;
-                }
-                if (wire.kind == protocol::command::relocationState) {
-                    if (mailbox_record.parts.size () != 1)
-                        continue;
-                    const auto control = protocol::decode_relocation_control (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    const auto *state = std::get_if<protocol::relocation_state_t> (&control);
-                    if (!state || state->sender_role != protocol::relocation_role_t::source
-                        || state->chunk_data.empty ())
-                        continue;
-                    const relocation_attempt_key_t key{state->relocation.high,
-                                                       state->relocation.low,
-                                                       state->target_attempt_generation};
-                    std::shared_ptr<pending_relocation_assembly_t> completed;
-                    std::optional<pending_relocation_assembly_t> failed;
-                    const auto assembly_current =
-                      _relocation_session_terminal_lane
-                        .run ([&] {
-                            const auto found = _relocation_assemblies.find (key);
-                            if (found == _relocation_assemblies.end ()
-                                || found->second.prepare.coordinator != state->coordinator
-                                || found->second.prepare.object != state->object
-                                || found->second.prepare.source_node_routing_id
-                                     != mailbox_record.source_routing_id
-                                || found->second.prepare.source_node_generation
-                                     != mailbox_record.source_node_generation)
-                                return false;
-                            const auto accepted = found->second.assembly.accept (*state);
-                            if (accepted == stateful::relocation_assembly_result_t::conflict) {
-                                failed.emplace (std::move (found->second));
-                                _relocation_assemblies.erase (found);
-                            } else if (accepted
-                                       == stateful::relocation_assembly_result_t::completed) {
-                                completed = std::make_shared<pending_relocation_assembly_t> (
-                                  std::move (found->second));
-                                relocation_target_attempt_t attempt;
-                                attempt.prepare = completed->prepare;
-                                attempt.pending = completed;
-                                attempt.terminal =
-                                  std::make_shared<task_completion_source_t<void>> ();
-                                lower_relocation_next_due_on_lane (relocation_due_now);
-                                _relocation_target_attempts.emplace (key, std::move (attempt));
-                                _relocation_assemblies.erase (found);
-                            }
-                            return true;
-                        })
-                        .get ();
-                    if (!assembly_current)
-                        continue;
-                    if (failed)
-                        reply_relocation_assembly_failure (
-                          *failed, protocol::framework_error_code::relocationDataLost);
-                    if (completed)
-                        complete_relocation_assembly (key, std::move (completed));
-                    continue;
-                }
-                if (wire.kind == protocol::command::relocationCutover) {
-                    if (mailbox_record.parts.size () != 1)
-                        continue;
-                    const auto control = protocol::decode_relocation_control (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    const auto *cutover = std::get_if<protocol::relocation_cutover_t> (&control);
-                    if (!cutover || cutover->sender_role != protocol::relocation_role_t::source)
-                        continue;
-                    const relocation_attempt_key_t key{cutover->relocation.high,
-                                                       cutover->relocation.low,
-                                                       cutover->target_attempt_generation};
-                    std::optional<std::vector<std::tuple<
-                      stateful::object_ref_t, protocol::relocation_data_t, std::uint64_t>>>
-                      verified;
-                    std::optional<relocation_target_attempt_t> mismatched;
-                    _relocation_session_terminal_lane
-                      .run ([&] {
-                          const auto found = _relocation_target_attempts.find (key);
-                          if (found == _relocation_target_attempts.end ()
-                              || !relocation_target_wire_ready (found->second)
-                              || found->second.prepare.coordinator != cutover->coordinator
-                              || found->second.prepare.object != cutover->object
-                              || found->second.prepare.source_node_routing_id
-                                   != mailbox_record.source_routing_id
-                              || found->second.prepare.source_node_generation
-                                   != mailbox_record.source_node_generation
-                              || _options.mesh.shutdown_admission_seal->load (
-                                std::memory_order_acquire)
-                              || found->second.cutover_received) {
-                              /* Late or duplicate cutover (28 §4.4): the
-                               * boundary already resolved and is never
-                               * re-verified or changed. */
-                              return;
-                          }
-                          /* The batch the source sent right before this
-                           * cutover on the ordered connection is the
-                           * received suffix of the declared length; a
-                           * retransmitted whole batch replaces any partial
-                           * earlier copy (28 §4.4). */
-                          auto &batch = found->second.boundary_batch;
-                          const auto count = cutover->boundary_record_count;
-                          bool matches = count <= batch.size ();
-                          if (matches) {
-                              stateful::relocation_crc32c_accumulator_t accumulator;
-                              for (auto record = batch.end () - static_cast<std::ptrdiff_t> (count);
-                                   record != batch.end (); ++record)
-                                  accumulator.update (
-                                    protocol::encode_relocation_control (std::get<1> (*record)));
-                              matches = accumulator.value () == cutover->boundary_checksum_crc32c;
-                          }
-                          if (matches) {
-                              found->second.cutover_received = true;
-                              lower_relocation_next_due_on_lane (relocation_due_now);
-                              verified.emplace (
-                                std::make_move_iterator (batch.end ()
-                                                         - static_cast<std::ptrdiff_t> (count)),
-                                std::make_move_iterator (batch.end ()));
-                              batch.clear ();
-                              return;
-                          }
-                          /* Ordered connection: a declared batch that does
-                           * not match what arrived before it is an
-                           * implementation defect, not a retryable
-                           * condition (28 §4.4) — no CAS on a possibly
-                           * incomplete batch; discard the staging. */
-                          mismatched = take_relocation_target_discard (found->second);
-                      })
-                      .get ();
-                    if (verified) {
-                        bool staged = true;
-                        for (const auto &[target, data, participant_id] : *verified)
-                            if (staged)
-                                staged =
-                                  co_await stage_relocation_record (target, data, participant_id);
-                        _relocation_session_terminal_lane
-                          .run ([&] {
-                              const auto found = _relocation_target_attempts.find (key);
-                              if (found == _relocation_target_attempts.end ())
-                                  return;
-                              if (staged) {
-                                  set_relocation_finalize_at_on_lane (
-                                    found->second, std::chrono::steady_clock::now ());
-                                  return;
-                              }
-                              mismatched = take_relocation_target_discard (found->second);
-                          })
-                          .get ();
-                        if (staged)
-                            (void) co_await try_finalize_relocation_target (key);
-                    }
-                    if (mismatched) {
-                        std::vector<relocation_target_attempt_t> cleanup;
-                        cleanup.push_back (std::move (*mismatched));
-                        co_await discard_relocation_target_attempts (std::move (cleanup));
-                    }
-                    continue;
-                }
-                if (wire.kind == protocol::command::relocationData
-                    || wire.kind == protocol::command::replyRelay
-                    || wire.kind == protocol::command::replyRelayAck) {
-                    (void) co_await _relocation_wire->process (mailbox_record);
-                    continue;
-                }
-                if (wire.kind != protocol::command::sessionRelocationSeal
-                    && wire.kind != protocol::command::sessionRelocationRoute
-                    && wire.kind != protocol::command::userSpotCreate
-                    && wire.kind != protocol::command::userSpotClose
-                    && wire.kind != protocol::command::actorCreate
-                    && wire.kind != protocol::command::actorJoin
-                    && wire.kind != protocol::command::instanceSpot)
-                    throw protocol::service_wire_error_t (
-                      "unsupported infrastructure mailbox command");
-
-                if (wire.kind == protocol::command::sessionRelocationSeal) {
-                    if (mailbox_record.parts.size () != 1)
-                        continue;
-                    const auto seal = [&] {
-                        try {
-                            return protocol::decode_session_relocation_seal (
-                              protocol::message_bytes (mailbox_record.parts.front ()));
-                        }
-                        catch (const protocol::service_wire_error_t &) {
-                            detail::dispatch_error_reporter_t (_options.mesh.dispatch)
-                              .report_lazy ([&] {
-                                  message_dispatch_error_event_t event{};
-                                  event.surface = dispatch_error_surface_t::stream_session;
-                                  event.message_kind = dispatch_message_kind_t::control;
-                                  event.reason = detail::dispatch_reason_from_error (
-                                    framework_error_kind_t::protocol_error);
-                                  event.action = dispatch_error_action_t::drop;
-                                  event.packet_name = "sessionRelocationSeal";
-                                  event.source_rid =
-                                    zlink::routing_id_t::from (mailbox_record.source_routing_id)
-                                      .to_hex ();
-                                  event.exception = std::current_exception ();
-                                  return event;
-                              });
-                            throw;
-                        }
-                    }();
-                    const auto owner =
-                      session_route_owner_resolver ? session_route_owner_resolver () : std::nullopt;
-                    if (!owner) {
-                        detail::trace_session_binding_control_drop (
-                          _options.mesh.dispatch, mailbox_record.source_routing_id,
-                          seal.actor.actor_id, "sessionRelocationSeal",
-                          message_flow_reason_t::location_unavailable);
-                        continue;
-                    }
-                    const auto reconcile = _transport->peer_reconcile ();
-                    const auto [accepted, immediate] = admit_session_relocation_seal (
-                      seal, *owner, mailbox_record.source_routing_id, {}, reconcile);
-                    if (!accepted) {
-                        detail::trace_session_binding_control_drop (
-                          _options.mesh.dispatch, mailbox_record.source_routing_id,
-                          seal.actor.actor_id, "sessionRelocationSeal",
-                          message_flow_reason_t::stale_target);
-                        continue;
-                    }
-                    if (immediate)
-                        (void) co_await _transport->send_session_relocation_sealed (
-                          mailbox_record.source_routing_id, *immediate);
-                    continue;
-                }
-
-                if (wire.kind == protocol::command::sessionRelocationRoute) {
-                    if (mailbox_record.parts.size () != 1 || !session_route_owner_resolver) {
-                        continue;
-                    }
-                    const auto route = protocol::decode_session_relocation_route (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    const auto authenticated_sender =
-                      route.route.action == protocol::session_relocation_route_action_t::commit
-                        ? route.sender_role == protocol::relocation_role_t::target
-                            && mailbox_record.source_node_generation != 0
-                            && mailbox_record.source_routing_id
-                                 == route.route.target_node_routing_id
-                            && mailbox_record.source_node_generation
-                                 == route.route.target_node_generation
-                        : route.sender_role == protocol::relocation_role_t::source
-                            && mailbox_record.source_node_generation != 0
-                            && mailbox_record.source_routing_id == route.coordinator.node_routing_id
-                            && mailbox_record.source_node_generation
-                                 == route.coordinator.node_generation;
-                    if (!authenticated_sender) {
-                        continue;
-                    }
-
-                    const auto owner = session_route_owner_resolver ();
-                    if (!owner || owner->owner_id != route.session_owner_id
-                        || route.session_owner_lease_generation > static_cast<std::uint64_t> (
-                             std::numeric_limits<std::int64_t>::max ())
-                        || owner->lease_generation
-                             != static_cast<std::int64_t> (route.session_owner_lease_generation)) {
-                        continue;
-                    }
-
-                    const auto relocation_key = session_relocation_key (route);
-                    bool late_session_route_update = false;
-                    const auto route_matches_seal =
-                      _relocation_session_terminal_lane
-                        .run ([&] {
-                            const auto sealed = _session_seal_terminals.find (relocation_key);
-                            if (sealed == _session_seal_terminals.end () || sealed->second.consumed
-                                || sealed->second.sealed.seal_result
-                                     == protocol::session_relocation_seal_result_t::
-                                       binding_absent) {
-                                late_session_route_update = true;
-                                return true;
-                            }
-                            if (!sealed->second.ready
-                                || sealed->second.seal.relocation != route.relocation
-                                || sealed->second.seal.actor.actor_id != route.actor.actor_id
-                                || sealed->second.seal.actor.object_generation
-                                     != route.actor.object_generation
-                                || sealed->second.seal.session_owner_node_routing_id
-                                     != route.session_owner_node_routing_id
-                                || sealed->second.seal.session_owner_node_generation
-                                     != route.session_owner_node_generation
-                                || sealed->second.seal.session_owner_id != route.session_owner_id
-                                || sealed->second.seal.session_owner_lease_generation
-                                     != route.session_owner_lease_generation
-                                || sealed->second.seal.session_routing_id
-                                     != route.session_routing_id
-                                || sealed->second.seal.binding_generation
-                                     != route.binding_generation)
-                                return false;
-                            return true;
-                        })
-                        .get ();
-                    if (!route_matches_seal)
-                        continue;
-                    if (late_session_route_update) {
-                        if (late_session_route_update_reporter) {
-                            try {
-                                late_session_route_update_reporter (route);
-                            }
-                            catch (...) {
-                                _options.mesh.runtime_failures->report (std::current_exception ());
-                            }
-                        }
-                        continue;
-                    }
-
-                    const auto session_id = stateful::stream_session_registry_t::connection_key (
-                      zlink::routing_id_t::from (route.session_routing_id));
-                    stateful::stream_route_admission_t admission;
-                    if (route.route.action == protocol::session_relocation_route_action_t::commit) {
-                        const auto current = _sessions.current_binding (route.actor.actor_id);
-                        if (!current) {
-                            continue;
-                        }
-                        const auto target_node =
-                          zlink::routing_id_t::from (route.route.target_node_routing_id);
-                        auto target = current->actor;
-                        target.node_id = target_node.to_string ();
-                        target.authority_owner_generation =
-                          route.route.target_authority_owner_generation;
-                        stateful::stream_session_registry_t::route_terminal_commit_t
-                          commit_projection;
-                        if (bound_session_operations.commit_relocation_route) {
-                            commit_projection =
-                              [&route, &bound_session_operations, previous = *current] (
-                                const stateful::stream_route_admission_t &committed) {
-                                  return committed.binding
-                                         && bound_session_operations.commit_relocation_route (
-                                           route, previous, *committed.binding);
-                              };
-                        }
-                        admission = _sessions.commit_remote_route (
-                          session_id, route.binding_generation, route.actor.actor_id,
-                          route.actor.object_generation, std::move (target),
-                          route.route.target_node_generation,
-                          route.route.target_owner_lease_generation, std::move (commit_projection));
-                    } else {
-                        admission = _sessions.acknowledge_remote_abort (
-                          session_id, route.binding_generation, route.actor.actor_id,
-                          route.actor.object_generation);
-                    }
-                    if (admission.error != stateful::stateful_error_t::none || !admission.binding) {
-                        continue;
-                    }
-
-                    _relocation_session_terminal_lane
-                      .run ([&] {
-                          const auto sealed = _session_seal_terminals.find (relocation_key);
-                          if (sealed != _session_seal_terminals.end () && !sealed->second.consumed
-                              && sealed->second.ready)
-                              sealed->second.consumed = true;
-                      })
-                      .get ();
-                    continue;
-                }
-
-                if (wire.kind == protocol::command::actorCreate) {
-                    const auto request = protocol::decode_actor_create_header (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    if (!actor_create_target
-                        || request.deadline_unix_ms <= unix_milliseconds_now ()) {
-                        actor_create_operation_result_t result;
-                        result.reply.header.correlation = request.correlation;
-                        result.reply.header.terminal_result = actor_create_target ? 101u : 105u;
-                        result.reply.header.failure_code =
-                          actor_create_target
-                            ? 0u
-                            : static_cast<std::uint32_t> (
-                                protocol::framework_error_code::actorCreateFailed);
-                        (void) _transport->reply_actor_create (
-                          mailbox_record, result.reply, std::move (result.application_reply));
-                    } else {
-                        auto completed = std::make_shared<std::atomic_bool> (false);
-                        auto reply = [weak = weak_from_this (),
-                                      reply_source = mailbox_record.reply_source (),
-                                      completed] (actor_create_operation_result_t result) mutable {
-                            if (completed->exchange (true, std::memory_order_acq_rel))
-                                return;
-                            const auto host = weak.lock ();
-                            if (!host)
-                                return;
-                            try {
-                                (void) host->_transport->reply_actor_create (
-                                  *reply_source, result.reply,
-                                  std::move (result.application_reply));
-                            }
-                            catch (...) {
-                                host->_options.mesh.runtime_failures->report (
-                                  std::current_exception ());
-                            }
-                        };
-                        try {
-                            actor_create_target (request, reply);
-                        }
-                        catch (...) {
-                            actor_create_operation_result_t result;
-                            result.reply.header = {
-                              request.correlation, 105u,
-                              static_cast<std::uint32_t> (
-                                protocol::framework_error_code::actorCreateFailed)};
-                            reply (std::move (result));
-                        }
-                    }
-                    continue;
-                }
-
-                if (wire.kind == protocol::command::actorJoin) {
-                    if (mailbox_record.parts.empty () || mailbox_record.parts.size () > 2)
-                        throw protocol::service_wire_error_t (
-                          "Actor join has an invalid part count");
-                    const auto canonical = try_decode_canonical_actor_join (
-                      ::zlink::framework::detail::backend::copy_binding_parts (
-                        mailbox_record.parts));
-                    if (!canonical)
-                        throw protocol::service_wire_error_t (
-                          "Actor join is not a canonical command-28 record");
-                    const auto &request = canonical->request;
-                    const auto &payload = canonical->payload;
-                    if (!actor_join_target) {
-                        (void) _transport->reply_actor_join (
-                          mailbox_record, protocol::actor_join_result_t::rejected, std::nullopt, 0,
-                          0);
-                        continue;
-                    }
-                    auto completed = std::make_shared<std::atomic_bool> (false);
-                    auto reply = [weak = weak_from_this (),
-                                  reply_source = mailbox_record.reply_source (),
-                                  completed] (actor_join_operation_result_t result) mutable {
-                        if (completed->exchange (true, std::memory_order_acq_rel))
-                            return;
-                        const auto host = weak.lock ();
-                        if (!host)
-                            return;
-                        try {
-                            (void) host->_transport->reply_actor_join (
-                              *reply_source, result.join_result, result.spot,
-                              result.membership_epoch, result.receive_chunk_limit_bytes,
-                              result.terminal_result, result.failure_code,
-                              std::move (result.application_reply));
-                        }
-                        catch (...) {
-                            host->_options.mesh.runtime_failures->report (
-                              std::current_exception ());
-                        }
-                    };
-                    try {
-                        actor_join_target (request, payload, reply);
-                    }
-                    catch (...) {
-                        reply (actor_join_operation_result_t{});
-                    }
-                    continue;
-                }
-
-                if (wire.kind == protocol::command::instanceSpot) {
-                    const auto request = protocol::decode_instance_spot_activation_header (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    const auto expected_parts = request.has_metadata ? 3u : 2u;
-                    if (mailbox_record.parts.size () != expected_parts)
-                        throw protocol::service_wire_error_t (
-                          "Instance Spot activation has an invalid part count");
-                    std::optional<std::vector<std::uint8_t>> metadata;
-                    if (request.has_metadata)
-                        metadata = mailbox_record.parts[1].to_bytes ();
-                    auto application = protocol::decode_application_payload (
-                      protocol::message_bytes (mailbox_record.parts[request.has_metadata ? 2 : 1]),
-                      capture_flow ());
-                    auto reply_record = mailbox_record.reply_source ();
-                    auto running =
-                      std::make_shared<task_t<void>> (dispatch_instance_spot_activation (
-                        {request, std::move (metadata), std::move (application)}, reply_record));
-                    detail::observe_task_terminal (*running, [self = shared_from_this (), running] (
-                                                               const result_t<void> &result) {
-                        if (!result)
-                            self->_options.mesh.runtime_failures->report (result.exception ());
-                    });
-                    continue;
-                }
-                if (wire.kind == protocol::command::userSpotCreate) {
-                    const auto request = protocol::decode_user_spot_create_header (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    auto fingerprint_request = request;
-                    fingerprint_request.correlation = 1;
-                    const auto request_fingerprint =
-                      protocol::encode_user_spot_create_header (fingerprint_request);
-                    const auto operation_key =
-                      user_spot_operation_key (request.source_node_routing_id,
-                                               request.source_node_generation, request.operation);
-                    std::optional<user_spot_terminal_record_t> cached;
-                    _user_spot_terminal_lane
-                      .run ([&] {
-                          const auto now = unix_milliseconds_now ();
-                          std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
-                              return (!entry.second.header
-                                      || !entry.second.header.value ().empty ())
-                                     && user_spot_operation_replay_expired (
-                                       entry.second.deadline_unix_ms, now,
-                                       _options.user_spot_operation_replay_retention);
-                          });
-                          const auto found = _user_spot_terminals.find (operation_key);
-                          if (found != _user_spot_terminals.end ())
-                              cached = found->second;
-                      })
-                      .get ();
-                    if (cached) {
-                        if (cached->kind != protocol::command::userSpotCreate
-                            || cached->request_fingerprint != request_fingerprint)
-                            throw protocol::service_wire_error_t (
-                              "user spot operation identity was reused with a different request");
-                        if (!cached->header) {
-                            (void) _transport->reply_user_spot_create (
-                              mailbox_record,
-                              detail::propagate_failure<protocol::user_spot_create_reply_t> (
-                                cached->header, "User Spot creation failed"),
-                              std::nullopt);
-                            continue;
-                        }
-                        auto reply =
-                          protocol::decode_user_spot_create_reply (cached->header.value ());
-                        reply.header.correlation = request.correlation;
-                        (void) _transport->reply_user_spot_create (mailbox_record, reply,
-                                                                   cached->application_reply);
-                        continue;
-                    }
-                    if (request.deadline_unix_ms <= unix_milliseconds_now ()) {
-                        protocol::user_spot_create_reply_t reply{
-                          {request.correlation, 101, 0},
-                          protocol::user_spot_create_result_t::rejected,
-                          {},
-                          0};
-                        (void) _transport->reply_user_spot_create (mailbox_record, reply,
-                                                                   std::nullopt);
-                        continue;
-                    }
-                    auto terminal =
-                      [&] (std::uint32_t terminal_result, std::uint32_t failure_code,
-                           protocol::user_spot_create_result_t result, const std::string &spot,
-                           std::uint64_t generation,
-                           std::optional<protocol::application_payload_t> application_reply =
-                             std::nullopt,
-                           result_t<void> outcome = result_t<void>::success ()) {
-                          protocol::user_spot_create_reply_t reply{
-                            {request.correlation, terminal_result, failure_code},
-                            result,
-                            spot,
-                            generation};
-                          user_spot_terminal_record_t stored{
-                            protocol::command::userSpotCreate, request.deadline_unix_ms,
-                            request_fingerprint,
-                            outcome ? result_t<std::vector<std::uint8_t>>::success (
-                                        protocol::encode_user_spot_create_reply (
-                                          request.correlation, terminal_result, failure_code,
-                                          result, spot, generation))
-                                    : detail::propagate_failure<std::vector<std::uint8_t>> (
-                                        outcome, "User Spot creation failed"),
-                            application_reply};
-                          _user_spot_terminal_lane
-                            .run ([&] {
-                                _user_spot_terminals.insert_or_assign (operation_key,
-                                                                       std::move (stored));
-                            })
-                            .get ();
-                          (void) _transport->reply_user_spot_create (
-                            mailbox_record,
-                            outcome
-                              ? result_t<protocol::user_spot_create_reply_t>::success (reply)
-                              : detail::propagate_failure<protocol::user_spot_create_reply_t> (
-                                  outcome, "User Spot creation failed"),
-                            std::move (application_reply));
-                      };
-                    if (!store || !materializer) {
-                        terminal (static_cast<std::uint32_t> (
-                                    protocol::request_terminal_result::internalError),
-                                  static_cast<std::uint32_t> (
-                                    protocol::framework_error_code::requestFailed),
-                                  protocol::user_spot_create_result_t::rejected, {}, 0);
-                        continue;
-                    }
-                    if (request.deadline_unix_ms <= unix_milliseconds_now ()) {
-                        terminal (
-                          static_cast<std::uint32_t> (protocol::request_terminal_result::timedOut),
-                          0, protocol::user_spot_create_result_t::rejected, {}, 0);
-                        continue;
-                    }
-                    const auto &global_id = request.spot_id;
-                    const auto read =
-                      store->read_authority (spot_authority_key (global_id)).result ().value ();
-                    const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
-                    const auto &reservation = request.reservation;
-                    const auto exact =
-                      snapshot && snapshot->store_version == reservation.expected_store_version
-                      && snapshot->object_generation == reservation.object_generation
-                      && snapshot->authority_owner_generation
-                           == reservation.authority_owner_generation
-                      && snapshot->owner.owner_id == reservation.target_owner_id
-                      && snapshot->owner.lease_generation
-                           == reservation.target_owner_lease_generation
-                      && snapshot->allocation.object_kind == placement_object_kind_t::user_spot
-                      && snapshot->allocation.stable_type == request.stable_type
-                      && snapshot->allocation.target.node_rid.value ()
-                           == node_rid_t::from_string (
-                                zlink::routing_id_t::from (reservation.target_node_routing_id)
-                                  .to_string ())
-                                .value ()
-                      && snapshot->allocation.target.node_lifecycle_generation
-                           == reservation.target_node_generation
-                      && snapshot->allocation.capacity_bundle.spot_slots
-                           == reservation.pending_capacity_delta;
-                    if (!exact) {
-                        const auto stale =
-                          snapshot && snapshot->object_generation != reservation.object_generation;
-                        const auto type_mismatch =
-                          snapshot
-                          && snapshot->allocation.object_kind == placement_object_kind_t::user_spot
-                          && snapshot->allocation.stable_type != request.stable_type;
-                        terminal (
-                          static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
-                          static_cast<std::uint32_t> (
-                            stale           ? protocol::framework_error_code::spotGenerationStale
-                            : type_mismatch ? protocol::framework_error_code::spotTypeMismatch
-                                            : protocol::framework_error_code::spotMoving),
-                          protocol::user_spot_create_result_t::rejected, {}, 0);
-                        continue;
-                    }
-                    const auto fence = public_fence (
-                      reservation, snapshot->allocation.target.mesh_name, request.stable_type);
-                    const auto &pending = snapshot->pending_creation;
-                    if (!pending || pending->reservation_id != fence.reservation_id) {
-                        terminal (
-                          static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
-                          static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
-                          protocol::user_spot_create_result_t::rejected, {}, 0);
-                        continue;
-                    }
-                    const auto creation_payload = runtime::decode_inline_creation_content (
-                      pending->request_content_reference, pending->request_sha256,
-                      pending->request_encoded_size);
-                    if (!creation_payload) {
-                        terminal (static_cast<std::uint32_t> (
-                                    protocol::request_terminal_result::internalError),
-                                  static_cast<std::uint32_t> (
-                                    protocol::framework_error_code::requestFailed),
-                                  protocol::user_spot_create_result_t::rejected, {}, 0);
-                        continue;
-                    }
-                    const stateful::object_ref_t exact_ref{
-                      stateful::object_kind_t::user_spot,
-                      request.spot_id,
-                      reservation.object_generation,
-                      reservation.authority_owner_generation,
-                      snapshot->allocation.target.mesh_name,
-                      std::string (snapshot->allocation.target.node_rid.value ())};
-                    if (snapshot->allocation.state == placement_allocation_state_t::active) {
-                        const auto existing = co_await _objects.find_async (
-                          stateful::object_kind_t::user_spot, exact_ref.key);
-                        if (!existing || *existing != exact_ref) {
-                            terminal (static_cast<std::uint32_t> (
-                                        protocol::request_terminal_result::internalError),
-                                      static_cast<std::uint32_t> (
-                                        protocol::framework_error_code::requestFailed),
-                                      protocol::user_spot_create_result_t::rejected, {}, 0);
-                            continue;
-                        }
-                        terminal (
-                          static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
-                          protocol::user_spot_create_result_t::existing, request.spot_id,
-                          exact_ref.object_generation);
-                        continue;
-                    }
-                    auto local = co_await _objects.begin_reserved_object_async (
-                      exact_ref, request.stable_type, [&] {
-                          std::vector<std::uint8_t> bytes;
-                          bytes.reserve (creation_payload->size ());
-                          for (const auto value : *creation_payload)
-                              bytes.push_back (std::to_integer<std::uint8_t> (value));
-                          return bytes;
-                      }());
-                    if (local.status == stateful::create_status_t::existing) {
-                        terminal (
-                          static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
-                          protocol::user_spot_create_result_t::existing, request.spot_id,
-                          exact_ref.object_generation);
-                        continue;
-                    }
-                    if (!local.factory_owner) {
-                        const auto [classified_terminal, classified_code] =
-                          stateful_failure_pair (local.error);
-                        terminal (classified_terminal, classified_code,
-                                  protocol::user_spot_create_result_t::rejected, {}, 0);
-                        continue;
-                    }
-                    user_spot_materialize_result_t materialized;
-                    try {
-                        materialized =
-                          materializer (exact_ref, request.stable_type, *creation_payload);
-                    }
-                    catch (...) {
-                        const auto failure = detail::current_exception_result<void> ();
-                        (void) _objects.abort_create (local.attempt);
-                        (void) store
-                          ->abort (
-                            {{placement_object_kind_t::user_spot, global_id},
-                             public_fence (reservation, snapshot->allocation.target.mesh_name,
-                                           request.stable_type)})
-                          .result ();
-                        terminal (static_cast<std::uint32_t> (
-                                    protocol::request_terminal_result::internalError),
-                                  static_cast<std::uint32_t> (
-                                    protocol::framework_error_code::spotCreateFailed),
-                                  protocol::user_spot_create_result_t::rejected, {}, 0,
-                                  std::nullopt, failure);
-                        continue;
-                    }
-                    preparation_terminal.preparation =
-                      std::move (materialized.preparation_terminal);
-                    if (!materialized.accepted) {
-                        co_await preparation_terminal.finish (false);
-                        (void) store
-                          ->abort ({{placement_object_kind_t::user_spot, global_id}, fence}, {},
-                                   std::chrono::system_clock::time_point (
-                                     std::chrono::milliseconds (request.deadline_unix_ms)))
-                          .result ()
-                          .value ();
-                        (void) _objects.abort_create (local.attempt);
-                        terminal (
-                          static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
-                          protocol::user_spot_create_result_t::rejected, request.spot_id,
-                          exact_ref.object_generation, std::move (materialized.application_reply));
-                        continue;
-                    }
-                    const auto committed =
-                      store
-                        ->commit ({{placement_object_kind_t::user_spot, global_id},
-                                   fence,
-                                   ready_user_spot_authority_payload (
-                                     exact_ref, request.stable_type, fence.target)},
-                                  {},
-                                  std::chrono::system_clock::time_point (
-                                    std::chrono::milliseconds (request.deadline_unix_ms)))
-                        .result ()
-                        .value ();
-                    const auto *ready = std::get_if<object_committed_t> (&committed);
-                    const auto *already = std::get_if<object_already_committed_t> (&committed);
-                    if (!ready && !already) {
-                        co_await preparation_terminal.finish (false);
-                        (void) _objects.abort_create (local.attempt);
-                        terminal (
-                          static_cast<std::uint32_t> (protocol::request_terminal_result::conflict),
-                          static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving),
-                          protocol::user_spot_create_result_t::rejected, {}, 0);
-                        continue;
-                    }
-                    auto local_commit = co_await _objects.commit_create_async (local.attempt);
-                    if (local_commit != stateful::stateful_error_t::none) {
-                        std::vector<std::uint8_t> creation_bytes;
-                        creation_bytes.reserve (creation_payload->size ());
-                        for (const auto value : *creation_payload)
-                            creation_bytes.push_back (std::to_integer<std::uint8_t> (value));
-                        const auto reconciled = co_await _objects.begin_reserved_object_async (
-                          exact_ref, request.stable_type, std::move (creation_bytes));
-                        if (reconciled.status == stateful::create_status_t::existing
-                            && reconciled.object == exact_ref)
-                            local_commit = stateful::stateful_error_t::none;
-                        else if ((reconciled.status == stateful::create_status_t::reserved
-                                  || reconciled.status == stateful::create_status_t::joined)
-                                 && reconciled.attempt != 0)
-                            local_commit =
-                              co_await _objects.commit_create_async (reconciled.attempt);
-                    }
-                    if (local_commit != stateful::stateful_error_t::none) {
-                        co_await preparation_terminal.finish (false);
-                        terminal (static_cast<std::uint32_t> (
-                                    protocol::request_terminal_result::internalError),
-                                  static_cast<std::uint32_t> (
-                                    protocol::framework_error_code::spotCreateFailed),
-                                  protocol::user_spot_create_result_t::rejected, {}, 0);
-                        continue;
-                    }
-                    co_await preparation_terminal.finish ();
-                    terminal (static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
-                              protocol::user_spot_create_result_t::created, request.spot_id,
-                              exact_ref.object_generation,
-                              std::move (materialized.application_reply));
-                    continue;
-                }
-
-                const auto request = protocol::decode_user_spot_close_header (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
-                auto fingerprint_request = request;
-                fingerprint_request.correlation = 1;
-                const auto request_fingerprint =
-                  protocol::encode_user_spot_close_header (fingerprint_request);
-                const auto operation_key =
-                  user_spot_operation_key (request.source_node_routing_id,
-                                           request.source_node_generation, request.operation);
-                /* One operation ID has one terminal result (§7.1). The table
-                 * decides in one lane turn whether this record replays the
-                 * terminal, joins the running operation, or starts it. */
-                enum class admission_t
-                {
-                    start,
-                    replay,
-                    joined,
-                    expired
-                };
-                std::optional<user_spot_terminal_record_t> cached;
-                const auto admission =
-                  _user_spot_terminal_lane
-                    .run ([&] {
-                        const auto now = unix_milliseconds_now ();
-                        std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
-                            return (!entry.second.header || !entry.second.header.value ().empty ())
-                                   && user_spot_operation_replay_expired (
-                                     entry.second.deadline_unix_ms, now,
-                                     _options.user_spot_operation_replay_retention);
-                        });
-                        const auto found = _user_spot_terminals.find (operation_key);
-                        if (found != _user_spot_terminals.end ()) {
-                            if (found->second.kind != protocol::command::userSpotClose
-                                || found->second.request_fingerprint != request_fingerprint)
-                                throw protocol::service_wire_error_t (
-                                  "user spot operation identity was reused with a different "
-                                  "request");
-                            if (found->second.header && found->second.header.value ().empty ()) {
-                                found->second.waiting.emplace_back (mailbox_record.reply_source (),
-                                                                    request.correlation);
-                                return admission_t::joined;
-                            }
-                            cached = found->second;
-                            return admission_t::replay;
-                        }
-                        if (request.deadline_unix_ms <= now)
-                            return admission_t::expired;
-                        _user_spot_terminals.insert_or_assign (
-                          operation_key, user_spot_terminal_record_t{
-                                           protocol::command::userSpotClose,
-                                           request.deadline_unix_ms,
-                                           request_fingerprint,
-                                           result_t<std::vector<std::uint8_t>>::success ({}),
-                                           std::nullopt,
-                                           {}});
-                        return admission_t::start;
-                    })
-                    .get ();
-                if (admission == admission_t::joined)
-                    continue;
-                if (admission == admission_t::replay) {
-                    auto reply = protocol::decode_user_spot_close_reply (cached->header.value ());
-                    reply.header.correlation = request.correlation;
-                    (void) _transport->reply_user_spot_close (mailbox_record, reply);
-                    continue;
-                }
-                if (admission == admission_t::expired) {
-                    protocol::user_spot_close_reply_t reply{{request.correlation, 101, 0}, false};
-                    (void) _transport->reply_user_spot_close (mailbox_record, reply);
-                    continue;
-                }
-                auto terminal = [this, transport = _transport,
-                                 reply_source = mailbox_record.reply_source (), operation_key,
-                                 correlation = request.correlation] (std::uint32_t terminal_result,
-                                                                     std::uint32_t failure_code,
-                                                                     bool closed) {
-                    std::vector<std::pair<std::shared_ptr<const mesh::service_mailbox_record_t>,
-                                          std::uint64_t>>
-                      waiting;
-                    _user_spot_terminal_lane
-                      .run ([&] {
-                          auto &stored = _user_spot_terminals[operation_key];
-                          stored.header = result_t<std::vector<std::uint8_t>>::success (
-                            protocol::encode_user_spot_close_reply (correlation, terminal_result,
-                                                                    failure_code, closed));
-                          waiting = std::exchange (stored.waiting, {});
-                      })
-                      .get ();
-                    waiting.emplace (waiting.begin (), reply_source, correlation);
-                    for (const auto &[record, record_correlation] : waiting) {
-                        protocol::user_spot_close_reply_t reply{
-                          {record_correlation, terminal_result, failure_code}, closed};
-                        (void) transport->reply_user_spot_close (*record, reply);
-                    }
-                };
-                if (!store) {
-                    terminal (
-                      105,
-                      static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed),
-                      false);
-                    continue;
-                }
-                // The owner runtime checks the authority and runs every Close
-                // step on the Spot lifecycle lane (Spot address messaging §7.1).
-                auto begin = [this, target = request.target] {
-                    return begin_user_spot_close (target);
-                };
-                auto done = [terminal] (result_t<bool> result) {
-                    if (result) {
-                        terminal (0, 0, result.value ());
-                        return;
-                    }
-                    const auto failure =
-                      messaging::request_failure_mapper_t{}.target_failure_reply (
-                        result.exception ());
-                    terminal (failure->terminal_result, failure->failure_code, false);
-                };
-                // The started operation settles its terminal record once, also
-                // when the Close cannot be scheduled.
-                try {
-                    if (user_spot_closer)
-                        user_spot_closer (
-                          request.target.spot_id, request.target.object_generation,
-                          messaging::request_deadline_utc_from_unix_ms (request.deadline_unix_ms),
-                          begin, done);
-                    else
-                        run_authority_close (begin, done, {});
-                }
-                catch (...) {
-                    done (detail::current_exception_result<bool> ());
-                }
-            }
-            catch (const protocol::service_wire_error_t &) {
-                dispatch_failure = {104, static_cast<std::uint32_t> (
-                                           protocol::framework_error_code::requestProtocolError)};
-            }
-            catch (const std::exception &) {
-                const auto failure = detail::current_exception_result<void> ();
-                const auto *error = failure.error ();
-                dispatch_failure =
-                  error && error->kind () == framework_error_kind_t::deadline_exceeded
-                    ? std::pair{static_cast<std::uint32_t> (
-                                  protocol::request_terminal_result::timedOut),
-                                static_cast<std::uint32_t> (protocol::framework_error_code::none)}
-                    : std::pair{
-                        static_cast<std::uint32_t> (
-                          protocol::request_terminal_result::internalError),
-                        static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)};
-            }
-            catch (...) {
-                dispatch_failure = {
-                  105, static_cast<std::uint32_t> (protocol::framework_error_code::requestFailed)};
-            }
-            if (dispatch_failure) {
-                const auto cleanup = co_await await_result (preparation_terminal.finish (false));
-                if (!cleanup) {
-                    const auto failure =
-                      messaging::request_failure_mapper_t{}.target_failure_reply (
-                        *cleanup.error ());
-                    if (failure)
-                        dispatch_failure = {failure->terminal_result, failure->failure_code};
-                }
-                if (mailbox_record.reply_token && mailbox_record.correlation)
-                    (void) _transport->reply_failure (mailbox_record, dispatch_failure->first,
-                                                      dispatch_failure->second);
-            }
-        }
-        co_return;
+    const auto dispatch_batch = [&] (const std::shared_ptr<mesh::service_mailbox_claim_t> &claim)
+      -> task_t<std::pair<std::size_t, receive_batch_budget_t>> {
+        return dispatch_user_spot_batch (
+          store, materializer, user_spot_closer, actor_create_target, actor_join_target,
+          session_route_owner_resolver, message_follow_handler, bound_session_operations,
+          late_session_route_update_reporter, infrastructure_budget, count, claim);
     };
     do {
         {
@@ -7364,7 +7379,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
             };
             const std::unique_ptr<mesh::service_mailbox_claim_t, decltype (release_claim)>
               claim_owner (claim.get (), release_claim);
-            co_await dispatch_batch (claim);
+            std::tie (count, infrastructure_budget) = co_await dispatch_batch (claim);
         }
         if (infrastructure_budget.exhausted ())
             break;
@@ -8937,58 +8952,72 @@ bool public_host_runtime_t::complete_local_actor_join (
   const result_t<actor_join_operation_result_t> &result,
   const std::vector<zlink::message_t> &parts)
 {
+    struct complete_actor_join_t
+    {
+        static task_t<void> run (std::shared_ptr<public_host_runtime_t> host,
+                                 std::decay_t<decltype (operation)> operation,
+                                 std::decay_t<decltype (std::move (actor_type))> actor_type,
+                                 std::decay_t<decltype (membership)> membership,
+                                 std::decay_t<decltype (result)> result,
+                                 std::decay_t<decltype (parts)> parts)
+        {
+            auto *self = host.get ();
+            receive_record_t completion;
+            completion.kind = record_kind_t::completion;
+            completion.domain = ready_domain_t::infrastructure;
+            completion.operation_id = operation.id;
+            completion.operation_kind = operation_kind_t::actor_join;
+            completion.source_node_rid =
+              zlink::routing_id_t::from (self->_options.mesh.descriptor.node_routing_id);
+
+            if (!result) {
+                (void) co_await self->_objects.abort_membership_move_async (membership);
+                completion.join_completion = detail::propagate_failure<actor_join_completion_t> (
+                  result, "Local Actor join failed");
+            } else if (result.value ().terminal_result != 0) {
+                (void) co_await self->_objects.abort_membership_move_async (membership);
+                completion.terminal_result = result.value ().terminal_result;
+                completion.failure_errno = result.value ().failure_code;
+            } else if (result.value ().join_result == protocol::actor_join_result_t::accepted) {
+                auto [error, current] =
+                  co_await self->_objects.commit_membership_move_async (membership);
+                if (error != stateful::stateful_error_t::none) {
+                    //  Spec 32-framework-error-model:119-120 — a Framework execution
+                    //  failure after the application ACCEPTED the join is not an
+                    //  application rejection; carry a classified terminal
+                    //  (internalError) instead of synthesizing typed Rejected.
+                    const auto failure =
+                      messaging::request_failure_mapper_t{}.target_failure_reply (
+                        framework_error_kind_t::internal_failure);
+                    completion.terminal_result = failure->terminal_result;
+                    completion.failure_errno = failure->failure_code;
+                } else {
+                    const auto actor = self->framework_actor_ref (current, actor_type);
+                    co_await self->_spot_actor_index_lane.run_task ([&] {
+                        const auto found = self->_actors.find (current.key);
+                        if (found != self->_actors.end ())
+                            found->second.second = current;
+                    });
+                    completion.join_completion = result_t<actor_join_completion_t>::success (
+                      {join_admission_t::accepted, actor});
+                }
+            } else {
+                (void) co_await self->_objects.abort_membership_move_async (membership);
+                completion.join_completion = result_t<actor_join_completion_t>::success (
+                  {join_admission_t::rejected,
+                   self->framework_actor_ref (membership.actor, actor_type)});
+            }
+
+            *operation.local_result =
+              operation_completion_t{std::move (completion), std::move (parts)};
+        }
+    };
     const bool completed = _transport->complete_local_operation_async (
       operation.id,
       [host = shared_from_this (), operation, actor_type = std::move (actor_type), membership,
        result, parts] () mutable -> task_t<void> {
-          auto *self = host.get ();
-          receive_record_t completion;
-          completion.kind = record_kind_t::completion;
-          completion.domain = ready_domain_t::infrastructure;
-          completion.operation_id = operation.id;
-          completion.operation_kind = operation_kind_t::actor_join;
-          completion.source_node_rid =
-            zlink::routing_id_t::from (self->_options.mesh.descriptor.node_routing_id);
-
-          if (!result) {
-              (void) co_await self->_objects.abort_membership_move_async (membership);
-              completion.join_completion = detail::propagate_failure<actor_join_completion_t> (
-                result, "Local Actor join failed");
-          } else if (result.value ().terminal_result != 0) {
-              (void) co_await self->_objects.abort_membership_move_async (membership);
-              completion.terminal_result = result.value ().terminal_result;
-              completion.failure_errno = result.value ().failure_code;
-          } else if (result.value ().join_result == protocol::actor_join_result_t::accepted) {
-              auto [error, current] =
-                co_await self->_objects.commit_membership_move_async (membership);
-              if (error != stateful::stateful_error_t::none) {
-                  //  Spec 32-framework-error-model:119-120 — a Framework execution
-                  //  failure after the application ACCEPTED the join is not an
-                  //  application rejection; carry a classified terminal
-                  //  (internalError) instead of synthesizing typed Rejected.
-                  const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
-                    framework_error_kind_t::internal_failure);
-                  completion.terminal_result = failure->terminal_result;
-                  completion.failure_errno = failure->failure_code;
-              } else {
-                  const auto actor = self->framework_actor_ref (current, actor_type);
-                  co_await self->_spot_actor_index_lane.run_task ([&] {
-                      const auto found = self->_actors.find (current.key);
-                      if (found != self->_actors.end ())
-                          found->second.second = current;
-                  });
-                  completion.join_completion = result_t<actor_join_completion_t>::success (
-                    {join_admission_t::accepted, actor});
-              }
-          } else {
-              (void) co_await self->_objects.abort_membership_move_async (membership);
-              completion.join_completion = result_t<actor_join_completion_t>::success (
-                {join_admission_t::rejected,
-                 self->framework_actor_ref (membership.actor, actor_type)});
-          }
-
-          *operation.local_result =
-            operation_completion_t{std::move (completion), std::move (parts)};
+          return complete_actor_join_t::run (host, operation, std::move (actor_type), membership,
+                                             result, parts);
       });
     return completed;
 }

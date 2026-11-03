@@ -517,67 +517,79 @@ task_t<void> spot_route_internal_dispatcher_t::dispatch_actor_commit_request_asy
               std::move (packet.packet_name_value), std::move (packet.payload),
               std::move (packet.content_type), std::move (packet.metadata), packet.is_request});
         }
+        struct activate_core_transfer_t
+        {
+            static task_t<result_t<void>> run (std::decay_t<decltype (runtime)> runtime,
+                                               std::decay_t<decltype (request)> request,
+                                               std::uint64_t authority_owner_generation)
+            {
+                auto native = co_await runtime.native_node_async ();
+                if (!native) {
+                    co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                                       "target Core MeshNode is unavailable");
+                }
+                const auto &target_spot = request.target_spot_id;
+                runtime::host::actor_transfer_prepare_t transfer_prepare{
+                  .role = runtime::host::actor_transfer_role_t::target,
+                  .transfer_id = request.transfer_id,
+                  .actor = runtime::host::public_host_runtime_t::remote_actor_ref (
+                    zlink::routing_id_t::from (request.actor_node_rid), request.actor_id,
+                    request.actor_generation),
+                  .source_spot_id = target_spot,
+                  .target_spot_id = target_spot,
+                  .target_node_rid = native->status ().routing_id ()};
+                runtime::host::actor_transfer_token_t transfer_token;
+                runtime::host::actor_transfer_prepare_result_t transfer_result{
+                  transfer_prepare.actor, 0};
+                try {
+                    const auto target_spot_object =
+                      co_await native->resolve_spot_async (target_spot);
+                    if (!target_spot_object) {
+                        co_return result_t<void>::failure (framework_error_kind_t::not_found,
+                                                           "target Spot authority is unavailable");
+                    }
+                    if (authority_owner_generation == 0) {
+                        co_return result_t<void>::failure (
+                          framework_error_kind_t::protocol_error,
+                          "Actor authority owner generation is invalid");
+                    }
+                    (void) co_await native->create_reserved_actor_async (
+                      request.actor_type,
+                      runtime::stateful::object_ref_t{
+                        runtime::stateful::object_kind_t::actor, request.actor_id,
+                        request.actor_generation, authority_owner_generation,
+                        target_spot_object->mesh_name,
+                        native->status ().routing_id ().to_string ()});
+                }
+                catch (const std::exception &error) {
+                    co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                                       error.what ());
+                }
+                const auto core_prepared = co_await native->prepare_actor_transfer_async (
+                  transfer_prepare, transfer_token, transfer_result);
+                if (!core_prepared) {
+                    co_return result_t<void>::failure (
+                      framework_error_kind_t::internal_failure,
+                      "target Framework Actor relocation prepare failed");
+                }
+                const auto next_membership_epoch = transfer_result.membership_epoch + 1;
+                const auto core_committed = co_await transfer_token.commit (next_membership_epoch);
+                bool core_activated = false;
+                if (core_committed)
+                    core_activated = co_await transfer_token.activate ();
+                if (!core_activated) {
+                    co_return result_t<void>::failure (
+                      framework_error_kind_t::internal_failure,
+                      "target Framework Actor relocation activation failed");
+                }
+                runtime.record_core_actor_transfer_activation (request.actor_id,
+                                                               next_membership_epoch);
+                co_return result_t<void>::success ();
+            }
+        };
         const auto activate_core_transfer =
           [&] (std::uint64_t authority_owner_generation) -> task_t<result_t<void>> {
-            auto native = co_await runtime.native_node_async ();
-            if (!native) {
-                co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                   "target Core MeshNode is unavailable");
-            }
-            const auto &target_spot = request.target_spot_id;
-            runtime::host::actor_transfer_prepare_t transfer_prepare{
-              .role = runtime::host::actor_transfer_role_t::target,
-              .transfer_id = request.transfer_id,
-              .actor = runtime::host::public_host_runtime_t::remote_actor_ref (
-                zlink::routing_id_t::from (request.actor_node_rid), request.actor_id,
-                request.actor_generation),
-              .source_spot_id = target_spot,
-              .target_spot_id = target_spot,
-              .target_node_rid = native->status ().routing_id ()};
-            runtime::host::actor_transfer_token_t transfer_token;
-            runtime::host::actor_transfer_prepare_result_t transfer_result{transfer_prepare.actor,
-                                                                           0};
-            try {
-                const auto target_spot_object = co_await native->resolve_spot_async (target_spot);
-                if (!target_spot_object) {
-                    co_return result_t<void>::failure (framework_error_kind_t::not_found,
-                                                       "target Spot authority is unavailable");
-                }
-                if (authority_owner_generation == 0) {
-                    co_return result_t<void>::failure (
-                      framework_error_kind_t::protocol_error,
-                      "Actor authority owner generation is invalid");
-                }
-                (void) co_await native->create_reserved_actor_async (
-                  request.actor_type,
-                  runtime::stateful::object_ref_t{
-                    runtime::stateful::object_kind_t::actor, request.actor_id,
-                    request.actor_generation, authority_owner_generation,
-                    target_spot_object->mesh_name, native->status ().routing_id ().to_string ()});
-            }
-            catch (const std::exception &error) {
-                co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                   error.what ());
-            }
-            const auto core_prepared = co_await native->prepare_actor_transfer_async (
-              transfer_prepare, transfer_token, transfer_result);
-            if (!core_prepared) {
-                co_return result_t<void>::failure (
-                  framework_error_kind_t::internal_failure,
-                  "target Framework Actor relocation prepare failed");
-            }
-            const auto next_membership_epoch = transfer_result.membership_epoch + 1;
-            const auto core_committed = co_await transfer_token.commit (next_membership_epoch);
-            bool core_activated = false;
-            if (core_committed)
-                core_activated = co_await transfer_token.activate ();
-            if (!core_activated) {
-                co_return result_t<void>::failure (
-                  framework_error_kind_t::internal_failure,
-                  "target Framework Actor relocation activation failed");
-            }
-            runtime.record_core_actor_transfer_activation (request.actor_id, next_membership_epoch);
-            co_return result_t<void>::success ();
+            return activate_core_transfer_t::run (runtime, request, authority_owner_generation);
         };
         if (request.finalize) {
             if (request.target_owner_lease_generation

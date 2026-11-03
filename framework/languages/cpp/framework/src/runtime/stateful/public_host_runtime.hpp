@@ -1011,6 +1011,20 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              operation_kind_t kind,
                              foundation::operation_terminal_t terminal,
                              zlink::message_t payload);
+    task_t<std::pair<std::size_t, receive_batch_budget_t>> dispatch_user_spot_batch (
+      std::shared_ptr<location_repository_t> store,
+      user_spot_materializer_t materializer,
+      user_spot_closer_t user_spot_closer,
+      actor_create_operation_target_t actor_create_target,
+      actor_join_operation_target_t actor_join_target,
+      std::function<std::optional<location_owner_token_t> ()> session_route_owner_resolver,
+      std::function<void (const protocol::message_follow_notice_t &)> message_follow_handler,
+      bound_session_operations_t bound_session_operations,
+      std::function<void (const protocol::session_relocation_route_t &)>
+        late_session_route_update_reporter,
+      receive_batch_budget_t infrastructure_budget,
+      std::size_t count,
+      std::shared_ptr<mesh::service_mailbox_claim_t> claim);
     task_t<std::size_t> dispatch_user_spot_operations ();
     task_t<std::size_t>
     dispatch_user_spot_operations (std::shared_ptr<mesh::service_mailbox_claim_t> &&first_claim,

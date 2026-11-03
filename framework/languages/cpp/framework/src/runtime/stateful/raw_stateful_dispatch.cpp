@@ -182,62 +182,72 @@ namespace
 accepted_record_authority_resolver_t make_store_authority_resolver (location_repository_t &store)
 {
     auto reader = std::make_shared<live_location_reader_t> (store);
-    return [&store, reader] (const accepted_record_authority_query_t &query)
-             -> task_t<std::optional<accepted_record_authority_t>> {
-        try {
-            std::uint64_t target_lease = 0;
-            {
-                const auto authority =
-                  co_await store.read_authority (query.target.kind == object_kind_t::actor
-                                                   ? actor_authority_key (query.target.key)
-                                                   : spot_authority_key (query.target.key));
-                const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
-                const auto target_rid = node_rid_t::from_string (
-                  zlink::routing_id_t::from (query.target_node_routing_id).to_string ());
-                // A Spot wire address covers both User and Instance Spots. The
-                // native facade is a mailbox owner; Store owns the placement kind.
-                const bool matches_kind =
-                  snapshot
-                  && (query.target.kind == object_kind_t::actor
-                        ? snapshot->allocation.object_kind == placement_object_kind_t::actor
-                        : snapshot->allocation.object_kind == placement_object_kind_t::user_spot
-                            || snapshot->allocation.object_kind
-                                 == placement_object_kind_t::instance_spot);
-                if (!matches_kind || snapshot->object_generation != query.target.object_generation
-                    || (query.target.kind == object_kind_t::actor
-                        && snapshot->authority_owner_generation
-                             != query.target.authority_owner_generation)
-                    || snapshot->authority_owner_generation
-                         != query.requested_authority_owner_generation
-                    || snapshot->allocation.target.mesh_name != query.target.mesh_name
-                    || snapshot->allocation.target.node_rid.value () != target_rid.value ()
-                    || snapshot->allocation.target.node_lifecycle_generation
-                         != query.target_node_generation) {
-                    co_return std::nullopt;
-                }
+    struct resolve_store_authority_t
+    {
+        static task_t<std::optional<accepted_record_authority_t>>
+        run (std::decay_t<decltype (reader)> reader, accepted_record_authority_query_t query)
+        {
+            try {
+                std::uint64_t target_lease = 0;
+                {
+                    const auto authority =
+                      co_await reader->read_authority (query.target.kind == object_kind_t::actor
+                                                         ? actor_authority_key (query.target.key)
+                                                         : spot_authority_key (query.target.key));
+                    const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
+                    const auto target_rid = node_rid_t::from_string (
+                      zlink::routing_id_t::from (query.target_node_routing_id).to_string ());
+                    // A Spot wire address covers both User and Instance Spots. The
+                    // native facade is a mailbox owner; Store owns the placement kind.
+                    const bool matches_kind =
+                      snapshot
+                      && (query.target.kind == object_kind_t::actor
+                            ? snapshot->allocation.object_kind == placement_object_kind_t::actor
+                            : snapshot->allocation.object_kind == placement_object_kind_t::user_spot
+                                || snapshot->allocation.object_kind
+                                     == placement_object_kind_t::instance_spot);
+                    if (!matches_kind
+                        || snapshot->object_generation != query.target.object_generation
+                        || (query.target.kind == object_kind_t::actor
+                            && snapshot->authority_owner_generation
+                                 != query.target.authority_owner_generation)
+                        || snapshot->authority_owner_generation
+                             != query.requested_authority_owner_generation
+                        || snapshot->allocation.target.mesh_name != query.target.mesh_name
+                        || snapshot->allocation.target.node_rid.value () != target_rid.value ()
+                        || snapshot->allocation.target.node_lifecycle_generation
+                             != query.target_node_generation) {
+                        co_return std::nullopt;
+                    }
 
-                target_lease =
-                  static_cast<std::uint64_t> (snapshot->allocation.target.owner.lease_generation);
+                    target_lease = static_cast<std::uint64_t> (
+                      snapshot->allocation.target.owner.lease_generation);
+                }
+                const auto cached = reader->cached_request_source (query.target.mesh_name,
+                                                                   query.source_node_routing_id,
+                                                                   query.source_node_generation);
+                std::shared_ptr<const mesh_node_descriptor_t> source;
+                if (cached)
+                    source = *cached;
+                else
+                    source = co_await reader->request_source (query.target.mesh_name,
+                                                              query.source_node_routing_id,
+                                                              query.source_node_generation);
+                if (!source)
+                    co_return std::nullopt;
+                co_return accepted_record_authority_t{
+                  {source->owner_id, static_cast<std::uint64_t> (source->lease_generation),
+                   query.source_node_routing_id, query.source_node_generation},
+                  target_lease};
             }
-            const auto cached = reader->cached_request_source (
-              query.target.mesh_name, query.source_node_routing_id, query.source_node_generation);
-            std::shared_ptr<const mesh_node_descriptor_t> source;
-            if (cached)
-                source = *cached;
-            else
-                source = co_await reader->request_source (query.target.mesh_name,
-                                                          query.source_node_routing_id,
-                                                          query.source_node_generation);
-            if (!source)
+            catch (...) {
                 co_return std::nullopt;
-            co_return accepted_record_authority_t{
-              {source->owner_id, static_cast<std::uint64_t> (source->lease_generation),
-               query.source_node_routing_id, query.source_node_generation},
-              target_lease};
+            }
         }
-        catch (...) {
-            co_return std::nullopt;
-        }
+    };
+    return [reader] (const accepted_record_authority_query_t &query)
+             -> task_t<std::optional<accepted_record_authority_t>> {
+        return resolve_store_authority_t::run (reader, query);
     };
 }
 } // namespace

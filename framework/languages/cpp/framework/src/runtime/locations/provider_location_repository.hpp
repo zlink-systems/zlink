@@ -1101,27 +1101,50 @@ class provider_location_repository_t final : public location_repository_t
             write_request.mutations.push_back (store_delete_t{member_key});
         }
         std::vector<stored_capacity_t> capacities;
-        const auto release_capacity = [&] (const placement_allocation_t &allocation,
-                                           std::int64_t pending_delta,
-                                           std::int64_t active_delta) -> task_t<bool> {
-            const auto key =
-              key_capacity (allocation.target.mesh_name, allocation.target.node_rid.value ());
-            auto existing =
-              std::find_if (capacities.begin (), capacities.end (),
-                            [&] (const auto &capacity) { return capacity.key.value == key.value; });
-            if (existing == capacities.end ()) {
-                capacities.push_back (co_await read_capacity_async (allocation.target));
-                existing = std::prev (capacities.end ());
+        struct release_stale_capacity_t
+        {
+            static task_t<std::pair<std::vector<stored_capacity_t>, bool>>
+            run (provider_location_repository_t *self,
+                 std::decay_t<decltype (std::move (capacities))> capacities,
+                 placement_allocation_t allocation,
+                 std::int64_t pending_delta,
+                 std::int64_t active_delta)
+            {
+                const auto key =
+                  key_capacity (allocation.target.mesh_name, allocation.target.node_rid.value ());
+                auto existing =
+                  std::find_if (capacities.begin (), capacities.end (), [&] (const auto &capacity) {
+                      return capacity.key.value == key.value;
+                  });
+                if (existing == capacities.end ()) {
+                    capacities.push_back (co_await self->read_capacity_async (allocation.target));
+                    existing = std::prev (capacities.end ());
+                }
+                const bool consistent =
+                  std::holds_alternative<store_missing_condition_t> (existing->condition)
+                  || adjust_capacity (existing->record, allocation.capacity_bundle, pending_delta,
+                                      active_delta);
+
+                co_return std::pair{std::move (capacities), consistent};
             }
-            co_return std::holds_alternative<store_missing_condition_t> (existing->condition)
-              || adjust_capacity (existing->record, allocation.capacity_bundle, pending_delta,
-                                  active_delta);
         };
-        bool consistent =
+        const auto release_capacity =
+          [&] (
+            const placement_allocation_t &allocation, std::int64_t pending_delta,
+            std::int64_t active_delta) -> task_t<std::pair<std::vector<stored_capacity_t>, bool>> {
+            return release_stale_capacity_t::run (this, std::move (capacities), allocation,
+                                                  pending_delta, active_delta);
+        };
+        auto released =
           co_await release_capacity (current.allocation, active ? 0 : -1, active ? -1 : 0);
+        capacities = std::move (released.first);
+        bool consistent = released.second;
         for (const auto &member : members)
-            if (consistent)
-                consistent = co_await release_capacity (member.snapshot.allocation, 0, -1);
+            if (consistent) {
+                released = co_await release_capacity (member.snapshot.allocation, 0, -1);
+                capacities = std::move (released.first);
+                consistent = released.second;
+            }
         if (!consistent) {
             const auto observed = co_await _store.read (authority_key);
             const auto *found = std::get_if<store_found_t> (&observed);
