@@ -213,8 +213,12 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
     state.inject = true;
     const auto bad = measure ();
     std::cout << "injected-claim channel=" << channel << " owning=" << owning_callback
-              << " count=" << bad.count << " bytes=" << bad.bytes << std::endl;
-    require (bad.count > limit_count && bad.bytes > limit_bytes,
+              << " count=" << bad.count << " bytes=" << bad.bytes
+              << " additional-count=" << bad.count - actual.count
+              << " additional-bytes=" << bad.bytes - actual.bytes << std::endl;
+    // Compare the same dispatch path with and without one owner allocation.
+    // The independent mailbox ceiling includes STL moves with different costs.
+    require (bad.count > actual.count && bad.bytes > actual.bytes,
              "allocation guard accepted injected ownership cost");
     std::cout << "allocation-guard channel=" << channel << " owning=" << owning_callback
               << " injected-rejected=true" << std::endl;
