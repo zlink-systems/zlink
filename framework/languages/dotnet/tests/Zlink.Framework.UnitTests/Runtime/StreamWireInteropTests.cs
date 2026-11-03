@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -42,7 +43,7 @@ public sealed class StreamWireInteropTests
             stream,
             ping,
             ReadOnlyMemory<byte>.Empty,
-            new ZLinkMessageFlowTracer(new ZLinkDispatchOptionsModel())
+            new CapturingLogger(LogLevel.Information)
         );
 
         Assert.True(
@@ -59,7 +60,7 @@ public sealed class StreamWireInteropTests
     }
 
     [Fact]
-    public async Task Server_ignored_controls_record_name_size_and_peer_session_rid()
+    public void Server_ignored_controls_use_debug_logs_without_message_flow_drops()
     {
         var socket = DispatchProxy.Create<IZLinkBackendStreamSocket, CapturingStreamSocketProxy>();
         var capture = (CapturingStreamSocketProxy)(object)socket;
@@ -70,35 +71,51 @@ public sealed class StreamWireInteropTests
             "test"
         );
         var options = new ZLinkDispatchOptionsModel();
-        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
-        var logger = new CapturingFlowLogger(3);
-        var flow = new ZLinkMessageFlowTracer(options, logger);
+        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Errors);
+        var flowLogger = new CapturingLogger(LogLevel.Trace);
+        var flow = new ZLinkMessageFlowTracer(options, flowLogger);
+        var runtimeLogger = new CapturingLogger(LogLevel.Information);
+        Assert.True(flow.Enabled(ZLinkMessageFlowOutcome.Dropped));
 
-        ZLinkStreamControlFrames.Dispatch(
-            stream,
-            Control("$zlink.future.control"),
-            new byte[] { 1, 2, 3 },
-            flow
-        );
+        for (var index = 0; index < 1000; index++)
+            ZLinkStreamControlFrames.Dispatch(
+                stream,
+                Control("$zlink.future.control"),
+                new byte[] { 1, 2, 3 },
+                runtimeLogger
+            );
+
+        Assert.Empty(flowLogger.Entries);
+        Assert.Empty(runtimeLogger.Entries);
+
+        runtimeLogger.MinimumLevel = LogLevel.Debug;
         ZLinkStreamControlFrames.Dispatch(
             stream,
             Control(ZlinkStreamControlProtocol.HeartbeatPingName),
             new byte[] { 2, 3 },
-            flow
+            runtimeLogger
         );
         ZLinkStreamControlFrames.Dispatch(
             stream,
             Control(ZlinkStreamControlProtocol.HeartbeatPongName),
             new byte[] { 2 },
-            flow
+            runtimeLogger
+        );
+        ZLinkStreamControlFrames.Dispatch(
+            stream,
+            Control("$zlink.future.control"),
+            new byte[] { 1, 2, 3 },
+            runtimeLogger
         );
 
-        var messages = await logger.Observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Empty(flowLogger.Entries);
+        var messages = runtimeLogger.Entries.Select(entry => entry.Message).ToArray();
+        Assert.Equal(3, messages.Length);
         Assert.Contains(
             messages,
             message =>
                 message.Contains("$zlink.future.control", StringComparison.Ordinal)
-                && message.Contains("bytes=3", StringComparison.Ordinal)
+                && message.Contains("payloadBytes=3", StringComparison.Ordinal)
                 && message.Contains("control-session", StringComparison.Ordinal)
         );
         Assert.Contains(
@@ -107,7 +124,7 @@ public sealed class StreamWireInteropTests
                 message.Contains(
                     ZlinkStreamControlProtocol.HeartbeatPingName,
                     StringComparison.Ordinal
-                ) && message.Contains("bytes=2", StringComparison.Ordinal)
+                ) && message.Contains("payloadBytes=2", StringComparison.Ordinal)
         );
         Assert.Contains(
             messages,
@@ -115,9 +132,11 @@ public sealed class StreamWireInteropTests
                 message.Contains(
                     ZlinkStreamControlProtocol.HeartbeatPongName,
                     StringComparison.Ordinal
-                ) && message.Contains("bytes=1", StringComparison.Ordinal)
+                ) && message.Contains("payloadBytes=1", StringComparison.Ordinal)
         );
         Assert.Single(capture.Frames);
+        Assert.True(CoreFrameCodec.TryDecode(capture.Frames[0], out _, out var pongPayload));
+        Assert.Empty(pongPayload.ToArray());
     }
 
     [Fact]
@@ -136,7 +155,7 @@ public sealed class StreamWireInteropTests
                 stream,
                 Control(ZlinkStreamControlProtocol.BoundControlName),
                 ReadOnlyMemory<byte>.Empty,
-                new ZLinkMessageFlowTracer(new ZLinkDispatchOptionsModel())
+                new CapturingLogger(LogLevel.Information)
             )
         );
     }
@@ -209,17 +228,15 @@ public sealed class StreamWireInteropTests
             ZlinkStreamMetadata.Empty
         );
 
-    private sealed class CapturingFlowLogger(int expectedMessages) : ILogger
+    private sealed class CapturingLogger(LogLevel minimumLevel) : ILogger
     {
-        private readonly object _gate = new();
-        private readonly List<string> _messages = [];
-        internal TaskCompletionSource<IReadOnlyList<string>> Observed { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal ConcurrentQueue<(LogLevel Level, string Message)> Entries { get; } = new();
+        internal LogLevel MinimumLevel { get; set; } = minimumLevel;
 
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull => null;
 
-        public bool IsEnabled(LogLevel logLevel) => true;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= MinimumLevel;
 
         public void Log<TState>(
             LogLevel logLevel,
@@ -229,12 +246,8 @@ public sealed class StreamWireInteropTests
             Func<TState, Exception?, string> formatter
         )
         {
-            lock (_gate)
-            {
-                _messages.Add(formatter(state, exception));
-                if (_messages.Count == expectedMessages)
-                    Observed.TrySetResult(_messages.ToArray());
-            }
+            if (IsEnabled(logLevel))
+                Entries.Enqueue((logLevel, formatter(state, exception)));
         }
     }
 

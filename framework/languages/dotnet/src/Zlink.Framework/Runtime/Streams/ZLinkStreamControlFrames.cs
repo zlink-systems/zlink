@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Diagnostics;
 
@@ -80,13 +81,13 @@ internal static class ZLinkStreamControlFrames
         ZLinkManagedStream stream,
         ZlinkStreamHeader header,
         ReadOnlyMemory<byte> payload,
-        ZLinkMessageFlowTracer flow
+        ILogger logger
     )
     {
         if (header.Name == ZlinkStreamControlProtocol.HeartbeatPingName)
         {
             if (payload.Length != 0)
-                TraceIgnoredControl(stream, header.Name, payload.Length, flow);
+                LogIgnoredControl(stream, header.Name, payload.Length, logger);
             SendHeartbeatPong(stream);
             return;
         }
@@ -94,7 +95,7 @@ internal static class ZLinkStreamControlFrames
         if (header.Name == ZlinkStreamControlProtocol.HeartbeatPongName)
         {
             if (payload.Length != 0)
-                TraceIgnoredControl(stream, header.Name, payload.Length, flow);
+                LogIgnoredControl(stream, header.Name, payload.Length, logger);
             return;
         }
 
@@ -106,37 +107,25 @@ internal static class ZLinkStreamControlFrames
 
         if (header.Name.StartsWith("$zlink.", StringComparison.Ordinal))
         {
-            TraceIgnoredControl(stream, header.Name, payload.Length, flow);
+            LogIgnoredControl(stream, header.Name, payload.Length, logger);
             return;
         }
 
         throw new InvalidOperationException("Unknown stream control packet.");
     }
 
-    private static void TraceIgnoredControl(
+    private static void LogIgnoredControl(
         ZLinkManagedStream stream,
         string name,
         int payloadLength,
-        ZLinkMessageFlowTracer flow
+        ILogger logger
     )
     {
-        if (!flow.Enabled(ZLinkMessageFlowOutcome.Dropped))
-            return;
-
-        var sessionRid = stream.RoutingId?.ToString();
-        flow.Trace(
-            new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.Dropped,
-                ZLinkDispatchErrorSurface.StreamSession,
-                ZLinkDispatchMessageKind.Control,
-                PacketName: name,
-                SourceRid: sessionRid,
-                MessageSize: payloadLength
-            )
-            {
-                StreamSessionId = stream.SessionId,
-                Detail = $"Ignored control payload bytes={payloadLength}",
-            }
+        logger.LogDebug(
+            "Ignored STREAM control name={ControlName} payloadBytes={PayloadBytes} peerSessionRid={PeerSessionRid}",
+            name,
+            payloadLength,
+            stream.RoutingId?.ToString()
         );
     }
 

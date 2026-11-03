@@ -2,9 +2,23 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const net = require('node:net');
 const test = require('node:test');
+const { logs, SeverityNumber } = require('@opentelemetry/api-logs');
+const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 const observation = require('./fixtures/message-flow-observation.cjs')(
   require('../../packages/framework/dist/runtime/diagnostics/message-flow-delivery'));
 const telemetryRecords = observation.telemetryRecords;
+const streamControlLogRecords = [];
+let minimumStreamControlLogSeverity = SeverityNumber.INFO;
+logs.setGlobalLoggerProvider(new LoggerProvider({ processors: [{
+  onEmit(record) {
+    if (
+      record.eventName === 'zlink.stream.control_ignored' &&
+      record.severityNumber >= minimumStreamControlLogSeverity
+    ) streamControlLogRecords.push(record);
+  },
+  forceFlush() { return Promise.resolve(); },
+  shutdown() { return Promise.resolve(); }
+}] }));
 test.beforeEach(async () => observation.observed());
 test.after(() => observation.close());
 
@@ -830,25 +844,25 @@ test('stream session runtime sends heartbeat ping and consumes pong outside appl
   await waitForReceive(socket);
 
   assert.equal(dispatches, 0);
-  assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.pong');
+  const pong = decodeServerSentFrame(socket.sent.at(-1));
+  assert.equal(pong.header.name, '$zlink.heartbeat.pong');
+  assert.equal(pong.payload.length, 0);
   assert.deepEqual(socket.disconnects, []);
   await runtime.dispose();
 });
 
-test('stream server ignores future controls and unknown heartbeat versions with diagnostics', async (t) => {
+test('stream server ignores future controls without message-flow and logs them at debug', async (t) => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
-  const records = [];
+  await observation.observed();
+  telemetryRecords.length = 0;
+  streamControlLogRecords.length = 0;
+  minimumStreamControlLogSeverity = SeverityNumber.INFO;
+  const reporter = new ZLinkDispatchErrorReporter();
   const runtime = createStreamRuntime({
     socket,
     livenessClock: clock,
-    dispatchErrors: {
-      flow: {
-        flowCreationEnabled: () => true,
-        begin: () => ({ trace: (record) => records.push(record) })
-      },
-      report() {}
-    },
+    dispatchErrors: reporter,
     sessionFactory(context) {
       return { context, async onDispatch() {} };
     }
@@ -868,26 +882,51 @@ test('stream server ignores future controls and unknown heartbeat versions with 
       }),
       fakeMessage(payload)
     );
-  emitControl('$zlink.future.control', Buffer.from([7, 8, 9]));
-  await clock.flush();
-  await waitForReceive(socket);
+  const receiveCallsBefore = socket.recvCalls;
+  for (let index = 0; index < 1000; index++)
+    emitControl('$zlink.future.control', Buffer.from([7, 8, 9]));
   emitControl('$zlink.heartbeat.ping', Buffer.from([2, 3]));
+  await waitForCondition(
+    () => socket.recvCalls >= receiveCallsBefore + 1001 && socket.received.length === 0,
+    'ignored controls received'
+  );
   await clock.flush();
-  await waitForReceive(socket);
-  emitControl('$zlink.heartbeat.pong', Buffer.from([2]));
-  await clock.flush();
-  await waitForReceive(socket);
+  await observation.observed();
 
   assert.deepEqual(socket.disconnects, []);
-  assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.pong');
+  const pong = decodeServerSentFrame(socket.sent.at(-1));
+  assert.equal(pong.header.name, '$zlink.heartbeat.pong');
+  assert.equal(pong.payload.length, 0);
+  assert.deepEqual(telemetryRecords, []);
+  assert.deepEqual(streamControlLogRecords, []);
+
+  minimumStreamControlLogSeverity = SeverityNumber.DEBUG;
+  emitControl('$zlink.future.control', Buffer.from([4, 5, 6]));
+  emitControl('$zlink.heartbeat.ping', Buffer.from([2, 3]));
+  emitControl('$zlink.heartbeat.pong', Buffer.from([2]));
+  await waitForCondition(
+    () => streamControlLogRecords.length === 3 && socket.received.length === 0,
+    'debug control records'
+  );
   assert.deepEqual(
-    records.map(({ packetName, messageSize, sourceRid }) => [packetName, messageSize, sourceRid]),
+    streamControlLogRecords.map(({ eventName, severityNumber, attributes }) => [
+      eventName,
+      severityNumber,
+      attributes.control_name,
+      attributes.payload_bytes,
+      attributes.peer_session_rid
+    ]),
     [
-      ['$zlink.future.control', 3, 'control-peer-rid'],
-      ['$zlink.heartbeat.ping', 2, 'control-peer-rid'],
-      ['$zlink.heartbeat.pong', 1, 'control-peer-rid']
+      ['zlink.stream.control_ignored', SeverityNumber.DEBUG, '$zlink.future.control', 3,
+        runtime.findSession('control-peer-rid').stream.sessionId],
+      ['zlink.stream.control_ignored', SeverityNumber.DEBUG, '$zlink.heartbeat.ping', 2,
+        runtime.findSession('control-peer-rid').stream.sessionId],
+      ['zlink.stream.control_ignored', SeverityNumber.DEBUG, '$zlink.heartbeat.pong', 1,
+        runtime.findSession('control-peer-rid').stream.sessionId]
     ]
   );
+  await observation.observed();
+  assert.deepEqual(telemetryRecords, []);
 });
 
 test('stream server closes peers for unprefixed unknown controls and malformed control headers', async (t) => {

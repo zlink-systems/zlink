@@ -1,4 +1,5 @@
 import { requireOneWayCompletion } from '../messaging/submission-result';
+import { logs, SeverityNumber } from '@opentelemetry/api-logs';
 import { ZlinkStreamControlPacket } from '@zlink-systems/stream-wire';
 import type { RoutingId, ZLinkMessageSerializer, ZLinkSession } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
@@ -32,6 +33,7 @@ import type {
 import type { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
 import { ZLinkDispatchErrorReporter, ZLinkRouteDisconnectedError } from '../channels';
 import { type ZLinkRuntimeMetrics, flowIfEnabled } from '../diagnostics';
+import { TELEMETRY_INSTRUMENTATION_NAME } from '../diagnostics/message-flow-record';
 
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
@@ -89,6 +91,7 @@ interface ZLinkStreamLivenessOptions {
 }
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const STREAM_RUNTIME_LOGGER = logs.getLogger(TELEMETRY_INSTRUMENTATION_NAME);
 
 const systemLivenessClock: ZLinkStreamLivenessClock = {
   now: () => performance.now(),
@@ -587,14 +590,14 @@ export class ZLinkStreamSessionRuntime {
     const payloadBytes = messageToBytes(payload);
     if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
       if (payloadBytes.length !== 0) {
-        this.traceIgnoredControl(header.name, payloadBytes.length);
+        this.logIgnoredControl(header.name, payloadBytes.length);
       }
       await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG);
       return;
     }
     if (header.name === ZLINK_STREAM_HEARTBEAT_PONG) {
       if (payloadBytes.length !== 0) {
-        this.traceIgnoredControl(header.name, payloadBytes.length);
+        this.logIgnoredControl(header.name, payloadBytes.length);
       }
       return;
     }
@@ -610,7 +613,7 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     if (header.name.startsWith('$zlink.')) {
-      this.traceIgnoredControl(header.name, payloadBytes.length);
+      this.logIgnoredControl(header.name, payloadBytes.length);
       return;
     }
     await this.closeForLiveness(
@@ -620,20 +623,18 @@ export class ZLinkStreamSessionRuntime {
     );
   }
 
-  private traceIgnoredControl(name: string, payloadLength: number): void {
-    const point = flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Dropped);
-    if (point === undefined) return;
-    const sessionRid =
-      this.context.routingId === undefined ? undefined : String(this.context.routingId);
-    point.trace({
-      outcome: ZLinkMessageFlowOutcome.Dropped,
-      surface: ZLinkDispatchErrorSurface.StreamSession,
-      messageKind: ZLinkDispatchMessageKind.Control,
-      sourceRid: sessionRid,
-      packetName: name,
-      messageSize: payloadLength,
-      errorMessage: `Ignored control payload bytes=${payloadLength}`,
-      streamSessionId: sessionRid
+  private logIgnoredControl(name: string, payloadLength: number): void {
+    STREAM_RUNTIME_LOGGER.emit({
+      eventName: 'zlink.stream.control_ignored',
+      timestamp: new Date(),
+      severityNumber: SeverityNumber.DEBUG,
+      severityText: 'DEBUG',
+      body: `Ignored STREAM control name=${name} payloadBytes=${payloadLength} peerSessionRid=${this.stream.sessionId}`,
+      attributes: {
+        control_name: name,
+        payload_bytes: payloadLength,
+        peer_session_rid: this.stream.sessionId
+      }
     });
   }
 
