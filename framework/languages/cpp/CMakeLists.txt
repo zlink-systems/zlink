@@ -1532,6 +1532,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-m6-runtime"
     TIMEOUT 60)
 
+  add_executable(test_cpp_framework_optional_location_store
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_optional_location_store.cpp)
+  target_compile_features(test_cpp_framework_optional_location_store PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_optional_location_store PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_link_libraries(test_cpp_framework_optional_location_store PRIVATE zlink_framework Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_optional_location_store
+    COMMAND test_cpp_framework_optional_location_store
+    LABELS "framework-unit"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_host_lifecycle
     tests/Zlink.Framework.UnitTests/test_cpp_framework_host_lifecycle.cpp)
   target_compile_features(test_cpp_framework_host_lifecycle PRIVATE cxx_std_20)
