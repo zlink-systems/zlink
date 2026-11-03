@@ -505,24 +505,42 @@ public sealed class AutoConnectLoopTests
         );
     }
 
+    [Fact]
+    public async Task Publication_fixture_owner_lease_uses_controlled_time()
+    {
+        var time = new ControllableTimeProvider();
+        var timeout = TimeSpan.FromMilliseconds(100);
+        var deadlineCreated = time.WaitForNextTimerAsync(timeout);
+
+        await using var fixture = await PublicationFixture.CreateAsync(timeout, time);
+
+        Assert.True(deadlineCreated.IsCompletedSuccessfully);
+        Assert.Equal(time.GetUtcNow(), fixture.Runtime.GetHealthSnapshot().RenewedAt);
+        Assert.Equal(0, time.ActiveTimerCount);
+        Assert.True(fixture.Runtime.IsOwnerAdmissionOpen);
+        time.Advance(fixture.Options.OwnerLeaseTtl - fixture.Options.OwnerLeaseFencingMargin);
+        Assert.False(fixture.Runtime.IsOwnerAdmissionOpen);
+    }
+
     private sealed class PublicationFixture : IAsyncDisposable
     {
         internal ZLinkLocationOptions Options { get; }
-        internal ControlledPublicationStore Store { get; } = new();
+        internal ControlledPublicationStore Store { get; }
         internal OrderedPeerResolver Peers { get; } = new();
         internal RecordingAutoConnectExecutor Executor { get; } = new();
         internal ZLinkLocationRuntime Runtime { get; }
         internal ZLinkAutoConnectReconciler Reconciler { get; }
         internal ZLinkAutoConnectLoop Loop { get; }
 
-        private PublicationFixture(TimeSpan timeout)
+        private PublicationFixture(TimeSpan timeout, TimeProvider time)
         {
             Options = new ZLinkLocationOptions
             {
                 OwnerLeaseRenewTimeout = timeout,
                 PollingInterval = TimeSpan.FromHours(1),
             };
-            Runtime = new ZLinkLocationRuntime(Options, Store);
+            Store = new ControlledPublicationStore(time);
+            Runtime = new ZLinkLocationRuntime(Options, Store, time);
             var local = new ZLinkAutoConnectLocal(
                 ZLinkLocationAutoConnectType.ClientServer,
                 Mesh("play"),
@@ -547,9 +565,15 @@ public sealed class AutoConnectLoopTests
             );
         }
 
-        internal static async Task<PublicationFixture> CreateAsync(TimeSpan timeout)
+        internal static async Task<PublicationFixture> CreateAsync(
+            TimeSpan timeout,
+            TimeProvider? timeProvider = null
+        )
         {
-            var fixture = new PublicationFixture(timeout);
+            var fixture = new PublicationFixture(
+                timeout,
+                timeProvider ?? new ControllableTimeProvider()
+            );
             Assert.True(await fixture.Runtime.RenewOwnerLeaseOnceAsync());
             return fixture;
         }
@@ -607,9 +631,10 @@ public sealed class AutoConnectLoopTests
         }
     }
 
-    private sealed class ControlledPublicationStore : ZLinkLocationStoreTestDouble
+    private sealed class ControlledPublicationStore(TimeProvider time)
+        : ZLinkLocationStoreTestDouble
     {
-        private readonly ZLinkInMemoryLocationStore _inner = new();
+        private readonly ZLinkInMemoryLocationStore _inner = new(time);
         private readonly System.Threading.Channels.Channel<PendingPublication> _writes =
             System.Threading.Channels.Channel.CreateUnbounded<PendingPublication>();
         internal System.Collections.Concurrent.ConcurrentBag<PendingPublication> Pending { get; } =
