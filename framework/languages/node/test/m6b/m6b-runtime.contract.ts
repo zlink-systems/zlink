@@ -7217,13 +7217,27 @@ test('Missing Instance placement capacity fails without polling or retaining a c
   assert.equal(selectionAttempts, 1);
 });
 
-test('Missing Instance request classifies an actorLocationStale terminal as Unavailable', async () => {
+test('Missing Instance request classifies an actorLocationStale terminal as Unavailable', async (context) => {
+  const originalPerformanceNow = Object.getOwnPropertyDescriptor(performance, 'now');
+  let monotonicNow = 0;
+  Object.defineProperty(performance, 'now', {
+    configurable: true,
+    value: () => ++monotonicNow
+  });
+  context.after(() => {
+    if (originalPerformanceNow === undefined) Reflect.deleteProperty(performance, 'now');
+    else Object.defineProperty(performance, 'now', originalPerformanceNow);
+  });
   let requests = 0;
+  let placementSelections = 0;
+  const reportedErrors: unknown[] = [];
   const node = {
     instanceSpotPlacementTypes() {
       return ['chat-room'];
     },
     selectObjectPlacement() {
+      placementSelections += 1;
+      if (placementSelections > 1) return { kind: 'capacity' };
       return {
         kind: 'selected',
         target: {
@@ -7262,6 +7276,15 @@ test('Missing Instance request classifies an actorLocationStale terminal as Unav
     },
     meshNames: () => ['mesh'],
     meshNode: () => node,
+    dispatchErrors: {
+      flow: {
+        flowCreationEnabled: () => false,
+        accepts: () => false
+      },
+      report(event: { readonly error?: unknown }) {
+        reportedErrors.push(event.error);
+      }
+    } as never,
     completions: () =>
       ({
         async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
@@ -7291,6 +7314,12 @@ test('Missing Instance request classifies an actorLocationStale terminal as Unav
       error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.Unavailable
   );
   assert.equal(requests, 1);
+  assert.equal(placementSelections, 2);
+  assert.ok(reportedErrors[0] instanceof ZLinkFrameworkException);
+  assert.equal(
+    (reportedErrors[0] as ZLinkFrameworkException).kind,
+    ZLinkFrameworkErrorKind.Unavailable
+  );
 });
 
 test('Ready Instance request ends on a disconnected stale route without resubmission', async () => {
@@ -7328,8 +7357,8 @@ test('Ready Instance request ends on a disconnected stale route without resubmis
             attempts += 1;
             if (attempts === 1) {
               throw createInternalFrameworkException(
-                ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-                `stale route ${String((route as { targetNodeRid: string }).targetNodeRid)}`
+                ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+                `disconnected route ${String((route as { targetNodeRid: string }).targetNodeRid)}`
               );
             }
             return 'unexpected' as TReply;
