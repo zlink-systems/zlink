@@ -16,7 +16,45 @@ public record ZLinkDispatchFailure(
         String errorMessage,
         String meshName,
         String targetRid,
-        Throwable failure) {
+        Throwable failure,
+        String streamSessionId) {
+    public ZLinkDispatchFailure(
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind messageKind,
+            ZLinkDispatchErrorReason reason,
+            ZLinkDispatchErrorAction action,
+            String packetName,
+            String channelName,
+            String topic,
+            String spotId,
+            String actorId,
+            String sourceRid,
+            String correlationId,
+            String errorType,
+            String errorMessage,
+            String meshName,
+            String targetRid,
+            Throwable failure) {
+        this(
+                surface,
+                messageKind,
+                reason,
+                action,
+                packetName,
+                channelName,
+                topic,
+                spotId,
+                actorId,
+                sourceRid,
+                correlationId,
+                errorType,
+                errorMessage,
+                meshName,
+                targetRid,
+                failure,
+                null);
+    }
+
     public ZLinkDispatchFailure(
             ZLinkDispatchErrorSurface surface,
             ZLinkDispatchMessageKind messageKind,
