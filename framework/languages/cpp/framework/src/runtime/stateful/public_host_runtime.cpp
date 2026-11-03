@@ -1482,18 +1482,43 @@ void public_host_runtime_t::expect_peer (const std::string &endpoint,
                                          std::uint64_t expected_lifecycle_generation,
                                          std::string security_identity)
 {
-    auto descriptor = _options.mesh.descriptor;
-    descriptor.node_routing_id = expected.to_bytes ();
-    descriptor.advertised_endpoint = endpoint;
-    descriptor.lifecycle_generation = expected_lifecycle_generation;
-    descriptor.security_identity = std::move (security_identity);
-    _transport->expect_peer (std::move (descriptor));
+    _transport->expect_peer (expected_peer_descriptor (
+      endpoint, expected, expected_lifecycle_generation, std::move (security_identity)));
 }
 
 void public_host_runtime_t::forget_peer (const std::string &endpoint,
                                          const zlink::routing_id_t &expected)
 {
     _transport->forget_peer (expected.to_bytes (), endpoint);
+}
+
+task_t<void> public_host_runtime_t::expect_peer_async (std::string endpoint,
+                                                       zlink::routing_id_t expected,
+                                                       std::uint64_t expected_lifecycle_generation,
+                                                       std::string security_identity)
+{
+    return _transport->expect_peer_async (expected_peer_descriptor (
+      endpoint, expected, expected_lifecycle_generation, std::move (security_identity)));
+}
+
+task_t<void> public_host_runtime_t::forget_peer_async (std::string endpoint,
+                                                       zlink::routing_id_t expected)
+{
+    return _transport->forget_peer_async (expected.to_bytes (), std::move (endpoint));
+}
+
+mesh::service_node_descriptor_t
+public_host_runtime_t::expected_peer_descriptor (const std::string &endpoint,
+                                                 const zlink::routing_id_t &expected,
+                                                 std::uint64_t expected_lifecycle_generation,
+                                                 std::string security_identity) const
+{
+    auto descriptor = _options.mesh.descriptor;
+    descriptor.node_routing_id = expected.to_bytes ();
+    descriptor.advertised_endpoint = endpoint;
+    descriptor.lifecycle_generation = expected_lifecycle_generation;
+    descriptor.security_identity = std::move (security_identity);
+    return descriptor;
 }
 
 void public_host_runtime_t::disconnect_peer (const std::string &endpoint) noexcept

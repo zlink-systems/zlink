@@ -473,6 +473,19 @@ class mesh_node_runtime_t
     std::optional<std::uint32_t>
     negotiated_receive_chunk_limit_bytes (const actor_ref_t &actor) const;
     std::string mesh_name () const;
+    task_t<void> connect_peer_async (zlink::routing_id_t expected_routing_id,
+                                     std::string endpoint,
+                                     std::uint64_t expected_lifecycle_generation,
+                                     std::string security_identity,
+                                     bool automatic);
+    task_t<void> expect_peer_async (zlink::routing_id_t expected_routing_id,
+                                    std::string endpoint,
+                                    std::uint64_t expected_lifecycle_generation,
+                                    std::string security_identity);
+    task_t<void> forget_peer_async (zlink::routing_id_t expected_routing_id, std::string endpoint);
+    task_t<void> disconnect_peer_async (zlink::routing_id_t expected_routing_id,
+                                        std::string endpoint,
+                                        bool automatic);
     std::chrono::milliseconds default_request_timeout () const;
     std::optional<zlink::routing_id_t> routing_id () const;
     task_t<std::optional<zlink::routing_id_t>> routing_id_async () const;
@@ -507,6 +520,10 @@ class mesh_node_runtime_t
     registrations (zlink_builder_t &builder);
 
   private:
+    static bool retains_manual_peer_owned (const mesh_node_builder_state_t &state,
+                                           const zlink::routing_id_t &expected_routing_id,
+                                           const std::string &endpoint);
+
     struct session_relocation_checkpoint_t
     {
         runtime::stateful::object_ref_t source;

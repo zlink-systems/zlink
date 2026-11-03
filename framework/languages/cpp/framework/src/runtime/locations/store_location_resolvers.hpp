@@ -58,6 +58,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                                          public actor_address_resolver_t,
                                          public location_readiness_t
 {
+    friend struct auto_connect_cache_test_access_t;
+
   public:
     explicit store_location_resolvers_t (
       location_repository_t &store,
@@ -214,13 +216,12 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     void invalidate_all_routes_after_store_recovery () override
     {
-        _lane
-          .run ([this] {
-              _spot_routes.clear ();
-              _actor_routes.clear ();
-              ++_store_recovery_generation;
-          })
-          .get ();
+        _lane.run ([this] { invalidate_routes_after_recovery_owned (); }).get ();
+    }
+
+    task_t<void> invalidate_all_routes_after_store_recovery_async ()
+    {
+        return _lane.run_task ([this] { invalidate_routes_after_recovery_owned (); });
     }
 
     task_t<std::optional<spot_address_t>> resolve_actor_address (std::string actor_id) override
@@ -302,6 +303,13 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     }
 
   private:
+    void invalidate_routes_after_recovery_owned ()
+    {
+        _spot_routes.clear ();
+        _actor_routes.clear ();
+        ++_store_recovery_generation;
+    }
+
     task_t<std::optional<spot_address_t>> read_actor_address (std::string actor_id)
     {
         const auto authority = co_await read_ready_authority (true, actor_id);

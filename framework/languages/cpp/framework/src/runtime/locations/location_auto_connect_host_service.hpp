@@ -194,40 +194,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             add_loop (
               route.router_channel_id (), std::move (local_rid), route.bind_endpoint (),
               local_object_role, local_has_server_channel,
-              [this, &route, manual] (const target_t &target) {
-                  const bool manual_endpoint =
-                    std::find (manual.begin (), manual.end (), target.endpoint) != manual.end ();
-                  for (const auto &mesh_node : _mesh_nodes) {
-                      if (mesh_node && mesh_node->mesh_name () == route.router_channel_id ()) {
-                          /* Manual routes still use the discovered descriptor
-                           * as their admission fence. Only the physical pipe
-                           * remains owned by the route registration. */
-                          mesh_node->expect_peer (target.node_rid, target.endpoint,
-                                                  target.lifecycle_generation,
-                                                  target.security_identity);
-                          if (target.initiates_connection)
-                              mesh_node->connect_peer (target.node_rid, target.endpoint,
-                                                       target.lifecycle_generation,
-                                                       target.security_identity, true);
-                      }
-                  }
-                  if (target.initiates_connection && !manual_endpoint)
-                      (void) route.connect (target.node_rid, target.endpoint);
+              [this, &route, manual] (target_t target) {
+                  return update_route_target (this, &route, manual, std::move (target), false);
               },
-              [this, &route, manual] (const target_t &target) {
-                  const bool manual_endpoint =
-                    std::find (manual.begin (), manual.end (), target.endpoint) != manual.end ();
-                  for (const auto &mesh_node : _mesh_nodes) {
-                      if (mesh_node && mesh_node->mesh_name () == route.router_channel_id ()) {
-                          /* A removed manual descriptor must not leave an old
-                           * identity accepted while Core tears down its pipe. */
-                          mesh_node->forget_peer (target.node_rid, target.endpoint);
-                          if (target.initiates_connection && !manual_endpoint)
-                              mesh_node->disconnect_peer (target.node_rid, target.endpoint, true);
-                      }
-                  }
-                  if (target.initiates_connection && !manual_endpoint)
-                      (void) route.disconnect (target.node_rid, target.endpoint);
+              [this, &route, manual] (target_t target) {
+                  return update_route_target (this, &route, manual, std::move (target), true);
               });
         }
 
@@ -237,18 +208,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             add_loop (
               mesh_node->mesh_name (), mesh_node->routing_id (), mesh_node->listen_endpoint (),
               mesh_node->object_role (), !mesh_node->channel_weights ().empty (),
-              [mesh_node] (const target_t &target) {
-                  mesh_node->expect_peer (target.node_rid, target.endpoint,
-                                          target.lifecycle_generation, target.security_identity);
-                  if (target.initiates_connection)
-                      mesh_node->connect_peer (target.node_rid, target.endpoint,
-                                               target.lifecycle_generation,
-                                               target.security_identity, true);
+              [mesh_node] (target_t target) {
+                  return update_mesh_target (mesh_node, std::move (target), false);
               },
-              [mesh_node] (const target_t &target) {
-                  mesh_node->forget_peer (target.node_rid, target.endpoint);
-                  if (target.initiates_connection)
-                      mesh_node->disconnect_peer (target.node_rid, target.endpoint, true);
+              [mesh_node] (target_t target) {
+                  return update_mesh_target (mesh_node, std::move (target), true);
               });
         }
 
@@ -319,7 +283,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             _fanout.reset ();
         for (auto &loop : _loops) {
             std::erase_if (loop.active, [&] (const auto &entry) {
-                return _runtime_failures->capture ([&] { disconnect (loop, entry.second); });
+                return _runtime_failures->capture (
+                  [&] { disconnect (&loop, entry.second).result ().value (); });
             });
         }
         std::erase_if (_loops, [] (const auto &loop) { return loop.active.empty (); });
@@ -351,8 +316,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         bool local_has_server_channel = false;
         std::map<std::string, target_t> active;
         std::map<std::string, target_t> last_desired;
-        std::function<void (const target_t &)> connect_target;
-        std::function<void (const target_t &)> disconnect_target;
+        std::function<task_t<void> (target_t)> connect_target;
+        std::function<task_t<void> (target_t)> disconnect_target;
         bool recovering_from_store_failure = false;
         std::optional<std::chrono::steady_clock::time_point> failure_started_at;
         std::optional<std::chrono::steady_clock::time_point> recovery_started_at;
@@ -382,8 +347,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                    std::string local_endpoint,
                    std::optional<object_role_t> local_object_role,
                    bool local_has_server_channel,
-                   std::function<void (const target_t &)> connect_target,
-                   std::function<void (const target_t &)> disconnect_target)
+                   std::function<task_t<void> (target_t)> connect_target,
+                   std::function<task_t<void> (target_t)> disconnect_target)
     {
         loop_t loop;
         loop.mesh_name = std::move (mesh_name);
@@ -396,6 +361,62 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         _loops.push_back (std::move (loop));
     }
 
+    static task_t<void> update_mesh_target (std::shared_ptr<detail::mesh_node_runtime_t> node,
+                                            target_t target,
+                                            bool remove)
+    {
+        if (remove) {
+            co_await node->forget_peer_async (target.node_rid, target.endpoint);
+            if (target.initiates_connection)
+                co_await node->disconnect_peer_async (target.node_rid, target.endpoint, true);
+        } else {
+            co_await node->expect_peer_async (target.node_rid, target.endpoint,
+                                              target.lifecycle_generation,
+                                              target.security_identity);
+            if (target.initiates_connection)
+                co_await node->connect_peer_async (target.node_rid, target.endpoint,
+                                                   target.lifecycle_generation,
+                                                   target.security_identity, true);
+        }
+    }
+
+    static task_t<void> update_route_target (location_auto_connect_host_service_t *service,
+                                             detail::route_channel_runtime_t *route,
+                                             std::vector<std::string> manual,
+                                             target_t target,
+                                             bool remove)
+    {
+        const bool manual_endpoint =
+          std::find (manual.begin (), manual.end (), target.endpoint) != manual.end ();
+        for (const auto &node : service->_mesh_nodes) {
+            if (!node)
+                continue;
+            const auto identity = co_await node->identity_async ();
+            if (identity.first != route->router_channel_id ())
+                continue;
+            if (remove) {
+                co_await node->forget_peer_async (target.node_rid, target.endpoint);
+                if (target.initiates_connection && !manual_endpoint)
+                    co_await node->disconnect_peer_async (target.node_rid, target.endpoint, true);
+            } else {
+                // Manual routes still refresh admission, but retain their pipe.
+                co_await node->expect_peer_async (target.node_rid, target.endpoint,
+                                                  target.lifecycle_generation,
+                                                  target.security_identity);
+                if (target.initiates_connection)
+                    co_await node->connect_peer_async (target.node_rid, target.endpoint,
+                                                       target.lifecycle_generation,
+                                                       target.security_identity, true);
+            }
+        }
+        if (target.initiates_connection && !manual_endpoint) {
+            if (remove)
+                (void) co_await route->disconnect_async (target.node_rid, target.endpoint);
+            else
+                (void) co_await route->connect_async (target.node_rid, target.endpoint);
+        }
+    }
+
     task_t<void> run_loop (std::optional<std::chrono::steady_clock::time_point> observed)
     {
         const auto stopped = _stop_requested.get_token ();
@@ -405,6 +426,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         snapshots.reserve (_loops.size ());
         while (!stopped.stop_requested ()) {
             for (auto &loop : _loops) {
+                std::exception_ptr failure;
                 try {
                     const auto deadline = std::chrono::steady_clock::now ()
                                           + _runtime->options ().owner_lease_renew_timeout;
@@ -424,12 +446,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                         refreshed.value ();
                     }
                 }
-                catch (const std::exception &error) {
-                    handle_loop_failure (loop, "tick", error.what ());
-                }
                 catch (...) {
-                    handle_loop_failure (loop, "tick", "unknown exception");
+                    failure = std::current_exception ();
                 }
+                if (failure)
+                    co_await handle_loop_failure (&loop, failure);
             }
             const auto current = _runtime->owner_lease_observation ();
             const auto intent = current != observed ? location_write_intent_t::new_claim
@@ -439,15 +460,15 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (stopped.stop_requested ())
                 co_return;
             for (auto &[loop, descriptors] : snapshots) {
+                std::exception_ptr failure;
                 try {
-                    reconcile (*loop, std::move (descriptors), published);
-                }
-                catch (const std::exception &error) {
-                    handle_loop_failure (*loop, "tick", error.what ());
+                    co_await reconcile (loop, std::move (descriptors), published);
                 }
                 catch (...) {
-                    handle_loop_failure (*loop, "tick", "unknown exception");
+                    failure = std::current_exception ();
                 }
+                if (failure)
+                    co_await handle_loop_failure (loop, failure);
             }
             snapshots.clear ();
             (void) co_await observe_until (
@@ -456,14 +477,23 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         }
     }
 
-    void handle_loop_failure (loop_t &loop, std::string_view stage, std::string_view error) noexcept
+    task_t<void> handle_loop_failure (loop_t *state, std::exception_ptr failure)
     {
-        trace_failure (stage, loop.mesh_name, {}, error);
+        auto &loop = *state;
+        try {
+            std::rethrow_exception (failure);
+        }
+        catch (const std::exception &error) {
+            trace_failure ("tick", loop.mesh_name, {}, error.what ());
+        }
+        catch (...) {
+            trace_failure ("tick", loop.mesh_name, {}, "unknown exception");
+        }
         if (!loop.failure_started_at)
             loop.failure_started_at = std::chrono::steady_clock::now ();
         loop.recovering_from_store_failure = true;
         try {
-            retry_pending_targets (loop);
+            co_await retry_pending_targets (state);
         }
         catch (const std::exception &retry_error) {
             trace_failure ("recovery-failed", loop.mesh_name, {}, retry_error.what ());
@@ -511,22 +541,24 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     }
 
 
-    void reconcile (loop_t &loop,
-                    std::shared_ptr<const live_location_reader_t::mesh_sources_t> descriptors,
-                    bool published)
+    task_t<void>
+    reconcile (loop_t *state,
+               std::shared_ptr<const live_location_reader_t::mesh_sources_t> descriptors,
+               bool published)
     {
+        auto &loop = *state;
         const bool was_recovering = loop.recovering_from_store_failure;
         if (!published) {
             loop.recovering_from_store_failure = true;
-            retry_pending_targets (loop);
-            return;
+            co_await retry_pending_targets (state);
+            co_return;
         }
         if (was_recovering) {
             loop.recovering_from_store_failure = false;
             loop.failure_started_at.reset ();
             loop.recovery_started_at = std::chrono::steady_clock::now ();
             if (_route_cache)
-                _route_cache->invalidate_all_routes_after_store_recovery ();
+                co_await _route_cache->invalidate_all_routes_after_store_recovery_async ();
         }
 
         auto desired = select_endpoint_winners (compute_desired (loop, std::move (descriptors)));
@@ -547,7 +579,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                     continue;
                 }
                 released_endpoints.insert (it->second.endpoint);
-                disconnect (loop, it->second);
+                co_await disconnect (state, it->second);
                 it = loop.active.erase (it);
             } else {
                 ++it;
@@ -568,12 +600,12 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                  * before submitting the replacement on a later tick. */
                 if (released_endpoints.contains (target.endpoint))
                     continue;
-                connect (loop, target);
+                co_await connect (state, target);
                 loop.active[key] = target;
             } else if (current->second.endpoint != target.endpoint
                        || current->second.original->owner_id != target.original->owner_id
                        || current->second.lifecycle_generation != target.lifecycle_generation) {
-                disconnect (loop, current->second);
+                co_await disconnect (state, current->second);
                 /* A descriptor replacement is a two-phase lifecycle change.
                  * The disconnect command only schedules physical pipe
                  * teardown in the binding runtime. Connecting the new
@@ -586,7 +618,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 /* A connect submission can be rejected while the previous
                  * same-endpoint RID is still closing. Keep reconciling the
                  * selected descriptor until the physical intent exists. */
-                connect (loop, target);
+                co_await connect (state, target);
             }
         }
     }
@@ -674,30 +706,33 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         return winners;
     }
 
-    void retry_pending_targets (loop_t &loop)
+    task_t<void> retry_pending_targets (loop_t *state)
     {
+        auto &loop = *state;
         if (!loop.failure_started_at
             || std::chrono::steady_clock::now () - *loop.failure_started_at
                  > _runtime->options ().store_failure_grace)
-            return;
+            co_return;
         for (const auto &[key, target] : loop.last_desired) {
             if (!loop.active.contains (key)) {
-                connect (loop, target);
+                co_await connect (state, target);
                 loop.active[key] = target;
             }
         }
     }
 
-    static void connect (loop_t &loop, const target_t &target)
+    static task_t<void> connect (loop_t *loop, target_t target)
     {
-        if (loop.connect_target)
-            loop.connect_target (target);
+        if (loop->connect_target)
+            return loop->connect_target (std::move (target));
+        return task_t<void> (result_t<void>::success ());
     }
 
-    static void disconnect (loop_t &loop, const target_t &target)
+    static task_t<void> disconnect (loop_t *loop, target_t target)
     {
-        if (loop.disconnect_target)
-            loop.disconnect_target (target);
+        if (loop->disconnect_target)
+            return loop->disconnect_target (std::move (target));
+        return task_t<void> (result_t<void>::success ());
     }
 
     message_bus_t _bus;

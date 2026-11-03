@@ -113,6 +113,65 @@ struct route_channel_runtime_t::state_t
         return completed;
     }
 
+    static void complete_notifications (std::vector<completion_t> completed)
+    {
+        for (auto &[observer, result] : completed)
+            observer->completion.complete (std::move (result));
+    }
+
+    using mutation_result_t = std::pair<bool, std::vector<completion_t>>;
+
+    static bool complete_mutation (mutation_result_t output)
+    {
+        complete_notifications (std::move (output.second));
+        return output.first;
+    }
+
+    static task_t<bool> complete_mutation (task_t<mutation_result_t> pending)
+    {
+        co_return complete_mutation (co_await pending);
+    }
+
+    mutation_result_t connect_owned (zlink::routing_id_t peer_rid, std::string endpoint)
+    {
+        const bool connected = _connections.connect (std::move (peer_rid), std::move (endpoint));
+        return {connected, notify_unlocked ({})};
+    }
+
+    mutation_result_t disconnect_owned (const std::optional<zlink::routing_id_t> &peer_rid,
+                                        const std::string &normalized)
+    {
+        std::optional<removed_route_t> change;
+        const auto removed = [&] {
+            const auto before = _connections.targets ();
+            const auto selected =
+              std::find_if (before.begin (), before.end (), [&] (const auto &entry) {
+                  return entry.endpoint == normalized && (!peer_rid || entry.peer_rid == peer_rid);
+              });
+            if (selected == before.end ())
+                return false;
+            _connections.disconnect (normalized);
+            const auto remaining = _connections.targets ();
+            const bool has_unknown =
+              std::any_of (remaining.begin (), remaining.end (), [&] (const auto &entry) {
+                  return !entry.peer_rid && entry.endpoint != _bind_endpoint;
+              });
+            const bool has_same_target =
+              selected->peer_rid
+              && std::any_of (remaining.begin (), remaining.end (), [&] (const auto &entry) {
+                     return entry.peer_rid == selected->peer_rid;
+                 });
+            if (!has_unknown && !has_same_target
+                && (selected->peer_rid || selected->endpoint != _bind_endpoint)) {
+                change.emplace (removed_route_t{selected->peer_rid});
+            }
+            if (selected->peer_rid && !has_same_target)
+                _ready_peer_rids.erase (selected->peer_rid->to_string ());
+            return true;
+        }();
+        return {removed, notify_unlocked (change)};
+    }
+
     template <typename Work>
     auto mutate (Work &&work, const std::optional<removed_route_t> &change = {})
     {
@@ -128,12 +187,16 @@ struct route_channel_runtime_t::state_t
             }();
             return std::pair (std::move (value), notify_unlocked (change));
         });
-        for (auto &[observer, result] : output.second)
-            observer->completion.complete (std::move (result));
+        complete_notifications (std::move (output.second));
         if constexpr (!std::is_void_v<value_t>)
             return std::move (output.first);
     }
 };
+
+runtime::state_lane_t &auto_connect_owner_lane (route_channel_runtime_t &owner)
+{
+    return owner._state->_lane;
+}
 
 route_channel_runtime_t::route_channel_runtime_t (std::string router_channel_id) :
     _state (std::make_shared<state_t> ())
@@ -198,8 +261,19 @@ bool route_channel_runtime_t::connect (std::string endpoint)
 
 bool route_channel_runtime_t::connect (zlink::routing_id_t peer_rid, std::string endpoint)
 {
-    return _state->mutate (
-      [&] { return _state->_connections.connect (std::move (peer_rid), std::move (endpoint)); });
+    return state_t::complete_mutation (_state->_lane.run_sync (
+      [&] { return _state->connect_owned (std::move (peer_rid), std::move (endpoint)); }));
+}
+
+
+task_t<bool> route_channel_runtime_t::connect_async (zlink::routing_id_t peer_rid,
+                                                     std::string endpoint)
+{
+    return state_t::complete_mutation (
+      _state->_lane.run_task ([state = _state, peer_rid = std::move (peer_rid),
+                               endpoint = std::move (endpoint)] () mutable {
+          return state->connect_owned (std::move (peer_rid), std::move (endpoint));
+      }));
 }
 
 bool route_channel_runtime_t::disconnect (const std::string &endpoint)
@@ -217,36 +291,25 @@ bool route_channel_runtime_t::disconnect_endpoint (std::optional<zlink::routing_
                                                    std::string endpoint)
 {
     const auto normalized = runtime::transport::normalize_endpoint (endpoint);
-    std::optional<removed_route_t> change;
-    return _state->mutate (
-      [&] {
-          const auto before = _state->_connections.targets ();
-          const auto selected =
-            std::find_if (before.begin (), before.end (), [&] (const auto &entry) {
-                return entry.endpoint == normalized && (!peer_rid || entry.peer_rid == peer_rid);
-            });
-          if (selected == before.end ())
-              return false;
-          _state->_connections.disconnect (normalized);
-          const auto remaining = _state->_connections.targets ();
-          const bool has_unknown =
-            std::any_of (remaining.begin (), remaining.end (), [&] (const auto &entry) {
-                return !entry.peer_rid && entry.endpoint != _state->_bind_endpoint;
-            });
-          const bool has_same_target =
-            selected->peer_rid
-            && std::any_of (remaining.begin (), remaining.end (), [&] (const auto &entry) {
-                   return entry.peer_rid == selected->peer_rid;
-               });
-          if (!has_unknown && !has_same_target
-              && (selected->peer_rid || selected->endpoint != _state->_bind_endpoint)) {
-              change.emplace (removed_route_t{selected->peer_rid});
-          }
-          if (selected->peer_rid && !has_same_target)
-              _state->_ready_peer_rids.erase (selected->peer_rid->to_string ());
-          return true;
-      },
-      change);
+    return state_t::complete_mutation (
+      _state->_lane.run_sync ([&] { return _state->disconnect_owned (peer_rid, normalized); }));
+}
+
+task_t<bool> route_channel_runtime_t::disconnect_async (zlink::routing_id_t peer_rid,
+                                                        std::string endpoint)
+{
+    return disconnect_endpoint_async (std::move (peer_rid), std::move (endpoint));
+}
+
+task_t<bool>
+route_channel_runtime_t::disconnect_endpoint_async (std::optional<zlink::routing_id_t> peer_rid,
+                                                    std::string endpoint)
+{
+    const auto normalized = runtime::transport::normalize_endpoint (endpoint);
+    return state_t::complete_mutation (
+      _state->_lane.run_task ([state = _state, peer_rid = std::move (peer_rid), normalized] {
+          return state->disconnect_owned (peer_rid, normalized);
+      }));
 }
 
 std::vector<std::string> route_channel_runtime_t::list_connections () const

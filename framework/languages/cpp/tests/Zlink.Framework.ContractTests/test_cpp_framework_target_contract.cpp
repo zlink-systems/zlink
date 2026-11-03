@@ -420,9 +420,8 @@ int main ()
                   "IMP-CP-05", "RouteMesh discovery still uses legacy peer rows");
     gate.require (
       location_auto_connect.find ("const bool manual_endpoint") != std::string::npos
-        && location_auto_connect.find ("Manual routes still use the discovered descriptor")
-             != std::string::npos
-        && location_auto_connect.find ("mesh_node->expect_peer") != std::string::npos,
+        && location_auto_connect.find ("Manual routes still refresh admission") != std::string::npos
+        && location_auto_connect.find ("co_await node->expect_peer_async") != std::string::npos,
       "CPP-TOPO-001", "manual RouteMesh endpoints do not install descriptor admission fences");
 
     /* IMP-CP-04 — incomplete and duplicate STREAM declarations fail validation. */
@@ -904,7 +903,7 @@ int main ()
     const auto recovery_republish = location_auto_connect.find (
       "co_await _republish_after_store_recovery (intent, stopped, deadline)", recovery_owner_check);
     const auto recovery_invalidation = location_auto_connect.find (
-      "invalidate_all_routes_after_store_recovery ();", recovery_republish);
+      "invalidate_all_routes_after_store_recovery_async ();", recovery_republish);
     const auto recovery_diff =
       location_auto_connect.find ("auto desired = select_endpoint_winners", recovery_invalidation);
     gate.require (
@@ -925,7 +924,7 @@ int main ()
         && location_auto_connect.find ("for (const auto &[key, target] : desired)", recovery_diff)
              != std::string::npos
         && location_auto_connect.find (
-             "invalidate_all_routes_after_store_recovery ();\n            return;",
+             "invalidate_all_routes_after_store_recovery_async ();\n            return;",
              recovery_republish)
              == std::string::npos,
       "IMP-CP-06",

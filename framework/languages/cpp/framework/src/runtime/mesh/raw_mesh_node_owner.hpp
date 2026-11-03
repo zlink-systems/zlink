@@ -134,6 +134,11 @@ struct actor_join_wire_outcome_t
 
 class raw_mesh_node_owner_t
 {
+    friend state_lane_t &auto_connect_owner_lane (raw_mesh_node_owner_t &owner)
+    {
+        return owner._lane;
+    }
+
   public:
     explicit raw_mesh_node_owner_t (raw_mesh_node_options_t options,
                                     std::shared_ptr<zlink::context_t> context = {});
@@ -189,6 +194,17 @@ class raw_mesh_node_owner_t
     void disconnect_peer_intent (const zlink::routing_id_t &expected_routing_id,
                                  const std::string &endpoint,
                                  bool automatic);
+    task_t<void> connect_peer_intent_async (std::string endpoint,
+                                            std::optional<zlink::routing_id_t> expected,
+                                            std::uint64_t expected_lifecycle_generation,
+                                            std::string security_identity,
+                                            bool automatic);
+    task_t<void> disconnect_peer_intent_async (zlink::routing_id_t expected_routing_id,
+                                               std::string endpoint,
+                                               bool automatic);
+    task_t<void> expect_peer_async (service_node_descriptor_t expected_descriptor);
+    task_t<void> forget_peer_async (std::vector<std::uint8_t> node_routing_id,
+                                    std::string endpoint);
     void clear_peer_connection_intents ();
     void expect_peer (service_node_descriptor_t expected_descriptor);
     // The auto-connect owner's per-peer reconcile request (MeshNode 7.1).
@@ -501,6 +517,19 @@ class raw_mesh_node_owner_t
     friend struct raw_mesh_node_owner_test_access_t;
 
   private:
+    void connect_peer_intent_owned (const std::string &endpoint,
+                                    std::optional<zlink::routing_id_t> expected,
+                                    std::uint64_t expected_lifecycle_generation,
+                                    std::string security_identity,
+                                    bool automatic);
+    void disconnect_peer_intent_owned (const zlink::routing_id_t &expected_routing_id,
+                                       const std::string &endpoint,
+                                       bool automatic,
+                                       std::vector<std::function<void ()>> &notifications);
+    static bool valid_expected_peer (const service_node_descriptor_t &descriptor);
+    void expect_peer_owned (const service_node_descriptor_t &expected_descriptor);
+    void forget_peer_owned (const std::vector<std::uint8_t> &node_routing_id,
+                            const std::string &endpoint);
     bool connect_peer_owned (const std::string &endpoint,
                              std::optional<service_node_descriptor_t> expected_descriptor);
     bool disconnect_peer_owned (const std::vector<std::uint8_t> &expected_routing_id,
