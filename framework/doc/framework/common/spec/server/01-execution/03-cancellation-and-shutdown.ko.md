@@ -70,6 +70,10 @@ Cancellation 입력이 있는 call이 pre-cancelled 상태로 도착했을 때�
   [Binding 비동기 실행 모델 §6](../../../../../../../bindings/doc/spec/async-execution-model.ko.md#6-caller-wait-cancellation)을 따른다.**
   Native operation의 수명과 registry는 binding이 소유하므로 Framework에서 다시 정의하지 않는다.
   Framework는 binding에 넘기기 전 자신이 소유한 queue 대기의 취소를 담당한다.
+  Binding이 Framework에 전달하지 않은 결과는 binding이 정리하며 Framework에 효과를 주지 않는다.
+  Framework는 binding이 이미 폐기한 reply를 다시 요구하지 않는다. Framework가 이미 받은 결과의
+  처리는 [Submit과 completion §9](01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)의
+  준비된 최종 수신자가 소유한다.
 - ChannelName과 topic으로 같은 Channel의 여러
   [Spot](../00-foundation/02-glossary.ko.md#spot) — 주소와 상태를 가진 논리 instance —
   에 message 하나를 전달하는 방식인

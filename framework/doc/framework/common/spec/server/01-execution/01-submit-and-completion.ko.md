@@ -330,7 +330,7 @@ STREAM reply의 one-shot [reply token](../00-foundation/02-glossary.ko.md#reply-
 
 Request는 제출 전에 최종 결과의 수신자를 준비한다. 기존 terminal 소유자가 확정한 결과는 각 codec 소유자의 값 변환을 거쳐 최종 typed 결과에 한 곳에서 전달한다. 내부 계층 사이의 변환만을 위한 별도 비동기 결과와 관찰 연결을 두지 않는다.
 
-Public 결과가 먼저 끝나도 제출 전에 준비한 최종 수신자는 physical 결과 처리에 필요한 자원을 그 처리의 완료까지 유지한다. Admission 실패로 public 결과가 먼저 끝나는 경우에도 같다. 그 수신자에 전달된 정상 physical 응답은 public 결과의 완료 여부와 관계없이 각 codec 소유자의 변환을 한 번 거친다. 이 변환의 값이나 실패는 이미 확정된 public 결과를 바꾸지 않으며, payload는 정확히 한 번 정리한다. 닫힌 correlation 때문에 최종 수신자에 전달되지 않는 late native reply의 처리는 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)의 소유 경계를 따른다.
+Public 결과가 먼저 끝나도 제출 전에 준비한 최종 수신자는 physical 결과 처리에 필요한 자원을 그 처리의 완료까지 유지한다. Admission 실패로 public 결과가 먼저 끝나는 경우에도 같다. 그 수신자는 public 결과의 완료 여부와 관계없이 전달받은 physical 실패와 그에 따른 route cache 처리를 소유한다([Routing §2.2](../03-spot-actor/08-routing.ko.md#22-최근-ready-route를-사용하는-조건)). 그 수신자에 전달된 정상 physical 응답은 public 결과의 완료 여부와 관계없이 각 codec 소유자의 변환을 한 번 거친다. 이 처리의 값이나 실패는 이미 확정된 public 결과를 바꾸거나 다시 완료하지 않으며, payload는 정확히 한 번 정리한다. 닫힌 correlation 때문에 최종 수신자에 전달되지 않는 late native reply의 처리는 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)의 소유 경계를 따른다.
 
 Request caller는 reply, remote 오류, timeout, cancellation 또는 shutdown 가운데 먼저
 확정된 결과 하나를 관찰한다. Timeout과 cancellation은 호출자의 대기를 끝내지만
@@ -347,7 +347,7 @@ flowchart LR
     W -->|timeout| C3["예외로 완료<br/>(원격 handler는 rollback 안 함)"]
     W -->|cancellation| C4["예외로 완료"]
     W -->|shutdown| C5["예외로 완료"]
-    C1 -.->|늦게 도착한 나머지 결과| D["폐기, correlation state만 정리"]
+    C1 -.->|늦게 도착한 나머지 결과| D["Public 결과 유지<br/>인도된 결과는 수신자가 처리"]
     C2 -.-> D
     C3 -.-> D
     C4 -.-> D
@@ -360,7 +360,7 @@ current Ready authority resolve와 handler 시간도 포함한다. Source는 앞
 selector·operation 소유자의 turn을 기다린 시간도 이 deadline에서 차감된다. 단계마다 timeout을 새로 시작하지 않는다. Outbound admission의 시간 상한은 남은 request timeout이며
 socket send timeout과 결합하지 않는다. Timeout이나 cancellation으로 caller의 대기가 끝나도 request가
 전송되지 않았다는 뜻은 아니다 — admission 전에 끝난 request도 binding이 이미 시작한 재제출로 나중에
-전송될 수 있고, 그 reply는 닫힌 correlation이므로 폐기한다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다. §5의 연결 준비 대기는
+전송될 수 있고, binding이 닫힌 correlation에서 폐기한 reply는 Framework에 전달되지 않는다. Timeout·연결 실패 뒤 request의 재제출 경계는 [§5](#5-backpressure와-오류-분류)가 정의한다. §5의 연결 준비 대기는
 outbound admission의 일부이며 같은 request timeout을 쓴다. Binding operation을 시작하지 않은 채 deadline이 먼저
 확정되어도 `DeadlineExceeded`다.
 
