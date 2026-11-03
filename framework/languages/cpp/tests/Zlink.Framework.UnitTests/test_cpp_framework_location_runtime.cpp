@@ -260,7 +260,7 @@ struct location_auto_connect_test_access_t
         if (operation == 2)
             for (auto &source : *sources)
                 source.descriptor.endpoint += "-replacement";
-        auto pending = service.reconcile (&loop, sources, true);
+        auto pending = service.finish_loop (service.reconcile (&loop, sources, true));
         ASSERT_FALSE (pending.await_ready ());
         ASSERT_EQ (1u, calls);
         service._stop_requested.request_stop ();
@@ -271,8 +271,6 @@ struct location_auto_connect_test_access_t
         ASSERT_TRUE (result);
         EXPECT_TRUE (*result);
         EXPECT_EQ (1u, calls);
-        EXPECT_EQ (1u, loop.active.size ());
-        loop.active.clear ();
         EXPECT_TRUE (loop.active.empty ());
     }
 
@@ -357,6 +355,70 @@ struct location_auto_connect_test_access_t
         stopping.get ();
         EXPECT_EQ (1u, disconnects);
         EXPECT_TRUE (route.list_connections ().empty ());
+    }
+
+    static task_t<void> pending_target (detail::route_channel_runtime_t *route,
+                                        location_auto_connect_host_service_t::target_t target,
+                                        std::shared_ptr<task_completion_source_t<void>> release,
+                                        bool remove)
+    {
+        co_await release->task ();
+        if (remove)
+            (void) route->disconnect (target.node_rid, target.endpoint);
+        else
+            (void) route->connect (target.node_rid, target.endpoint);
+    }
+
+    static auto start_timeout_probe (location_auto_connect_host_service_t &service,
+                                     location_runtime_t &runtime,
+                                     detail::route_channel_runtime_t &route,
+                                     std::shared_ptr<task_completion_source_t<void>> release,
+                                     int operation)
+    {
+        service._runtime = &runtime;
+        service._loop_finished = std::make_shared<task_completion_source_t<void>> ();
+        service.add_loop (
+          "l4-mesh", std::nullopt, {}, std::nullopt, false,
+          [&route, release] (auto target) {
+              return pending_target (&route, target, release, false);
+          },
+          [&route, release] (auto target) {
+              return pending_target (&route, target, release, true);
+          },
+          [&service, &route] (const auto &target) {
+              service.disconnect_route_target (&service, route, {}, target);
+          });
+        auto &loop = service._loops.front ();
+        auto descriptor = std::make_shared<mesh_node_descriptor_t> ();
+        descriptor->mesh_name = "l4-mesh";
+        descriptor->rid = zlink::routing_id_t::from ("remote");
+        descriptor->endpoint = "inproc://l4-timeout";
+        descriptor->owner_id = "remote-owner";
+        descriptor->lease_generation = 1;
+        descriptor->lifecycle_generation = 1;
+        descriptor->state = framework_runtime_state_t::serving;
+        auto sources = std::make_shared<live_location_reader_t::mesh_sources_t> ();
+        sources->push_back (
+          {*descriptor, std::chrono::steady_clock::now () + std::chrono::hours (1)});
+        if (operation != 0) {
+            loop.active = service.compute_desired (loop, sources);
+            (void) route.connect (descriptor->rid, descriptor->endpoint);
+        }
+        if (operation == 1)
+            sources->clear ();
+        if (operation == 2)
+            sources->front ().descriptor.endpoint += "-replacement";
+        auto pending = service.finish_loop (service.reconcile (&loop, sources, true));
+        EXPECT_FALSE (pending.await_ready ());
+        auto finished = service._loop_finished;
+        detail::observe_task_terminal (
+          pending, [finished] (const result_t<void> &result) { finished->complete (result); });
+        return finished->task ();
+    }
+
+    static std::size_t loop_count (const location_auto_connect_host_service_t &service)
+    {
+        return service._loops.size ();
     }
 
     static void configure_probe (location_auto_connect_host_service_t &service,
@@ -2967,6 +3029,69 @@ TEST (AutoConnectSyncTest, StopDisconnectsConnectCompletedWhileStopIsPending)
     detail::route_channel_runtime_t route ("l4-mesh");
     location_auto_connect_test_access_t::check_stop_after_pending_connect (fixture.service, runtime,
                                                                            route);
+}
+
+TEST (AutoConnectSyncTest, StopTimeoutLeavesPendingLoopToDisconnectTargets)
+{
+    for (int operation : {0, 1, 2}) {
+        SCOPED_TRACE (operation);
+        in_memory_location_repository_t store;
+        location_options_t options;
+        options.owner_lease_renew_timeout = std::chrono::milliseconds::zero ();
+        location_runtime_t runtime (store, options, "timeout-owner");
+        production_auto_fixture_t fixture;
+        detail::route_channel_runtime_t route ("l4-mesh");
+        auto release = std::make_shared<task_completion_source_t<void>> ();
+        auto finished = location_auto_connect_test_access_t::start_timeout_probe (
+          fixture.service, runtime, route, release, operation);
+        fixture.service.stop ();
+        try {
+            fixture.failures->rethrow_if_failed ();
+            ADD_FAILURE () << "stop did not report its timeout";
+        }
+        catch (const framework_exception_t &error) {
+            EXPECT_EQ (framework_error_kind_t::deadline_exceeded, error.kind ());
+        }
+        EXPECT_EQ (1u, location_auto_connect_test_access_t::loop_count (fixture.service));
+        release->complete (result_t<void>::success ());
+        const auto result = finished.result_for (auto_connect_wait);
+        ASSERT_TRUE (result);
+        EXPECT_TRUE (*result);
+        EXPECT_TRUE (route.list_connections ().empty ());
+    }
+}
+
+TEST (AutoConnectSyncTest, DestructorDrainsPendingLoopAfterStopTimeout)
+{
+    in_memory_location_repository_t store;
+    location_options_t options;
+    options.owner_lease_renew_timeout = std::chrono::milliseconds::zero ();
+    location_runtime_t runtime (store, options, "timeout-owner");
+    auto builder = test::runtime_failure_builder ();
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    detail::route_channel_runtime_t route ("l4-mesh");
+    auto failures = std::make_shared<runtime_failure_collector_t> ();
+    auto service = std::make_unique<location_auto_connect_host_service_t> (
+      failures, builder.message_bus (), std::vector<channel_snapshot_t>{}, handlers, serializers,
+      [] { return framework_runtime_state_t::serving; });
+    auto release = std::make_shared<task_completion_source_t<void>> ();
+    auto finished = location_auto_connect_test_access_t::start_timeout_probe (*service, runtime,
+                                                                              route, release, 0);
+    service->stop ();
+    std::promise<void> destructor_stopping;
+    auto destroying = std::async (std::launch::async, [&] {
+        destructor_stopping.set_value ();
+        service.reset ();
+    });
+    destructor_stopping.get_future ().wait ();
+    EXPECT_EQ (std::future_status::timeout,
+               destroying.wait_for (std::chrono::milliseconds::zero ()));
+    release->complete (result_t<void>::success ());
+    EXPECT_EQ (std::future_status::ready, destroying.wait_for (auto_connect_wait));
+    destroying.get ();
+    EXPECT_TRUE (finished.result ());
+    EXPECT_TRUE (route.list_connections ().empty ());
 }
 
 TEST (AutoConnectSyncDeathTest, StopCompletesWithoutCompletionDispatcher)

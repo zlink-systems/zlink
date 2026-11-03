@@ -91,7 +91,15 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     {
     }
 
-    ~location_auto_connect_host_service_t () override { stop (); }
+    ~location_auto_connect_host_service_t () override
+    {
+        request_stop ();
+        // Unlike stop(), destruction cannot return while a coroutine still
+        // borrows this service, its loop iterators or its callback captures.
+        if (_loop_finished)
+            _runtime_failures->capture ([&] { _loop_finished->task ().result ().value (); });
+        finish_stop (stop_deadline ());
+    }
 
     // Teardown completes this with false if initial publication has not finished.
     task_t<bool> descriptors_published () const { return _startup_publication.task (); }
@@ -214,7 +222,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         _loop_finished = std::make_shared<task_completion_source_t<void>> ();
         try {
             if (!infrastructure_executor ()->try_submit_internal ([this, observed] {
-                    auto pending = run_loop (observed);
+                    auto pending = finish_loop (run_loop (observed));
                     detail::observe_task_terminal (
                       pending, [finished = _loop_finished] (const result_t<void> &result) {
                           finished->complete (result);
@@ -233,22 +241,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     void stop () noexcept override
     {
-        const auto deadline = std::chrono::steady_clock::now ()
-                              + (_runtime ? _runtime->options ().owner_lease_renew_timeout
-                                          : std::chrono::milliseconds::zero ());
-        _runtime_failures->capture ([&] { _stop_requested.request_stop (); });
-        // A coordinator publication can follow a periodic domain publication.
-        // Cancel that existing owner too before waiting for the serial chain.
-        if (_client_server)
-            _client_server->request_stop ();
-        if (_fanout)
-            _fanout->request_stop ();
-        _runtime_failures->capture (
-          [&] { _startup_publication.complete (result_t<bool>::success (false)); });
-        if (_runtime)
-            _runtime->wake_owner_lease_observers ();
-        if (_loop_finished)
-            _runtime_failures->capture ([&] {
+        const auto deadline = stop_deadline ();
+        request_stop ();
+        if (_loop_finished && !_runtime_failures->capture ([&] {
                 const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
                   std::max (std::chrono::steady_clock::duration::zero (),
                             deadline - std::chrono::steady_clock::now ()));
@@ -257,24 +252,10 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 if (!finished)
                     throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
                                                  "Location coordinator stop timed out");
-                finished->value ();
-            });
-        if (_client_server
-            && _runtime_failures->capture ([&] { _client_server->stop (deadline); })) {
-            _client_server_started = false;
-            _client_server.reset ();
-        }
-        if (_fanout && _runtime_failures->capture ([&] { _fanout->stop (deadline); }))
-            _fanout.reset ();
-        for (auto &loop : _loops) {
-            std::erase_if (loop.active, [&] (const auto &entry) {
-                return _runtime_failures->capture (
-                  [&] { loop.disconnect_target_sync (entry.second); });
-            });
-        }
-        std::erase_if (_loops, [] (const auto &loop) { return loop.active.empty (); });
-        _runtime_failures->capture (
-          [&] { detail::channel_runtime_t::from (_bus).close_manual_channel_publishers (); });
+                _runtime_failures->capture ([&] { finished->value (); });
+            }))
+            return;
+        finish_stop (deadline);
     }
 
   private:
@@ -308,6 +289,53 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         std::optional<std::chrono::steady_clock::time_point> failure_started_at;
         std::optional<std::chrono::steady_clock::time_point> recovery_started_at;
     };
+
+    std::chrono::steady_clock::time_point stop_deadline () const
+    {
+        return std::chrono::steady_clock::now ()
+               + (_runtime ? _runtime->options ().owner_lease_renew_timeout
+                           : std::chrono::milliseconds::zero ());
+    }
+
+    void request_stop () noexcept
+    {
+        _runtime_failures->capture ([&] { _stop_requested.request_stop (); });
+        // A coordinator publication can follow a periodic domain publication.
+        // Cancel that existing owner too before waiting for the serial chain.
+        if (_client_server)
+            _client_server->request_stop ();
+        if (_fanout)
+            _fanout->request_stop ();
+        _runtime_failures->capture (
+          [&] { _startup_publication.complete (result_t<bool>::success (false)); });
+        if (_runtime)
+            _runtime->wake_owner_lease_observers ();
+    }
+
+    void finish_stop (std::chrono::steady_clock::time_point deadline) noexcept
+    {
+        if (_client_server
+            && _runtime_failures->capture ([&] { _client_server->stop (deadline); })) {
+            _client_server_started = false;
+            _client_server.reset ();
+        }
+        if (_fanout && _runtime_failures->capture ([&] { _fanout->stop (deadline); }))
+            _fanout.reset ();
+        disconnect_active_targets ();
+        std::erase_if (_loops, [] (const auto &loop) { return loop.active.empty (); });
+        _runtime_failures->capture (
+          [&] { detail::channel_runtime_t::from (_bus).close_manual_channel_publishers (); });
+    }
+
+    void disconnect_active_targets () noexcept
+    {
+        for (auto &loop : _loops) {
+            std::erase_if (loop.active, [&] (const auto &entry) {
+                return _runtime_failures->capture (
+                  [&] { loop.disconnect_target_sync (entry.second); });
+            });
+        }
+    }
 
     static void trace_failure (std::string_view stage,
                                std::string_view mesh_name,
@@ -469,6 +497,23 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             else
                 (void) co_await route->connect_async (target.node_rid, target.endpoint);
         }
+    }
+
+    task_t<void> finish_loop (task_t<void> pending)
+    {
+        std::exception_ptr failure;
+        try {
+            co_await pending;
+        }
+        catch (...) {
+            failure = std::current_exception ();
+        }
+        // Completion transfers ownership to stop(). Until then only this
+        // coroutine may mutate active targets, including after a stop timeout.
+        if (_stop_requested.stop_requested ())
+            disconnect_active_targets ();
+        if (failure)
+            std::rethrow_exception (failure);
     }
 
     task_t<void> run_loop (std::optional<std::chrono::steady_clock::time_point> observed)
@@ -638,9 +683,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 }
                 released_endpoints.insert (it->second.endpoint);
                 co_await disconnect (state, it->second);
-                it = loop.active.erase (it);
                 if (_stop_requested.stop_requested ())
                     co_return;
+                it = loop.active.erase (it);
             } else {
                 ++it;
             }
@@ -663,9 +708,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 if (released_endpoints.contains (target.endpoint))
                     continue;
                 co_await connect (state, target);
-                loop.active[key] = target;
-                if (_stop_requested.stop_requested ())
+                if (_stop_requested.stop_requested ()) {
+                    _runtime_failures->capture ([&] { loop.disconnect_target_sync (target); });
                     co_return;
+                }
+                loop.active[key] = target;
             } else if (current->second.endpoint != target.endpoint
                        || current->second.original->owner_id != target.original->owner_id
                        || current->second.lifecycle_generation != target.lifecycle_generation) {
@@ -677,9 +724,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                  * pipes with one routing ID before the old pipe has been
                  * removed. Keep the key absent and let the next tick create
                  * the replacement after the teardown has progressed. */
-                loop.active.erase (current);
                 if (_stop_requested.stop_requested ())
                     co_return;
+                loop.active.erase (current);
             } else {
                 /* A connect submission can be rejected while the previous
                  * same-endpoint RID is still closing. Keep reconciling the
@@ -784,9 +831,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 co_return;
             if (!loop.active.contains (key)) {
                 co_await connect (state, target);
-                loop.active[key] = target;
-                if (_stop_requested.stop_requested ())
+                if (_stop_requested.stop_requested ()) {
+                    _runtime_failures->capture ([&] { loop.disconnect_target_sync (target); });
                     co_return;
+                }
+                loop.active[key] = target;
             }
         }
     }
