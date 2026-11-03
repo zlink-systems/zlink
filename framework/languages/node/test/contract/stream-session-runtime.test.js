@@ -835,6 +835,122 @@ test('stream session runtime sends heartbeat ping and consumes pong outside appl
   await runtime.dispose();
 });
 
+test('stream server ignores future controls and unknown heartbeat versions with diagnostics', async (t) => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const records = [];
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    dispatchErrors: {
+      flow: {
+        flowCreationEnabled: () => true,
+        begin: () => ({ trace: (record) => records.push(record) })
+      },
+      report() {}
+    },
+    sessionFactory(context) {
+      return { context, async onDispatch() {} };
+    }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  runtime.markConnected('control-peer-rid');
+
+  const emitControl = (name, payload) =>
+    socket.emitPacket(
+      'control-peer-rid',
+      fakeHeader({
+        kind: connector.ZlinkStreamMessageKind.Control,
+        codec: connector.ZlinkStreamCodec.Raw,
+        flags: connector.ZlinkStreamHeaderFlags.None,
+        name
+      }),
+      fakeMessage(payload)
+    );
+  emitControl('$zlink.future.control', Buffer.from([7, 8, 9]));
+  await clock.flush();
+  await waitForReceive(socket);
+  emitControl('$zlink.heartbeat.ping', Buffer.from([2, 3]));
+  await clock.flush();
+  await waitForReceive(socket);
+  emitControl('$zlink.heartbeat.pong', Buffer.from([2]));
+  await clock.flush();
+  await waitForReceive(socket);
+
+  assert.deepEqual(socket.disconnects, []);
+  assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.pong');
+  assert.deepEqual(
+    records.map(({ packetName, messageSize, sourceRid }) => [packetName, messageSize, sourceRid]),
+    [
+      ['$zlink.future.control', 3, 'control-peer-rid'],
+      ['$zlink.heartbeat.ping', 2, 'control-peer-rid'],
+      ['$zlink.heartbeat.pong', 1, 'control-peer-rid']
+    ]
+  );
+});
+
+test('stream server closes peers for unprefixed unknown controls and malformed control headers', async (t) => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    sessionFactory(context) {
+      return { context, async onDispatch() {} };
+    }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  runtime.markConnected('control-name-peer');
+  socket.emitPacket(
+    'control-name-peer',
+    fakeHeader({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.None,
+      name: 'future.control'
+    }),
+    fakeMessage('')
+  );
+  await clock.flush();
+  await waitForReceive(socket);
+  assert.deepEqual(socket.disconnects, ['control-name-peer']);
+
+  const malformedHeader = streamProtocol.encodeStreamHeader(
+    streamHeader({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.None,
+      name: '$zlink.future.header'
+    })
+  );
+  malformedHeader[0] = 0;
+  socket.emitRaw('control-header-peer', [rawStreamFrame(malformedHeader, [])]);
+  await clock.flush();
+  await waitForReceive(socket);
+  assert.deepEqual(socket.disconnects, ['control-name-peer', 'control-header-peer']);
+
+  runtime.markConnected('known-control-peer');
+  socket.emitPacket(
+    'known-control-peer',
+    fakeHeader({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.None,
+      name: '$zlink.actor.bound'
+    }),
+    fakeMessage('')
+  );
+  await clock.flush();
+  await waitForReceive(socket);
+  assert.deepEqual(socket.disconnects, [
+    'control-name-peer',
+    'control-header-peer',
+    'known-control-peer'
+  ]);
+});
+
 test('inbound heartbeat control frames release their application job permits', async () => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
@@ -977,10 +1093,10 @@ test('stream request dispatch emits exactly one replied terminal record (spec 26
 });
 
 for (const [controlName, controlPayload] of [
-  ['$zlink.unknown', ''],
-  ['$zlink.heartbeat.ping', 'invalid-payload']
+  ['future.control', ''],
+  ['$zlink.actor.bound', '']
 ]) {
-  test(`stream rejects ${controlName} protocol errors before application handler terminal`, async () => {
+  test(`stream rejects malformed ${controlName} before application handler terminal`, async () => {
     const socket = new FakeStreamSocket();
     let entered;
     let release;

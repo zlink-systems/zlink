@@ -1,4 +1,5 @@
 import { requireOneWayCompletion } from '../messaging/submission-result';
+import { ZlinkStreamControlPacket } from '@zlink-systems/stream-wire';
 import type { RoutingId, ZLinkMessageSerializer, ZLinkSession } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
@@ -583,19 +584,33 @@ export class ZLinkStreamSessionRuntime {
   }
 
   private async handleControl(header: ZLinkStreamFrameHeader, payload: Message): Promise<void> {
-    if (messageToBytes(payload).length !== 0) {
-      await this.closeForLiveness(
-        ZLinkStreamCloseReasonCode.ProtocolError,
-        'protocol_error',
-        'Control heartbeat payload must be empty.'
-      );
+    const payloadBytes = messageToBytes(payload);
+    if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
+      if (payloadBytes.length !== 0) {
+        this.traceIgnoredControl(header.name, payloadBytes.length);
+      }
+      await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG);
       return;
     }
     if (header.name === ZLINK_STREAM_HEARTBEAT_PONG) {
+      if (payloadBytes.length !== 0) {
+        this.traceIgnoredControl(header.name, payloadBytes.length);
+      }
       return;
     }
-    if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
-      await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG);
+    if (
+      header.name === ZlinkStreamControlPacket.ActorBound ||
+      header.name === ZlinkStreamControlPacket.ActorUnbound
+    ) {
+      await this.closeForLiveness(
+        ZLinkStreamCloseReasonCode.ProtocolError,
+        'protocol_error',
+        `Unexpected stream actor control frame: ${header.name}`
+      );
+      return;
+    }
+    if (header.name.startsWith('$zlink.')) {
+      this.traceIgnoredControl(header.name, payloadBytes.length);
       return;
     }
     await this.closeForLiveness(
@@ -603,6 +618,23 @@ export class ZLinkStreamSessionRuntime {
       'protocol_error',
       `Unknown stream control frame: ${header.name}`
     );
+  }
+
+  private traceIgnoredControl(name: string, payloadLength: number): void {
+    const point = flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Dropped);
+    if (point === undefined) return;
+    const sessionRid =
+      this.context.routingId === undefined ? undefined : String(this.context.routingId);
+    point.trace({
+      outcome: ZLinkMessageFlowOutcome.Dropped,
+      surface: ZLinkDispatchErrorSurface.StreamSession,
+      messageKind: ZLinkDispatchMessageKind.Control,
+      sourceRid: sessionRid,
+      packetName: name,
+      messageSize: payloadLength,
+      errorMessage: `Ignored control payload bytes=${payloadLength}`,
+      streamSessionId: sessionRid
+    });
   }
 
   private scheduleLivenessCheck(): void {

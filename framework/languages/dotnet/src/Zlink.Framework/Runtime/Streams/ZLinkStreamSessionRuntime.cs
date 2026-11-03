@@ -593,7 +593,12 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 );
                 if (decoded.Kind == ZlinkStreamMessageKind.Control)
                 {
-                    ZLinkStreamControlFrames.Dispatch(Stream, decoded, payload.AsReadOnlyMemory());
+                    ZLinkStreamControlFrames.Dispatch(
+                        Stream,
+                        decoded,
+                        payload.AsReadOnlyMemory(),
+                        _flow
+                    );
                     return;
                 }
             }

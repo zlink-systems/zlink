@@ -1,4 +1,5 @@
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
+using Zlink.Framework.Runtime.Diagnostics;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -78,22 +79,65 @@ internal static class ZLinkStreamControlFrames
     public static void Dispatch(
         ZLinkManagedStream stream,
         ZlinkStreamHeader header,
-        ReadOnlyMemory<byte> payload
+        ReadOnlyMemory<byte> payload,
+        ZLinkMessageFlowTracer flow
     )
     {
-        if (payload.Length != 0)
-            throw new InvalidOperationException("Stream control packet payload must be empty.");
-
         if (header.Name == ZlinkStreamControlProtocol.HeartbeatPingName)
         {
+            if (payload.Length != 0)
+                TraceIgnoredControl(stream, header.Name, payload.Length, flow);
             SendHeartbeatPong(stream);
             return;
         }
 
         if (header.Name == ZlinkStreamControlProtocol.HeartbeatPongName)
+        {
+            if (payload.Length != 0)
+                TraceIgnoredControl(stream, header.Name, payload.Length, flow);
             return;
+        }
+
+        if (
+            header.Name == ZlinkStreamControlProtocol.BoundControlName
+            || header.Name == ZlinkStreamControlProtocol.UnboundControlName
+        )
+            throw new InvalidOperationException("Unexpected stream actor control packet.");
+
+        if (header.Name.StartsWith("$zlink.", StringComparison.Ordinal))
+        {
+            TraceIgnoredControl(stream, header.Name, payload.Length, flow);
+            return;
+        }
 
         throw new InvalidOperationException("Unknown stream control packet.");
+    }
+
+    private static void TraceIgnoredControl(
+        ZLinkManagedStream stream,
+        string name,
+        int payloadLength,
+        ZLinkMessageFlowTracer flow
+    )
+    {
+        if (!flow.Enabled(ZLinkMessageFlowOutcome.Dropped))
+            return;
+
+        var sessionRid = stream.RoutingId?.ToString();
+        flow.Trace(
+            new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.Dropped,
+                ZLinkDispatchErrorSurface.StreamSession,
+                ZLinkDispatchMessageKind.Control,
+                PacketName: name,
+                SourceRid: sessionRid,
+                MessageSize: payloadLength
+            )
+            {
+                StreamSessionId = stream.SessionId,
+                Detail = $"Ignored control payload bytes={payloadLength}",
+            }
+        );
     }
 
     private static void SendHeartbeatPong(ZLinkManagedStream stream)

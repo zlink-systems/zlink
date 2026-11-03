@@ -26,6 +26,60 @@ final class ConnectorDispatchTest {
     }
 
     @Test
+    void futureControlsAndUnknownHeartbeatVersionsKeepTheConnectionOpen() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    ZLinkStreamConnectorFactory.create(
+                            server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            try {
+                AtomicInteger received = new AtomicInteger();
+                connector.on(
+                        "StillConnected",
+                        message -> {
+                            received.incrementAndGet();
+                            message.payload().payload().close();
+                            return CompletableFuture.completedFuture(null);
+                        });
+                ConnectorTestAwait.await(connector.connect());
+                server.sendAsync(control("$zlink.future.control"), new byte[] {7, 8}).join();
+                server.sendAsync(control("$zlink.heartbeat.ping"), new byte[] {2, 3}).join();
+
+                TcpStreamConnectorTestServer.ReceivedFrame pong =
+                        server.readFrameAsync().get(5, TimeUnit.SECONDS);
+                assertEquals("$zlink.heartbeat.pong", pong.header().name());
+                assertEquals(0, pong.payload().length);
+
+                server.sendAsync(control("$zlink.heartbeat.pong"), new byte[] {2}).join();
+                server.sendAsync(send("StillConnected"), TcpStreamConnectorTestServer.bytes("ok"))
+                        .join();
+                TcpStreamConnectorTestServer.awaitCondition(() -> received.get() == 1);
+                assertEquals(ZLinkStreamConnectionState.CONNECTED, connector.state());
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
+    @Test
+    void unprefixedUnknownControlEndsTheConnection() throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    ZLinkStreamConnectorFactory.create(
+                            server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            try {
+                ConnectorTestAwait.await(connector.connect());
+                server.sendAsync(control("future.control"), new byte[0]).join();
+                TcpStreamConnectorTestServer.awaitCondition(
+                        () ->
+                                connector.closeReason().orElse(null)
+                                        == ZLinkStreamCloseReason.PROTOCOL_ERROR);
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
+    @Test
     void manualDispatchStartsNextCallbackWithoutWaitingForPreviousCompletion() throws Exception {
         try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
             ZLinkStreamConnector connector =
@@ -481,5 +535,27 @@ final class ConnectorDispatchTest {
 
     private static ZLinkStreamEncodedPayload payload(String packetName, String body) {
         return new ZLinkStreamEncodedPayload(packetName, Message.from(body), Map.of());
+    }
+
+    private static ZLinkStreamWireProtocol.Header control(String name) {
+        return new ZLinkStreamWireProtocol.Header(
+                ZLinkStreamWireProtocol.KIND_CONTROL,
+                ZLinkStreamWireProtocol.CODEC_RAW,
+                0,
+                null,
+                name,
+                Map.of(),
+                null);
+    }
+
+    private static ZLinkStreamWireProtocol.Header send(String name) {
+        return new ZLinkStreamWireProtocol.Header(
+                ZLinkStreamWireProtocol.KIND_SEND,
+                ZLinkStreamWireProtocol.CODEC_RAW,
+                0,
+                null,
+                name,
+                Map.of(),
+                null);
     }
 }

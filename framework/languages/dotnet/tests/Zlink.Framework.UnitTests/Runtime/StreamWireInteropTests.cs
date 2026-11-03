@@ -1,9 +1,12 @@
 using System.Reflection;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Streams;
 using ConnectorClosingCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamSessionClosingCodec;
 using ConnectorFrameCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.Framing.ZlinkStreamFrameCodec;
@@ -35,7 +38,12 @@ public sealed class StreamWireInteropTests
             ZlinkStreamMetadata.Empty
         );
 
-        ZLinkStreamControlFrames.Dispatch(stream, ping, ReadOnlyMemory<byte>.Empty);
+        ZLinkStreamControlFrames.Dispatch(
+            stream,
+            ping,
+            ReadOnlyMemory<byte>.Empty,
+            new ZLinkMessageFlowTracer(new ZLinkDispatchOptionsModel())
+        );
 
         Assert.True(
             CoreFrameCodec.TryDecode(
@@ -48,6 +56,89 @@ public sealed class StreamWireInteropTests
         Assert.Equal(ZlinkStreamMessageKind.Control, pong.Kind);
         Assert.Equal(ZlinkStreamControlProtocol.HeartbeatPongName, pong.Name);
         Assert.Empty(payload.ToArray());
+    }
+
+    [Fact]
+    public async Task Server_ignored_controls_record_name_size_and_peer_session_rid()
+    {
+        var socket = DispatchProxy.Create<IZLinkBackendStreamSocket, CapturingStreamSocketProxy>();
+        var capture = (CapturingStreamSocketProxy)(object)socket;
+        var stream = new ZLinkManagedStream(
+            socket,
+            RoutingId.From("control-session"),
+            new ZLinkCodecRegistryBuilder(),
+            "test"
+        );
+        var options = new ZLinkDispatchOptionsModel();
+        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        var logger = new CapturingFlowLogger(3);
+        var flow = new ZLinkMessageFlowTracer(options, logger);
+
+        ZLinkStreamControlFrames.Dispatch(
+            stream,
+            Control("$zlink.future.control"),
+            new byte[] { 1, 2, 3 },
+            flow
+        );
+        ZLinkStreamControlFrames.Dispatch(
+            stream,
+            Control(ZlinkStreamControlProtocol.HeartbeatPingName),
+            new byte[] { 2, 3 },
+            flow
+        );
+        ZLinkStreamControlFrames.Dispatch(
+            stream,
+            Control(ZlinkStreamControlProtocol.HeartbeatPongName),
+            new byte[] { 2 },
+            flow
+        );
+
+        var messages = await logger.Observed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains(
+            messages,
+            message =>
+                message.Contains("$zlink.future.control", StringComparison.Ordinal)
+                && message.Contains("bytes=3", StringComparison.Ordinal)
+                && message.Contains("control-session", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            messages,
+            message =>
+                message.Contains(
+                    ZlinkStreamControlProtocol.HeartbeatPingName,
+                    StringComparison.Ordinal
+                ) && message.Contains("bytes=2", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            messages,
+            message =>
+                message.Contains(
+                    ZlinkStreamControlProtocol.HeartbeatPongName,
+                    StringComparison.Ordinal
+                ) && message.Contains("bytes=1", StringComparison.Ordinal)
+        );
+        Assert.Single(capture.Frames);
+    }
+
+    [Fact]
+    public void Server_rejects_known_actor_control_instead_of_treating_it_as_an_extension()
+    {
+        var socket = DispatchProxy.Create<IZLinkBackendStreamSocket, CapturingStreamSocketProxy>();
+        var stream = new ZLinkManagedStream(
+            socket,
+            RoutingId.From("control-session"),
+            new ZLinkCodecRegistryBuilder(),
+            "test"
+        );
+
+        Assert.Throws<InvalidOperationException>(() =>
+            ZLinkStreamControlFrames.Dispatch(
+                stream,
+                Control(ZlinkStreamControlProtocol.BoundControlName),
+                ReadOnlyMemory<byte>.Empty,
+                new ZLinkMessageFlowTracer(new ZLinkDispatchOptionsModel())
+            )
+        );
     }
 
     [Theory]
@@ -105,6 +196,45 @@ public sealed class StreamWireInteropTests
             }
 
             throw new NotSupportedException(targetMethod?.Name);
+        }
+    }
+
+    private static ZlinkStreamHeader Control(string name) =>
+        new(
+            ZlinkStreamMessageKind.Control,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            name,
+            ZlinkStreamMetadata.Empty
+        );
+
+    private sealed class CapturingFlowLogger(int expectedMessages) : ILogger
+    {
+        private readonly object _gate = new();
+        private readonly List<string> _messages = [];
+        internal TaskCompletionSource<IReadOnlyList<string>> Observed { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        )
+        {
+            lock (_gate)
+            {
+                _messages.Add(formatter(state, exception));
+                if (_messages.Count == expectedMessages)
+                    Observed.TrySetResult(_messages.ToArray());
+            }
         }
     }
 

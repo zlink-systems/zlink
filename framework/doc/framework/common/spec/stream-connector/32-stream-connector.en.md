@@ -237,6 +237,29 @@ payload only. **The payload differs per control packet.**
 | `$zlink.actor.bound` | **Not empty** — see below |
 | `$zlink.actor.unbound` | **Not empty** — see below |
 
+The table lists the payload formats defined today. A receiver first applies
+the header checks in §4.5 and the payload-size check in §4.7. An unlisted
+control name that starts with `$zlink.` is a future extension: the receiver
+doesn't interpret its payload or perform an action, ignores the frame, and
+keeps the connection open. The server records the control name, payload length
+in bytes, and peer session RID through its existing diagnostic path. A
+connector records the control name and payload length when it has an existing
+diagnostic path. An undefined control name that doesn't start with `$zlink.`
+is a decode error.
+
+The only heartbeat ping/pong payload formats defined today are empty. The
+first byte of a non-empty ping payload is its version. If the implementation
+doesn't know that version, it doesn't interpret the payload and replies with
+an empty pong. The server records the control name, payload length in bytes,
+and peer session RID through its existing diagnostic path; a connector records
+the control name and payload length when it has an existing diagnostic path.
+A non-empty pong with an unknown version is also ignored without interpreting
+its payload or changing state, using the same recording rule. A known version
+whose payload length or format doesn't match that version's definition is a
+decode error and ends the connection. No non-empty heartbeat version is
+currently defined, so every non-empty ping/pong payload has an unknown version
+today.
+
 `session-closing` is a control packet the server sends right before
 closing a session, and the client reads it to confirm `closeReason`
 ([Complete Host Relocation Flow §9](../server/05-location-relocation/05-host-relocation-flow.en.md#12-moving-pending-messages-timers-and-sessions)).

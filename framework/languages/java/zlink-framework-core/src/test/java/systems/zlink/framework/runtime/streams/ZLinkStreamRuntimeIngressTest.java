@@ -969,6 +969,86 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void futureControlsAndUnknownHeartbeatVersionsAreIgnoredAndLogged() throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, controlFrame("$zlink.future.control", new byte[] {7, 8, 9}));
+        stream.enqueue(PEER_A, controlFrame(HEARTBEAT_PING, new byte[] {2, 3}));
+        stream.enqueue(PEER_A, controlFrame(HEARTBEAT_PONG, new byte[] {2}));
+        stream.enqueue(PEER_A, controlFrame(ZLinkStreamActorControl.BOUND));
+        stream.enqueue(PEER_B, frame("good", "{}"));
+
+        Logger logger = Logger.getLogger(ZLinkStreamRuntime.class.getName());
+        List<String> lines = new CopyOnWriteArrayList<>();
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        lines.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        Level oldLevel = logger.getLevel();
+        boolean oldParentHandlers = logger.getUseParentHandlers();
+        logger.addHandler(handler);
+        logger.setLevel(Level.FINE);
+        logger.setUseParentHandlers(false);
+        try {
+            ZLinkStreamRuntime runtime = start(stream, 0);
+            runtimes.add(runtime);
+
+            TestSession session = awaitSession();
+            assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+            assertEquals(List.of("good"), session.packetNames);
+            assertEquals(0, stream.disconnectCalls.get());
+            assertEquals(1, stream.sessionClosingSends.get());
+            assertTrue(
+                    lines.contains(
+                            "Ignored STREAM control name=$zlink.future.control payloadBytes=3"
+                                    + " peerSessionRid="
+                                    + PEER_A));
+            assertTrue(
+                    lines.contains(
+                            "Ignored STREAM control name="
+                                    + HEARTBEAT_PING
+                                    + " payloadBytes=2 peerSessionRid="
+                                    + PEER_A));
+            assertTrue(
+                    lines.contains(
+                            "Ignored STREAM control name="
+                                    + HEARTBEAT_PONG
+                                    + " payloadBytes=1 peerSessionRid="
+                                    + PEER_A));
+        } finally {
+            logger.removeHandler(handler);
+            logger.setLevel(oldLevel);
+            logger.setUseParentHandlers(oldParentHandlers);
+        }
+    }
+
+    @Test
+    void unprefixedUnknownControlAndMalformedControlHeaderIsolateOnlyTheirPeer() throws Exception {
+        FakeStream stream = new FakeStream();
+        byte[] malformedHeader = controlFrame("$zlink.future.header");
+        malformedHeader[6] = 0;
+        stream.enqueue(PEER_A, controlFrame("future.control"));
+        stream.enqueue(PEER_B, malformedHeader);
+        stream.enqueue(RoutingId.from("peer-good"), frame("good", "{}"));
+
+        ZLinkStreamRuntime runtime = start(stream, 0);
+        runtimes.add(runtime);
+
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        assertEquals(List.of("good"), session.packetNames);
+        assertEquals(2, stream.sessionClosingSends.get());
+    }
+
+    @Test
     void pendingHeartbeatPongAdmissionDoesNotBlockTheReceiveOwner() throws Exception {
         FakeStream stream = new FakeStream();
         stream.deferHeartbeatPongSend = true;
@@ -2351,6 +2431,10 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     private static byte[] controlFrame(String packetName) {
+        return controlFrame(packetName, new byte[0]);
+    }
+
+    private static byte[] controlFrame(String packetName, byte[] payload) {
         ZLinkStreamHeader header =
                 new ZLinkStreamHeader(
                         ZLinkStreamMessageKind.CONTROL,
@@ -2359,7 +2443,7 @@ final class ZLinkStreamRuntimeIngressTest {
                         Optional.empty(),
                         packetName,
                         Map.of());
-        return ZLinkStreamFrameCodec.encode(ZLinkStreamHeaderCodec.encode(header), new byte[0]);
+        return ZLinkStreamFrameCodec.encode(ZLinkStreamHeaderCodec.encode(header), payload);
     }
 
     private static void awaitCondition(java.util.function.BooleanSupplier condition)
