@@ -19,7 +19,18 @@ bind할 때 사용하는 immutable location snapshot이다.
 export interface ZLinkActor {
  readonly context: ZLinkActorContext;
  configure?(): void;
+ onDuplicateBind?(
+ current: ZLinkSessionBindingIdentity,
+ incoming: ZLinkSessionBindingIdentity,
+ signal: AbortSignal,
+ ): Promise<string | undefined>;
  onJoinCompleted?(completion: ZLinkActorJoinCompletion): Promise<void>;
+}
+
+export interface ZLinkSessionBindingIdentity {
+ readonly sessionOwnerNodeRid: RoutingId;
+ readonly sessionOwnerNodeGeneration: bigint;
+ readonly bindingGeneration: bigint;
 }
 
 export interface ZLinkActorContext {
@@ -70,6 +81,9 @@ export type ZLinkActorJoinCompletion =
 `ActorId`와 `ActorRef`의 canonical declaration은
 [기초 타입과 구성](01-foundation-configuration.ko.md)이 소유한다. 이 문서는 Actor lifecycle과 manager가
 그 타입을 사용하는 정확한 위치만 고정한다.
+
+Callback이 `undefined` 또는 빈 문자열을 반환하면 받아들이고, 비어 있지 않은 문자열을 반환하면 그 메시지로 거부한다. 선택적 method를
+구현하지 않으면 기존처럼 새 Session을 받아들인다. 제한 시간이 끝나면 `signal`이 abort 상태가 된다.
 
 ## 2. Global client와 manager
 

@@ -477,24 +477,51 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             String sessionOwnerId,
             long sessionOwnerLeaseGeneration,
             RoutingId sessionRid,
-            long bindingGeneration) {}
+            long bindingGeneration) {
+        public systems.zlink.framework.actors.ZLinkSessionBindingIdentity sessionBindingIdentity() {
+            return new systems.zlink.framework.actors.ZLinkSessionBindingIdentity(
+                    sessionOwnerNodeRid, sessionOwnerNodeGeneration, bindingGeneration);
+        }
+
+        public boolean isSamePhysicalSession(
+                systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,
+                RoutingId incomingSessionRid) {
+            return sessionOwnerNodeRid.equals(incoming.sessionOwnerNodeRid())
+                    && sessionOwnerNodeGeneration == incoming.sessionOwnerNodeGeneration()
+                    && sessionRid.equals(incomingSessionRid);
+        }
+    }
 
     default void setRemoteSessionBindingOwner(RemoteSessionBindingOwner owner) {}
 
+    default void setRemoteSessionBindingOwner(
+            RemoteSessionBindingOwner owner, Duration duplicateBindCallbackTimeout) {
+        setRemoteSessionBindingOwner(owner);
+    }
+
     /**
-     * Owner of the remote bound Session fact. The node's remote route and the Actor context change
-     * only inside {@link #apply}, which runs the transition in the owner turn; a caller already in
-     * that turn runs it inline.
+     * Owns the remote bound Session fact and applies normal transitions in the Actor owner turn.
      */
     @FunctionalInterface
     interface RemoteSessionBindingOwner {
         CompletionStage<Boolean> apply(
                 ZLinkInternalSpotNode node,
                 ZLinkBackendActorRef actor,
-                java.util.function.Function<RemoteSessionBindingTransition, Boolean> transition);
+                java.util.function.Function<
+                                RemoteSessionBindingTransition, CompletionStage<Boolean>>
+                        transition);
+
+        default CompletionStage<Boolean> restoreRelocated(
+                ZLinkInternalSpotNode node,
+                ZLinkBackendActorRef actor,
+                java.util.function.Function<
+                                RemoteSessionBindingTransition, CompletionStage<Boolean>>
+                        transition) {
+            return apply(node, actor, transition);
+        }
     }
 
-    /** Actor-context side of one remote binding transition, applied in the owner turn. */
+    /** Actor-context side of one remote binding transition. */
     interface RemoteSessionBindingTransition {
         RemoteSessionBindingTransition NONE =
                 new RemoteSessionBindingTransition() {
@@ -508,6 +535,14 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         void bind(BoundSessionRoute route);
 
         void retire(BoundSessionRoute route);
+
+        default CompletionStage<java.util.Optional<String>> decideDuplicateBind(
+                systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,
+                RoutingId incomingSessionRid,
+                Runnable callbackStarted,
+                systems.zlink.framework.actors.ZLinkActorCallbackCancellation cancellation) {
+            return CompletableFuture.completedFuture(java.util.Optional.empty());
+        }
     }
 
     @FunctionalInterface

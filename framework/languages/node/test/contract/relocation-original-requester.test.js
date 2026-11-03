@@ -7,7 +7,7 @@ const {
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
 const {
   ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+} = require('../../packages/framework/dist/internal');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const multipart = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');

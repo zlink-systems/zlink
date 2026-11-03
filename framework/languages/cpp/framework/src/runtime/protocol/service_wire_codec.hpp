@@ -667,8 +667,9 @@ struct reply_header_t
 
 struct stream_bind_reply_tail_t
 {
-    std::uint64_t binding_generation;
-    std::uint64_t authority_owner_generation;
+    std::uint64_t binding_generation = 0;
+    std::uint64_t authority_owner_generation = 0;
+    std::optional<std::string> rejection_message;
     friend bool operator== (const stream_bind_reply_tail_t &,
                             const stream_bind_reply_tail_t &) = default;
 };
@@ -1007,6 +1008,8 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
  * frame-integrity guards. */
 application_payload_t decode_application_payload (std::span<const std::uint8_t> bytes,
                                                   bool capture_flow = true);
+std::vector<std::span<const std::byte>>
+decode_application_part_views (std::span<const std::uint8_t> bytes, bool capture_flow = true);
 application_payload_t::multipart_t decode_application_parts (zlink::message_t &&bytes,
                                                              bool capture_flow = true);
 

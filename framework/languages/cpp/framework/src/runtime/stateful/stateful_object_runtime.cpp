@@ -272,79 +272,76 @@ task_t<create_result_t> stateful_object_runtime_t::begin_reserved_object_async (
     });
 }
 
-stateful_error_t
-stateful_object_runtime_t::adopt_reserved_actor_owner (const object_ref_t &reserved,
-                                                       const std::string &stable_type)
+task_t<stateful_error_t>
+stateful_object_runtime_t::adopt_reserved_actor_owner (object_ref_t reserved,
+                                                       std::string stable_type)
 {
-    return _lane
-      .run ([&, this] () -> stateful_error_t {
-          if (reserved.kind != object_kind_t::actor || !valid_text (reserved.key)
-              || !valid_text (stable_type) || reserved.object_generation == 0
-              || reserved.authority_owner_generation == 0 || !valid_text (reserved.mesh_name)
-              || !valid_text (reserved.node_id)) {
-              return stateful_error_t::invalid;
-          }
-          const auto found = _objects.find (key_for (reserved));
-          if (found == _objects.end ())
-              return stateful_error_t::not_found;
-          auto &record = found->second;
-          if (record.stable_type != stable_type)
-              return stateful_error_t::type_mismatch;
-          if (record.reference.object_generation != reserved.object_generation)
-              return stateful_error_t::generation_stale;
-          if (record.reference == reserved)
-              return stateful_error_t::none;
-          if (state_on_lane (record) != object_state_t::ready)
-              return stateful_error_t::moving;
-          if (record.reference.mesh_name != reserved.mesh_name
-              || record.reference.node_id == reserved.node_id
-              || record.reference.authority_owner_generation == 0
-              || reserved.authority_owner_generation
-                   <= record.reference.authority_owner_generation) {
-              return stateful_error_t::generation_stale;
-          }
-          record.reference = reserved;
-          return stateful_error_t::none;
-      })
-      .get ();
+    return _lane.run_task ([this, reserved = std::move (reserved),
+                            stable_type = std::move (stable_type)] () -> stateful_error_t {
+        if (reserved.kind != object_kind_t::actor || !valid_text (reserved.key)
+            || !valid_text (stable_type) || reserved.object_generation == 0
+            || reserved.authority_owner_generation == 0 || !valid_text (reserved.mesh_name)
+            || !valid_text (reserved.node_id)) {
+            return stateful_error_t::invalid;
+        }
+        const auto found = _objects.find (key_for (reserved));
+        if (found == _objects.end ())
+            return stateful_error_t::not_found;
+        auto &record = found->second;
+        if (record.stable_type != stable_type)
+            return stateful_error_t::type_mismatch;
+        if (record.reference.object_generation != reserved.object_generation)
+            return stateful_error_t::generation_stale;
+        if (record.reference == reserved)
+            return stateful_error_t::none;
+        if (state_on_lane (record) != object_state_t::ready)
+            return stateful_error_t::moving;
+        if (record.reference.mesh_name != reserved.mesh_name
+            || record.reference.node_id == reserved.node_id
+            || record.reference.authority_owner_generation == 0
+            || reserved.authority_owner_generation <= record.reference.authority_owner_generation) {
+            return stateful_error_t::generation_stale;
+        }
+        record.reference = reserved;
+        return stateful_error_t::none;
+    });
 }
 
-stateful_error_t
-stateful_object_runtime_t::advance_local_actor_authority (const object_ref_t &committed,
-                                                          const std::string &stable_type)
+task_t<stateful_error_t>
+stateful_object_runtime_t::advance_local_actor_authority (object_ref_t committed,
+                                                          std::string stable_type)
 {
-    return _lane
-      .run ([&, this] () -> stateful_error_t {
-          if (committed.kind != object_kind_t::actor || !valid_text (committed.key)
-              || !valid_text (stable_type) || committed.object_generation == 0
-              || committed.authority_owner_generation == 0 || !valid_text (committed.mesh_name)
-              || !valid_text (committed.node_id)) {
-              return stateful_error_t::invalid;
-          }
-          const auto found = _objects.find (key_for (committed));
-          if (found == _objects.end ())
-              return stateful_error_t::not_found;
-          auto &record = found->second;
-          if (record.stable_type != stable_type)
-              return stateful_error_t::type_mismatch;
-          if (record.reference.object_generation != committed.object_generation)
-              return stateful_error_t::generation_stale;
-          if (record.reference == committed)
-              return stateful_error_t::none;
-          if (state_on_lane (record) != object_state_t::ready)
-              return stateful_error_t::moving;
-          if (record.reference.mesh_name != committed.mesh_name
-              || record.reference.node_id != committed.node_id
-              || record.reference.authority_owner_generation
-                   == std::numeric_limits<std::uint64_t>::max ()
-              || committed.authority_owner_generation
-                   <= record.reference.authority_owner_generation) {
-              return stateful_error_t::generation_stale;
-          }
-          record.reference = committed;
-          return stateful_error_t::none;
-      })
-      .get ();
+    return _lane.run_task ([this, committed = std::move (committed),
+                            stable_type = std::move (stable_type)] () -> stateful_error_t {
+        if (committed.kind != object_kind_t::actor || !valid_text (committed.key)
+            || !valid_text (stable_type) || committed.object_generation == 0
+            || committed.authority_owner_generation == 0 || !valid_text (committed.mesh_name)
+            || !valid_text (committed.node_id)) {
+            return stateful_error_t::invalid;
+        }
+        const auto found = _objects.find (key_for (committed));
+        if (found == _objects.end ())
+            return stateful_error_t::not_found;
+        auto &record = found->second;
+        if (record.stable_type != stable_type)
+            return stateful_error_t::type_mismatch;
+        if (record.reference.object_generation != committed.object_generation)
+            return stateful_error_t::generation_stale;
+        if (record.reference == committed)
+            return stateful_error_t::none;
+        if (state_on_lane (record) != object_state_t::ready)
+            return stateful_error_t::moving;
+        if (record.reference.mesh_name != committed.mesh_name
+            || record.reference.node_id != committed.node_id
+            || record.reference.authority_owner_generation
+                 == std::numeric_limits<std::uint64_t>::max ()
+            || committed.authority_owner_generation
+                 <= record.reference.authority_owner_generation) {
+            return stateful_error_t::generation_stale;
+        }
+        record.reference = committed;
+        return stateful_error_t::none;
+    });
 }
 
 stateful_error_t stateful_object_runtime_t::reconcile_relocation_restore_authority (
@@ -2048,7 +2045,8 @@ stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
         }
         if (!restored && plan.abort) {
             try {
-                plan.abort ({target});
+                const std::vector<object_ref_t> aborted_targets{target};
+                co_await plan.abort (aborted_targets);
             }
             catch (...) {
             }
@@ -2190,110 +2188,101 @@ stateful_error_t stateful_object_runtime_t::commit_relocation_restore_aggregate 
       .get ();
 }
 
-stateful_error_t
-stateful_object_runtime_t::abort_relocation_restore (const object_ref_t &target,
-                                                     const relocation_restore_identity_t &identity)
+task_t<stateful_error_t>
+stateful_object_runtime_t::abort_relocation_restore_async (object_ref_t target,
+                                                           relocation_restore_identity_t identity)
 {
     relocation_state_abort_t abort;
-    const auto preflight = _lane
-                             .run ([&, this] {
-                                 const auto found = _objects.find (key_for (target));
-                                 if (found == _objects.end ())
-                                     return stateful_error_t::already_exists;
-                                 if (!same_exact_ref (found->second.reference, target)
-                                     || found->second.state != object_state_t::recovering
-                                     || found->second.restore_identity
-                                          != std::optional<relocation_restore_identity_t>{identity})
-                                     return stateful_error_t::conflict;
-                                 abort = _relocation_state_abort;
-                                 return stateful_error_t::none;
-                             })
-                             .get ();
+    const auto preflight = co_await _lane.run_task ([&, this] {
+        const auto found = _objects.find (key_for (target));
+        if (found == _objects.end ())
+            return stateful_error_t::already_exists;
+        if (!same_exact_ref (found->second.reference, target)
+            || found->second.state != object_state_t::recovering
+            || found->second.restore_identity
+                 != std::optional<relocation_restore_identity_t>{identity})
+            return stateful_error_t::conflict;
+        abort = _relocation_state_abort;
+        return stateful_error_t::none;
+    });
     if (preflight != stateful_error_t::none)
-        return preflight;
+        co_return preflight;
     if (abort) {
         try {
-            abort ({target});
+            const std::vector<object_ref_t> aborted_targets{target};
+            co_await abort (aborted_targets);
         }
         catch (...) {
         }
     }
-    return _lane
-      .run ([&, this] {
-          const auto key = key_for (target);
-          const auto found = _objects.find (key);
-          if (found == _objects.end ())
-              return stateful_error_t::already_exists;
-          if (!same_exact_ref (found->second.reference, target)
-              || found->second.state != object_state_t::recovering
-              || found->second.restore_identity
-                   != std::optional<relocation_restore_identity_t>{identity})
-              return stateful_error_t::conflict;
-          erase_object_on_lane (found);
-          const auto generation = _last_generation.find (key);
-          if (generation != _last_generation.end ()
-              && generation->second == target.object_generation)
-              _last_generation.erase (generation);
-          notify_quiescence ();
-          return stateful_error_t::none;
-      })
-      .get ();
+    co_return co_await _lane.run_task ([&, this] {
+        const auto key = key_for (target);
+        const auto found = _objects.find (key);
+        if (found == _objects.end ())
+            return stateful_error_t::already_exists;
+        if (!same_exact_ref (found->second.reference, target)
+            || found->second.state != object_state_t::recovering
+            || found->second.restore_identity
+                 != std::optional<relocation_restore_identity_t>{identity})
+            return stateful_error_t::conflict;
+        erase_object_on_lane (found);
+        const auto generation = _last_generation.find (key);
+        if (generation != _last_generation.end () && generation->second == target.object_generation)
+            _last_generation.erase (generation);
+        notify_quiescence ();
+        return stateful_error_t::none;
+    });
 }
 
-stateful_error_t stateful_object_runtime_t::abort_relocation_restore_aggregate (
-  const std::vector<object_ref_t> &targets, const relocation_restore_identity_t &identity)
+task_t<stateful_error_t> stateful_object_runtime_t::abort_relocation_restore_aggregate_async (
+  std::vector<object_ref_t> targets, relocation_restore_identity_t identity)
 {
     relocation_state_abort_t abort;
-    const auto preflight =
-      _lane
-        .run ([&, this] {
-            if (targets.size () < 2)
-                return stateful_error_t::invalid;
-            for (const auto &target : targets) {
-                const auto found = _objects.find (key_for (target));
-                if (found == _objects.end () || !same_exact_ref (found->second.reference, target)
-                    || found->second.state != object_state_t::recovering
-                    || found->second.restore_identity
-                         != std::optional<relocation_restore_identity_t>{identity})
-                    return stateful_error_t::conflict;
-            }
-            abort = _relocation_state_abort;
-            return stateful_error_t::none;
-        })
-        .get ();
+    const auto preflight = co_await _lane.run_task ([&, this] {
+        if (targets.size () < 2)
+            return stateful_error_t::invalid;
+        for (const auto &target : targets) {
+            const auto found = _objects.find (key_for (target));
+            if (found == _objects.end () || !same_exact_ref (found->second.reference, target)
+                || found->second.state != object_state_t::recovering
+                || found->second.restore_identity
+                     != std::optional<relocation_restore_identity_t>{identity})
+                return stateful_error_t::conflict;
+        }
+        abort = _relocation_state_abort;
+        return stateful_error_t::none;
+    });
     if (preflight != stateful_error_t::none)
-        return preflight;
+        co_return preflight;
     if (abort) {
         try {
-            abort (targets);
+            co_await abort (targets);
         }
         catch (...) {
         }
     }
-    return _lane
-      .run ([&, this] {
-          std::vector<object_key_t> keys;
-          keys.reserve (targets.size ());
-          for (const auto &target : targets) {
-              const auto key = key_for (target);
-              const auto found = _objects.find (key);
-              if (found == _objects.end () || !same_exact_ref (found->second.reference, target)
-                  || found->second.state != object_state_t::recovering
-                  || found->second.restore_identity
-                       != std::optional<relocation_restore_identity_t>{identity})
-                  return stateful_error_t::conflict;
-              keys.push_back (key);
-          }
-          for (const auto &key : keys) {
-              const auto generation = _last_generation.find (key);
-              if (generation != _last_generation.end ())
-                  _last_generation.erase (generation);
-              erase_object_on_lane (key);
-          }
-          notify_quiescence ();
-          return stateful_error_t::none;
-      })
-      .get ();
+    co_return co_await _lane.run_task ([&, this] {
+        std::vector<object_key_t> keys;
+        keys.reserve (targets.size ());
+        for (const auto &target : targets) {
+            const auto key = key_for (target);
+            const auto found = _objects.find (key);
+            if (found == _objects.end () || !same_exact_ref (found->second.reference, target)
+                || found->second.state != object_state_t::recovering
+                || found->second.restore_identity
+                     != std::optional<relocation_restore_identity_t>{identity})
+                return stateful_error_t::conflict;
+            keys.push_back (key);
+        }
+        for (const auto &key : keys) {
+            const auto generation = _last_generation.find (key);
+            if (generation != _last_generation.end ())
+                _last_generation.erase (generation);
+            erase_object_on_lane (key);
+        }
+        notify_quiescence ();
+        return stateful_error_t::none;
+    });
 }
 
 task_t<stateful_error_t>
@@ -2522,7 +2511,7 @@ stateful_object_runtime_t::restore_relocation_aggregate (std::vector<frozen_obje
 
         if (!restored && abort) {
             try {
-                abort (targets);
+                co_await abort (targets);
             }
             catch (...) {
             }

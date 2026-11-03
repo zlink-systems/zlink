@@ -60,6 +60,25 @@ namespace zlink::framework::runtime
 
 namespace
 {
+bool requires_location_owner_state (const mesh::service_mailbox_record_t &record)
+{
+    if (record.application) {
+        return !detail::is_node_or_channel_record_kind (record.application->record.kind);
+    }
+    if (record.parts.empty ())
+        return true;
+    const auto header = protocol::decode_header (protocol::message_bytes (record.parts.front ()));
+    switch (header.kind) {
+        case protocol::command::nodeSend:
+        case protocol::command::nodeRequest:
+        case protocol::command::channelSend:
+        case protocol::command::channelRequest:
+            return false;
+        default:
+            return true;
+    }
+}
+
 bool is_application_request (host::record_kind_t kind)
 {
     using kind_t = host::record_kind_t;
@@ -2021,12 +2040,14 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
 
     void run () override
     {
+        std::optional<zlink::poll_event_flag_t> readiness;
         while (!host._stop.load (std::memory_order_acquire))
-            rotate ();
+            readiness = rotate (readiness);
         supply.close ();
     }
 
-    void rotate ()
+    std::optional<zlink::poll_event_flag_t>
+    rotate (std::optional<zlink::poll_event_flag_t> readiness)
     {
         auto &application_permit = *receive_permit;
         auto &mailbox = node->native_node ().transport ().mailbox ();
@@ -2073,6 +2094,8 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
             node->dispatch_ready (
               [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
                    std::vector<zlink::message_t> parts, application_job_queue_t::permit_t permit) {
+                  auto accepted_record = record;
+                  accepted_record.received_at = std::chrono::system_clock::now ();
                   trace_mesh_application ("callback", record, parts.size ());
                   detail::spot_node_runtime_t spot_runtime (registration->spot_state);
                   const bool transfer_dispatch =
@@ -2134,7 +2157,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                                   return;
                               }
                               handled = spot_runtime.dispatch_mesh_record (
-                                owner, record, parts, header.value (), *host._services,
+                                owner, accepted_record, parts, header.value (), *host._services,
                                 *host._serializers, {}, nullptr,
                                 handler_entry_t (record.before_application_handler,
                                                  std::move (permit)));
@@ -2155,8 +2178,8 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                       mailbox_record.domain = mesh::service_mailbox_domain_t::application;
                       mailbox_record.before_application_handler = record.before_application_handler;
                       mailbox_record.application_permit.emplace (std::move (permit));
-                      mailbox_record.application.emplace (
-                        host::local_application_dispatch_t{owner, record, std::move (parts)});
+                      mailbox_record.application.emplace (host::local_application_dispatch_t{
+                        owner, accepted_record, std::move (parts)});
                       const auto accepted =
                         node->native_node ().transport ().mailbox ().try_enqueue (
                           std::move (mailbox_record));
@@ -2180,21 +2203,34 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                         host._dispatch_options);
                       if (!decoded_header)
                           return;
-                      if (spot_runtime.dispatch_mesh_record (owner, record, parts,
-                                                             decoded_header.value (),
-                                                             *host._services, *host._serializers)
-                          || !decoded_header.value ()) {
+                      std::function<void ()> direct_terminal;
+                      if (record.kind == host::record_kind_t::node_send) {
+                          // Native receives already own their work; this transfers only
+                          // the existing terminal callbacks, without an application job.
+                          auto terminal = std::make_shared<application_dispatch_terminal_owner_t> (
+                            nullptr, complete_stateful_dispatch, release_mailbox_reservation,
+                            handler_entry_t{});
+                          stateful_guard.dismiss ();
+                          release_guard.dismiss ();
+                          if (retain_mailbox_reservation)
+                              retain_mailbox_reservation ();
+                          direct_terminal = [terminal] { terminal->settle (); };
+                      }
+                      const auto handled = spot_runtime.dispatch_mesh_record (
+                        owner, accepted_record, parts, decoded_header.value (), *host._services,
+                        *host._serializers, direct_terminal);
+                      if (handled || !decoded_header.value ()) {
                           return;
                       }
                       detail::mesh_record_dispatcher_t dispatcher (
                         *host._services, *host._serializers, registration->handlers, *host._filters,
                         host._dispatch_options, {}, registration);
-                      auto pending = dispatcher.dispatch (record, std::move (parts),
+                      auto pending = dispatcher.dispatch (accepted_record, std::move (parts),
                                                           std::move (*decoded_header.value ()), {},
                                                           host._application_dispatch.get ());
                   });
               },
-              accept_application_receive, next_application_receive))
+              accept_application_receive, next_application_receive, readiness))
             .result ()
             .value ();
         auto ready = mailbox.take_application_receive_turn ();
@@ -2234,14 +2270,16 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                 next_activity = activity.second;
             }
         }
+        readiness.reset ();
         // A pump may consume the wake for supply delivered after this turn's
         // take. Recheck its owner state before waiting for the next rotation.
         if (!local_pending && !ready && !host._stop.load (std::memory_order_acquire)
             && !supply.has_supply ()) {
-            (void) node->native_node ().wait_for_dispatch_activity (
+            readiness = node->native_node ().wait_for_dispatch_activity (
               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
         }
         mesh::service_mailbox_t::notify_application_ready (ready);
+        return readiness;
     }
 
     struct pending_management_t
@@ -2509,9 +2547,12 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
         }
         _stop.store (false, std::memory_order_release);
         _actor_destroy_gate = std::make_shared<actor_destroy_callback_gate_t> ();
-        auto store =
-          std::shared_ptr<location_repository_t> (&services.get_required<location_repository_t> (),
-                                                  [] (location_repository_t *) noexcept {});
+        const auto locations = services.get<location_runtime_t> ();
+        _location_runtime = locations ? &locations->get () : nullptr;
+        auto store = _location_runtime ? std::shared_ptr<location_repository_t> (
+                                           &services.get_required<location_repository_t> (),
+                                           [] (location_repository_t *) noexcept {})
+                                       : nullptr;
         _location_store = store;
         for (const auto &registration : _registrations) {
             if (!registration || !registration->spot_state)
@@ -2541,9 +2582,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   });
             }
         }
-        auto &location_runtime = services.get_required<location_runtime_t> ();
-        _location_runtime = &location_runtime;
-        _accept_application_dispatch.store (location_runtime.owner_lease_usable (),
+        _accept_application_dispatch.store (!_location_runtime
+                                              || _location_runtime->owner_lease_usable (),
                                             std::memory_order_release);
         std::shared_ptr<stateful::relocation_store_port_t> instance_relocations;
         const auto has_instance_factories = std::any_of (
@@ -2592,7 +2632,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   return _location_runtime ? _location_runtime->current_owner_observation ()
                                            : std::shared_ptr<const location_owner_token_t>{};
               },
-              &services.get_required<live_location_reader_t> ());
+              _location_runtime ? &services.get_required<live_location_reader_t> () : nullptr);
             _nodes[index]->configure_user_spot_operations (
               store,
               [this, weak_registration = std::weak_ptr (registration),
@@ -2840,83 +2880,86 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     registration->spot_state->snapshot.instance_spot_names});
             }
         }
-        const auto spot_resolver =
-          zlink::framework::detail::service_scope_access_t::get_required_shared<
-            spot_address_resolver_t> (services);
-        auto &actor_resolver = services.get_required<actor_address_resolver_t> ();
-        const auto location_options_at_startup = location_runtime.options ();
         for (std::size_t index = 0; index < _nodes.size (); ++index) {
             const auto &node = _nodes[index];
             const auto registration = _registrations[index];
-            const auto mesh_name = node->mesh_name ();
-            node->configure_spot_route_fence_resolver (
-              [spot_resolver,
-               mesh_name] (zlink::routing_id_t target_node_rid, std::string target_spot_id,
-                           std::uint64_t) -> task_t<std::optional<host::route_fence_t>> {
-                  const auto resolver = spot_resolver;
-                  const auto resolved = co_await await_result (
-                    resolver->resolve_spot_address (mesh_name, std::move (target_spot_id)));
-                  if (!resolved || !resolved.value ())
-                      co_return std::nullopt;
-                  const auto &address = *resolved.value ();
-                  if (address.node_rid != target_node_rid || address.authority_owner_generation == 0
-                      || address.owner.lease_generation <= 0)
-                      co_return std::nullopt;
-                  co_return host::route_fence_t{
-                    address.authority_owner_generation,
-                    static_cast<std::uint64_t> (address.owner.lease_generation),
-                    address.node_generation};
-              },
-              location_options_at_startup.owner_lease_fencing_margin,
-              location_options_at_startup.session_relocation_seal_timeout);
-            node->configure_actor_route_resolver (
-              [&actor_resolver] (actor_ref_t actor) -> task_t<std::optional<spot_address_t>> {
-                  const auto resolved = co_await actor_resolver.resolve_actor_address (
-                    std::string (actor.actor_id ().value ()));
-                  if (!resolved)
-                      co_return std::nullopt;
-                  const auto &address = *resolved;
-                  if (address.authority_owner_generation == 0
-                      || address.owner.lease_generation <= 0)
-                      co_return std::nullopt;
-                  co_return address;
-              },
-              [&actor_resolver] (const protocol::actor_route_fence_t &source) {
-                  const auto expected =
-                    spot_address_t{{},
-                                   zlink::routing_id_t::from (source.target_node_routing_id),
-                                   {},
-                                   0,
-                                   {},
-                                   source.object_generation,
-                                   source.authority_owner_generation,
-                                   location_owner_token_t{
-                                     {}, static_cast<std::int64_t> (source.owner_lease_generation)},
-                                   source.target_node_generation};
-                  (void) actor_resolver.invalidate_actor_address_if_matches (source.actor_id,
-                                                                             expected);
-              });
-            registration->spot_state->actor_route_admission =
-              [&actor_resolver] (const protocol::actor_route_fence_t &route) {
-                  try {
-                      const auto resolved = infrastructure_result (
-                        [&] { return actor_resolver.resolve_actor_address (route.actor_id); });
+            if (_location_runtime) {
+                const auto spot_resolver =
+                  zlink::framework::detail::service_scope_access_t::get_required_shared<
+                    spot_address_resolver_t> (services);
+                auto &actor_resolver = services.get_required<actor_address_resolver_t> ();
+                const auto location_options_at_startup = _location_runtime->options ();
+                const auto mesh_name = node->mesh_name ();
+                node->configure_spot_route_fence_resolver (
+                  [spot_resolver,
+                   mesh_name] (zlink::routing_id_t target_node_rid, std::string target_spot_id,
+                               std::uint64_t) -> task_t<std::optional<host::route_fence_t>> {
+                      const auto resolver = spot_resolver;
+                      const auto resolved = co_await await_result (
+                        resolver->resolve_spot_address (mesh_name, std::move (target_spot_id)));
                       if (!resolved || !resolved.value ())
-                          return false;
+                          co_return std::nullopt;
                       const auto &address = *resolved.value ();
-                      return address.node_rid
-                               == zlink::routing_id_t::from (route.target_node_routing_id)
-                             && address.node_generation == route.target_node_generation
-                             && address.authority_owner_generation
-                                  == route.authority_owner_generation
-                             && address.owner.lease_generation > 0
-                             && static_cast<std::uint64_t> (address.owner.lease_generation)
-                                  == route.owner_lease_generation;
-                  }
-                  catch (...) {
-                      return false;
-                  }
-              };
+                      if (address.node_rid != target_node_rid
+                          || address.authority_owner_generation == 0
+                          || address.owner.lease_generation <= 0)
+                          co_return std::nullopt;
+                      co_return host::route_fence_t{
+                        address.authority_owner_generation,
+                        static_cast<std::uint64_t> (address.owner.lease_generation),
+                        address.node_generation};
+                  },
+                  location_options_at_startup.owner_lease_fencing_margin,
+                  location_options_at_startup.session_relocation_seal_timeout);
+                node->configure_actor_route_resolver (
+                  [&actor_resolver] (actor_ref_t actor) -> task_t<std::optional<spot_address_t>> {
+                      const auto resolved = co_await actor_resolver.resolve_actor_address (
+                        std::string (actor.actor_id ().value ()));
+                      if (!resolved)
+                          co_return std::nullopt;
+                      const auto &address = *resolved;
+                      if (address.authority_owner_generation == 0
+                          || address.owner.lease_generation <= 0)
+                          co_return std::nullopt;
+                      co_return address;
+                  },
+                  [&actor_resolver] (const protocol::actor_route_fence_t &source) {
+                      const auto expected = spot_address_t{
+                        {},
+                        zlink::routing_id_t::from (source.target_node_routing_id),
+                        {},
+                        0,
+                        {},
+                        source.object_generation,
+                        source.authority_owner_generation,
+                        location_owner_token_t{
+                          {}, static_cast<std::int64_t> (source.owner_lease_generation)},
+                        source.target_node_generation};
+                      (void) actor_resolver.invalidate_actor_address_if_matches (source.actor_id,
+                                                                                 expected);
+                  });
+                registration->spot_state->actor_route_admission =
+                  [&actor_resolver] (const protocol::actor_route_fence_t &route) {
+                      try {
+                          const auto resolved = infrastructure_result (
+                            [&] { return actor_resolver.resolve_actor_address (route.actor_id); });
+                          if (!resolved || !resolved.value ())
+                              return false;
+                          const auto &address = *resolved.value ();
+                          return address.node_rid
+                                   == zlink::routing_id_t::from (route.target_node_routing_id)
+                                 && address.node_generation == route.target_node_generation
+                                 && address.authority_owner_generation
+                                      == route.authority_owner_generation
+                                 && address.owner.lease_generation > 0
+                                 && static_cast<std::uint64_t> (address.owner.lease_generation)
+                                      == route.owner_lease_generation;
+                      }
+                      catch (...) {
+                          return false;
+                      }
+                  };
+            }
             node->configure_actor_create_operations (
               [weak_node = std::weak_ptr (node), store,
                weak_registration = std::weak_ptr (registration)] (
@@ -2993,13 +3036,13 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [weak_registration = std::weak_ptr (registration)] (
                 const std::vector<stateful::object_ref_t> &targets) {
                   const auto registration = detail::lock_runtime_owner (weak_registration);
-                  detail::spot_node_runtime_t (registration->spot_state)
-                    .abort_relocation_materialization (targets);
+                  return detail::spot_node_runtime_t (registration->spot_state)
+                    .abort_relocation_materialization_async (targets);
               });
         }
         _published_mesh_nodes.clear ();
         _published_mesh_descriptors.clear ();
-        for (std::size_t index = 0; index < _nodes.size (); ++index) {
+        for (std::size_t index = 0; _location_runtime && index < _nodes.size (); ++index) {
             const auto &node = _nodes[index];
             const auto &registration = _registrations[index];
             const auto status = node->status ();
@@ -3169,7 +3212,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [this, node, receive_permit] (mesh::service_mailbox_record_t &record) {
                   std::lock_guard lock (_dispatch_gate_mutex);
                   if (!_accept_application_dispatch.load (std::memory_order_relaxed)
-                      || !_location_runtime || !_location_runtime->owner_lease_usable ()) {
+                      || (requires_location_owner_state (record)
+                          && (!_location_runtime || !_location_runtime->owner_lease_usable ()))) {
                       if (record.before_application_handler
                           || (record.application_permit && *record.application_permit)) {
                           record.before_application_handler = {};
@@ -3386,51 +3430,78 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
     }
 }
 
-bool mesh_node_host_service_t::republish_after_store_recovery (location_write_intent_t intent)
+task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
+  location_write_intent_t intent,
+  std::stop_token cancellation,
+  std::chrono::steady_clock::time_point deadline)
 {
-    std::lock_guard lock (_descriptor_publish_mutex);
     const auto owner = current_location_owner ();
-    if (!_location_store || !owner)
-        return _published_mesh_descriptors.empty ();
-    for (std::size_t index = 0; index < _published_mesh_descriptors.size (); ++index) {
-        auto descriptor = _published_mesh_descriptors[index];
+    std::vector<mesh_node_descriptor_t> descriptors;
+    {
+        std::lock_guard lock (_descriptor_publish_mutex);
+        if (!_location_store || !owner)
+            co_return _published_mesh_descriptors.empty ();
+        descriptors = _published_mesh_descriptors;
+    }
+    for (const auto &original : descriptors) {
+        if (cancellation.stop_requested ())
+            co_return false;
+        auto descriptor = original;
         const auto key = mesh_node_descriptor_key_t{descriptor.mesh_name, descriptor.rid};
-        const bool first_publication =
-          std::find_if (_published_mesh_nodes.begin (), _published_mesh_nodes.end (),
-                        [&key] (const auto &published) {
-                            return published.mesh_name == key.mesh_name && published.rid == key.rid;
-                        })
-          == _published_mesh_nodes.end ();
+        bool first_publication;
+        {
+            std::lock_guard lock (_descriptor_publish_mutex);
+            first_publication =
+              std::find_if (_published_mesh_nodes.begin (), _published_mesh_nodes.end (),
+                            [&key] (const auto &published) {
+                                return published.mesh_name == key.mesh_name
+                                       && published.rid == key.rid;
+                            })
+              == _published_mesh_nodes.end ();
+        }
         if (!first_publication && descriptor.owner_id == owner->owner_id
             && descriptor.lease_generation == owner->lease_generation)
             continue;
         if (intent == location_write_intent_t::renew)
-            return false;
+            co_return false;
         descriptor.owner_id = owner->owner_id;
         descriptor.lease_generation = owner->lease_generation;
         if (!first_publication
-            && descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ()) {
-            return false;
-        }
+            && descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+            co_return false;
         if (!first_publication)
             ++descriptor.descriptor_revision;
-        const auto written =
-          infrastructure_result ([&] {
-              return _location_runtime->descriptor_write_confirmed ([&] {
-                  return _location_store->update_mesh_node (
-                    descriptor, first_publication ? location_write_intent_t::new_claim
-                                                  : location_write_intent_t::renew);
-              });
-          }).value ();
-        if (!written)
-            return false;
-        _published_mesh_descriptors[index] = std::move (descriptor);
+        const auto written = co_await _location_runtime->descriptor_write_confirmed (
+          [store = _location_store, descriptor, first_publication] {
+              return store->update_mesh_node (descriptor, first_publication
+                                                            ? location_write_intent_t::new_claim
+                                                            : location_write_intent_t::renew);
+          },
+          std::chrono::steady_clock::now, cancellation, deadline);
+        if (!written || cancellation.stop_requested ())
+            co_return false;
+        std::lock_guard lock (_descriptor_publish_mutex);
+        const auto current =
+          std::find_if (_published_mesh_descriptors.begin (), _published_mesh_descriptors.end (),
+                        [&key] (const auto &value) {
+                            return value.mesh_name == key.mesh_name && value.rid == key.rid;
+                        });
+        // A concurrent state/weight publication owns its newer descriptor. Never
+        // overwrite it with the copy captured before external confirmation.
+        if (current == _published_mesh_descriptors.end ()
+            || current->descriptor_revision != original.descriptor_revision
+            || current->owner_id != original.owner_id
+            || current->lease_generation != original.lease_generation)
+            co_return false;
+        *current = std::move (descriptor);
         if (first_publication)
-            _published_mesh_nodes.push_back (std::move (key));
+            _published_mesh_nodes.push_back (key);
     }
+    if (cancellation.stop_requested ())
+        co_return false;
     _accept_application_dispatch.store (true, std::memory_order_release);
     _dispatch_gate_changed.notify_all ();
-    return true;
+    co_return true;
 }
 
 void mesh_node_host_service_t::stop () noexcept
@@ -3678,8 +3749,8 @@ mesh_node_host_service_t::submit_local_node_send (std::shared_ptr<detail::mesh_n
 
     {
         std::lock_guard lock (_dispatch_gate_mutex);
-        if (!_accept_application_dispatch.load (std::memory_order_relaxed) || !_location_runtime
-            || !_location_runtime->owner_lease_usable ())
+        if (!_accept_application_dispatch.load (std::memory_order_relaxed)
+            || (_location_runtime && !_location_runtime->owner_lease_usable ()))
             co_return zlink::submit_result_t::terminated;
     }
     using permit_t = application_job_queue_t::permit_t;
@@ -3695,8 +3766,8 @@ mesh_node_host_service_t::submit_local_node_send (std::shared_ptr<detail::mesh_n
         co_return zlink::submit_result_t::terminated;
     {
         std::lock_guard lock (_dispatch_gate_mutex);
-        if (!_accept_application_dispatch.load (std::memory_order_relaxed) || !_location_runtime
-            || !_location_runtime->owner_lease_usable ())
+        if (!_accept_application_dispatch.load (std::memory_order_relaxed)
+            || (_location_runtime && !_location_runtime->owner_lease_usable ()))
             co_return zlink::submit_result_t::terminated;
         application_job->mark_queued ();
     }

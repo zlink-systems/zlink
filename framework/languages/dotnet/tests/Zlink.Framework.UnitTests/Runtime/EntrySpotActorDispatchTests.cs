@@ -2,7 +2,6 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -358,21 +357,17 @@ public sealed partial class EntrySpotActorDispatchTests
             var caller = Request();
             var (record, requestParts) = await ReceiveActorRequest();
             Assert.Equal(1, mesh.PendingOperationCount);
-            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
-            var operations = (System.Collections.IDictionary)
-                typeof(ZLinkManagedMeshNode).GetField("_operations", flags)!.GetValue(mesh)!;
             var pending = Assert.IsType<ZLinkManagedMeshNode.PendingOperation<CountingActorReply>>(
-                operations[record.OperationId.Low]
+                mesh._operations[record.OperationId.Low]
             );
             // Cooperative native input uses the SAME receiver captured before local
             // submission; no replacement decoder or pending operation is installed.
-            var physical = record
-                .CaptureReplyRoute()!
-                .Target!.GetType()
-                .GetFields(flags | BindingFlags.Public)
-                .Select(field => field.GetValue(record.CaptureReplyRoute()!.Target))
-                .OfType<Action<ZLinkManagedMeshNode.ManagedRequestCompletion>>()
-                .Single();
+            var replyRoute = Assert.IsType<ZLinkManagedMeshNode.LocalActorReplyRoute>(
+                record.CaptureReplyRoute()!.Target
+            );
+            var physical = Assert.IsAssignableFrom<
+                Action<ZLinkManagedMeshNode.ManagedRequestCompletion>
+            >(replyRoute.PhysicalCompletion);
             Assert.Equal(0, CountingActorReplyConverter.Reads);
             var requestHeader = ZLinkStreamProtocolDefaults.DecodeHeader(
                 requestParts[0].AsReadOnlyMemory()
@@ -386,27 +381,17 @@ public sealed partial class EntrySpotActorDispatchTests
                 else if (terminal == "deadline")
                 {
                     clock.Timestamp += TimeSpan.FromSeconds(5).Ticks;
-                    typeof(ZLinkManagedMeshNode)
-                        .GetMethod(
-                            "ExpireOperations",
-                            BindingFlags.NonPublic | BindingFlags.Instance
-                        )!
-                        .Invoke(mesh, null);
+                    mesh.ExpireOperations();
                 }
                 else if (terminal == "lifecycle")
                     // Cooperative lifecycle failure enters the existing exact-pair owner.
-                    typeof(ZLinkManagedMeshNode)
-                        .GetMethod("FailNativeDeadline", flags)!
-                        .Invoke(
-                            mesh,
-                            [
-                                pending,
-                                new ZLinkFrameworkException(
-                                    ZLinkFrameworkErrorKind.Unavailable,
-                                    "Actor request lifecycle ended."
-                                ),
-                            ]
-                        );
+                    mesh.FailNativeDeadline(
+                        pending,
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            "Actor request lifecycle ended."
+                        )
+                    );
                 else
                     mesh.CloseSubmissions();
                 originalFailure = await Record.ExceptionAsync(() =>
@@ -457,9 +442,7 @@ public sealed partial class EntrySpotActorDispatchTests
                         response,
                     ]),
                 ];
-                typeof(ZLinkManagedMeshNode)
-                    .GetMethod("CompleteNativeApplicationRequest", flags)!
-                    .Invoke(mesh, [pending, RequestResult.Ok, wire, physical]);
+                mesh.CompleteNativeApplicationRequest(pending, RequestResult.Ok, wire, physical);
                 Assert.All(
                     wire,
                     part => Assert.Throws<ObjectDisposedException>(() => _ = part.Size)
@@ -3185,6 +3168,373 @@ public sealed partial class EntrySpotActorDispatchTests
             )
         );
 
+    private static async Task<(
+        ZLinkFrameworkRuntime Runtime,
+        CapturingSpotNode Node,
+        ZLinkBackendActorRef ActorRef,
+        ProbeActor Actor,
+        ZLinkActorRuntimeState State,
+        RoutingId SessionNode
+    )> CreateDuplicateBindFixtureAsync(TimeSpan? callbackTimeout = null)
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            ),
+            sessionReplacementCallbackTimeout: callbackTimeout
+        );
+        var actor = RegisterProbeActor(runtime, actorRef);
+        var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+        var sessionNode = RoutingId.From("session-node-duplicate-bind");
+        node.AdmittedMeshPeers.Add(
+            new MeshNodePeer(
+                1,
+                MeshPeerSource.Discovery,
+                MeshPeerState.Admitted,
+                sessionNode,
+                61,
+                1,
+                "inproc://session-node-duplicate-bind",
+                1,
+                0,
+                1
+            )
+        );
+        node.SetLocalActorAuthorityFence(actorRef, 41, 51);
+        return (runtime, node, actorRef, actor, state, sessionNode);
+    }
+
+    private static async Task BindDuplicateSessionAsync(
+        ZLinkFrameworkRuntime runtime,
+        ZLinkBackendActorRef actorRef,
+        RoutingId sessionNode,
+        string session,
+        ulong generation,
+        List<(RequestResult Result, uint Code, string? Message)> replies,
+        CancellationToken cancellationToken = default
+    ) =>
+        await runtime.ApplyBoundSessionBindAsync(
+            actorRef.NodeRid,
+            sessionNode,
+            61,
+            CanonicalBind(actorRef, session, generation),
+            (result, code, message) => replies.Add((result, code, message)),
+            cancellationToken
+        );
+
+    [Fact]
+    public async Task RemoteSessionBind_DuplicateCallback_AcceptsAndReplacesCurrentBinding()
+    {
+        var (runtime, _, actorRef, actor, state, sessionNode) =
+            await CreateDuplicateBindFixtureAsync();
+        try
+        {
+            var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity? current = null;
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity? incoming = null;
+            actor.DuplicateBindCallback = (oldIdentity, newIdentity, _) =>
+            {
+                current = oldIdentity;
+                incoming = newIdentity;
+                return ValueTask.FromResult<string?>(null);
+            };
+
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies
+            );
+
+            Assert.Equal(RequestResult.Ok, replies[^1].Result);
+            Assert.Equal(new(sessionNode, 61, 1), current);
+            Assert.Equal(new(sessionNode, 61, 2), incoming);
+            Assert.True(state.TryGetBoundSession(out var bound));
+            Assert.Equal(RoutingId.From("session-incoming"), bound.SessionRid);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteSessionBind_DuplicateCallback_RejectsAndKeepsCurrentBinding()
+    {
+        var (runtime, _, actorRef, actor, state, sessionNode) =
+            await CreateDuplicateBindFixtureAsync();
+        try
+        {
+            var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+            actor.DuplicateBindCallback = (_, _, _) =>
+                ValueTask.FromResult<string?>("already signed in");
+
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies
+            );
+
+            Assert.Equal(RequestResult.Rejected, replies[^1].Result);
+            Assert.Equal("already signed in", replies[^1].Message);
+            Assert.True(state.TryGetBoundSession(out var bound));
+            Assert.Equal(RoutingId.From("session-current"), bound.SessionRid);
+
+            actor.DuplicateBindCallback = (_, _, _) => ValueTask.FromResult<string?>(string.Empty);
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-empty",
+                3,
+                replies
+            );
+
+            Assert.Equal(RequestResult.Ok, replies[^1].Result);
+            Assert.Null(replies[^1].Message);
+            Assert.True(state.TryGetBoundSession(out bound));
+            Assert.Equal(RoutingId.From("session-empty"), bound.SessionRid);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteSessionBind_DuplicateCallbackTimeout_RejectsAndIgnoresLateAcceptance()
+    {
+        var (runtime, _, actorRef, actor, state, sessionNode) =
+            await CreateDuplicateBindFixtureAsync(TimeSpan.FromMilliseconds(25));
+        try
+        {
+            var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+            using var callbackStarted = new ManualResetEventSlim();
+            using var callbackCancellation = new ManualResetEventSlim();
+            var release = new TaskCompletionSource<string?>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            actor.DuplicateBindCallback = async (_, _, cancellationToken) =>
+            {
+                callbackStarted.Set();
+                using var registration = cancellationToken.Register(callbackCancellation.Set);
+                return await release.Task.ConfigureAwait(false);
+            };
+
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies
+            );
+
+            Assert.True(callbackStarted.IsSet);
+            Assert.True(callbackCancellation.IsSet);
+            Assert.Equal(RequestResult.TimedOut, replies[^1].Result);
+            Assert.True(state.TryGetBoundSession(out var bound));
+            Assert.Equal(RoutingId.From("session-current"), bound.SessionRid);
+            release.SetResult(null);
+            await state.ExecuteDispatchAsync(_ => ValueTask.CompletedTask, CancellationToken.None);
+            Assert.True(state.TryGetBoundSession(out bound));
+            Assert.Equal(RoutingId.From("session-current"), bound.SessionRid);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteSessionBind_WithoutDuplicateCallback_PreservesLaterSessionWins()
+    {
+        var (runtime, _, actorRef, _, state, sessionNode) = await CreateDuplicateBindFixtureAsync();
+        try
+        {
+            var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies
+            );
+
+            Assert.Equal(RequestResult.Ok, replies[^1].Result);
+            Assert.True(state.TryGetBoundSession(out var bound));
+            Assert.Equal(RoutingId.From("session-incoming"), bound.SessionRid);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteSessionBind_WithoutDuplicateCallback_DoesNotWaitForPreviousSessionDisconnect()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            )
+        );
+        var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+        state.BindNativeActorRef(actorRef);
+        var actorCreation = await state.GetOrStartActorCreationAsync(
+            "probe",
+            failIfExists: false,
+            () =>
+            {
+                var context = state.GetOrCreateContext(() =>
+                    new ZLinkActorContext(
+                        runtime,
+                        state,
+                        "entry",
+                        actorRef.Generation,
+                        spotId: null,
+                        new ZLinkBoundSessionService(runtime)
+                    )
+                );
+                return Task.FromResult<IZLinkActor>(new CreationProbeActor(context));
+            },
+            CancellationToken.None
+        );
+        state.BindActorInstance(await actorCreation.Task);
+        var sessionNode = RoutingId.From("session-node-duplicate-bind");
+        node.AdmittedMeshPeers.Add(
+            new MeshNodePeer(
+                1,
+                MeshPeerSource.Discovery,
+                MeshPeerState.Admitted,
+                sessionNode,
+                61,
+                1,
+                "inproc://session-node-duplicate-bind",
+                1,
+                0,
+                1
+            )
+        );
+        node.SetLocalActorAuthorityFence(actorRef, 41, 51);
+
+        var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+        var releaseDisconnect = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var disconnectStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Task? disconnectTask = null;
+        try
+        {
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+
+            // Model the prior Session's disconnect callback holding the Actor turn.
+            disconnectTask = state
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        disconnectStarted.TrySetResult();
+                        await releaseDisconnect.Task.ConfigureAwait(false);
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            await disconnectStarted.Task;
+
+            using var bindDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            var deadlineReached = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            using var deadlineRegistration = bindDeadline.Token.Register(() =>
+                deadlineReached.TrySetResult()
+            );
+            var bindTask = BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies,
+                bindDeadline.Token
+            );
+
+            var completion = await Task.WhenAny(bindTask, deadlineReached.Task);
+            if (completion == deadlineReached.Task)
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => bindTask);
+            Assert.Same(bindTask, completion);
+            await bindTask;
+
+            Assert.False(disconnectTask.IsCompleted);
+            Assert.Equal(RequestResult.Ok, replies[^1].Result);
+            Assert.True(state.TryGetBoundSession(out var bound));
+            Assert.Equal(RoutingId.From("session-incoming"), bound.SessionRid);
+        }
+        finally
+        {
+            releaseDisconnect.TrySetResult();
+            if (disconnectTask is not null)
+                await disconnectTask;
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task RemoteSessionBindPublication_OldCleanup_Cannot_Interrupt_The_Owner_Turn()
     {
@@ -3224,7 +3574,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionNode,
                 61,
                 request,
-                static () => { },
+                static (_, _, _) => { },
                 CancellationToken.None
             );
             Assert.True(state.TryGetBoundSession(out var oldBinding));
@@ -3262,7 +3612,7 @@ public sealed partial class EntrySpotActorDispatchTests
                             new(2)
                         ),
                 },
-                static () => { },
+                static (_, _, _) => { },
                 CancellationToken.None
             );
             await cleanup;
@@ -3323,7 +3673,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionNode,
                 61,
                 request,
-                static () => { },
+                static (_, _, _) => { },
                 CancellationToken.None
             );
 
@@ -3382,7 +3732,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 sessionNode,
                 61,
                 request,
-                static () => { },
+                static (_, _, _) => { },
                 CancellationToken.None
             );
             if (migrated)
@@ -3439,7 +3789,7 @@ public sealed partial class EntrySpotActorDispatchTests
                                     new(2)
                                 ),
                         },
-                        static () => { },
+                        static (_, _, _) => { },
                         CancellationToken.None
                     )
                     .AsTask()
@@ -3502,7 +3852,7 @@ public sealed partial class EntrySpotActorDispatchTests
                         sessionNode,
                         61,
                         request,
-                        static () => { },
+                        static (_, _, _) => { },
                         CancellationToken.None
                     )
                     .AsTask()
@@ -3989,7 +4339,12 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task RemoteActorFrame_BoundSessionWithoutRouteLease_UsesBindingFenceForStaleHandling()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            observer,
+            ZLinkDiagnosticsLevel.Normal
+        );
         try
         {
             var relayNode = RoutingId.From("session-node");
@@ -4030,7 +4385,7 @@ public sealed partial class EntrySpotActorDispatchTests
                     actorRef.Generation,
                     sessionRid,
                     "replaced-binding",
-                    BindingGeneration: 2,
+                    BindingGeneration: 1,
                     SessionSequence: 1
                 )
             );
@@ -4082,6 +4437,33 @@ public sealed partial class EntrySpotActorDispatchTests
             var directReply = Assert.Single(directReplies);
             var directReplyPayload = DecodeReplyFrame<ZLinkStreamWireError>(directReply);
             Assert.Equal("not_found", directReplyPayload.Payload.Code);
+
+            var invalidOperationReplies = new List<byte[]>();
+            await ZLinkActorBoundSessionRelay.ReplyStaleActorAsync(
+                runtime,
+                actorRef,
+                relayNode,
+                sessionRid,
+                requestId: 7,
+                flags: ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                replyCapability: "stale-reply",
+                decodedRequestHeader,
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    "session relay sequence is stale."
+                ),
+                CancellationToken.None,
+                directReply: parts =>
+                {
+                    invalidOperationReplies.Add(parts.Single().AsReadOnlySpan().ToArray());
+                    return SubmitResult.Ok;
+                }
+            );
+            var invalidOperationReply = Assert.Single(invalidOperationReplies);
+            Assert.Equal(
+                "invalid_operation",
+                DecodeReplyFrame<ZLinkStreamWireError>(invalidOperationReply).Payload.Code
+            );
 
             await runtime.DispatchRemoteActorFrameAsync(
                 actorRef.ActorId,
@@ -4148,6 +4530,193 @@ public sealed partial class EntrySpotActorDispatchTests
 
             Assert.Empty(node.NoBindReplies);
             Assert.Empty(node.ActorSends);
+
+            var duplicateSequenceMetadata = ZLinkActorBoundSessionHandoffMetadata.Encode(
+                new ZLinkActorBoundSessionHandoffFence(
+                    actorRef.ActorId,
+                    actorRef.Generation,
+                    sessionRid,
+                    "live-binding",
+                    BindingGeneration: 2,
+                    SessionSequence: 1
+                )
+            );
+            await runtime.DispatchRemoteActorFrameAsync(
+                actorRef.ActorId,
+                actorRef.Generation,
+                actorRef.NodeRid,
+                targetNodeGeneration: 1,
+                authorityOwnerGeneration: 3,
+                ownerLeaseGeneration: 0,
+                authenticatedRelayNodeRid: relayNode,
+                relayNodeRid: relayNode,
+                relayNodeGeneration: 1,
+                sourceNodeRid: relayNode,
+                sourceNodeGeneration: 1,
+                sourceSessionRid: sessionRid,
+                requestSource,
+                duplicateSequenceMetadata,
+                new MeshOperationId(81, 84),
+                messageFollowHopCount: 0,
+                replyRequestId: 7,
+                replyFlags: ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                replyCapability: "stale-reply",
+                deadlineUnixMs: ulong.MaxValue,
+                encodedRequestHeader,
+                Encoding.UTF8.GetBytes("duplicate-sequence-request"),
+                CancellationToken.None
+            );
+            var sequenceRequestError = Assert.Single(
+                observer.Events.Where(flow =>
+                    flow.PacketName == "stale-bound-request"
+                    && flow.Outcome == "failed"
+                    && flow.Reason == "stale_target"
+                    && flow.Action == "reply_error"
+                )
+            );
+            Assert.Equal("stream", sequenceRequestError.Surface);
+            Assert.Equal("request", sequenceRequestError.MessageKind);
+
+            var clientDisconnectRequestHeader = new ZlinkStreamHeader(
+                ZlinkStreamMessageKind.Request,
+                ZlinkStreamCodec.Raw,
+                ZlinkStreamHeaderFlags.HasRequestSeq,
+                new ZlinkStreamRequestSeq(8),
+                ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName,
+                ZlinkStreamMetadata.Empty
+            );
+            var replyAttemptsBeforeDisconnectCollision = node.NodeSendAttempts.Count;
+            await runtime.DispatchRemoteActorFrameAsync(
+                actorRef.ActorId,
+                actorRef.Generation,
+                actorRef.NodeRid,
+                targetNodeGeneration: 1,
+                authorityOwnerGeneration: 3,
+                ownerLeaseGeneration: 0,
+                authenticatedRelayNodeRid: relayNode,
+                relayNodeRid: relayNode,
+                relayNodeGeneration: 1,
+                sourceNodeRid: relayNode,
+                sourceNodeGeneration: 1,
+                sourceSessionRid: sessionRid,
+                requestSource,
+                duplicateSequenceMetadata,
+                new MeshOperationId(81, 86),
+                messageFollowHopCount: 0,
+                replyRequestId: 8,
+                replyFlags: ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                replyCapability: "stale-reply",
+                deadlineUnixMs: ulong.MaxValue,
+                ZLinkStreamProtocolDefaults.EncodeHeader(clientDisconnectRequestHeader).ToArray(),
+                Encoding.UTF8.GetBytes("client-disconnect-request"),
+                CancellationToken.None
+            );
+            var disconnectCollisionReplyParts = Assert.Single(
+                node.NodeSendAttempts.Skip(replyAttemptsBeforeDisconnectCollision)
+            );
+            Assert.Equal(2, disconnectCollisionReplyParts.Count);
+            using var disconnectCollisionReplyHeader = Message.From(
+                disconnectCollisionReplyParts[0]
+            );
+            using var disconnectCollisionReplyBody = Message.From(disconnectCollisionReplyParts[1]);
+            var disconnectCollisionReply = Assert.IsType<ZLinkRemoteActorReplyRelay>(
+                ZLinkEnvelopeCodec.DecodeBody(
+                    [disconnectCollisionReplyHeader, disconnectCollisionReplyBody],
+                    typeof(ZLinkRemoteActorReplyRelay),
+                    runtime.Registration.Codecs
+                )
+            );
+            Assert.Equal((ulong)8, disconnectCollisionReply.RequestId);
+            Assert.Equal(
+                "invalid_operation",
+                DecodeReplyFrame<ZLinkStreamWireError>(disconnectCollisionReply.Frame).Payload.Code
+            );
+            var disconnectCollisionError = Assert.Single(
+                observer.Events.Where(flow =>
+                    flow.PacketName == ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName
+                    && flow.Outcome == "failed"
+                    && flow.Reason == "stale_target"
+                    && flow.Action == "reply_error"
+                )
+            );
+            Assert.Equal("request", disconnectCollisionError.MessageKind);
+
+            await runtime.DispatchRemoteActorFrameAsync(
+                actorRef.ActorId,
+                actorRef.Generation,
+                actorRef.NodeRid,
+                targetNodeGeneration: 1,
+                authorityOwnerGeneration: 3,
+                ownerLeaseGeneration: 0,
+                authenticatedRelayNodeRid: relayNode,
+                relayNodeRid: relayNode,
+                relayNodeGeneration: 1,
+                sourceNodeRid: relayNode,
+                sourceNodeGeneration: 1,
+                sourceSessionRid: sessionRid,
+                requestSource,
+                duplicateSequenceMetadata,
+                new MeshOperationId(81, 85),
+                messageFollowHopCount: 0,
+                replyRequestId: 0,
+                replyFlags: 0,
+                replyCapability: null,
+                deadlineUnixMs: ulong.MaxValue,
+                ZLinkStreamProtocolDefaults.EncodeHeader(oneWayHeader).ToArray(),
+                Encoding.UTF8.GetBytes("duplicate-sequence-send"),
+                CancellationToken.None
+            );
+            var sequenceSendDrop = Assert.Single(
+                observer.Events.Where(flow =>
+                    flow.PacketName == "stale-bound-send"
+                    && flow.Outcome == "dropped"
+                    && flow.Reason == "stale_target"
+                )
+            );
+            Assert.Equal("stream", sequenceSendDrop.Surface);
+            Assert.Equal("send", sequenceSendDrop.MessageKind);
+
+            var increasingSequenceMetadata = ZLinkActorBoundSessionHandoffMetadata.Encode(
+                new ZLinkActorBoundSessionHandoffFence(
+                    actorRef.ActorId,
+                    actorRef.Generation,
+                    sessionRid,
+                    "live-binding",
+                    BindingGeneration: 2,
+                    SessionSequence: 2
+                )
+            );
+            await runtime.DispatchRemoteActorFrameAsync(
+                actorRef.ActorId,
+                actorRef.Generation,
+                actorRef.NodeRid,
+                targetNodeGeneration: 1,
+                authorityOwnerGeneration: 3,
+                ownerLeaseGeneration: 0,
+                authenticatedRelayNodeRid: relayNode,
+                relayNodeRid: relayNode,
+                relayNodeGeneration: 1,
+                sourceNodeRid: relayNode,
+                sourceNodeGeneration: 1,
+                sourceSessionRid: sessionRid,
+                requestSource,
+                increasingSequenceMetadata,
+                new MeshOperationId(81, 87),
+                messageFollowHopCount: 0,
+                replyRequestId: 0,
+                replyFlags: 0,
+                replyCapability: null,
+                deadlineUnixMs: ulong.MaxValue,
+                ZLinkStreamProtocolDefaults.EncodeHeader(oneWayHeader).ToArray(),
+                Encoding.UTF8.GetBytes("increasing-sequence-send"),
+                CancellationToken.None
+            );
+            Assert.True(
+                runtime
+                    .GetOrCreateActorState(actorRef.ActorId)
+                    .TryGetBoundSession(out var acceptedRoute)
+            );
+            Assert.Equal((ulong)2, acceptedRoute.AcceptedHighWater);
         }
         finally
         {
@@ -8512,19 +9081,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime,
                 parts
             );
-            var manager = Assert.IsType<ZLinkActorSessionManager>(
-                typeof(ZLinkFrameworkRuntime)
-                    .GetField(
-                        "_actorSessionManager",
-                        BindingFlags.Instance | BindingFlags.NonPublic
-                    )!
-                    .GetValue(runtime)
-            );
-            var registry = Assert.IsType<ZLinkActorSessionRegistry>(
-                typeof(ZLinkActorSessionManager)
-                    .GetField("_actorSessions", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(manager)
-            );
+            var manager = runtime._actorSessionManager;
+            var registry = manager._actorSessions;
             var actorId = ZLinkActorId.FromBoundary(actorRef.ActorId, "actorId");
             registry.RemoveIfCurrent(actorId, acceptedState);
             var successor = registry.GetOrCreate(actorId);
@@ -10583,57 +11141,16 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(node);
-        object? targetAttemptLease = null;
+        ZLinkStandaloneActorRelocationRuntime.AttemptSlotLease? targetAttemptLease = null;
         Task? targetAttemptRun = null;
         TaskCompletionSource? releaseTargetAttempt = null;
         try
         {
             var owner = runtime.StandaloneActorRelocationRuntime;
-            var ownerType = owner.GetType();
-            var keyType =
-                ownerType.GetNestedType("AttemptKey", BindingFlags.NonPublic)
-                ?? throw new InvalidOperationException("Target attempt key was not found.");
-            var key =
-                Activator.CreateInstance(
-                    keyType,
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                    binder: null,
-                    args: [11UL, 12UL, 1UL],
-                    culture: null
-                )
-                ?? throw new InvalidOperationException("Target attempt key could not be created.");
-            var acquire =
-                ownerType.GetMethod(
-                    "AcquireTargetAttempt",
-                    BindingFlags.Instance | BindingFlags.NonPublic,
-                    binder: null,
-                    types: [keyType],
-                    modifiers: null
-                )
-                ?? throw new InvalidOperationException(
-                    "Target attempt acquisition owner was not found."
-                );
-            targetAttemptLease =
-                acquire.Invoke(owner, [key])
-                ?? throw new InvalidOperationException("Target attempt lease was not acquired.");
-            var slot =
-                targetAttemptLease
-                    .GetType()
-                    .GetProperty("Slot", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(targetAttemptLease)
-                ?? throw new InvalidOperationException("Target attempt slot was not found.");
-            var runAsync =
-                slot.GetType()
-                    .GetMethod(
-                        "RunAsync",
-                        BindingFlags.Instance | BindingFlags.NonPublic,
-                        binder: null,
-                        types: [typeof(Func<ValueTask>)],
-                        modifiers: null
-                    )
-                ?? throw new InvalidOperationException(
-                    "Target attempt state-lane runner was not found."
-                );
+            var key = new ZLinkStandaloneActorRelocationRuntime.AttemptKey(11, 12, 1);
+            var lease = owner.AcquireTargetAttempt(key);
+            targetAttemptLease = lease;
+            var slot = lease.Slot;
             var targetAttemptStarted = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
@@ -10645,14 +11162,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 targetAttemptStarted.TrySetResult();
                 return new ValueTask(releaseTargetAttempt.Task);
             };
-            targetAttemptRun = (
-                (ValueTask)(
-                    runAsync.Invoke(slot, [holdTargetAttempt])
-                    ?? throw new InvalidOperationException(
-                        "Target attempt state-lane work was not scheduled."
-                    )
-                )
-            ).AsTask();
+            targetAttemptRun = slot.RunAsync(holdTargetAttempt).AsTask();
             await targetAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
@@ -10668,7 +11178,7 @@ public sealed partial class EntrySpotActorDispatchTests
             releaseTargetAttempt?.TrySetResult();
             if (targetAttemptRun is not null)
                 await targetAttemptRun;
-            (targetAttemptLease as IDisposable)?.Dispose();
+            targetAttemptLease?.Dispose();
             await runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -11245,15 +11755,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 Reply: rawReplyBytes
             );
 
-            var method =
-                typeof(ZLinkSpotActorJoinDispatcher).GetMethod(
-                    "ReplyCanonicalAdmission",
-                    BindingFlags.NonPublic | BindingFlags.Instance
-                )
-                ?? throw new InvalidOperationException(
-                    "ReplyCanonicalAdmission was not found by reflection."
-                );
-            method.Invoke(dispatcher, [joinRequest, admission]);
+            dispatcher.ReplyCanonicalAdmission(joinRequest, admission);
 
             Assert.Equal(0, nativeSpot.ActorJoinResultCode);
             Assert.Equal(rawReplyBytes, nativeSpot.ActorJoinReplyMessageBytes);
@@ -12540,7 +13042,8 @@ public sealed partial class EntrySpotActorDispatchTests
             null,
         AcceptedSendProbe? acceptedSendProbe = null,
         ILoggerFactory? loggerFactory = null,
-        TimeProvider? joinTimeProvider = null
+        TimeProvider? joinTimeProvider = null,
+        TimeSpan? sessionReplacementCallbackTimeout = null
     )
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
@@ -12630,6 +13133,8 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             TimeProvider = joinTimeProvider ?? TimeProvider.System,
             DefaultRequestTimeout = defaultRequestTimeout ?? TimeSpan.FromSeconds(1),
+            SessionReplacementCallbackTimeout =
+                sessionReplacementCallbackTimeout ?? TimeSpan.FromSeconds(30),
             ImplicitHandlerAutoRegistrationEnabled = false,
         };
         registration.Locations.StoreInstance = runtimeLocationProvider;
@@ -13264,6 +13769,21 @@ public sealed partial class EntrySpotActorDispatchTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Func<ValueTask>? JoinCompletionCallback { get; set; }
+
+        internal Func<
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity,
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity,
+            CancellationToken,
+            ValueTask<string?>
+        >? DuplicateBindCallback { get; set; }
+
+        public ValueTask<string?> OnDuplicateBindAsync(
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity current,
+            Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity incoming,
+            CancellationToken cancellationToken = default
+        ) =>
+            DuplicateBindCallback?.Invoke(current, incoming, cancellationToken)
+            ?? ValueTask.FromResult<string?>(null);
 
         public ValueTask OnJoinCompletedAsync(
             ZLinkActorJoinCompletion completion,
@@ -15002,7 +15522,7 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId,
             ulong,
             Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38,
-            Action,
+            Action<RequestResult, uint, string?>,
             CancellationToken,
             ValueTask
         >? _bindHandler;
@@ -15012,7 +15532,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 RoutingId,
                 ulong,
                 Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38,
-                Action,
+                Action<RequestResult, uint, string?>,
                 CancellationToken,
                 ValueTask
             > handler
@@ -15030,7 +15550,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 RoutingId,
                 MeshStatus().LifecycleGeneration,
                 request,
-                static () => { },
+                static (_, _, _) => { },
                 cancellationToken
             );
             return

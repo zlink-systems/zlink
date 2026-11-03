@@ -57,6 +57,8 @@ class route_channel_runtime_t
 
     bool connect (std::string endpoint);
     bool connect (zlink::routing_id_t peer_rid, std::string endpoint);
+    task_t<bool> connect_async (zlink::routing_id_t peer_rid, std::string endpoint);
+    task_t<bool> disconnect_async (zlink::routing_id_t peer_rid, std::string endpoint);
     bool disconnect (const std::string &endpoint);
     bool disconnect (const zlink::routing_id_t &peer_rid, const std::string &endpoint);
     std::vector<std::string> list_connections () const;
@@ -107,6 +109,12 @@ class route_channel_runtime_t
                          runtime::messaging::message_parts_t parts,
                          std::chrono::milliseconds timeout);
 
+    void request_reply_parts (const zlink::routing_id_t &target_node_rid,
+                              std::optional<std::string> target_spot_id,
+                              runtime::messaging::message_parts_t parts,
+                              std::chrono::steady_clock::time_point deadline,
+                              request_receiver_t<runtime::messaging::message_parts_t> receiver);
+
     task_t<void> submit_spot_send_parts (const zlink::routing_id_t &target_node_rid,
                                          const std::string &target_spot_id,
                                          runtime::messaging::message_parts_t parts);
@@ -124,10 +132,13 @@ class route_channel_runtime_t
     std::size_t pending_request_count () const;
 
   private:
+    friend runtime::state_lane_t &auto_connect_owner_lane (route_channel_runtime_t &owner);
     struct state_t;
     struct removed_route_t;
     struct ready_observer_t;
     bool disconnect_endpoint (std::optional<zlink::routing_id_t> peer_rid, std::string endpoint);
+    task_t<bool> disconnect_endpoint_async (std::optional<zlink::routing_id_t> peer_rid,
+                                            std::string endpoint);
     static result_t<void> submit_send_unlocked (const std::shared_ptr<state_t> &state,
                                                 const zlink::routing_id_t &target,
                                                 std::optional<std::string> spot,
@@ -136,12 +147,6 @@ class route_channel_runtime_t
     await_readiness (std::shared_ptr<state_t> state,
                      std::shared_ptr<ready_observer_t> observer,
                      std::optional<std::chrono::steady_clock::time_point> deadline);
-    static request_task_t<runtime::messaging::message_parts_t>
-    request_backend_parts (const std::shared_ptr<state_t> &_state,
-                           const zlink::routing_id_t &target_node_rid,
-                           std::optional<std::string> target_spot_id,
-                           runtime::messaging::message_parts_t parts,
-                           std::chrono::steady_clock::time_point deadline);
     static route_outbound_packet_t &
     append_outbound_unlocked (const std::shared_ptr<state_t> &_state,
                               const zlink::routing_id_t &target_node_rid,
@@ -154,17 +159,13 @@ class route_channel_runtime_t
     static result_t<void>
     ensure_ready (const std::shared_ptr<state_t> &state,
                   const std::optional<zlink::routing_id_t> &target = std::nullopt);
-    static request_task_t<runtime::messaging::message_parts_t>
-    request_reply_spot_parts_owned (std::shared_ptr<state_t> state,
-                                    zlink::routing_id_t target_node_rid,
-                                    std::string target_spot_id,
-                                    runtime::messaging::message_parts_t parts,
-                                    std::chrono::steady_clock::time_point deadline);
     static std::optional<result_t<void>>
     ready_unlocked (const state_t &state,
                     const std::optional<zlink::routing_id_t> &target,
                     const std::optional<removed_route_t> *send_change = nullptr);
     std::shared_ptr<state_t> _state;
 };
+
+runtime::state_lane_t &auto_connect_owner_lane (route_channel_runtime_t &owner);
 
 } // namespace zlink::framework::detail

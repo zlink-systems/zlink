@@ -29,10 +29,12 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -291,6 +293,40 @@ final class ZLinkNodeSubmitTurnTest {
                 assertTerminal(reply);
                 admission.toCompletableFuture().join();
                 assertEquals(2, node.nodeCalls());
+            }
+        }
+    }
+
+    @Test
+    void requestAndSendToAnotherSourceOwnerSubmitBeforeCallerLaneReturns() throws Exception {
+        for (boolean request : new boolean[] {false, true}) {
+            var sourceExecutor = new HeldExecutor();
+            var sourceOwner = new ZLinkStateLane(sourceExecutor);
+            try (Fixture f = new Fixture(null, false, sourceOwner)) {
+                NodeProbe node = new NodeProbe(sourceOwner);
+                f.runtime.registerSpotRouterNode(CHANNEL, node.node);
+
+                try {
+                    CompletionStage<?> submission =
+                            f.lane.runAsync(
+                                            () -> {
+                                                CompletionStage<?> submitted =
+                                                        request
+                                                                ? f.request().submit(String.class)
+                                                                : f.send().submit();
+                                                assertEquals(
+                                                        1,
+                                                        node.nodeCalls(),
+                                                        "the source owner must start the binding submission before return");
+                                                return submitted;
+                                            })
+                                    .toCompletableFuture()
+                                    .join();
+                    if (request) assertTerminal(submission);
+                    else submission.toCompletableFuture().join();
+                } finally {
+                    sourceExecutor.release();
+                }
             }
         }
     }
@@ -732,6 +768,11 @@ final class ZLinkNodeSubmitTurnTest {
         }
 
         Fixture(Executor laneExecutor, boolean trace) throws Exception {
+            this(laneExecutor, trace, null);
+        }
+
+        Fixture(Executor laneExecutor, boolean trace, ZLinkStateLane operationOwner)
+                throws Exception {
             DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
             if (trace)
                 options.configureDispatch()
@@ -745,7 +786,7 @@ final class ZLinkNodeSubmitTurnTest {
                             new EmptyBackend(),
                             options.registration(),
                             new ZLinkJsonMessageSerializer(),
-                            lane);
+                            operationOwner == null ? lane : operationOwner);
             sockets = runtime.sockets;
         }
 
@@ -796,6 +837,27 @@ final class ZLinkNodeSubmitTurnTest {
 
         int turns() {
             return turns.get();
+        }
+    }
+
+    private static final class HeldExecutor implements Executor {
+        private final Queue<Runnable> pending = new ConcurrentLinkedQueue<>();
+        private volatile boolean released;
+
+        @Override
+        public void execute(Runnable command) {
+            if (released) {
+                command.run();
+                return;
+            }
+            pending.add(command);
+            if (released && pending.remove(command)) command.run();
+        }
+
+        void release() {
+            released = true;
+            Runnable command;
+            while ((command = pending.poll()) != null) command.run();
         }
     }
 
@@ -856,6 +918,8 @@ final class ZLinkNodeSubmitTurnTest {
                                         switch (method.getName()) {
                                             case "routingId":
                                                 return SOURCE;
+                                            case "sourceTransportLane":
+                                                return lane;
                                             case "classifyNodeSendTarget":
                                                 return Optional.empty();
                                             case "entrySpot":

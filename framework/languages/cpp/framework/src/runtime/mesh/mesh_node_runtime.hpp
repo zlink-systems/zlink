@@ -427,7 +427,8 @@ class mesh_node_runtime_t
     task_t<std::size_t>
     dispatch_ready (runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
                     bool accept_application_receive = true,
-                    std::function<bool ()> next_application_receive = {});
+                    std::function<bool ()> next_application_receive = {},
+                    std::optional<zlink::poll_event_flag_t> readiness = {});
     host::node_status_t status () const;
     task_t<std::tuple<std::vector<std::string>, std::int32_t, std::int32_t>>
     monitoring_configuration_async () const;
@@ -469,6 +470,19 @@ class mesh_node_runtime_t
     std::optional<std::uint32_t>
     negotiated_receive_chunk_limit_bytes (const actor_ref_t &actor) const;
     std::string mesh_name () const;
+    task_t<void> connect_peer_async (zlink::routing_id_t expected_routing_id,
+                                     std::string endpoint,
+                                     std::uint64_t expected_lifecycle_generation,
+                                     std::string security_identity,
+                                     bool automatic);
+    task_t<void> expect_peer_async (zlink::routing_id_t expected_routing_id,
+                                    std::string endpoint,
+                                    std::uint64_t expected_lifecycle_generation,
+                                    std::string security_identity);
+    task_t<void> forget_peer_async (zlink::routing_id_t expected_routing_id, std::string endpoint);
+    task_t<void> disconnect_peer_async (zlink::routing_id_t expected_routing_id,
+                                        std::string endpoint,
+                                        bool automatic);
     std::chrono::milliseconds default_request_timeout () const;
     std::optional<zlink::routing_id_t> routing_id () const;
     task_t<std::optional<zlink::routing_id_t>> routing_id_async () const;
@@ -503,6 +517,10 @@ class mesh_node_runtime_t
     registrations (zlink_builder_t &builder);
 
   private:
+    static bool retains_manual_peer_owned (const mesh_node_builder_state_t &state,
+                                           const zlink::routing_id_t &expected_routing_id,
+                                           const std::string &endpoint);
+
     struct session_relocation_checkpoint_t
     {
         runtime::stateful::object_ref_t source;
@@ -615,6 +633,11 @@ class mesh_node_runtime_t
                                 Classified &&classified,
                                 Known &&known,
                                 Unknown &&unknown) -> decltype (known ());
+    void submit_node_request_reply (
+      const zlink::routing_id_t &target,
+      std::vector<zlink::message_t> parts,
+      std::chrono::milliseconds timeout,
+      request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
     void request_unknown_node_reply (
       zlink::routing_id_t target,
       std::vector<zlink::message_t> parts,

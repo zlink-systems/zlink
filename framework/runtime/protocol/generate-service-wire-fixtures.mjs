@@ -1783,6 +1783,50 @@ function buildOperationCases(schema) {
       surface(durable.name, durable.body.$ref),
       trailing,
     ),
+    ...(() => {
+      const reply = {
+        correlation: "77",
+        terminalResult: "rejected",
+        failureCode: "requestRejected",
+        tail: {
+          originalOperationKind: "streamBind",
+          terminalResult: "rejected",
+          rejectionMessage: "이미 연결된 세션이 있습니다.",
+        },
+      };
+      const encoded = encodeCommandFrame(schema, "reply", 0, reply);
+      const headerLength = commandHeader(schema, "reply").length
+        + encodeSchemaValue(schema, "nonzero-u64", reply.correlation).length
+        + encodeSchemaValue(schema, "request-terminal-result", reply.terminalResult).length
+        + encodeSchemaValue(schema, "framework-error-code", reply.failureCode).length;
+      const missingMessage = encoded.subarray(0, headerLength);
+      return [
+        operationCase(
+          "stream-bind-rejected-reply-message",
+          "conditional-union",
+          "streamBind-rejected-message",
+          "accept",
+          surface("command", null, "reply", 20),
+          [encoded],
+          {
+            directions: ["encode", "decode"],
+            context: { originalOperationKind: "streamBind" },
+          },
+        ),
+        operationCase(
+          "stream-bind-rejected-reply-message-required",
+          "conditional-union",
+          "streamBind-rejected-message-required",
+          "reject",
+          surface("command", null, "reply", 20),
+          [missingMessage],
+          {
+            directions: ["decode"],
+            context: { originalOperationKind: "streamBind" },
+          },
+        ),
+      ];
+    })(),
   ];
 }
 

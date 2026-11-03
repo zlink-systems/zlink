@@ -49,6 +49,10 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowResult;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkTraceEventId;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
@@ -178,8 +182,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private final ZLinkStateLane transportStateLane;
     // Descriptor mutation and deferred-ready state are one C2 group.
     final ZLinkStateLane descriptorStateLane = new ZLinkStateLane();
-    // Lazy SpotNode construction is a separate C1 registry state.
-    private final ZLinkStateLane spotNodeStateLane = new ZLinkStateLane();
     // User operation slots and their retention sweep form one C2 group.
     private final ZLinkStateLane userSpotTerminalStateLane = new ZLinkStateLane();
     private final ZLinkServiceM6AWireCodec wire = new ZLinkServiceM6AWireCodec();
@@ -277,7 +279,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private volatile systems.zlink.framework.runtime.internal.dispatch
                     .ZLinkApplicationJobReceiveFlowController.Registration
             receiveFlowRegistration = () -> {};
-    private volatile ZLinkJavaRawSpotNode spotNode;
+    private final ZLinkJavaRawSpotNode spotNode;
     private volatile ExecutorService pump;
     // The pump's next rotation, built once per pump start.
     private volatile Runnable pumpRotation;
@@ -500,6 +502,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     new PeerObservationRoot(
                             localDescriptor, Map.of(), Set.of(), this.selectedRoutes, null);
         }
+        this.spotNode = new ZLinkJavaRawSpotNode(this);
     }
 
     ZLinkServiceOperationRegistry operationRegistry() {
@@ -530,6 +533,76 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     @Override
     public void setDispatchErrorReporter(ZLinkDispatchErrorReporter reporter) {
         dispatchErrorReporter = Objects.requireNonNull(reporter, "reporter");
+    }
+
+    void reportStaleBoundSessionRelay(
+            String actorId,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            String packetName,
+            String correlationId,
+            boolean request,
+            ZLinkFrameworkException failure) {
+        ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
+        if (reporter == null) return;
+        if (request) {
+            if (reporter.errorsEnabled()) {
+                reporter.report(
+                        new ZLinkDispatchFailure(
+                                ZLinkDispatchErrorSurface.STREAM_SESSION,
+                                ZLinkDispatchMessageKind.REQUEST,
+                                ZLinkDispatchErrorReason.STALE_TARGET,
+                                ZLinkDispatchErrorAction.REPLY_ERROR,
+                                packetName,
+                                null,
+                                null,
+                                null,
+                                actorId,
+                                sourceSessionRid.toString(),
+                                correlationId,
+                                null,
+                                null,
+                                null,
+                                null,
+                                failure,
+                                sourceSessionRid.toString()));
+            }
+            return;
+        }
+        var point = reporter.flow().begin(ZLinkMessageFlowOutcome.DROPPED);
+        if (point == null) return;
+        point.trace(
+                new ZLinkMessageFlowEvent(
+                        ZLinkTraceEventId.MESSAGE_FLOW,
+                        ZLinkMessageFlowOutcome.DROPPED,
+                        ZLinkMessageFlowResult.DROPPED,
+                        ZLinkDispatchErrorSurface.STREAM_SESSION,
+                        ZLinkDispatchMessageKind.SEND,
+                        packetName,
+                        null,
+                        null,
+                        null,
+                        null,
+                        correlationId,
+                        sourceNodeRid.toString(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        actorId,
+                        null,
+                        null,
+                        ZLinkDispatchErrorReason.STALE_TARGET,
+                        null,
+                        failure.getClass().getSimpleName(),
+                        failure.getMessage(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        sourceSessionRid.toString()));
     }
 
     @Override
@@ -1818,15 +1891,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     public void setApplicationReceiver(ZLinkMeshApplicationReceiver value) {
         ZLinkMeshApplicationReceiver receiver =
                 Objects.requireNonNull(value, "applicationReceiver");
-        ZLinkJavaRawSpotNode current =
-                inSpotNodeStateLane(
-                        () -> {
-                            applicationReceiver = receiver;
-                            return spotNode;
-                        });
-        if (current != null) {
-            current.setApplicationReceiver(receiver);
-        }
+        applicationReceiver = receiver;
+        spotNode.setApplicationReceiver(receiver);
     }
 
     @Override
@@ -1840,16 +1906,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     @Override
     public ZLinkInternalSpotNode spotNode() {
-        return inSpotNodeStateLane(this::spotNodeCore);
-    }
-
-    private ZLinkInternalSpotNode spotNodeCore() {
-        if (spotNode == null) {
-            spotNode = new ZLinkJavaRawSpotNode(this);
-            if (applicationReceiver != null) {
-                spotNode.setApplicationReceiver(applicationReceiver);
-            }
-        }
         return spotNode;
     }
 
@@ -3665,7 +3721,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         throw ZLinkRequestFailureMapping.receivedFailure(
                                 ZLinkBackendRequestResult.fromWireTerminal(reply.terminalResult())
                                         .toFrameworkErrorKind(reply.failureCode()),
-                                "bound session binding was rejected",
+                                reply.rejectionMessage().isEmpty()
+                                        ? "bound session binding was rejected"
+                                        : reply.rejectionMessage(),
                                 reply.failureCode(),
                                 java.util.Map.of());
                     }
@@ -7568,6 +7626,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                                                             payload)),
                                                     receivedMessages,
                                                     contentType,
+                                                    payload.packetName(),
                                                     replyParts -> {
                                                         if (!terminal.tryWin(
                                                                 ZLinkTerminalWinner.Cause
@@ -8877,14 +8936,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private <T> T inDescriptorStateLane(Supplier<T> work) {
         try {
             return descriptorStateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            return rethrowStateFailure(failure);
-        }
-    }
-
-    private <T> T inSpotNodeStateLane(Supplier<T> work) {
-        try {
-            return spotNodeStateLane.runAsync(work).toCompletableFuture().join();
         } catch (CompletionException failure) {
             return rethrowStateFailure(failure);
         }

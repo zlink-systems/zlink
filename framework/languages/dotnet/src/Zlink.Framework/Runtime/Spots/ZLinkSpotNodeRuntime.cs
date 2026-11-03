@@ -310,7 +310,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 node,
                 registration,
                 () => locationLifecycle.OwnerToken,
-                _runtime.Flow
+                _runtime.Flow,
+                frameworkRegistration.TimeProvider
             );
             node.SetInstanceSpotActivationTarget(_instanceSpotActivationTarget);
         }

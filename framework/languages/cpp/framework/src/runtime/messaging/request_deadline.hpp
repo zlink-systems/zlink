@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 
 #include <cmath>
@@ -9,6 +10,14 @@
 
 namespace zlink::framework::runtime::messaging
 {
+
+inline std::chrono::milliseconds
+remaining_request_timeout (std::chrono::steady_clock::time_point deadline)
+{
+    return std::max (
+      std::chrono::milliseconds::zero (),
+      std::chrono::ceil<std::chrono::milliseconds> (deadline - std::chrono::steady_clock::now ()));
+}
 
 // Preserve the source operation's deadline across the steady/system clock boundary.
 inline std::uint64_t request_deadline_unix_ms (std::chrono::steady_clock::time_point at)

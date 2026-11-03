@@ -843,54 +843,54 @@ public sealed class SerialExecutorTests
         var observedSamples = new List<long>();
         for (var round = 0; round < windowQueues * PerCallAllocation.Windows; round++)
         {
-            // A retry needs a fresh busy queue: its first observation owns the signal.
-            observedSamples.Add(
-                await PerCallAllocation.MeasureWindowAsync(async () =>
-                {
-                    using var errors = new ZLinkRuntimeErrorSink();
-                    await using var queue = new ZLinkSerialExecutionQueue(
-                        new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
-                        errors,
+            // Each sample needs a fresh busy queue: its first observation owns the signal.
+            var measurement = await PerCallAllocation.MeasureWindowAsync(async () =>
+            {
+                using var errors = new ZLinkRuntimeErrorSink();
+                await using var queue = new ZLinkSerialExecutionQueue(
+                    new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+                    errors,
+                    CancellationToken.None
+                );
+                Assert.True(queue.ApplicationDrained.IsCompletedSuccessfully);
+                var entered = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                var release = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                var execution = queue
+                    .RunAsync(
+                        async _ =>
+                        {
+                            entered.TrySetResult();
+                            await release.Task;
+                        },
                         CancellationToken.None
-                    );
+                    )
+                    .AsTask();
+                try
+                {
+                    await entered.Task;
+                    var before = GC.GetAllocatedBytesForCurrentThread();
+                    var drained = queue.ApplicationDrained;
+                    var observedStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+                    Assert.Same(drained, queue.ApplicationDrained);
+                    Assert.False(drained.IsCompleted);
+                    release.TrySetResult();
+                    await execution;
+                    await drained;
                     Assert.True(queue.ApplicationDrained.IsCompletedSuccessfully);
-                    var entered = new TaskCompletionSource(
-                        TaskCreationOptions.RunContinuationsAsynchronously
-                    );
-                    var release = new TaskCompletionSource(
-                        TaskCreationOptions.RunContinuationsAsynchronously
-                    );
-                    var execution = queue
-                        .RunAsync(
-                            async _ =>
-                            {
-                                entered.TrySetResult();
-                                await release.Task;
-                            },
-                            CancellationToken.None
-                        )
-                        .AsTask();
-                    try
-                    {
-                        await entered.Task;
-                        var before = GC.GetAllocatedBytesForCurrentThread();
-                        var drained = queue.ApplicationDrained;
-                        var observedStorage = GC.GetAllocatedBytesForCurrentThread() - before;
-                        Assert.Same(drained, queue.ApplicationDrained);
-                        Assert.False(drained.IsCompleted);
-                        release.TrySetResult();
-                        await execution;
-                        await drained;
-                        Assert.True(queue.ApplicationDrained.IsCompletedSuccessfully);
-                        return observedStorage;
-                    }
-                    finally
-                    {
-                        release.TrySetResult();
-                        await execution;
-                    }
-                })
-            );
+                    return observedStorage;
+                }
+                finally
+                {
+                    release.TrySetResult();
+                    await execution;
+                }
+            });
+            if (measurement.IsValid)
+                observedSamples.Add(measurement.Value);
         }
         Assert.Equal(signalStorage, PerCallAllocation.MinWindow(observedSamples));
     }
@@ -1069,12 +1069,7 @@ public sealed class SerialExecutorTests
         );
         // Arrange this selector input directly: a retained claim, a ready held
         // head, and a non-reserved mailbox. No consumer runs on the fixture.
-        const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var type = typeof(ZLinkSerialExecutionQueue);
-        var active = type.GetField("_active", flags)!;
-        var pending = (ZLinkSerialWorkQueue)
-            type.GetField("_applicationQueue", flags)!.GetValue(claimed)!;
+        var pending = claimed._applicationQueue;
         var headReads = 0;
         var head = new ZLinkSerialWorkItem(
             static _ => ValueTask.CompletedTask,
@@ -1085,7 +1080,7 @@ public sealed class SerialExecutorTests
             }
         );
         var mailbox = new ZLinkSerialWorkItem(owner);
-        active.SetValue(claimed, new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask));
+        claimed._active = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
         pending.Enqueue(head);
         pending.Enqueue(mailbox);
         try
@@ -1093,22 +1088,16 @@ public sealed class SerialExecutorTests
             Assert.True(head.ReservationHeld);
             Assert.False(mailbox.ReservationHeld);
             Assert.NotNull(mailbox.Mailbox);
-            Assert.True(
-                (bool)
-                    type.GetMethod("HasRunnableApplicationUnderLock", flags)!.Invoke(claimed, null)!
-            );
+            Assert.True(claimed.HasRunnableApplicationUnderLock());
             Assert.True(headReads > 0);
-            var arguments = new object?[] { null };
-            Assert.True(
-                (bool)type.GetMethod("TryDequeueNextUnderLock", flags)!.Invoke(claimed, arguments)!
-            );
-            Assert.Same(mailbox, arguments[0]);
+            Assert.True(claimed.TryDequeueNextUnderLock(out var dequeued));
+            Assert.Same(mailbox, dequeued);
             Assert.Same(head, pending.Head);
         }
         finally
         {
             pending.Clear();
-            active.SetValue(claimed, null);
+            claimed._active = null;
         }
     }
 

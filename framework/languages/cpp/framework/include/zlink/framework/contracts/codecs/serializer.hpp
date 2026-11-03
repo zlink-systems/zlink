@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+#include <zlink/framework/detail/test_creation_probe.hpp>
+#endif
+
 #include <zlink/json_profile.hpp>
 
 #include <zlink/Contracts/Messaging/message.hpp>
@@ -18,6 +22,7 @@
 #include <type_traits>
 #include <typeindex>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace zlink::framework
@@ -33,8 +38,10 @@ class serializer_registry_state_t;
 struct serializer_registry_access_t;
 struct serializer_registry_test_access_t;
 encoded_payload_t encoded_payload_from_raw (const zlink::message_t &message);
+encoded_payload_t encoded_payload_from_raw (std::span<const std::byte> bytes);
 encoded_payload_t encoded_payload_from_raw (zlink::message_t &&message);
 zlink::message_t encoded_payload_to_raw (const encoded_payload_t &payload);
+zlink::message_t encoded_payload_to_raw (encoded_payload_t &&payload);
 
 template <typename T> struct service_packet_codec_t;
 
@@ -49,24 +56,26 @@ class encoded_payload_t
   public:
     encoded_payload_t () = default;
 
-    encoded_payload_t (const encoded_payload_t &other)
+    encoded_payload_t (const encoded_payload_t &other) :
+        encoded_payload_t (zlink::message_t::from (other.bytes ()))
     {
-        const auto source = other.bytes ();
-        _message = zlink::message_t::from (source);
-        if (!_message.valid ())
-            throw std::bad_alloc ();
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        detail::test_creation_probe::payload_copies.fetch_add (1, std::memory_order_relaxed);
+#endif
     }
 
     encoded_payload_t &operator= (const encoded_payload_t &other)
     {
         if (this == &other)
             return *this;
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        detail::test_creation_probe::payload_copies.fetch_add (1, std::memory_order_relaxed);
+#endif
         const auto source = other.bytes ();
         auto owned = zlink::message_t::from (source);
         if (!owned.valid ())
             throw std::bad_alloc ();
-        _message = std::move (owned);
-        _borrowed_bytes.reset ();
+        _storage = std::move (owned);
         return *this;
     }
 
@@ -75,11 +84,7 @@ class encoded_payload_t
 
     static encoded_payload_t from_bytes (std::span<const std::byte> bytes)
     {
-        encoded_payload_t payload;
-        payload._message = zlink::message_t::from (bytes);
-        if (!payload._message.valid ())
-            throw std::bad_alloc ();
-        return payload;
+        return encoded_payload_t (zlink::message_t::from (bytes));
     }
 
     static encoded_payload_t from_bytes (std::span<const std::uint8_t> bytes)
@@ -94,7 +99,9 @@ class encoded_payload_t
 
     std::span<const std::byte> bytes () const noexcept
     {
-        return _borrowed_bytes.value_or (_message.bytes ());
+        if (const auto *message = std::get_if<zlink::message_t> (&_storage))
+            return message->bytes ();
+        return std::get<std::span<const std::byte>> (_storage);
     }
     std::vector<std::uint8_t> to_bytes () const
     {
@@ -122,14 +129,15 @@ class encoded_payload_t
     friend class serializer_registry_t;
     friend class message_t;
     friend encoded_payload_t detail::encoded_payload_from_raw (const zlink::message_t &message);
+    friend encoded_payload_t detail::encoded_payload_from_raw (std::span<const std::byte> bytes);
     friend encoded_payload_t detail::encoded_payload_from_raw (zlink::message_t &&message);
     friend zlink::message_t detail::encoded_payload_to_raw (const encoded_payload_t &payload);
+    friend zlink::message_t detail::encoded_payload_to_raw (encoded_payload_t &&payload);
 
-    static encoded_payload_t from_raw (const zlink::message_t &message)
+    explicit encoded_payload_t (zlink::message_t &&message) : _storage (std::move (message))
     {
-        encoded_payload_t payload;
-        payload._borrowed_bytes = message.bytes ();
-        return payload;
+        if (!std::get<zlink::message_t> (_storage).valid ())
+            throw std::bad_alloc ();
     }
 
     static encoded_payload_t from_text (std::string text)
@@ -137,25 +145,28 @@ class encoded_payload_t
         auto storage = std::make_unique<std::string> (std::move (text));
         const auto data =
           std::as_writable_bytes (std::span<char> (storage->data (), storage->size ()));
-        encoded_payload_t payload;
-        payload._message = zlink::advanced::external_message_t::from (
+        auto message = zlink::advanced::external_message_t::from (
           data, [] (void *, void *hint) { delete static_cast<std::string *> (hint); },
           storage.get ());
-        if (!payload._message.valid ())
+        if (!message.valid ())
             throw std::bad_alloc ();
         storage.release ();
-        return payload;
+        return encoded_payload_t (std::move (message));
     }
 
     zlink::message_t to_raw () const
     {
-        return _borrowed_bytes ? zlink::message_t::from (*_borrowed_bytes) : _message.copy ();
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        detail::test_creation_probe::payload_copies.fetch_add (1, std::memory_order_relaxed);
+#endif
+        if (const auto *message = std::get_if<zlink::message_t> (&_storage))
+            return message->copy ();
+        return zlink::message_t::from (bytes ());
     }
 
-    zlink::message_t _message;
     // Only the private raw-message bridge creates a borrowed view. Public
     // factories and copies keep value semantics by owning their bytes.
-    std::optional<std::span<const std::byte>> _borrowed_bytes;
+    std::variant<std::span<const std::byte>, zlink::message_t> _storage;
 };
 
 /// Encoded bytes and the media type chosen by the same typed serializer.
@@ -169,20 +180,32 @@ struct serialized_payload_t
 
 namespace detail
 {
+inline encoded_payload_t encoded_payload_from_raw (std::span<const std::byte> bytes)
+{
+    encoded_payload_t payload;
+    payload._storage = bytes;
+    return payload;
+}
+
 inline encoded_payload_t encoded_payload_from_raw (const zlink::message_t &message)
 {
-    return encoded_payload_t::from_raw (message);
+    return encoded_payload_from_raw (message.bytes ());
 }
 
 inline encoded_payload_t encoded_payload_from_raw (zlink::message_t &&message)
 {
-    encoded_payload_t payload;
-    payload._message = std::move (message);
-    return payload;
+    return encoded_payload_t (std::move (message));
 }
 
 inline zlink::message_t encoded_payload_to_raw (const encoded_payload_t &payload)
 {
+    return payload.to_raw ();
+}
+
+inline zlink::message_t encoded_payload_to_raw (encoded_payload_t &&payload)
+{
+    if (auto *message = std::get_if<zlink::message_t> (&payload._storage))
+        return std::move (*message);
     return payload.to_raw ();
 }
 } // namespace detail

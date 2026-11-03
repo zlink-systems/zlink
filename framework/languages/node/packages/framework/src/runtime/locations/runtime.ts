@@ -220,7 +220,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     return this.ownerToken;
   }
 
-  /** Location runtime §5: a startup Store request ends within the renew timeout. */
+  /** Location runtime §5: a descriptor publication ends within the renew timeout. */
   async writeDescriptor<T>(
     action: (signal?: AbortSignal) => Promise<T>,
     signal?: AbortSignal
@@ -754,7 +754,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     const normalizedEndpoint = normalizeEndpoint(peer.endpoint);
     const stamped = { ...peer, endpoint: normalizedEndpoint, ownerId: this.ownerId };
     const result = await this.guardWrite(() =>
-      this.stores.peerStore.updatePeer(stamped, intent, signal)
+      this.writeDescriptor(
+        (writeSignal) => this.stores.peerStore.updatePeer(stamped, intent, writeSignal),
+        signal
+      )
     );
     const key: ZLinkPeerLocationKey = {
       autoConnectType: peer.autoConnectType,
@@ -1342,11 +1345,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
   }
 
-  private notifyIfStale(
-    result: ZLinkLocationWriteResult,
-    kind: ZLinkLocationKind,
-    key: string
-  ): void {
+  notifyIfStale(result: ZLinkLocationWriteResult, kind: ZLinkLocationKind, key: string): void {
     if (result.status !== ZLinkLocationWriteStatus.IgnoredStale) {
       return;
     }

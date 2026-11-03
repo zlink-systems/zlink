@@ -17,10 +17,10 @@
 #include "runtime/dispatch/application_job_queue_capacity.hpp"
 #include "runtime/dispatch/host_capacity_runtime.hpp"
 #include "runtime/host/bound_session_send_stage_trace.hpp"
+#include "runtime/host/bound_session_bind.hpp"
 #include "runtime/host/framework_runtime.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
 #include "runtime/http/http_host_service.hpp"
-#include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/location_auto_connect_host_service.hpp"
@@ -880,43 +880,45 @@ void trace_instance_spot_activation (
   std::optional<zlink::framework::message_flow_result_t> result = std::nullopt,
   std::optional<zlink::framework::message_flow_reason_t> reason = std::nullopt)
 {
-    zlink::framework::detail::message_flow_tracer_t (dispatch).trace (outcome, result, [&] {
-        zlink::framework::message_flow_event_t event{
-          outcome,
-          zlink::framework::dispatch_error_surface_t::instance_spot,
-          message_kind,
-          context.packet_name,
-          std::nullopt,
-          std::nullopt,
-          context.correlation_id,
-          std::nullopt,
-          std::string (context.spot_id),
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          std::exception_ptr{},
-          std::nullopt,
-          std::nullopt};
-        if (flow && !flow->flow_id.empty ()) {
-            event.flow_id = flow->flow_id;
-            event.flow_origin = flow->origin;
-        }
-        event.mesh_name = context.mesh_name;
-        event.target_rid = context.target_node.to_string ();
-        event.instance_spot_type = context.instance_spot_type;
-        event.activation_state =
-          outcome == zlink::framework::message_flow_outcome_t::reply_received
-              && (!result || *result == zlink::framework::message_flow_result_t::succeeded)
-            ? "ready"
-            : "activating";
-        event.source_mesh_generation = context.source_node_generation;
-        if (result)
-            event.result = *result;
-        if (reason)
-            event.reason = *reason;
-        return event;
-    });
+    if (zlink::framework::detail::message_flow_tracer_t (dispatch).enabled_for (outcome, result)) {
+        zlink::framework::detail::message_flow_tracer_t (dispatch).trace (outcome, result, [&] {
+            zlink::framework::message_flow_event_t event{
+              outcome,
+              zlink::framework::dispatch_error_surface_t::instance_spot,
+              message_kind,
+              context.packet_name,
+              std::nullopt,
+              std::nullopt,
+              context.correlation_id,
+              std::nullopt,
+              std::string (context.spot_id),
+              std::nullopt,
+              std::nullopt,
+              std::nullopt,
+              std::nullopt,
+              std::exception_ptr{},
+              std::nullopt,
+              std::nullopt};
+            if (flow && !flow->flow_id.empty ()) {
+                event.flow_id = flow->flow_id;
+                event.flow_origin = flow->origin;
+            }
+            event.mesh_name = context.mesh_name;
+            event.target_rid = context.target_node.to_string ();
+            event.instance_spot_type = context.instance_spot_type;
+            event.activation_state =
+              outcome == zlink::framework::message_flow_outcome_t::reply_received
+                  && (!result || *result == zlink::framework::message_flow_result_t::succeeded)
+                ? "ready"
+                : "activating";
+            event.source_mesh_generation = context.source_node_generation;
+            if (result)
+                event.result = *result;
+            if (reason)
+                event.reason = *reason;
+            return event;
+        });
+    }
 }
 
 zlink::framework::result_t<void> one_way_native_submit_result (zlink::submit_result_t result,
@@ -964,6 +966,61 @@ zlink::framework::result_t<void> one_way_native_submit_result (zlink::submit_res
     }
 }
 
+// Value parameters keep request state in the coroutine frame after the caller destroys its closure.
+zlink::framework::request_task_t<
+  zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>>
+request_mesh_spot_from_app_task (
+  std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t> mesh,
+  std::string source_spot_id,
+  zlink::routing_id_t target_node,
+  std::string target_spot,
+  std::uint64_t target_spot_generation,
+  zlink::framework::runtime::messaging::message_parts_t parts,
+  std::chrono::milliseconds timeout)
+{
+    using namespace zlink::framework;
+    detail::host::pending_operation_t operation;
+    auto submission =
+      mesh->request_to_spot (source_spot_id, target_node, target_spot, target_spot_generation,
+                             parts.items (), operation, timeout);
+    auto admitted = co_await detail::request_admission_source_t{};
+    mesh->observe_request_failure (operation, admitted, "MeshNode Spot request");
+    const auto submitted = co_await submission;
+    if (submitted != zlink::submit_result_t::ok) {
+        co_return result_t<runtime::messaging::message_parts_t>::failure (
+          framework_error_kind_t::unavailable, "MeshNode Spot request was not submitted");
+    }
+    co_await detail::request_admitted_t{};
+    co_return co_await mesh->await_request_reply (operation, "MeshNode Spot request");
+}
+
+zlink::framework::request_task_t<
+  zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>>
+request_mesh_channel_from_app_task (
+  std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t> mesh,
+  std::string channel_name,
+  zlink::framework::runtime::messaging::message_parts_t parts,
+  std::chrono::milliseconds timeout)
+{
+    using namespace zlink::framework;
+    detail::host::pending_operation_t operation;
+    auto submission = mesh->request_to_channel (channel_name, parts.items (), operation, timeout);
+    auto admitted = co_await detail::request_admission_source_t{};
+    mesh->observe_request_failure (operation, admitted, "RouteMesh channel request");
+    const auto submitted = co_await submission;
+    if (submitted != zlink::submit_result_t::ok) {
+        if (submitted == zlink::submit_result_t::terminated) {
+            co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
+              detail::boundary_error_t::shutdown, "RouteMesh channel request runtime is stopped");
+        }
+        co_return result_t<runtime::messaging::message_parts_t>::failure (
+          runtime::messaging::map_submit_result_error_kind (submitted),
+          "RouteMesh channel request was not submitted");
+    }
+    co_await detail::request_admitted_t{};
+    co_return co_await mesh->await_request_reply (operation, "RouteMesh channel request");
+}
+
 zlink::framework::task_t<zlink::framework::result_t<void>> send_bound_session_from_app_task (
   std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t> application_mesh,
   zlink::framework::detail::actor_gateway_runtime_t actor_gateway_runtime,
@@ -983,13 +1040,15 @@ zlink::framework::task_t<zlink::framework::result_t<void>> send_bound_session_fr
                                                "Actor bound Session route is not ready");
         }
         const auto local = application_mesh->native_node ().status ();
-        actor_gateway_runtime.trace_bound_session_send_stage (
-          actor.actor_id ().value (), "actor_owner_push_target",
-          [&] {
-              return "session_rid=" + route->session_rid->to_hex ()
-                     + " binding_generation=" + std::to_string (route->binding_generation);
-          },
-          &*route->session_rid);
+        if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+            actor_gateway_runtime.trace_bound_session_send_stage (
+              actor.actor_id ().value (), "actor_owner_push_target",
+              [&] {
+                  return "session_rid=" + route->session_rid->to_hex ()
+                         + " binding_generation=" + std::to_string (route->binding_generation);
+              },
+              &*route->session_rid);
+        }
         const auto local_actor = detail::actor_ref_access_t::make (
           node_rid_t::from_string (local.routing_id ().to_string ()),
           std::string (detail::actor_ref_access_t::actor_type (actor)),
@@ -1013,6 +1072,286 @@ zlink::framework::task_t<zlink::framework::result_t<void>> send_bound_session_fr
         co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
     }
 }
+
+} // namespace
+
+namespace zlink::framework::detail
+{
+
+zlink::framework::task_t<zlink::framework::runtime::host::bound_session_bind_operation_result_t>
+apply_bound_session_bind_async (
+  std::weak_ptr<zlink::framework::detail::actor_gateway_state_t> weak_actor_gateway_runtime,
+  std::weak_ptr<zlink::framework::detail::mesh_node_runtime_t> weak_application_mesh,
+  std::shared_ptr<zlink::framework::detail::spot_node_builder_state_t> spot_state,
+  zlink::framework::detail::stream_runtime_t stream_runtime,
+  zlink::framework::actor_ref_t actor,
+  zlink::framework::runtime::protocol::bound_session_bind_t bind,
+  zlink::routing_id_t session_owner,
+  std::uint64_t session_owner_generation,
+  zlink::framework::location_owner_token_t session_owner_token,
+  std::function<bool (std::uint32_t,
+                      std::uint32_t,
+                      std::optional<zlink::framework::runtime::protocol::stream_bind_reply_tail_t>)>
+    submit_terminal_reply,
+  zlink::framework::detail::delay_owner_t &delays,
+  std::chrono::milliseconds callback_timeout)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    using bind_result_t = runtime::host::bound_session_bind_operation_result_t;
+    actor_gateway_runtime_t actor_gateway_runtime (lock_runtime_owner (weak_actor_gateway_runtime));
+    const auto session_rid = zlink::routing_id_t::from (bind.session_routing_id);
+    if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+        actor_gateway_runtime.trace_bound_session_send_stage (
+          bind.actor.actor_id, "bound_session_bind_receive",
+          [&] {
+              return "new_session_rid=" + session_rid.to_hex ()
+                     + " new_binding_generation=" + std::to_string (bind.binding.generation);
+          },
+          &session_rid);
+    }
+    if (bind.binding.state == runtime::protocol::bound_session_binding_state_t::tombstone) {
+        const auto retired = actor_gateway_runtime.retire_bound_session_route (
+          actor, session_owner, session_rid, bind.binding.generation);
+        co_return bind_result_t{retired ? runtime::stateful::stateful_error_t::none
+                                        : runtime::stateful::stateful_error_t::conflict,
+                                std::nullopt};
+    }
+
+    auto sink = [weak_application_mesh, weak_actor_gateway_runtime, stream_runtime, actor,
+                 session_owner, session_rid, binding_generation = bind.binding.generation,
+                 authority_owner_generation = bind.actor.authority_owner_generation,
+                 owner_lease_generation = bind.actor.owner_lease_generation] (
+                  std::string packet_name, stream_codec_t codec,
+                  const zlink::message_t &payload) mutable -> task_t<void> {
+        const auto application_mesh = lock_runtime_owner (weak_application_mesh);
+        actor_gateway_runtime_t actor_gateway_runtime (
+          lock_runtime_owner (weak_actor_gateway_runtime));
+        const stream_header_t header (stream_message_kind_t::send, codec,
+                                      stream_header_flags_t::none, std::nullopt,
+                                      std::move (packet_name));
+        const actor_bound_session_route_t staged_route{session_owner,
+                                                       session_rid,
+                                                       actor.object_generation (),
+                                                       0,
+                                                       authority_owner_generation,
+                                                       owner_lease_generation,
+                                                       binding_generation,
+                                                       0,
+                                                       0};
+        const auto current_route =
+          actor_gateway_runtime.resolve_bound_session_push_route (actor, staged_route);
+        if (!current_route || !current_route->session_rid)
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Framework Actor bound Session route is unavailable");
+        bound_session_send_stage_trace_context_t trace_context{
+          &actor_gateway_runtime, actor.actor_id ().value (), &*current_route->session_rid};
+        auto stage_trace = make_bound_session_send_stage_trace (trace_context);
+        const auto submitted = co_await application_mesh->native_node ().send_bound_session (
+          actor, current_route->node_rid, current_route->binding_generation,
+          current_route->authority_owner_generation, current_route->owner_lease_generation,
+          encode_bound_session_frame (stream_runtime, header, payload), std::move (stage_trace));
+        const auto result =
+          one_way_native_submit_result (submitted, "Framework Actor bound Session send");
+        if (!result)
+            throw result.error ()
+              ? *result.error ()
+              : framework_exception_t (framework_error_kind_t::internal_failure,
+                                       "Framework Actor bound Session send failed");
+        co_return;
+    };
+
+    const actor_bound_session_route_t incoming_route{
+      session_owner,
+      session_rid,
+      bind.actor.object_generation,
+      session_owner_generation,
+      bind.actor.authority_owner_generation,
+      bind.actor.owner_lease_generation,
+      bind.binding.generation,
+      0,
+      0,
+      false,
+      session_owner_token.owner_id,
+      static_cast<std::uint64_t> (session_owner_token.lease_generation)};
+    auto replace_binding =
+      [actor_gateway_runtime, actor, bind, incoming_route, sink = std::move (sink),
+       submit_terminal_reply] () mutable -> ::zlink::framework::result_t<bind_result_t> {
+        const auto transition = actor_gateway_runtime.replace_session_route (
+          actor, std::move (sink), incoming_route, stream_codec_t::message_pack,
+          [submit_terminal_reply] (const actor_bound_session_route_t &accepted) {
+              return submit_terminal_reply (
+                static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::ok),
+                static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
+                runtime::protocol::stream_bind_reply_tail_t{accepted.binding_generation,
+                                                            accepted.authority_owner_generation});
+          });
+        if (!transition)
+            return ::zlink::framework::result_t<bind_result_t>::failure (
+              transition.error_kind (), transition.error ()
+                                          ? transition.error ()->what ()
+                                          : "Actor bound Session route replacement failed");
+
+        std::optional<runtime::protocol::bound_session_replaced_t> replacement;
+        const auto &change = transition.value ();
+        if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+            actor_gateway_runtime.trace_bound_session_send_stage (
+              std::string (actor.actor_id ().value ()), "actor_owner_route_publish",
+              [&] {
+                  return "session_rid=" + incoming_route.session_rid->to_hex ()
+                         + " binding_generation="
+                         + std::to_string (incoming_route.binding_generation)
+                         + " replaced=" + (change.changed ? "true" : "false");
+              },
+              &*incoming_route.session_rid);
+        }
+        if (change.changed && change.previous && change.previous->session_rid
+            && change.previous->node_generation != 0 && change.previous->binding_generation != 0
+            && !change.previous->session_owner_id.empty ()
+            && change.previous->session_owner_lease_generation != 0) {
+            replacement = runtime::protocol::bound_session_replaced_t{
+              bind.actor,
+              runtime::protocol::retired_bound_session_route_fence_t{
+                change.previous->node_rid.to_bytes (), change.previous->node_generation,
+                change.previous->session_owner_id, change.previous->session_owner_lease_generation,
+                change.previous->session_rid->to_bytes (), change.previous->binding_generation}};
+        }
+        return ::zlink::framework::result_t<bind_result_t>::success (
+          bind_result_t{runtime::stateful::stateful_error_t::none, std::move (replacement)});
+    };
+    const bool callback_absent = co_await spot_state->lane.run_task ([spot_state, actor] {
+        auto actor_type = std::string (actor_ref_access_t::actor_type (actor));
+        if (actor_type.empty ()) {
+            const auto type =
+              spot_state->actor_types_by_id.find (std::string (actor.actor_id ().value ()));
+            if (type == spot_state->actor_types_by_id.end ())
+                return false;
+            actor_type = type->second;
+        }
+        const auto factory = spot_state->actor_factories.find (actor_type);
+        const auto instance = spot_state->actor_instances.find (
+          actor_type + ":" + std::string (actor.actor_id ().value ()));
+        if (factory == spot_state->actor_factories.end ()
+            || !factory->second.duplicate_bind_is_default || !factory->second.as_actor
+            || instance == spot_state->actor_instances.end () || !instance->second)
+            return false;
+        const auto *actor_instance = factory->second.as_actor (instance->second.get ());
+        // A factory may return a subtype with an override absent from its registered type.
+        return actor_instance
+               && std::type_index (typeid (*actor_instance)) == factory->second.actor_type;
+    });
+    if (callback_absent)
+        co_return replace_binding ();
+    struct callback_race_t
+    {
+        std::atomic<std::uint8_t> decision{0};
+        std::stop_source cancellation;
+    };
+    auto race = std::make_shared<callback_race_t> ();
+    auto completion = std::make_shared<task_completion_source_t<bind_result_t>> ();
+    auto start_callback_timeout = [&delays, callback_timeout, race, completion] {
+        auto timeout = delay (delays, callback_timeout, race->cancellation.get_token ());
+        observe_task_completion (timeout, [race, completion] (const result_t<void> &elapsed) {
+            std::uint8_t pending = 0;
+            if (!race->decision.compare_exchange_strong (pending, 2))
+                return;
+            race->cancellation.request_stop ();
+            if (!elapsed) {
+                completion->complete (::zlink::framework::result_t<bind_result_t>::failure (
+                  elapsed.error_kind (),
+                  elapsed.error () ? elapsed.error ()->what () : "Actor callback timer failed"));
+                return;
+            }
+            completion->complete (
+              ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
+                runtime::stateful::stateful_error_t::unavailable, std::nullopt,
+                static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::timedOut),
+                static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
+                std::nullopt}));
+        });
+    };
+    auto spot_runtime = spot_node_runtime_t (std::move (spot_state));
+    auto turn = spot_runtime.run_actor_turn (
+      actor,
+      [actor_gateway_runtime, actor, incoming_route, replace_binding = std::move (replace_binding),
+       incoming_identity =
+         actor_session_binding_identity_t{node_rid_t::from_string (session_owner.to_string ()),
+                                          session_owner_generation, bind.binding.generation},
+       race, completion, start_callback_timeout] (
+        actor_t &actor_instance,
+        std::stop_token cancellation) mutable -> task_t<::zlink::framework::result_t<bool>> {
+          const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
+          const bool duplicate = current && current->session_rid && current->node_generation != 0
+                                 && current->binding_generation != 0
+                                 && (current->node_rid != incoming_route.node_rid
+                                     || current->node_generation != incoming_route.node_generation
+                                     || *current->session_rid != *incoming_route.session_rid);
+          if (duplicate) {
+              const actor_session_binding_identity_t current_identity{
+                node_rid_t::from_string (current->node_rid.to_string ()), current->node_generation,
+                current->binding_generation};
+              start_callback_timeout ();
+              const auto rejection = co_await actor_instance.on_duplicate_bind (
+                current_identity, incoming_identity, cancellation);
+              std::uint8_t pending = 0;
+              if (!race->decision.compare_exchange_strong (pending, 1))
+                  co_return ::zlink::framework::result_t<bool>::success (false);
+              if (rejection && !rejection->empty ()) {
+                  completion->complete (
+                    ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
+                      runtime::stateful::stateful_error_t::conflict, std::nullopt,
+                      static_cast<std::uint32_t> (
+                        runtime::protocol::request_terminal_result::rejected),
+                      static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
+                      runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
+                  co_return ::zlink::framework::result_t<bool>::success (false);
+              }
+          } else {
+              std::uint8_t pending = 0;
+              if (!race->decision.compare_exchange_strong (pending, 1))
+                  co_return ::zlink::framework::result_t<bool>::success (false);
+          }
+          if (cancellation.stop_requested ())
+              co_return ::zlink::framework::result_t<bool>::success (false);
+
+          auto transition = replace_binding ();
+          if (!transition)
+              co_return ::zlink::framework::result_t<bool>::failure (
+                transition.error_kind (), transition.error ()
+                                            ? transition.error ()->what ()
+                                            : "Actor bound Session route replacement failed");
+          completion->complete (std::move (transition));
+          co_return ::zlink::framework::result_t<bool>::success (true);
+      },
+      race->cancellation.get_token ());
+    observe_task_completion (
+      turn, [race, completion] (
+              const ::zlink::framework::result_t<::zlink::framework::result_t<bool>> &finished) {
+          std::uint8_t pending = 0;
+          (void) race->decision.compare_exchange_strong (pending, 1);
+          race->cancellation.request_stop ();
+          if (!finished) {
+              completion->complete (::zlink::framework::result_t<bind_result_t>::failure (
+                finished.error_kind (), finished.error () ? finished.error ()->what ()
+                                                          : "Actor duplicate-bind turn failed"));
+              return;
+          }
+          const auto &turn_result = finished.value ();
+          if (!turn_result) {
+              completion->complete (::zlink::framework::result_t<bind_result_t>::failure (
+                turn_result.error_kind (), turn_result.error ()
+                                             ? turn_result.error ()->what ()
+                                             : "Actor duplicate-bind turn failed"));
+              return;
+          }
+      });
+    co_return co_await completion->task ();
+}
+
+} // namespace zlink::framework::detail
+
+namespace
+{
 
 } // namespace
 
@@ -1312,124 +1651,121 @@ void app_t::_apply_zlink_framework ()
           },
           service_lifetime_t::singleton);
     }
-    if (!_state->services.contains (std::type_index (typeid (location_repository_t)))) {
-        auto store = std::make_shared<runtime::in_memory_location_repository_t> ();
-        _state->services.add_factory<location_repository_t> (
-          [store] (service_provider_t &) {
-              return std::static_pointer_cast<location_repository_t> (store);
-          },
-          service_lifetime_t::singleton);
-    }
-    if (!_state->services.contains (
-          std::type_index (typeid (runtime::stateful::authority_relocation_port_t)))) {
-        _state->services.add_factory<runtime::stateful::authority_relocation_port_t> (
-          [] (service_provider_t &provider) {
-              return std::unique_ptr<runtime::stateful::authority_relocation_port_t> (
-                std::make_unique<runtime::stateful::public_authority_store_adapter_t> (
-                  provider.get_required<location_repository_t> ()));
-          },
-          service_lifetime_t::singleton);
-    }
-    if (!_state->services.contains (std::type_index (typeid (runtime::location_runtime_t)))) {
-        const auto location_options = options.location_options ();
-        _state->services.add_factory<runtime::location_runtime_t> (
-          [location_options, monitoring = _state->monitoring] (service_provider_t &provider) {
-              auto runtime = std::make_unique<runtime::location_runtime_t> (
-                provider.get_required<location_repository_t> (), location_options);
-              runtime->bind_monitoring (monitoring);
-              return runtime;
-          },
-          service_lifetime_t::singleton);
-    }
-    if (!_state->services.contains (std::type_index (typeid (runtime::live_location_reader_t)))) {
-        const auto location_options = options.location_options ();
-        _state->services.add_factory<runtime::live_location_reader_t> (
-          [location_options] (service_provider_t &provider) {
-              return std::make_unique<runtime::live_location_reader_t> (
-                provider.get_required<location_repository_t> (), location_options);
-          },
-          service_lifetime_t::singleton);
-    }
-    if (!_state->services.contains (std::type_index (typeid (runtime::location_lifecycle_t)))) {
-        _state->services.add_factory<runtime::location_lifecycle_t> (
-          [] (service_provider_t &provider) {
-              return std::make_unique<runtime::location_lifecycle_t> (
-                provider.get_required<runtime::location_runtime_t> ());
-          },
-          service_lifetime_t::singleton);
-    }
     const auto actor_location_observer = std::make_shared<runtime::actor_location_observer_t> ();
     const auto actor_mesh_name = std::make_shared<std::string> ();
-    if (!_state->services.contains (
-          std::type_index (typeid (runtime::store_location_resolvers_t)))) {
-        const auto resolver_location_options = options.location_options ();
-        _state->services.add_factory<runtime::store_location_resolvers_t> (
-          [resolver_location_options, actor_location_observer] (service_provider_t &provider) {
-              return std::make_shared<runtime::store_location_resolvers_t> (
-                provider.get_required<runtime::live_location_reader_t> (),
-                resolver_location_options, actor_location_observer);
-          },
-          service_lifetime_t::singleton);
-    }
-    if (!_state->services.contains (std::type_index (typeid (runtime::spot_address_resolver_t)))) {
-        _state->services.add_factory<runtime::spot_address_resolver_t> (
-          [] (service_provider_t &provider) {
-              // Shares the store resolvers' ownership: runtimes that bind this
-              // resolver keep it for their late operations.
-              const auto resolvers = detail::service_scope_access_t::get_required_shared<
-                runtime::store_location_resolvers_t> (provider);
-              return std::shared_ptr<runtime::spot_address_resolver_t> (resolvers,
-                                                                        resolvers.get ());
-          },
-          service_lifetime_t::singleton);
-    }
-    if (!_state->services.contains (std::type_index (typeid (runtime::actor_address_resolver_t)))) {
-        _state->services.add_factory<runtime::actor_address_resolver_t> (
-          [] (service_provider_t &provider) {
-              return std::shared_ptr<runtime::actor_address_resolver_t> (
-                &provider.get_required<runtime::store_location_resolvers_t> (),
-                [] (runtime::actor_address_resolver_t *) noexcept {});
-          },
-          service_lifetime_t::singleton);
-    }
-    if (!_state->services.contains (std::type_index (typeid (actor_directory_t)))) {
-        _state->services.add_factory<actor_directory_t> (
-          [actor_location_observer, actor_mesh_name] (service_provider_t &provider) {
-              return std::shared_ptr<actor_directory_t> (
-                std::make_shared<detail::store_actor_directory_t> (
-                  provider.get_required<runtime::live_location_reader_t> (),
-                  actor_location_observer, actor_mesh_name));
-          },
-          service_lifetime_t::singleton);
-    }
-    if (!_state->services.contains (std::type_index (typeid (location_readiness_t)))) {
-        _state->services.add_factory<location_readiness_t> (
-          [] (service_provider_t &provider) {
-              return std::shared_ptr<location_readiness_t> (
-                &provider.get_required<runtime::store_location_resolvers_t> (),
-                [] (location_readiness_t *) noexcept {});
-          },
-          service_lifetime_t::singleton);
-    }
-    if (!_state->services.contains (std::type_index (typeid (location_runtime_query_t)))) {
-        const auto location_options = options.location_options ();
-        _state->services.add_factory<location_runtime_query_t> (
-          [location_options, actor_location_observer] (service_provider_t &provider) {
-              return std::shared_ptr<location_runtime_query_t> (
-                std::make_shared<runtime::store_location_runtime_query_t> (
-                  provider.get_required<runtime::live_location_reader_t> (),
-                  provider.get_required<runtime::location_runtime_t> (), location_options,
-                  actor_location_observer));
-          },
-          service_lifetime_t::singleton);
+    if (_state->services.contains (std::type_index (typeid (location_repository_t)))) {
+        if (!_state->services.contains (
+              std::type_index (typeid (runtime::stateful::authority_relocation_port_t)))) {
+            _state->services.add_factory<runtime::stateful::authority_relocation_port_t> (
+              [] (service_provider_t &provider) {
+                  return std::unique_ptr<runtime::stateful::authority_relocation_port_t> (
+                    std::make_unique<runtime::stateful::public_authority_store_adapter_t> (
+                      provider.get_required<location_repository_t> ()));
+              },
+              service_lifetime_t::singleton);
+        }
+        if (!_state->services.contains (std::type_index (typeid (runtime::location_runtime_t)))) {
+            const auto location_options = options.location_options ();
+            _state->services.add_factory<runtime::location_runtime_t> (
+              [location_options, monitoring = _state->monitoring] (service_provider_t &provider) {
+                  auto runtime = std::make_unique<runtime::location_runtime_t> (
+                    provider.get_required<location_repository_t> (), location_options);
+                  runtime->bind_monitoring (monitoring);
+                  return runtime;
+              },
+              service_lifetime_t::singleton);
+        }
+        if (!_state->services.contains (
+              std::type_index (typeid (runtime::live_location_reader_t)))) {
+            const auto location_options = options.location_options ();
+            _state->services.add_factory<runtime::live_location_reader_t> (
+              [location_options] (service_provider_t &provider) {
+                  return std::make_unique<runtime::live_location_reader_t> (
+                    provider.get_required<location_repository_t> (), location_options);
+              },
+              service_lifetime_t::singleton);
+        }
+        if (!_state->services.contains (std::type_index (typeid (runtime::location_lifecycle_t)))) {
+            _state->services.add_factory<runtime::location_lifecycle_t> (
+              [] (service_provider_t &provider) {
+                  return std::make_unique<runtime::location_lifecycle_t> (
+                    provider.get_required<runtime::location_runtime_t> ());
+              },
+              service_lifetime_t::singleton);
+        }
+        if (!_state->services.contains (
+              std::type_index (typeid (runtime::store_location_resolvers_t)))) {
+            const auto resolver_location_options = options.location_options ();
+            _state->services.add_factory<runtime::store_location_resolvers_t> (
+              [resolver_location_options, actor_location_observer] (service_provider_t &provider) {
+                  return std::make_shared<runtime::store_location_resolvers_t> (
+                    provider.get_required<runtime::live_location_reader_t> (),
+                    resolver_location_options, actor_location_observer);
+              },
+              service_lifetime_t::singleton);
+        }
+        if (!_state->services.contains (
+              std::type_index (typeid (runtime::spot_address_resolver_t)))) {
+            _state->services.add_factory<runtime::spot_address_resolver_t> (
+              [] (service_provider_t &provider) {
+                  // Shares the store resolvers' ownership: runtimes that bind this
+                  // resolver keep it for their late operations.
+                  const auto resolvers = detail::service_scope_access_t::get_required_shared<
+                    runtime::store_location_resolvers_t> (provider);
+                  return std::shared_ptr<runtime::spot_address_resolver_t> (resolvers,
+                                                                            resolvers.get ());
+              },
+              service_lifetime_t::singleton);
+        }
+        if (!_state->services.contains (
+              std::type_index (typeid (runtime::actor_address_resolver_t)))) {
+            _state->services.add_factory<runtime::actor_address_resolver_t> (
+              [] (service_provider_t &provider) {
+                  return std::shared_ptr<runtime::actor_address_resolver_t> (
+                    &provider.get_required<runtime::store_location_resolvers_t> (),
+                    [] (runtime::actor_address_resolver_t *) noexcept {});
+              },
+              service_lifetime_t::singleton);
+        }
+        if (!_state->services.contains (std::type_index (typeid (actor_directory_t)))) {
+            _state->services.add_factory<actor_directory_t> (
+              [actor_location_observer, actor_mesh_name] (service_provider_t &provider) {
+                  return std::shared_ptr<actor_directory_t> (
+                    std::make_shared<detail::store_actor_directory_t> (
+                      provider.get_required<runtime::live_location_reader_t> (),
+                      actor_location_observer, actor_mesh_name));
+              },
+              service_lifetime_t::singleton);
+        }
+        if (!_state->services.contains (std::type_index (typeid (location_readiness_t)))) {
+            _state->services.add_factory<location_readiness_t> (
+              [] (service_provider_t &provider) {
+                  return std::shared_ptr<location_readiness_t> (
+                    &provider.get_required<runtime::store_location_resolvers_t> (),
+                    [] (location_readiness_t *) noexcept {});
+              },
+              service_lifetime_t::singleton);
+        }
+        if (!_state->services.contains (std::type_index (typeid (location_runtime_query_t)))) {
+            const auto location_options = options.location_options ();
+            _state->services.add_factory<location_runtime_query_t> (
+              [location_options, actor_location_observer] (service_provider_t &provider) {
+                  return std::shared_ptr<location_runtime_query_t> (
+                    std::make_shared<runtime::store_location_runtime_query_t> (
+                      provider.get_required<runtime::live_location_reader_t> (),
+                      provider.get_required<runtime::location_runtime_t> (), location_options,
+                      actor_location_observer));
+              },
+              service_lifetime_t::singleton);
+        }
     }
     detail::bind_zlink_monitoring (_state->zlink, _state->monitoring);
     detail::bind_stream_serializers (_state->zlink, _state->serializers);
     auto &actor_gateway_runtime =
       _state->services.build_provider ().get_required<detail::actor_gateway_runtime_t> ();
-    _state->services.build_provider ()
-      .get_required<runtime::location_runtime_t> ()
-      .bind_monitoring (_state->monitoring);
+    auto location_provider = _state->services.build_provider ();
+    const auto locations = location_provider.get<runtime::location_runtime_t> ();
+    auto *location_runtime = locations ? &locations->get () : nullptr;
     actor_gateway_runtime.bind_serializers (_state->serializers);
     actor_gateway_runtime.set_dispatch (options.configure_dispatch ());
     auto channel_runtime = detail::channel_runtime_t::from (_state->zlink.message_bus ());
@@ -1487,13 +1823,15 @@ void app_t::_apply_zlink_framework ()
     *actor_mesh_name = application_mesh_name;
     {
         auto provider = _state->services.build_provider ();
-        const auto spot_resolver =
-          detail::service_scope_access_t::get_required_shared<runtime::spot_address_resolver_t> (
-            provider);
-        channel_runtime.bind_spot_address_resolver (spot_resolver);
-        provider.get_required<runtime::store_location_resolvers_t> ().set_actor_mesh_name (
-          application_mesh_name);
-        auto &location_lifecycle = provider.get_required<runtime::location_lifecycle_t> ();
+        const auto spot_resolver = location_runtime
+                                     ? detail::service_scope_access_t::get_required_shared<
+                                         runtime::spot_address_resolver_t> (provider)
+                                     : nullptr;
+        if (location_runtime) {
+            channel_runtime.bind_spot_address_resolver (spot_resolver);
+            provider.get_required<runtime::store_location_resolvers_t> ().set_actor_mesh_name (
+              application_mesh_name);
+        }
         auto route_client = provider.get_required<route_client_t> ();
         for (const auto &registration : mesh_node_registrations) {
             registration->spot_state->dispatch = options.configure_dispatch ();
@@ -1518,7 +1856,9 @@ void app_t::_apply_zlink_framework ()
                   std::shared_ptr<runtime::stateful::authority_relocation_port_t> (
                     &authority, [] (auto *) noexcept {}));
             }
-            spot_runtime.bind_location_lifecycle (location_lifecycle);
+            if (location_runtime)
+                spot_runtime.bind_location_lifecycle (
+                  provider.get_required<runtime::location_lifecycle_t> ());
             spot_runtime.bind_spot_location_resolver (spot_resolver);
             spot_runtime.bind_drain_flag (_state->draining);
             spot_runtime.bind_host_lifecycle ([access = _state->status_access] {
@@ -1553,7 +1893,8 @@ void app_t::_apply_zlink_framework ()
                                                      _state->serializers));
     }
     const auto location_owner = detail::location_owner_node_rid (mesh_node_registrations);
-    add_hosted_service (std::make_unique<runtime::location_host_service_t> (location_owner));
+    if (location_runtime)
+        add_hosted_service (std::make_unique<runtime::location_host_service_t> (location_owner));
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes;
     const auto callback_registrations = mesh_node_registrations;
     runtime::mesh_node_host_service_t *mesh_node_service = nullptr;
@@ -1572,8 +1913,7 @@ void app_t::_apply_zlink_framework ()
         mesh_nodes = mesh_service->nodes ();
         _state->route_mesh_nodes = mesh_nodes;
         auto provider = _state->services.build_provider ();
-        auto &location_runtime = provider.get_required<runtime::location_runtime_t> ();
-        auto &location_store = provider.get_required<location_repository_t> ();
+
         std::shared_ptr<runtime::stateful::authority_relocation_port_t> relocation_authority;
         std::shared_ptr<runtime::stateful::relocation_store_port_t> relocation_store;
         std::shared_ptr<runtime::stateful::aggregate_authority_port_t>
@@ -1590,12 +1930,13 @@ void app_t::_apply_zlink_framework ()
               [] (auto *) noexcept {});
             aggregate_relocation_authority =
               std::make_shared<runtime::stateful::public_aggregate_authority_adapter_t> (
-                location_store);
+                provider.get_required<location_repository_t> ());
         }
         for (const auto &mesh_node : mesh_nodes) {
             mesh_node->bind_delay_owner (_state->delays);
-            mesh_node->configure_session_route_owner (
-              [&location_runtime] { return location_runtime.current_owner_token (); });
+            if (location_runtime)
+                mesh_node->configure_session_route_owner (
+                  [location_runtime] { return location_runtime->current_owner_token (); });
             if (relocation_authority && relocation_store) {
                 const auto location_options = options.location_options ();
                 runtime::stateful::relocation_limits_t relocation_limits;
@@ -1787,7 +2128,7 @@ void app_t::_apply_zlink_framework ()
         _state->services.add_singleton<route_mesh_runtime_options_t> (
           std::make_unique<runtime::route_mesh_runtime_options_service_t> (mesh_nodes));
     }
-    if (!mesh_nodes.empty ()) {
+    if (location_runtime && !mesh_nodes.empty ()) {
         auto provider = _state->services.build_provider ();
         auto &location_resolvers = provider.get_required<runtime::store_location_resolvers_t> ();
         auto operation_sequence = std::make_shared<std::atomic<std::uint64_t>> (1);
@@ -2145,19 +2486,9 @@ void app_t::_apply_zlink_framework ()
                                                        runtime::messaging::message_parts_t parts,
                                                        std::chrono::milliseconds timeout)
           -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
-            detail::host::pending_operation_t operation;
-            auto submission =
-              mesh->request_to_spot (source_spot_id, target_node, target_spot,
-                                     target_spot_generation, parts.items (), operation, timeout);
-            auto admitted = co_await detail::request_admission_source_t{};
-            mesh->observe_request_failure (operation, admitted, "MeshNode Spot request");
-            const auto submitted = co_await submission;
-            if (submitted != zlink::submit_result_t::ok) {
-                co_return result_t<runtime::messaging::message_parts_t>::failure (
-                  framework_error_kind_t::unavailable, "MeshNode Spot request was not submitted");
-            }
-            co_await detail::request_admitted_t{};
-            co_return co_await mesh->await_request_reply (operation, "MeshNode Spot request");
+            return request_mesh_spot_from_app_task (mesh, source_spot_id, target_node, target_spot,
+                                                    target_spot_generation, std::move (parts),
+                                                    timeout);
         };
         const auto mesh_name = mesh->mesh_name ();
         const auto claimed_as_route_alias =
@@ -2212,29 +2543,12 @@ void app_t::_apply_zlink_framework ()
               [mesh, channel_name] (runtime::messaging::message_parts_t parts,
                                     std::chrono::milliseconds timeout)
                 -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
-                  detail::host::pending_operation_t operation;
-                  auto submission =
-                    mesh->request_to_channel (channel_name, parts.items (), operation, timeout);
-                  auto admitted = co_await detail::request_admission_source_t{};
-                  mesh->observe_request_failure (operation, admitted, "RouteMesh channel request");
-                  const auto submitted = co_await submission;
-                  if (submitted != zlink::submit_result_t::ok) {
-                      if (submitted == zlink::submit_result_t::terminated) {
-                          co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
-                            detail::boundary_error_t::shutdown,
-                            "RouteMesh channel request runtime is stopped");
-                      }
-                      co_return result_t<runtime::messaging::message_parts_t>::failure (
-                        runtime::messaging::map_submit_result_error_kind (submitted),
-                        "RouteMesh channel request was not submitted");
-                  }
-                  co_await detail::request_admitted_t{};
-                  co_return co_await mesh->await_request_reply (operation,
-                                                                "RouteMesh channel request");
+                  return request_mesh_channel_from_app_task (mesh, channel_name, std::move (parts),
+                                                             timeout);
               });
         }
     }
-    if (!mesh_nodes.empty ()) {
+    if (location_runtime && !mesh_nodes.empty ()) {
         const auto application_mesh_it =
           std::find_if (mesh_nodes.begin (), mesh_nodes.end (), [&] (const auto &mesh) {
               return mesh->mesh_name () == application_mesh_name;
@@ -2624,134 +2938,24 @@ void app_t::_apply_zlink_framework ()
                 co_return std::nullopt;
             },
             [weak_actor_gateway_runtime = actor_gateway_runtime.weak_state (),
-             weak_application_mesh = std::weak_ptr (application_mesh), stream_runtime] (
+             weak_application_mesh = std::weak_ptr (application_mesh),
+             spot_state = (*application_mesh_registration)->spot_state, stream_runtime,
+             delays = &_state->delays,
+             callback_timeout = options.session_replacement_callback_timeout ()] (
               const runtime::protocol::bound_session_bind_t &bind,
               const zlink::routing_id_t &session_owner, std::uint64_t session_owner_generation,
               const location_owner_token_t &session_owner_token,
-              std::function<bool (const runtime::protocol::stream_bind_reply_tail_t &)>
+              std::function<bool (std::uint32_t, std::uint32_t,
+                                  std::optional<runtime::protocol::stream_bind_reply_tail_t>)>
                 submit_terminal_reply) mutable {
-                const auto application_mesh = detail::lock_runtime_owner (weak_application_mesh);
-                auto actor_gateway_runtime = detail::actor_gateway_runtime_t (
-                  detail::lock_runtime_owner (weak_actor_gateway_runtime));
                 const auto actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (
                     zlink::routing_id_t::from (bind.actor.target_node_routing_id).to_string ()),
                   {}, bind.actor.actor_id, bind.actor.object_generation);
-                const auto session_rid = zlink::routing_id_t::from (bind.session_routing_id);
-                actor_gateway_runtime.trace_bound_session_send_stage (
-                  bind.actor.actor_id, "bound_session_bind_receive",
-                  [&] {
-                      return "new_session_rid=" + session_rid.to_hex () + " new_binding_generation="
-                             + std::to_string (bind.binding.generation);
-                  },
-                  &session_rid);
-                if (bind.binding.state
-                    == runtime::protocol::bound_session_binding_state_t::tombstone) {
-                    const auto retired = actor_gateway_runtime.retire_bound_session_route (
-                      actor, session_owner, session_rid, bind.binding.generation);
-                    return runtime::host::bound_session_bind_operation_result_t{
-                      retired ? runtime::stateful::stateful_error_t::none
-                              : runtime::stateful::stateful_error_t::conflict,
-                      std::nullopt};
-                }
-                auto sink = [weak_application_mesh = std::weak_ptr (application_mesh),
-                             weak_actor_gateway_runtime = actor_gateway_runtime.weak_state (),
-                             stream_runtime, actor, session_owner, session_rid,
-                             binding_generation = bind.binding.generation,
-                             authority_owner_generation = bind.actor.authority_owner_generation,
-                             owner_lease_generation = bind.actor.owner_lease_generation] (
-                              std::string packet_name, stream_codec_t codec,
-                              const zlink::message_t &payload) mutable -> task_t<void> {
-                    const auto application_mesh =
-                      detail::lock_runtime_owner (weak_application_mesh);
-                    auto actor_gateway_runtime = detail::actor_gateway_runtime_t (
-                      detail::lock_runtime_owner (weak_actor_gateway_runtime));
-                    const detail::stream_header_t header (
-                      detail::stream_message_kind_t::send, codec,
-                      detail::stream_header_flags_t::none, std::nullopt, std::move (packet_name));
-                    const detail::actor_bound_session_route_t staged_route{
-                      session_owner,
-                      session_rid,
-                      actor.object_generation (),
-                      0,
-                      authority_owner_generation,
-                      owner_lease_generation,
-                      binding_generation,
-                      0,
-                      0};
-                    const auto current_route =
-                      actor_gateway_runtime.resolve_bound_session_push_route (actor, staged_route);
-                    if (!current_route || !current_route->session_rid) {
-                        throw framework_exception_t (
-                          framework_error_kind_t::not_configured,
-                          "Framework Actor bound Session route is unavailable");
-                    }
-                    detail::bound_session_send_stage_trace_context_t stage_trace_context{
-                      &actor_gateway_runtime, actor.actor_id ().value (),
-                      &*current_route->session_rid};
-                    auto stage_trace =
-                      detail::make_bound_session_send_stage_trace (stage_trace_context);
-                    const auto submitted =
-                      co_await application_mesh->native_node ().send_bound_session (
-                        actor, current_route->node_rid, current_route->binding_generation,
-                        current_route->authority_owner_generation,
-                        current_route->owner_lease_generation,
-                        encode_bound_session_frame (stream_runtime, header, payload),
-                        std::move (stage_trace));
-                    const auto result = one_way_native_submit_result (
-                      submitted, "Framework Actor bound Session send");
-                    if (!result) {
-                        throw result.error ()
-                          ? *result.error ()
-                          : framework_exception_t (framework_error_kind_t::internal_failure,
-                                                   "Framework Actor bound Session send failed");
-                    }
-                    co_return;
-                };
-                const auto transition = actor_gateway_runtime.replace_session_route (
-                  actor, std::move (sink),
-                  detail::actor_bound_session_route_t{
-                    session_owner, session_rid, bind.actor.object_generation,
-                    session_owner_generation, bind.actor.authority_owner_generation,
-                    bind.actor.owner_lease_generation, bind.binding.generation, 0, 0, false,
-                    session_owner_token.owner_id,
-                    static_cast<std::uint64_t> (session_owner_token.lease_generation)},
-                  stream_codec_t::message_pack,
-                  [submit_terminal_reply = std::move (submit_terminal_reply)] (
-                    const detail::actor_bound_session_route_t &accepted) {
-                      return submit_terminal_reply (
-                        {accepted.binding_generation, accepted.authority_owner_generation});
-                  });
-                if (!transition) {
-                    return runtime::host::bound_session_bind_operation_result_t{
-                      runtime::stateful::stateful_error_t::conflict, std::nullopt};
-                }
-                std::optional<runtime::protocol::bound_session_replaced_t> replacement;
-                const auto &change = transition.value ();
-                actor_gateway_runtime.trace_bound_session_send_stage (
-                  bind.actor.actor_id, "actor_owner_route_publish",
-                  [&] {
-                      return "session_rid=" + session_rid.to_hex ()
-                             + " binding_generation=" + std::to_string (bind.binding.generation)
-                             + " replaced=" + (change.changed ? "true" : "false");
-                  },
-                  &session_rid);
-                if (change.changed && change.previous && change.previous->session_rid
-                    && change.previous->node_generation != 0
-                    && change.previous->binding_generation != 0
-                    && !change.previous->session_owner_id.empty ()
-                    && change.previous->session_owner_lease_generation != 0) {
-                    replacement = runtime::protocol::bound_session_replaced_t{
-                      bind.actor,
-                      runtime::protocol::retired_bound_session_route_fence_t{
-                        change.previous->node_rid.to_bytes (), change.previous->node_generation,
-                        change.previous->session_owner_id,
-                        change.previous->session_owner_lease_generation,
-                        change.previous->session_rid->to_bytes (),
-                        change.previous->binding_generation}};
-                }
-                return runtime::host::bound_session_bind_operation_result_t{
-                  runtime::stateful::stateful_error_t::none, std::move (replacement)};
+                return detail::apply_bound_session_bind_async (
+                  weak_actor_gateway_runtime, weak_application_mesh, spot_state, stream_runtime,
+                  actor, bind, session_owner, session_owner_generation, session_owner_token,
+                  std::move (submit_terminal_reply), *delays, callback_timeout);
             },
             [weak_actor_gateway_runtime = actor_gateway_runtime.weak_state (),
              stream_runtime] (const runtime::protocol::bound_session_send_t &send,
@@ -2759,13 +2963,15 @@ void app_t::_apply_zlink_framework ()
                 auto actor_gateway_runtime = detail::actor_gateway_runtime_t (
                   detail::lock_runtime_owner (weak_actor_gateway_runtime));
                 try {
-                    actor_gateway_runtime.trace_bound_session_send_stage (
-                      send.actor.actor_id, "session_node_receive",
-                      [&] {
-                          return "binding_generation="
-                                 + std::to_string (send.expected_binding_generation);
-                      },
-                      nullptr);
+                    if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+                        actor_gateway_runtime.trace_bound_session_send_stage (
+                          send.actor.actor_id, "session_node_receive",
+                          [&] {
+                              return "binding_generation="
+                                     + std::to_string (send.expected_binding_generation);
+                          },
+                          nullptr);
+                    }
                     const auto actor = detail::actor_ref_access_t::make (
                       node_rid_t::from_string (
                         zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()),
@@ -2808,13 +3014,15 @@ void app_t::_apply_zlink_framework ()
             -> std::optional<runtime::host::bound_session_operations_t::delivery_capability_t> {
                 auto actor_gateway_runtime = detail::actor_gateway_runtime_t (
                   detail::lock_runtime_owner (weak_actor_gateway_runtime));
-                actor_gateway_runtime.trace_bound_session_send_stage (
-                  send.actor.actor_id, "session_node_receive",
-                  [&] {
-                      return "binding_generation="
-                             + std::to_string (send.expected_binding_generation);
-                  },
-                  nullptr);
+                if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+                    actor_gateway_runtime.trace_bound_session_send_stage (
+                      send.actor.actor_id, "session_node_receive",
+                      [&] {
+                          return "binding_generation="
+                                 + std::to_string (send.expected_binding_generation);
+                      },
+                      nullptr);
+                }
                 const auto actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (
                     zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()),
@@ -2897,7 +3105,8 @@ void app_t::_apply_zlink_framework ()
         return state->runtime_state.load (std::memory_order_acquire);
     };
     std::shared_ptr<runtime::client_server::client_server_location_runtime_t> client_server_runtime;
-    if (!_state->services.contains (std::type_index (typeid (client_server_runtime_t)))) {
+    if (location_runtime
+        && !_state->services.contains (std::type_index (typeid (client_server_runtime_t)))) {
         auto provider = _state->services.build_provider ();
         client_server_runtime =
           std::make_shared<runtime::client_server::client_server_location_runtime_t> (
@@ -2921,7 +3130,7 @@ void app_t::_apply_zlink_framework ()
           return (channel.publisher.enabled && channel.publisher.discovery)
                  || (channel.subscriber.enabled && channel.subscriber.discovery);
       });
-    if (needs_fanout_runtime
+    if (location_runtime && needs_fanout_runtime
         && !_state->services.contains (std::type_index (typeid (fanout_runtime_t)))) {
         auto provider = _state->services.build_provider ();
         fanout_runtime = std::make_shared<runtime::fanout::fanout_location_runtime_t> (
@@ -2944,9 +3153,11 @@ void app_t::_apply_zlink_framework ()
       _state->handlers, _state->serializers, read_framework_state,
       options.runtime_client_server_advertise_hosts (), options.runtime_fanout_advertise_hosts (),
       options.route_mesh_client_channels (), mesh_nodes,
-      [mesh_node_service] (location_write_intent_t intent) {
-          return mesh_node_service == nullptr
-                 || mesh_node_service->republish_after_store_recovery (intent);
+      [mesh_node_service] (location_write_intent_t intent, std::stop_token cancellation,
+                           std::chrono::steady_clock::time_point deadline) {
+          return mesh_node_service ? mesh_node_service->republish_after_store_recovery (
+                                       intent, cancellation, deadline)
+                                   : task_t<bool> (result_t<bool>::success (true));
       },
       std::move (client_server_runtime), std::move (fanout_runtime), _state->listener_statuses);
     _state->startup_publication = [service = auto_connect_service.get ()] {

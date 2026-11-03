@@ -4,6 +4,7 @@
 
 #include "runtime/transport/endpoint_notation.hpp"
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/messaging/request_deadline.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -14,12 +15,6 @@ namespace zlink::framework::detail
 
 namespace
 {
-std::chrono::milliseconds remaining_request_timeout (std::chrono::steady_clock::time_point deadline)
-{
-    return std::max (
-      std::chrono::milliseconds::zero (),
-      std::chrono::ceil<std::chrono::milliseconds> (deadline - std::chrono::steady_clock::now ()));
-}
 template <typename T> struct readiness_change_awaiter_t
 {
     task_t<T> pending;
@@ -118,6 +113,65 @@ struct route_channel_runtime_t::state_t
         return completed;
     }
 
+    static void complete_notifications (std::vector<completion_t> completed)
+    {
+        for (auto &[observer, result] : completed)
+            observer->completion.complete (std::move (result));
+    }
+
+    using mutation_result_t = std::pair<bool, std::vector<completion_t>>;
+
+    static bool complete_mutation (mutation_result_t output)
+    {
+        complete_notifications (std::move (output.second));
+        return output.first;
+    }
+
+    static task_t<bool> complete_mutation (task_t<mutation_result_t> pending)
+    {
+        co_return complete_mutation (co_await pending);
+    }
+
+    mutation_result_t connect_owned (zlink::routing_id_t peer_rid, std::string endpoint)
+    {
+        const bool connected = _connections.connect (std::move (peer_rid), std::move (endpoint));
+        return {connected, notify_unlocked ({})};
+    }
+
+    mutation_result_t disconnect_owned (const std::optional<zlink::routing_id_t> &peer_rid,
+                                        const std::string &normalized)
+    {
+        std::optional<removed_route_t> change;
+        const auto removed = [&] {
+            const auto before = _connections.targets ();
+            const auto selected =
+              std::find_if (before.begin (), before.end (), [&] (const auto &entry) {
+                  return entry.endpoint == normalized && (!peer_rid || entry.peer_rid == peer_rid);
+              });
+            if (selected == before.end ())
+                return false;
+            _connections.disconnect (normalized);
+            const auto remaining = _connections.targets ();
+            const bool has_unknown =
+              std::any_of (remaining.begin (), remaining.end (), [&] (const auto &entry) {
+                  return !entry.peer_rid && entry.endpoint != _bind_endpoint;
+              });
+            const bool has_same_target =
+              selected->peer_rid
+              && std::any_of (remaining.begin (), remaining.end (), [&] (const auto &entry) {
+                     return entry.peer_rid == selected->peer_rid;
+                 });
+            if (!has_unknown && !has_same_target
+                && (selected->peer_rid || selected->endpoint != _bind_endpoint)) {
+                change.emplace (removed_route_t{selected->peer_rid});
+            }
+            if (selected->peer_rid && !has_same_target)
+                _ready_peer_rids.erase (selected->peer_rid->to_string ());
+            return true;
+        }();
+        return {removed, notify_unlocked (change)};
+    }
+
     template <typename Work>
     auto mutate (Work &&work, const std::optional<removed_route_t> &change = {})
     {
@@ -133,12 +187,16 @@ struct route_channel_runtime_t::state_t
             }();
             return std::pair (std::move (value), notify_unlocked (change));
         });
-        for (auto &[observer, result] : output.second)
-            observer->completion.complete (std::move (result));
+        complete_notifications (std::move (output.second));
         if constexpr (!std::is_void_v<value_t>)
             return std::move (output.first);
     }
 };
+
+runtime::state_lane_t &auto_connect_owner_lane (route_channel_runtime_t &owner)
+{
+    return owner._state->_lane;
+}
 
 route_channel_runtime_t::route_channel_runtime_t (std::string router_channel_id) :
     _state (std::make_shared<state_t> ())
@@ -203,8 +261,19 @@ bool route_channel_runtime_t::connect (std::string endpoint)
 
 bool route_channel_runtime_t::connect (zlink::routing_id_t peer_rid, std::string endpoint)
 {
-    return _state->mutate (
-      [&] { return _state->_connections.connect (std::move (peer_rid), std::move (endpoint)); });
+    return state_t::complete_mutation (_state->_lane.run_sync (
+      [&] { return _state->connect_owned (std::move (peer_rid), std::move (endpoint)); }));
+}
+
+
+task_t<bool> route_channel_runtime_t::connect_async (zlink::routing_id_t peer_rid,
+                                                     std::string endpoint)
+{
+    return state_t::complete_mutation (
+      _state->_lane.run_task ([state = _state, peer_rid = std::move (peer_rid),
+                               endpoint = std::move (endpoint)] () mutable {
+          return state->connect_owned (std::move (peer_rid), std::move (endpoint));
+      }));
 }
 
 bool route_channel_runtime_t::disconnect (const std::string &endpoint)
@@ -222,36 +291,25 @@ bool route_channel_runtime_t::disconnect_endpoint (std::optional<zlink::routing_
                                                    std::string endpoint)
 {
     const auto normalized = runtime::transport::normalize_endpoint (endpoint);
-    std::optional<removed_route_t> change;
-    return _state->mutate (
-      [&] {
-          const auto before = _state->_connections.targets ();
-          const auto selected =
-            std::find_if (before.begin (), before.end (), [&] (const auto &entry) {
-                return entry.endpoint == normalized && (!peer_rid || entry.peer_rid == peer_rid);
-            });
-          if (selected == before.end ())
-              return false;
-          _state->_connections.disconnect (normalized);
-          const auto remaining = _state->_connections.targets ();
-          const bool has_unknown =
-            std::any_of (remaining.begin (), remaining.end (), [&] (const auto &entry) {
-                return !entry.peer_rid && entry.endpoint != _state->_bind_endpoint;
-            });
-          const bool has_same_target =
-            selected->peer_rid
-            && std::any_of (remaining.begin (), remaining.end (), [&] (const auto &entry) {
-                   return entry.peer_rid == selected->peer_rid;
-               });
-          if (!has_unknown && !has_same_target
-              && (selected->peer_rid || selected->endpoint != _state->_bind_endpoint)) {
-              change.emplace (removed_route_t{selected->peer_rid});
-          }
-          if (selected->peer_rid && !has_same_target)
-              _state->_ready_peer_rids.erase (selected->peer_rid->to_string ());
-          return true;
-      },
-      change);
+    return state_t::complete_mutation (
+      _state->_lane.run_sync ([&] { return _state->disconnect_owned (peer_rid, normalized); }));
+}
+
+task_t<bool> route_channel_runtime_t::disconnect_async (zlink::routing_id_t peer_rid,
+                                                        std::string endpoint)
+{
+    return disconnect_endpoint_async (std::move (peer_rid), std::move (endpoint));
+}
+
+task_t<bool>
+route_channel_runtime_t::disconnect_endpoint_async (std::optional<zlink::routing_id_t> peer_rid,
+                                                    std::string endpoint)
+{
+    const auto normalized = runtime::transport::normalize_endpoint (endpoint);
+    return state_t::complete_mutation (
+      _state->_lane.run_task ([state = _state, peer_rid = std::move (peer_rid), normalized] {
+          return state->disconnect_owned (peer_rid, normalized);
+      }));
 }
 
 std::vector<std::string> route_channel_runtime_t::list_connections () const
@@ -346,68 +404,79 @@ route_channel_runtime_t::request_reply_parts (const zlink::routing_id_t &target_
                                               runtime::messaging::message_parts_t parts,
                                               std::chrono::milliseconds timeout)
 {
+    const auto deadline = std::chrono::steady_clock::now () + timeout;
     using reply_t = result_t<runtime::messaging::message_parts_t>;
-    if (auto ready = _state->_lane.run_sync ([&] { return ensure_ready (_state); }); !ready) {
-        return result_t<reply_t>::success (
-          detail::propagate_failure<runtime::messaging::message_parts_t> (
-            ready, "route channel peer is not ready"));
-    }
-    auto pending = request_backend_parts (_state, target_node_rid, std::nullopt, std::move (parts),
-                                          std::chrono::steady_clock::now () + timeout);
-    return detail::project_request_reply<reply_t> (
-      pending, [] (const reply_t &terminal) { return result_t<reply_t>::success (terminal); });
+    return request_task_access_t::receive_internal<reply_t> ([&] (auto receiver) {
+        request_reply_parts (
+          target_node_rid, std::nullopt, std::move (parts), deadline,
+          receiver.template project<runtime::messaging::message_parts_t> (
+            [] (const reply_t &terminal) { return result_t<reply_t>::success (terminal); }));
+    });
 }
 
-request_task_t<runtime::messaging::message_parts_t>
-route_channel_runtime_t::request_backend_parts (const std::shared_ptr<state_t> &_state,
-                                                const zlink::routing_id_t &target_node_rid,
-                                                std::optional<std::string> target_spot_id,
-                                                runtime::messaging::message_parts_t parts,
-                                                std::chrono::steady_clock::time_point deadline)
+void route_channel_runtime_t::request_reply_parts (
+  const zlink::routing_id_t &target_node_rid,
+  std::optional<std::string> target_spot_id,
+  runtime::messaging::message_parts_t parts,
+  std::chrono::steady_clock::time_point deadline,
+  request_receiver_t<runtime::messaging::message_parts_t> receiver)
 {
-    // The selected backend may borrow its arguments through the physical terminal.
-    auto packet = std::make_shared<route_outbound_packet_t> (route_outbound_packet_t{
-      target_node_rid, std::move (target_spot_id), std::move (parts), std::nullopt});
-    request_backend_t backend;
-    auto prepared = _state->_lane.run_sync (
-      [&] () -> result_t<request_task_t<runtime::messaging::message_parts_t>> {
-          const auto timeout = remaining_request_timeout (deadline);
-          if (timeout <= std::chrono::milliseconds::zero ()) {
-              return detail::boundary_failure<request_task_t<runtime::messaging::message_parts_t>> (
-                detail::boundary_error_t::timed_out,
-                "route request deadline expired before binding submission");
-          }
-          if (auto connected = ensure_ready (_state); !connected) {
-              return detail::propagate_failure<
-                request_task_t<runtime::messaging::message_parts_t>> (
-                connected, "route channel is not connected");
-          }
-          if (!_state->_request_backend) {
-              return detail::boundary_failure<request_task_t<runtime::messaging::message_parts_t>> (
-                detail::boundary_error_t::timed_out,
-                "route request reply was not completed by a backend");
-          }
-          backend = _state->_request_backend;
-          // This sequence records the diagnostic packet. The backend request task
-          // owns correlation and completion; no second pending entry is needed here.
-          packet->request_seq = _state->_pending_requests.next_request_seq ();
-          append_outbound_unlocked (_state, packet->target_node_rid, packet->target_spot_id,
-                                    packet->parts, packet->request_seq);
-          return result_t<request_task_t<runtime::messaging::message_parts_t>>::success (
-            backend (packet->target_node_rid, packet->target_spot_id, packet->parts, timeout));
-      });
-    if (!prepared) {
-        return detail::propagate_failure<runtime::messaging::message_parts_t> (
-          prepared, "route request submission failed");
+    const auto failed = [receiver] (const result_t<void> &terminal) {
+        if (terminal)
+            return;
+        const auto failure = detail::propagate_failure<runtime::messaging::message_parts_t> (
+          terminal, "route request submission failed");
+        receiver.admitted->complete (detail::result_access_t::failure<void> (failure.exception ()));
+        receiver.complete (failure);
+    };
+    try {
+        const auto state = _state;
+        auto packet = std::make_shared<route_outbound_packet_t> (route_outbound_packet_t{
+          target_node_rid, std::move (target_spot_id), std::move (parts), std::nullopt});
+        const auto ambient_context = capture_ambient_context ();
+        auto submitted = state->_lane.run_task (
+          [state, packet, deadline, ambient_context, receiver] () mutable -> task_t<void> {
+              try {
+                  const auto ambient_guard = enter_ambient_context (ambient_context);
+                  const auto timeout = runtime::messaging::remaining_request_timeout (deadline);
+                  if (timeout <= std::chrono::milliseconds::zero ())
+                      throw framework_exception_t (
+                        framework_error_kind_t::deadline_exceeded,
+                        "route request deadline expired before binding submission");
+                  if (ambient_context.wait_owner.stop_requested ())
+                      throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                                   "route request wait owner stopped");
+                  ensure_ready (state).value ();
+                  if (!state->_request_backend)
+                      throw framework_exception_t (
+                        framework_error_kind_t::deadline_exceeded,
+                        "route request reply was not completed by a backend");
+                  auto backend = state->_request_backend;
+                  request_receiver_t<runtime::messaging::message_parts_t> physical{
+                    std::move (receiver.admitted),
+                    [packet, backend,
+                     deliver = std::move (receiver.complete)] (const auto &terminal) {
+                        (void) packet;
+                        (void) backend;
+                        deliver (terminal);
+                    }};
+                  // This sequence records diagnostics; binding owns the operation.
+                  packet->request_seq = state->_pending_requests.next_request_seq ();
+                  append_outbound_unlocked (state, packet->target_node_rid, packet->target_spot_id,
+                                            packet->parts, packet->request_seq);
+                  physical.observe (backend (packet->target_node_rid, packet->target_spot_id,
+                                             packet->parts, timeout));
+                  return task_t<void> (result_t<void>::success ());
+              }
+              catch (...) {
+                  return task_t<void> (detail::current_exception_result<void> ());
+              }
+          });
+        detail::observe_task_terminal (submitted, failed);
     }
-    auto pending = std::move (prepared.value ());
-    auto physical = detail::request_task_access_t::physical_reply (pending);
-    detail::observe_task_terminal (
-      physical, [packet = std::move (packet), backend = std::move (backend)] (const auto &) {
-          (void) packet;
-          (void) backend;
-      });
-    return pending;
+    catch (...) {
+        failed (detail::current_exception_result<void> ());
+    }
 }
 
 task_t<void>
@@ -434,21 +503,11 @@ route_channel_runtime_t::request_reply_spot_parts (const zlink::routing_id_t &ta
                                                    runtime::messaging::message_parts_t parts,
                                                    std::chrono::steady_clock::time_point deadline)
 {
-    return request_reply_spot_parts_owned (_state, target_node_rid, target_spot_id,
-                                           std::move (parts), deadline);
-}
-
-request_task_t<runtime::messaging::message_parts_t>
-route_channel_runtime_t::request_reply_spot_parts_owned (
-  std::shared_ptr<state_t> state,
-  zlink::routing_id_t target_node_rid,
-  std::string target_spot_id,
-  runtime::messaging::message_parts_t parts,
-  std::chrono::steady_clock::time_point deadline)
-{
-    auto pending = request_backend_parts (state, target_node_rid, std::move (target_spot_id),
-                                          std::move (parts), deadline);
-    co_return co_await detail::request_submission (std::move (pending));
+    return request_task_access_t::receive_public<runtime::messaging::message_parts_t> (
+      [&] (auto receiver) {
+          request_reply_parts (target_node_rid, target_spot_id, std::move (parts), deadline,
+                               std::move (receiver));
+      });
 }
 
 result_t<void> route_channel_runtime_t::complete_request (std::uint64_t request_seq)

@@ -725,7 +725,8 @@ internal sealed partial class ZLinkProviderLocationRepository
         CancellationToken cancellationToken,
         ZLinkAuthorityKey? creationKey = null,
         byte? creationRelocationPolicy = null,
-        Action? noteTakeover = null
+        Action? noteTakeover = null,
+        ZLinkLocationOwnerToken? requiredOwner = null
     )
     {
         var active = current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active;
@@ -751,6 +752,15 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ReadAsync(descriptorKey, cancellationToken)
             .ConfigureAwait(false);
         var ownerLive = IsOwnerLeaseLive(owners[current.Snapshot.OwnerId], current.Snapshot);
+        if (
+            requiredOwner is { } owner
+            && (
+                !ownerLive
+                || owner.OwnerId != current.Snapshot.OwnerId
+                || owner.LeaseGeneration != current.Snapshot.OwnerLeaseGeneration
+            )
+        )
+            return StaleAuthorityReclaimResult.NotReclaimable;
         if (!ownerLive)
             noteTakeover?.Invoke();
         if (active)
@@ -1008,11 +1018,26 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
     }
 
-    public async ValueTask<bool> ReleaseEndedReservationAsync(
+    public ValueTask<bool> ReleaseEndedReservationAsync(
         ZLinkAuthorityKey key,
         string expectedStoreVersion,
         ZLinkCreationAuthorityRecovery? creationRecovery = null,
         CancellationToken cancellationToken = default
+    ) =>
+        ReleaseEndedReservationAsync(
+            key,
+            expectedStoreVersion,
+            creationRecovery,
+            cancellationToken,
+            null
+        );
+
+    private async ValueTask<bool> ReleaseEndedReservationAsync(
+        ZLinkAuthorityKey key,
+        string expectedStoreVersion,
+        ZLinkCreationAuthorityRecovery? creationRecovery,
+        CancellationToken cancellationToken,
+        ZLinkLocationOwnerToken? requiredOwner
     )
     {
         for (; ; )
@@ -1026,7 +1051,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                     current,
                     cancellationToken,
                     creationRecovery is null ? null : key,
-                    creationRecovery?.RelocationPolicy
+                    creationRecovery?.RelocationPolicy,
+                    requiredOwner: requiredOwner
                 )
                 .ConfigureAwait(false);
             if (result != StaleAuthorityReclaimResult.Conflict)
@@ -4279,7 +4305,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         for (; ; )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (operationDeadline is { } deadline && DateTimeOffset.UtcNow >= deadline)
+            if (operationDeadline is { } deadline && _time.GetUtcNow() >= deadline)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.DeadlineExceeded,
                     "Authority Ready commit exceeded the operation deadline."

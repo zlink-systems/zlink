@@ -50,24 +50,22 @@ Terms that appear for the first time:
 
 ## 2. Runtime Metrics
 
-The framework emits every instrument through one `System.Diagnostics.Metrics.Meter` named
-`"zlink.framework"`. The app registers this canonical meter name in its collection pipeline.
+The Framework connects its instruments and message-flow records to each language's
+collector. The application configures the providers and exporters; the Framework doesn't
+include a scrape server.
 
 ```typescript
-// Wire the zlink meter into the OpenTelemetry Node SDK.
-// "zlink.framework" is the canonical meter name the Framework emits instruments through.
+// Register SDK providers, configured with exporters, on the global OTel API.
 const meterProvider = new MeterProvider({ readers: [prometheusExporter] });
-meterProvider.getMeter('zlink.framework');
 ```
 
-- There's no zlink-specific metrics API. The framework uses each language's standard metrics
-  API directly. To collect without OTel, subscribe directly to the meter name `"zlink.framework"`
-  from a `MeterListener`.
-- If no listener is attached at all, an instrument update ends on a minimal-cost inactive
-  path. Registering an instrument without turning it on has no effect on messaging
-  performance.
-- Choosing a dashboard and exporter is the app's job. The framework doesn't bundle a scrape
-  server.
+Collection names per language:
+
+Node.js registers SDK providers with `metrics.setGlobalMeterProvider(...)` and
+`trace.setGlobalTracerProvider(...)`. The Framework reads meter `zlink.framework` and tracer
+`@zlink-systems/framework`.
+
+Choosing a dashboard and exporter is the app's job.
 
 The catalog below lists the measurements and units for MeshNode, object/STREAM, and
 location/fanout instruments. For detailed labels, units, and kinds, see

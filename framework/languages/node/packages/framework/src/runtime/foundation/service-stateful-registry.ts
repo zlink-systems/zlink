@@ -62,6 +62,11 @@ export interface ServiceSessionBinding {
   readonly membershipEpoch: bigint;
 }
 
+interface ServiceSessionBindingEntry {
+  readonly binding: ServiceSessionBinding;
+  lastAcceptedSequence: bigint;
+}
+
 export interface ServiceObjectReservation {
   readonly id: bigint;
   readonly objectKind: 'actor' | 'userSpot' | 'instanceSpot';
@@ -112,7 +117,7 @@ export class ServiceStatefulRegistry {
   >();
   private readonly actors = new Map<string, ServiceActorState>();
   private readonly actorTypes = new Map<string, string>();
-  private readonly bindings = new Map<string, ServiceSessionBinding>();
+  private readonly bindings = new Map<string, ServiceSessionBindingEntry>();
   private readonly reservations = new Map<string, ServiceObjectReservation>();
   private readonly spotGenerations = new Map<string, bigint>();
   private readonly actorGenerations = new Map<string, bigint>();
@@ -408,7 +413,7 @@ export class ServiceStatefulRegistry {
     );
     requireText(binding.sessionOwnerNodeRid, 'sessionOwnerNodeRid');
     requirePositive(binding.bindingGeneration, 'bindingGeneration');
-    const current = this.bindings.get(actorKey(binding.actor));
+    const current = this.bindings.get(actorKey(binding.actor))?.binding;
     if (
       current !== undefined &&
       current.sessionOwnerNodeRid === binding.sessionOwnerNodeRid &&
@@ -423,7 +428,7 @@ export class ServiceStatefulRegistry {
       throw new ServiceStaleGenerationError('binding', binding.actor.actorId);
     }
     const accepted = Object.freeze({ ...binding });
-    this.bindings.set(actorKey(binding.actor), accepted);
+    this.bindings.set(actorKey(binding.actor), { binding: accepted, lastAcceptedSequence: 0n });
     return accepted;
   }
 
@@ -432,8 +437,27 @@ export class ServiceStatefulRegistry {
   }
 
   private bindingCore(actor: ServiceActorRef): ServiceSessionBinding | undefined {
-    const binding = this.bindings.get(actorKey(actor));
+    const binding = this.bindings.get(actorKey(actor))?.binding;
     return binding?.actor.generation === actor.generation ? binding : undefined;
+  }
+
+  /** The Actor owner admits each relayed Session sequence once per binding. */
+  acceptBoundSessionSequence(
+    actor: ServiceActorRef,
+    expectedBindingGeneration: bigint,
+    sequence: bigint
+  ): boolean {
+    const entry = this.bindings.get(actorKey(actor));
+    if (
+      entry === undefined ||
+      entry.binding.actor.generation !== actor.generation ||
+      entry.binding.bindingGeneration !== expectedBindingGeneration ||
+      sequence <= entry.lastAcceptedSequence
+    ) {
+      return false;
+    }
+    entry.lastAcceptedSequence = sequence;
+    return true;
   }
 
   unbindSession(
@@ -443,8 +467,9 @@ export class ServiceStatefulRegistry {
     expectedSessionOwnerNodeRid?: string
   ): boolean {
     const key = actorKey(actor);
-    const binding = this.bindings.get(key);
-    if (binding === undefined) return false;
+    const entry = this.bindings.get(key);
+    if (entry === undefined) return false;
+    const binding = entry.binding;
     if (
       binding.bindingGeneration !== expectedBindingGeneration ||
       (expectedSessionRid !== undefined &&
@@ -577,16 +602,16 @@ export class ServiceStatefulRegistry {
 
   private updateBindingMembership(actor: ServiceActorState): void {
     const key = actorKey(actor.ref);
-    const binding = this.bindings.get(key);
-    if (binding === undefined) return;
-    this.bindings.set(
-      key,
-      Object.freeze({
-        ...binding,
+    const entry = this.bindings.get(key);
+    if (entry === undefined) return;
+    this.bindings.set(key, {
+      binding: Object.freeze({
+        ...entry.binding,
         actor: actor.ref,
         membershipEpoch: actor.membershipEpoch
-      })
-    );
+      }),
+      lastAcceptedSequence: entry.lastAcceptedSequence
+    });
   }
 }
 

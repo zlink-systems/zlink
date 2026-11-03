@@ -5170,6 +5170,7 @@ function validateServiceInvariants(schema, types, fail) {
       { name: "bindingGeneration", $ref: "nonzero-u64" },
       { name: "authorityOwnerGeneration", $ref: "nonzero-u64" },
     ]],
+    ["streamBind:rejected", [{ name: "rejectionMessage", $ref: "nonempty-text16" }]],
     ["userSpotCreate:ok", [
       { name: "createResult", $ref: "user-spot-create-result" },
       { name: "spot", $ref: "spot-ref" },
@@ -5180,7 +5181,7 @@ function validateServiceInvariants(schema, types, fail) {
   const requestTailCases = requestTail?.cases ?? [];
   if (requestTailCases.length !== expectedRequestTailCases.size
       || requestTail?.otherwise?.fields?.length !== 0) {
-    fail("$.types", "reply tail must remain closed with exactly six successful operation-specific cases");
+    fail("$.types", "reply tail must remain closed with six success cases and the stream-bind rejection case");
   } else {
     const seenReplyCases = new Set();
     for (const replyCase of requestTailCases) {

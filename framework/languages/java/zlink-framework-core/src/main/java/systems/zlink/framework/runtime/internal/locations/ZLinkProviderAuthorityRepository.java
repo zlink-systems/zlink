@@ -786,7 +786,12 @@ final class ZLinkProviderAuthorityRepository {
                                         && !current.storeVersion().equals(reclaimVersion))
                                     return completed(new ZLinkObjectConflict(current));
                                 return tryReclaimStaleAuthority(
-                                                key, found, record, opaqueCancellation, request)
+                                                key,
+                                                found,
+                                                record,
+                                                opaqueCancellation,
+                                                request,
+                                                null)
                                         .thenCompose(
                                                 reclaim ->
                                                         switch (reclaim) {
@@ -998,7 +1003,7 @@ final class ZLinkProviderAuthorityRepository {
             String key,
             String expectedStoreVersion,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        return releaseEndedReservation(key, expectedStoreVersion, cancellation, null);
+        return releaseEndedReservation(key, expectedStoreVersion, cancellation, null, null);
     }
 
     CompletionStage<Boolean> releaseEndedReservation(
@@ -1006,14 +1011,15 @@ final class ZLinkProviderAuthorityRepository {
             String expectedStoreVersion,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         return releaseEndedReservation(
-                request.authorityKey(), expectedStoreVersion, cancellation, request);
+                request.authorityKey(), expectedStoreVersion, cancellation, request, null);
     }
 
     private CompletionStage<Boolean> releaseEndedReservation(
             String key,
             String expectedStoreVersion,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
-            ZLinkObjectReservationRequest request) {
+            ZLinkObjectReservationRequest request,
+            ZLinkLocationOwnerToken requiredOwner) {
         ZLinkStoreKey rowKey = authorityKey(key);
         return provider.read(rowKey, cancellation)
                 .thenCompose(
@@ -1034,7 +1040,12 @@ final class ZLinkProviderAuthorityRepository {
                                 return completed(false);
                             }
                             return tryReclaimStaleAuthority(
-                                            rowKey, found, current, cancellation, request)
+                                            rowKey,
+                                            found,
+                                            current,
+                                            cancellation,
+                                            request,
+                                            requiredOwner)
                                     .thenCompose(
                                             result ->
                                                     result == StaleAuthorityReclaim.CONFLICT
@@ -1042,7 +1053,8 @@ final class ZLinkProviderAuthorityRepository {
                                                                     key,
                                                                     expectedStoreVersion,
                                                                     cancellation,
-                                                                    request)
+                                                                    request,
+                                                                    requiredOwner)
                                                             : completed(
                                                                     result
                                                                             == StaleAuthorityReclaim
@@ -1055,7 +1067,8 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkStoreReadFound authority,
             AuthorityRecord current,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
-            ZLinkObjectReservationRequest request) {
+            ZLinkObjectReservationRequest request,
+            ZLinkLocationOwnerToken requiredOwner) {
         boolean active = current.allocation().state() == ZLinkPlacementAllocationState.ACTIVE;
         if ((active ? request == null : current.pendingCreation().isEmpty())
                 || (!active
@@ -1089,6 +1102,20 @@ final class ZLinkProviderAuthorityRepository {
                                                                                         .ownerId(),
                                                                                 ownerEvidence
                                                                                         .ownerLeaseGeneration());
+                                                                if (requiredOwner != null
+                                                                        && (!ownerLive
+                                                                                || !requiredOwner
+                                                                                        .ownerId()
+                                                                                        .equals(
+                                                                                                ownerEvidence
+                                                                                                        .ownerId())
+                                                                                || requiredOwner
+                                                                                                .leaseGeneration()
+                                                                                        != ownerEvidence
+                                                                                                .ownerLeaseGeneration()))
+                                                                    return completed(
+                                                                            StaleAuthorityReclaim
+                                                                                    .NOT_RECLAIMABLE);
                                                                 ZLinkStoreCondition
                                                                         descriptorCondition;
                                                                 if (active) {
@@ -2811,11 +2838,29 @@ final class ZLinkProviderAuthorityRepository {
                                                                             reservation,
                                                                             cancellation
                                                                                     ::isCancellationRequested)
-                                                                    .thenApply(
+                                                                    .thenCompose(
                                                                             write ->
                                                                                     write
                                                                                                     == ZLinkObjectAbortResult
                                                                                                             .ABORTED
+                                                                                            ? completed(
+                                                                                                    true)
+                                                                                            : write
+                                                                                                            == ZLinkObjectAbortResult
+                                                                                                                    .STALE
+                                                                                                    ? releaseEndedReservation(
+                                                                                                            key,
+                                                                                                            item.value()
+                                                                                                                    .version()
+                                                                                                                    .value(),
+                                                                                                            cancellation,
+                                                                                                            null,
+                                                                                                            owner)
+                                                                                                    : completed(
+                                                                                                            false))
+                                                                    .thenApply(
+                                                                            released ->
+                                                                                    released
                                                                                             ? Math
                                                                                                     .addExact(
                                                                                                             count,

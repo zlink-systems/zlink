@@ -79,6 +79,7 @@ export interface ZLinkActorRequestTerminal {
 /** One admitted Actor packet and the routing context that must move with it. */
 export interface ZLinkActorPacketDelivery {
   readonly origin: ApplicationJobOrigin;
+  readonly receivedAt?: Date;
   readonly actorId: string;
   readonly parts: readonly Message[];
   readonly returnResponse: boolean;
@@ -142,6 +143,7 @@ export class ZLinkSpotActorPacketDispatch {
   ): Promise<unknown> {
     return this.dispatchDelivery(serial, {
       origin,
+      receivedAt: new Date(),
       actorId,
       parts,
       returnResponse,
@@ -168,10 +170,12 @@ export class ZLinkSpotActorPacketDispatch {
       actorId,
       parts,
       returnResponse,
+      receivedAt: deliveryReceivedAt,
       remoteBoundSessionTarget,
       fallbackActorRef,
       requestTerminal
     } = delivery;
+    const receivedAt = deliveryReceivedAt ?? new Date();
     if (parts.length < 2) {
       this.reportInvalidFrame(actorId, ZLinkDispatchMessageKind.ActorSend);
       return { response: undefined };
@@ -298,7 +302,8 @@ export class ZLinkSpotActorPacketDispatch {
             zlinkSerialWorkOptions(
               parts[1].data().byteLength,
               zlinkMetadataByteLength(header.metadata)
-            )
+            ),
+            receivedAt
           )
         };
       }
@@ -375,7 +380,8 @@ export class ZLinkSpotActorPacketDispatch {
     requestTerminal: ZLinkActorRequestTerminal | undefined,
     requestDeadlineUnixMs: number | undefined,
     serial: ZLinkSpotSerialTurnExecutor | undefined,
-    workOptions: ZLinkSerialWorkOptions
+    workOptions: ZLinkSerialWorkOptions,
+    receivedAt: Date
   ): Promise<unknown> {
     const spot = typeof this.options.spot === 'function' ? this.options.spot() : this.options.spot;
     const dispatcher = new ZLinkSpotActorDispatcher({
@@ -415,7 +421,8 @@ export class ZLinkSpotActorPacketDispatch {
         await dispatcher.dispatchSendDecoded(actor, header.name, decodePayload, {
           meshName: spot.context.meshName,
           metadata: zlinkMessageMetadata(header.metadata),
-          correlationId: header.correlationId ?? undefined
+          correlationId: header.correlationId ?? undefined,
+          receivedAt
         });
         this.trace(
           ZLinkMessageFlowOutcome.Completed,
@@ -448,7 +455,8 @@ export class ZLinkSpotActorPacketDispatch {
           {
             meshName: spot.context.meshName,
             metadata: zlinkMessageMetadata(header.metadata),
-            correlationId: header.correlationId ?? header.requestSeq.toString()
+            correlationId: header.correlationId ?? header.requestSeq.toString(),
+            receivedAt
           },
           async (response) => {
             this.trace(
@@ -476,7 +484,8 @@ export class ZLinkSpotActorPacketDispatch {
           {
             meshName: spot.context.meshName,
             metadata: zlinkMessageMetadata(header.metadata),
-            correlationId: header.correlationId ?? header.requestSeq.toString()
+            correlationId: header.correlationId ?? header.requestSeq.toString(),
+            receivedAt
           }
         );
         this.trace(
@@ -494,7 +503,8 @@ export class ZLinkSpotActorPacketDispatch {
         {
           meshName: spot.context.meshName,
           metadata: zlinkMessageMetadata(header.metadata),
-          correlationId: header.correlationId ?? header.requestSeq.toString()
+          correlationId: header.correlationId ?? header.requestSeq.toString(),
+          receivedAt
         },
         async (response, replyOptions) => {
           this.trace(

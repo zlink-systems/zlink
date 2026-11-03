@@ -611,17 +611,7 @@ public sealed class SessionActorCoordinatorTests
             RoutingId.From("session-busy-binding"),
             "missing"
         );
-        const System.Reflection.BindingFlags fields =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var coordinator = typeof(ZLinkFrameworkRuntime)
-            .GetField("_actorBoundSessionCoordinator", fields)!
-            .GetValue(runtime)!;
-        var bindings = coordinator
-            .GetType()
-            .GetField("_sessionBindings", fields)!
-            .GetValue(coordinator)!;
-        var lane = (ZLinkStateLane)
-            bindings.GetType().GetField("_lane", fields)!.GetValue(bindings)!;
+        var lane = runtime._actorBoundSessionCoordinator._sessionBindings._lane;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var held = lane.RunAsync(async () =>
@@ -753,14 +743,12 @@ public sealed class SessionActorCoordinatorTests
             "actors",
             RoutingId.From("actor-invalid")
         );
-        object malformed = validShape;
-        typeof(ActorRef)
-            .GetField(
-                "_objectGeneration",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-            )!
-            .SetValue(malformed, 0UL);
-        var invalidActor = (ActorRef)malformed;
+        var invalidActor = default(ActorRef) with
+        {
+            ActorId = validShape.ActorId,
+            MeshName = validShape.MeshName,
+            NodeRid = validShape.NodeRid,
+        };
 
         var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
             BindWithDescriptorFixtureAsync(context, invalidActor, CancellationToken.None).AsTask()
@@ -3134,7 +3122,7 @@ public sealed class SessionActorCoordinatorTests
             cancellationToken
         );
 
-    private static ValueTask<ZLinkSessionBindingIdentity> ConfirmWithDescriptorFixture(
+    private static ValueTask<Zlink.Framework.Runtime.Streams.ZLinkSessionBindingIdentity> ConfirmWithDescriptorFixture(
         ZLinkSessionContext context,
         ActorRef actor,
         CancellationToken cancellationToken
@@ -3173,7 +3161,7 @@ public sealed class SessionActorCoordinatorTests
             FixtureSessionOwnerLeaseGeneration
         );
         return ValueTask.FromResult(
-            new ZLinkSessionBindingIdentity(
+            new Zlink.Framework.Runtime.Streams.ZLinkSessionBindingIdentity(
                 bindingToken,
                 bindingGeneration,
                 ZLinkMeshName.FromBoundary(actor.MeshName, nameof(actor.MeshName)),

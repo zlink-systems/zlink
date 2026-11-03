@@ -210,7 +210,9 @@ internal static class ZLinkFrameworkServiceRegistrar
                     provider.GetRequiredService<ZLinkFrameworkRuntime>().SafeToShutdown,
                 subscribeSafeToShutdownChanged: handler =>
                     provider.GetRequiredService<ZLinkFrameworkRuntime>().SafeToShutdownChanged +=
-                        handler
+                        handler,
+                flowCaptureEnabled: () =>
+                    provider.GetRequiredService<ZLinkFrameworkRuntime>().Flow.CaptureEnabled
             )
         );
         services.TryAddSingleton<IZLinkFrameworkRuntime>(static provider =>
@@ -490,6 +492,7 @@ internal static class ZLinkFrameworkServiceRegistrar
         services.AddSingleton(provider => new ZLinkLocationRuntime(
             provider.GetRequiredService<ZLinkLocationOptions>(),
             provider.GetRequiredService<IZLinkLocationRepository>(),
+            registration.TimeProvider,
             metricScopes: registration
                 .SpotNodes.Keys.Select(static name => new KeyValuePair<string, string>(
                     "mesh",

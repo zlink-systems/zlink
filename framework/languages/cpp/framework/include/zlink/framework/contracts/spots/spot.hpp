@@ -374,7 +374,7 @@ struct spot_inbound_message_t
 
     message_context_t to_message_context (std::string packet_name) const
     {
-        message_context_t context;
+        message_context_t context{.received_at = received_at};
         context.mesh_name = mesh_name;
         context.packet_name = std::move (packet_name);
         context.content_type = content_type;
@@ -404,6 +404,7 @@ struct spot_inbound_message_t
     std::optional<std::string> correlation_id;
     std::optional<std::string> source;
     std::optional<std::string> channel_name;
+    std::chrono::system_clock::time_point received_at = std::chrono::system_clock::now ();
 };
 
 class message_metadata_policy_t
@@ -2129,10 +2130,12 @@ class spot_node_builder_t
       std::function<void (void *, const zlink::message_t &, serializer_registry_t &)>
         deserialize_instance,
       std::function<std::shared_ptr<void> (actor_context_t)> create_context_instance = {},
+      std::function<actor_t *(void *)> as_actor = {},
       detail::actor_join_completion_callback_t on_join_completed = {},
       detail::factory_relocation_configuration_t relocation = {},
       std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture = {},
-      std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore = {});
+      std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore = {},
+      bool duplicate_bind_is_default = false);
 
     template <typename TSpot, typename TContext>
     void register_context_lifecycle (

@@ -110,6 +110,14 @@ struct public_host_runtime_test_access_t
     {
         host._options.mesh.dispatch = std::move (options);
     }
+    static bool post_terminal_turn (public_host_runtime_t &host, std::function<void ()> work)
+    {
+        return host._relocation_session_terminal_lane.try_post (std::move (work));
+    }
+    static bool on_terminal_lane (public_host_runtime_t &host)
+    {
+        return host._relocation_session_terminal_lane.is_on_lane ();
+    }
     static void enqueue_lifetime_probe (public_host_runtime_t &host)
     {
         host._local_dispatch_completion_lane
@@ -223,6 +231,39 @@ using namespace std::chrono_literals;
 
 namespace
 {
+
+struct blocking_log_sink_state_t
+{
+    std::promise<void> copy_entered;
+    std::promise<void> release_copy;
+    std::shared_future<void> released = release_copy.get_future ().share ();
+    std::atomic_bool block_next_copy{false};
+    std::function<bool ()> on_terminal_lane;
+    std::atomic_bool diagnostic_logged_inside_terminal{false};
+};
+
+struct blocking_log_sink_t
+{
+    explicit blocking_log_sink_t (std::shared_ptr<blocking_log_sink_state_t> state_) :
+        state (std::move (state_))
+    {
+    }
+    blocking_log_sink_t (const blocking_log_sink_t &other) : state (other.state)
+    {
+        if (state->block_next_copy.exchange (false, std::memory_order_acq_rel)) {
+            state->copy_entered.set_value ();
+            state->released.wait ();
+        }
+    }
+    void operator() (const zlink::framework::log_record_t &record) const
+    {
+        if (record.message == "late_session_relocation_seal" && state->on_terminal_lane
+            && state->on_terminal_lane ())
+            state->diagnostic_logged_inside_terminal.store (true, std::memory_order_release);
+    }
+
+    std::shared_ptr<blocking_log_sink_state_t> state;
+};
 
 bool ready_peer (const mesh::service_topology_registry_t &topology,
                  const std::vector<std::uint8_t> &routing_id)
@@ -1808,7 +1849,8 @@ void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_sea
        .bind =
          [&] (const auto &, const auto &, std::uint64_t, const auto &, auto) {
              ++binds;
-             return host::bound_session_bind_operation_result_t{};
+             using bind_result_t = host::bound_session_bind_operation_result_t;
+             return task_t<bind_result_t> (result_t<bind_result_t>::success (bind_result_t{}));
          },
        .send = [] (const auto &, auto) { return stateful::stateful_error_t::conflict; },
        .replaced = [] (const auto &) {},
@@ -1930,13 +1972,19 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
 
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
-        [] (
-          const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
-          const zlink::framework::location_owner_token_t &,
-          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
+        [] (const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
+            const zlink::framework::location_owner_token_t &,
+            std::function<bool (std::uint32_t, std::uint32_t,
+                                std::optional<protocol::stream_bind_reply_tail_t>)>
+              submit_terminal_reply) {
             (void) submit_terminal_reply (
-              {bind.binding.generation, bind.actor.authority_owner_generation});
-            return host::bound_session_bind_operation_result_t{};
+              static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+              static_cast<std::uint32_t> (protocol::framework_error_code::none),
+              protocol::stream_bind_reply_tail_t{bind.binding.generation,
+                                                 bind.actor.authority_owner_generation});
+            using bind_result_t = host::bound_session_bind_operation_result_t;
+            return zlink::framework::task_t<bind_result_t> (
+              zlink::framework::result_t<bind_result_t>::success (bind_result_t{}));
         },
       .send = [] (const protocol::bound_session_send_t &,
                   std::vector<zlink::message_t>) { return stateful::stateful_error_t::conflict; },
@@ -2028,13 +2076,19 @@ void verify_bound_session_push_admission_uses_only_session_owned_fields ()
     std::atomic_int deliveries{0};
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
-        [] (
-          const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
-          const zlink::framework::location_owner_token_t &,
-          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
+        [] (const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
+            const zlink::framework::location_owner_token_t &,
+            std::function<bool (std::uint32_t, std::uint32_t,
+                                std::optional<protocol::stream_bind_reply_tail_t>)>
+              submit_terminal_reply) {
             (void) submit_terminal_reply (
-              {bind.binding.generation, bind.actor.authority_owner_generation});
-            return host::bound_session_bind_operation_result_t{};
+              static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+              static_cast<std::uint32_t> (protocol::framework_error_code::none),
+              protocol::stream_bind_reply_tail_t{bind.binding.generation,
+                                                 bind.actor.authority_owner_generation});
+            using bind_result_t = host::bound_session_bind_operation_result_t;
+            return zlink::framework::task_t<bind_result_t> (
+              zlink::framework::result_t<bind_result_t>::success (bind_result_t{}));
         },
       .send =
         [&deliveries] (const protocol::bound_session_send_t &, std::vector<zlink::message_t>) {
@@ -3088,17 +3142,17 @@ void verify_global_identity_remote_create_and_generation_fence ()
     auto remote_owner = returning_actor;
     remote_owner.authority_owner_generation++;
     remote_owner.node_id = "node-b";
-    assert (runtime.adopt_reserved_actor_owner (remote_owner, "player")
+    assert (runtime.adopt_reserved_actor_owner (remote_owner, "player").result ().value ()
             == stateful::stateful_error_t::none);
     auto returned_owner = remote_owner;
     returned_owner.authority_owner_generation += 3;
     returned_owner.node_id = "node-a";
-    assert (runtime.adopt_reserved_actor_owner (returned_owner, "player")
+    assert (runtime.adopt_reserved_actor_owner (returned_owner, "player").result ().value ()
             == stateful::stateful_error_t::none);
     auto stale_owner = returned_owner;
     stale_owner.authority_owner_generation--;
     stale_owner.node_id = "node-b";
-    assert (runtime.adopt_reserved_actor_owner (stale_owner, "player")
+    assert (runtime.adopt_reserved_actor_owner (stale_owner, "player").result ().value ()
             == stateful::stateful_error_t::generation_stale);
 
     // A User-Spot membership authority commit can advance the generation
@@ -3106,17 +3160,22 @@ void verify_global_identity_remote_create_and_generation_fence ()
     // return-to-node adoption above and accepts exactly the next generation.
     auto local_membership_owner = returned_owner;
     ++local_membership_owner.authority_owner_generation;
-    assert (runtime.advance_local_actor_authority (local_membership_owner, "player")
-            == stateful::stateful_error_t::none);
+    assert (
+      runtime.advance_local_actor_authority (local_membership_owner, "player").result ().value ()
+      == stateful::stateful_error_t::none);
     assert (runtime.find (stateful::object_kind_t::actor, local_membership_owner.key)
             == local_membership_owner);
     auto skipped_local_membership_owner = local_membership_owner;
     skipped_local_membership_owner.authority_owner_generation += 2;
     assert (runtime.advance_local_actor_authority (skipped_local_membership_owner, "player")
+              .result ()
+              .value ()
             == stateful::stateful_error_t::none);
     auto stale_local_membership_owner = skipped_local_membership_owner;
     --stale_local_membership_owner.authority_owner_generation;
     assert (runtime.advance_local_actor_authority (stale_local_membership_owner, "player")
+              .result ()
+              .value ()
             == stateful::stateful_error_t::generation_stale);
 
     // Application actors created from a globally reserved reference use the
@@ -5046,6 +5105,18 @@ void verify_absent_session_seal ()
     local->configure_session_route_owner ([] {
         return std::make_optional (zlink::framework::location_owner_token_t{"absent-owner", 19});
     });
+    zlink::framework::logging_builder_t logging;
+    logging.set_min_level (zlink::framework::log_level_t::warn);
+    auto log_state = std::make_shared<blocking_log_sink_state_t> ();
+    auto *local_host = local.get ();
+    log_state->on_terminal_lane = [local_host] {
+        return host::public_host_runtime_test_access_t::on_terminal_lane (*local_host);
+    };
+    logging.use_callback_sink (blocking_log_sink_t{log_state});
+    auto logger = logging.create_logger ("session-native");
+    auto dispatch = zlink::framework::dispatch_options_t{};
+    zlink::framework::detail::dispatch_options_access_t::set_logger (dispatch, logger);
+    host::public_host_runtime_test_access_t::set_dispatch (*local, std::move (dispatch));
     int late_routes = 0;
     local->configure_late_session_route_update ([&] (const auto &) { ++late_routes; });
     local->start ();
@@ -5158,9 +5229,38 @@ void verify_absent_session_seal ()
     assert (local->route_session_remote (status.routing_id (), committed).result ().value ());
     local->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}).result ().value ();
     assert (!local->sessions ().remote_route_sealed (object.key));
+    log_state->block_next_copy.store (true, std::memory_order_release);
+    std::thread occupying_logger_lane ([&] { logger.warn ("occupy_session_log_lane"); });
+    assert (log_state->copy_entered.get_future ().wait_for (5s) == std::future_status::ready);
+    std::promise<void> terminal_turn_entered;
+    auto entered = terminal_turn_entered.get_future ();
+    std::promise<void> release_terminal_turn;
+    const auto terminal_released = release_terminal_turn.get_future ().share ();
+    assert (host::public_host_runtime_test_access_t::post_terminal_turn (*local, [&] {
+        terminal_turn_entered.set_value ();
+        terminal_released.wait ();
+    }));
+    assert (entered.wait_for (5s) == std::future_status::ready);
+    std::jthread unblock_workers ([&] {
+        std::this_thread::sleep_for (25ms);
+        release_terminal_turn.set_value ();
+        std::this_thread::sleep_for (100ms);
+        log_state->release_copy.set_value ();
+    });
+    const auto caller_thread = std::this_thread::get_id ();
     const auto closed_record =
       host::public_host_runtime_test_access_t::admit_seal (*local, next_seal);
+    unblock_workers.join ();
+    occupying_logger_lane.join ();
     assert (closed_record.first && !closed_record.second);
+    const auto &records = logging.captured_records ();
+    assert (records.size () == 2);
+    assert (records.back ().level == zlink::framework::log_level_t::warn);
+    assert (records.back ().category == "session-native");
+    assert (records.back ().message == "late_session_relocation_seal");
+    assert (records.back ().fields.empty ());
+    assert (records.back ().thread_id == caller_thread);
+    assert (!log_state->diagnostic_logged_inside_terminal.load (std::memory_order_acquire));
     const auto current = local->sessions ().current_binding (object.key);
     assert (current
             && local->sessions ().unbind (*current).first == stateful::stateful_error_t::none);
@@ -9340,12 +9440,16 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
           return std::nullopt;
       },
       [] (stateful::frozen_object_state_t &, const stateful::object_ref_t &,
-          const protocol::relocation_prepare_t &) { return true; },
+          const protocol::relocation_prepare_t &) -> zlink::framework::task_t<bool> {
+          co_return true;
+      },
       [] (const stateful::object_ref_t &)
         -> std::optional<zlink::framework::runtime::actor_authority_payload_t> {
           return std::nullopt;
       },
-      [] (const std::string &, const stateful::object_ref_t &) {},
+      [] (const std::string &, const stateful::object_ref_t &) -> zlink::framework::task_t<void> {
+          co_return;
+      },
       [] (const stateful::object_ref_t &, std::uint64_t, std::uint64_t) { return true; });
     source->start ();
     target->start ();
@@ -9501,8 +9605,11 @@ void verify_dispatch_callbacks_survive_suspension (bool through_mesh, bool dispa
              entered->store (true);
              return release->task ();
          },
-       .bind = [] (const auto &, const auto &, std::uint64_t, const auto &,
-                   auto) { return host::bound_session_bind_operation_result_t{}; },
+       .bind =
+         [] (const auto &, const auto &, std::uint64_t, const auto &, auto) {
+             using bind_result_t = host::bound_session_bind_operation_result_t;
+             return task_t<bind_result_t> (result_t<bind_result_t>::success (bind_result_t{}));
+         },
        .send = [] (const auto &, auto) { return stateful::stateful_error_t::conflict; },
        .replaced = [] (const auto &) {},
        .commit_relocation_route = [] (const auto &, const auto &, const auto &) { return false; },

@@ -14,16 +14,16 @@ import { meshRequestFailure } from '../../packages/framework/src/runtime/channel
 import { ZLinkFrameworkErrorKind } from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
 import {
   RawServiceMeshRuntime,
-  type RawServiceMeshRuntimeOptions
-} from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
-import { ServiceStatefulRuntime } from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
+  type RawServiceMeshRuntimeOptions,
+  ServiceStatefulRuntime
+} from '../../packages/framework/src/internal';
 import { ZLinkNodeRawBindingPort } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
 import type {
   ZLinkRawBindingPort,
   ZLinkRawHostPort,
   ZLinkRawRouterPort
 } from '../../packages/framework/src/runtime/backend/raw-binding-port';
-import { ZLinkNodeRawMeshBackend } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
+import { ZLinkNodeRawMeshBackend } from '../../packages/framework/src/internal';
 import {
   RequestResult,
   SubmitResult,

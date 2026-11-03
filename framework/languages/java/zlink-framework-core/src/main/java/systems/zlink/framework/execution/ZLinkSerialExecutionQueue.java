@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
@@ -57,8 +58,8 @@ public final class ZLinkSerialExecutionQueue {
     public static final int DEFAULT_LIFECYCLE_BURST_LIMIT = 8;
     public static final Duration DEFAULT_OWNER_TIME_BUDGET = Duration.ofMillis(10);
     private static final ThreadLocal<SerialTurn> CURRENT = new ThreadLocal<>();
-    // Arbitrary executors may block or execute inline; worker services already
-    // provide the asynchronous boundary. Compatibility dispatch is process-wide.
+    // Non-service executors and pools that may run or drop rejected turns use the
+    // existing asynchronous boundary.
     private static final ExecutorService DRAIN_EXECUTOR =
             Executors.newVirtualThreadPerTaskExecutor();
     private final Executor executor;
@@ -1876,7 +1877,13 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void submitWorker(Runnable work, Consumer<RuntimeException> reject) {
-        if (executor instanceof ExecutorService) {
+        // A ThreadPoolExecutor rejection handler other than AbortPolicy may run the
+        // rejected turn on the submitting thread (CallerRuns or a custom handler),
+        // so only an aborting pool is called directly from a Framework thread.
+        if (executor instanceof ExecutorService
+                && !(executor instanceof ThreadPoolExecutor pool
+                        && !(pool.getRejectedExecutionHandler()
+                                instanceof ThreadPoolExecutor.AbortPolicy))) {
             executeWorker(work, reject);
         } else {
             try {

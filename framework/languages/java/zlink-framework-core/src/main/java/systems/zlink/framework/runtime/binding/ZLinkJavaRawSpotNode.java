@@ -7,7 +7,10 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.actors.ZLinkActorCallbackCancellation;
+import systems.zlink.framework.actors.ZLinkSessionBindingIdentity;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
@@ -49,6 +52,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -88,8 +92,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     // Without an attached Actor runtime this node's own lane is the binding owner.
     private volatile RemoteSessionBindingOwner remoteSessionBindingOwner =
             (node, actor, transition) ->
-                    this.stateLane.runNowOrQueue(
-                            () -> transition.apply(RemoteSessionBindingTransition.NONE));
+                    this.stateLane
+                            .runNowOrQueue(
+                                    () -> transition.apply(RemoteSessionBindingTransition.NONE))
+                            .thenCompose(stage -> stage);
+    private volatile Duration duplicateBindCallbackTimeout = Duration.ofMillis(30_000);
     final ZLinkJavaInstanceSpotRegistry instanceSpots;
     private volatile Function<
                     ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope,
@@ -1033,6 +1040,18 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         new ZlinkSubmitException(SubmitResult.NOT_FOUND));
             }
             case STALE_SEQUENCE -> {
+                var failure =
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                "STREAM bound-session sequence is stale");
+                owner.reportStaleBoundSessionRelay(
+                        actor.actorId(),
+                        routingId(),
+                        sourceSessionRid,
+                        streamHeader == null ? null : streamHeader.name(),
+                        streamHeader == null ? null : streamHeader.correlationId().orElse(null),
+                        false,
+                        failure);
                 return CompletableFuture.failedFuture(
                         new ZlinkSubmitException(SubmitResult.NOT_ADMITTED));
             }
@@ -1109,8 +1128,19 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         new IllegalStateException("STREAM session binding is no longer current"));
             }
             case STALE_SEQUENCE -> {
-                return CompletableFuture.failedFuture(
-                        new IllegalStateException("STREAM bound-session sequence is stale"));
+                var failure =
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                "STREAM bound-session sequence is stale");
+                owner.reportStaleBoundSessionRelay(
+                        actor.actorId(),
+                        routingId(),
+                        sourceSessionRid,
+                        streamHeader.name(),
+                        streamHeader.correlationId().orElse(null),
+                        true,
+                        failure);
+                return CompletableFuture.failedFuture(failure);
             }
             case ADMITTED -> {}
         }
@@ -1210,14 +1240,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         actorRoute.authorityOwnerGeneration(),
                         actorRoute.ownerLeaseGeneration(),
                         true);
-        return remoteSessionBindingOwner
-                .apply(
+        CompletionStage<Boolean> installation =
+                remoteSessionBindingOwner.restoreRelocated(
                         this,
                         actor,
                         applied -> {
                             BindingEntry current = actorBindings.get(actor.actorId());
                             if (current != null && candidate.equals(current.binding())) {
-                                return true;
+                                return CompletableFuture.completedFuture(true);
                             }
                             if (current != null) {
                                 throw new IllegalStateException(
@@ -1226,9 +1256,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             }
                             applied.bind(candidate.route());
                             installActorBinding(candidate);
-                            return true;
-                        })
-                .thenApply(ignored -> null);
+                            return CompletableFuture.completedFuture(true);
+                        });
+        return installation.thenApply(ignored -> null);
     }
 
     @Override
@@ -1314,13 +1344,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 actor,
                 applied -> {
                     BindingEntry current = actorBindings.get(actor.actorId());
-                    return current != null
-                            && current.binding().actor().equals(actor)
-                            && current.binding().authorityOwnerGeneration()
-                                    == authorityOwnerGeneration
-                            && (sessionRid == null
-                                    || current.binding().sessionRid().equals(sessionRid))
-                            && actorBindings.remove(actor.actorId(), current);
+                    return CompletableFuture.completedFuture(
+                            current != null
+                                    && current.binding().actor().equals(actor)
+                                    && current.binding().authorityOwnerGeneration()
+                                            == authorityOwnerGeneration
+                                    && (sessionRid == null
+                                            || current.binding().sessionRid().equals(sessionRid))
+                                    && actorBindings.remove(actor.actorId(), current));
                 });
     }
 
@@ -1814,12 +1845,35 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure,
             Runnable terminalRelease) {
+        return enqueueRemoteActor(
+                source,
+                header,
+                acceptedJournalRecord,
+                parts,
+                contentType,
+                null,
+                reply,
+                failure,
+                terminalRelease);
+    }
+
+    boolean enqueueRemoteActor(
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkServiceM6BWireCodec.ActorMessage header,
+            Supplier<byte[]> acceptedJournalRecord,
+            List<Message> parts,
+            String contentType,
+            String packetName,
+            Consumer<List<Message>> reply,
+            Consumer<Throwable> failure,
+            Runnable terminalRelease) {
         return dispatchActorIngress(
                         source,
                         header,
                         acceptedJournalRecord,
                         parts,
                         contentType,
+                        packetName,
                         reply,
                         failure,
                         terminalRelease,
@@ -1834,6 +1888,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             Supplier<byte[]> acceptedJournalRecord,
             List<Message> parts,
             String contentType,
+            String packetName,
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure,
             Runnable terminalRelease,
@@ -1900,9 +1955,28 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     sourceNodeRid,
                                     header.boundSession().sourceSessionRid(),
                                     header.boundSession().sourceBindingGeneration())
-                    || current.binding().sessionOwnerNodeGeneration() != sourceNodeGeneration
-                    || !current.accept(header.boundSession().sourceSessionSequence())) {
+                    || current.binding().sessionOwnerNodeGeneration() != sourceNodeGeneration) {
                 return null;
+            }
+            if (!current.accept(header.boundSession().sourceSessionSequence())) {
+                var staleSequence =
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                "Actor bound-session relay sequence is stale");
+                owner.reportStaleBoundSessionRelay(
+                        actor.actorId(),
+                        sourceNodeRid,
+                        header.boundSession().sourceSessionRid(),
+                        packetName,
+                        header.correlation() == null
+                                ? null
+                                : Long.toUnsignedString(header.correlation()),
+                        header.request(),
+                        staleSequence);
+                parts.forEach(Message::close);
+                if (terminalRelease != null) terminalRelease.run();
+                if (header.request() && failure != null) failure.accept(staleSequence);
+                return CompletableFuture.completedFuture(null);
             }
         }
         String targetSpotId = nativeStay.spotId();
@@ -2287,7 +2361,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                         "Session binding generation is stale");
                             }
                             if (accepted == candidate) installActorBinding(accepted);
-                            return true;
+                            return CompletableFuture.completedFuture(true);
                         })
                 .thenApply(
                         ignored ->
@@ -2309,10 +2383,15 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 actor,
                 applied -> {
                     BindingEntry current = actorBindings.get(actor.actorId());
-                    return current != null
-                            && current.binding()
-                                    .identifies(actor, routingId(), sessionRid, bindingGeneration)
-                            && actorBindings.remove(actor.actorId(), current);
+                    return CompletableFuture.completedFuture(
+                            current != null
+                                    && current.binding()
+                                            .identifies(
+                                                    actor,
+                                                    routingId(),
+                                                    sessionRid,
+                                                    bindingGeneration)
+                                    && actorBindings.remove(actor.actorId(), current));
                 });
     }
 
@@ -2337,6 +2416,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         remoteSessionBindingOwner = Objects.requireNonNull(owner, "owner");
     }
 
+    @Override
+    public void setRemoteSessionBindingOwner(
+            RemoteSessionBindingOwner owner, Duration callbackTimeout) {
+        setRemoteSessionBindingOwner(owner);
+        duplicateBindCallbackTimeout = Objects.requireNonNull(callbackTimeout, "callbackTimeout");
+    }
+
     CompletionStage<Boolean> applyRemoteStreamBinding(
             RoutingId sourceNodeRid,
             long sourceNodeGeneration,
@@ -2358,7 +2444,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                 applied));
     }
 
-    private boolean acceptRemoteStreamBindingOnOwner(
+    private CompletionStage<Boolean> acceptRemoteStreamBindingOnOwner(
             RoutingId sourceNodeRid,
             long sourceNodeGeneration,
             String sessionOwnerId,
@@ -2383,30 +2469,199 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         true);
         BindingEntry entry = actorBindings.get(actor.actorId());
         ActorSessionBinding current = entry == null ? null : entry.binding();
-        // The terminal reply is submitted once, here, in this owner turn and before the accepted
-        // binding is published to the command 36 path (02-session-actor-binding.ko.md:215-219).
-        ActorSessionBinding accepted = null;
-        try {
-            accepted =
-                    admitRemoteStreamBinding(route, candidate, current, command.active(), applied);
-        } finally {
-            int[] failure =
-                    accepted == null
-                            ? ZLinkRequestFailureMapping.outgoing(
-                                    ZLinkFrameworkErrorKind.UNAVAILABLE)
-                            : new int[] {0, 0};
+        if (!command.active()) {
+            ActorSessionBinding retired =
+                    admitRemoteStreamBinding(route, candidate, current, false, applied);
             reply.accept(
-                    new ZLinkServiceM6BWireCodec.BoundSessionBindReply(
+                    bindReply(
                             command.correlation(),
-                            failure[0],
-                            failure[1],
-                            accepted == null ? 0 : accepted.bindingGeneration(),
-                            accepted == null ? 0 : accepted.authorityOwnerGeneration()));
+                            retired == null
+                                    ? RequestResult.CONFLICT.value()
+                                    : RequestResult.OK.value(),
+                            0,
+                            retired,
+                            ""));
+            return CompletableFuture.completedFuture(retired != null);
         }
-        if (accepted == candidate && command.active()) {
-            installActorBinding(accepted);
+        if (!isAdmissibleRemoteStreamBinding(route, candidate, current)) {
+            int[] unavailable =
+                    ZLinkRequestFailureMapping.outgoing(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED);
+            reply.accept(
+                    bindReply(command.correlation(), unavailable[0], unavailable[1], null, ""));
+            return CompletableFuture.completedFuture(false);
         }
-        return accepted != null;
+        if (current == null || samePhysicalSession(current, candidate)) {
+            return commitRemoteStreamBinding(route, candidate, command, reply, applied);
+        }
+
+        var result = new CompletableFuture<Boolean>();
+        var decided = new AtomicBoolean();
+        var cancellation = new AtomicBoolean();
+        var callbackCancellation = (ZLinkActorCallbackCancellation) cancellation::get;
+        var incomingIdentity = sessionBindingIdentity(candidate);
+        CompletionStage<Optional<String>> decision;
+        try {
+            decision =
+                    Objects.requireNonNull(
+                            applied.decideDuplicateBind(
+                                    incomingIdentity,
+                                    command.sessionRid(),
+                                    () ->
+                                            CompletableFuture.delayedExecutor(
+                                                            duplicateBindCallbackTimeout.toNanos(),
+                                                            TimeUnit.NANOSECONDS)
+                                                    .execute(
+                                                            () -> {
+                                                                if (decided.compareAndSet(
+                                                                        false, true)) {
+                                                                    cancellation.set(true);
+                                                                    reply.accept(
+                                                                            bindReply(
+                                                                                    command
+                                                                                            .correlation(),
+                                                                                    RequestResult
+                                                                                            .TIMED_OUT
+                                                                                            .value(),
+                                                                                    0,
+                                                                                    null,
+                                                                                    ""));
+                                                                }
+                                                            }),
+                                    callbackCancellation),
+                            "Duplicate-bind callback stage");
+        } catch (RuntimeException error) {
+            int[] internalFailure =
+                    ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.INTERNAL_FAILURE);
+            reply.accept(
+                    bindReply(
+                            command.correlation(),
+                            internalFailure[0],
+                            internalFailure[1],
+                            null,
+                            ""));
+            return CompletableFuture.completedFuture(false);
+        }
+        decision.whenComplete(
+                (rejection, failure) -> {
+                    if (!decided.compareAndSet(false, true)) {
+                        result.complete(false);
+                        return;
+                    }
+                    if (failure != null || rejection == null) {
+                        reply.accept(
+                                bindReply(
+                                        command.correlation(),
+                                        RequestResult.INTERNAL_ERROR.value(),
+                                        0,
+                                        null,
+                                        ""));
+                        result.complete(false);
+                        return;
+                    }
+                    if (rejection.isPresent() && !rejection.get().isEmpty()) {
+                        String message = rejection.get();
+                        if (message.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+                                        > 0xffff
+                                || message.indexOf('\0') >= 0) {
+                            reply.accept(
+                                    bindReply(
+                                            command.correlation(),
+                                            RequestResult.INTERNAL_ERROR.value(),
+                                            0,
+                                            null,
+                                            ""));
+                        } else {
+                            int[] rejected =
+                                    ZLinkRequestFailureMapping.outgoing(
+                                            ZLinkFrameworkErrorKind.REJECTED);
+                            reply.accept(
+                                    bindReply(
+                                            command.correlation(),
+                                            rejected[0],
+                                            rejected[1],
+                                            null,
+                                            message));
+                        }
+                        result.complete(false);
+                        return;
+                    }
+                    commitRemoteStreamBinding(route, candidate, command, reply, applied)
+                            .whenComplete(
+                                    (accepted, commitFailure) -> {
+                                        if (commitFailure != null) {
+                                            result.completeExceptionally(commitFailure);
+                                        } else {
+                                            result.complete(accepted);
+                                        }
+                                    });
+                });
+        return result;
+    }
+
+    private CompletionStage<Boolean> commitRemoteStreamBinding(
+            ZLinkServiceM6BWireCodec.ActorRouteFence route,
+            ActorSessionBinding candidate,
+            ZLinkServiceM6BWireCodec.BoundSessionBind command,
+            Consumer<ZLinkServiceM6BWireCodec.BoundSessionBindReply> reply,
+            RemoteSessionBindingTransition applied) {
+        ActorSessionBinding accepted;
+        try {
+            BindingEntry entry = actorBindings.get(route.actor().actorId());
+            ActorSessionBinding current = entry == null ? null : entry.binding();
+            accepted = admitRemoteStreamBinding(route, candidate, current, true, applied);
+        } catch (RuntimeException error) {
+            int[] internalFailure =
+                    ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.INTERNAL_FAILURE);
+            reply.accept(
+                    bindReply(
+                            command.correlation(),
+                            internalFailure[0],
+                            internalFailure[1],
+                            null,
+                            ""));
+            return CompletableFuture.completedFuture(false);
+        }
+        if (accepted == null) {
+            int[] unavailable =
+                    ZLinkRequestFailureMapping.outgoing(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            (int) ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED);
+            reply.accept(
+                    bindReply(command.correlation(), unavailable[0], unavailable[1], null, ""));
+            return CompletableFuture.completedFuture(false);
+        }
+        reply.accept(bindReply(command.correlation(), RequestResult.OK.value(), 0, accepted, ""));
+        if (accepted == candidate) installActorBinding(accepted);
+        return CompletableFuture.completedFuture(true);
+    }
+
+    private static ZLinkServiceM6BWireCodec.BoundSessionBindReply bindReply(
+            long correlation,
+            int terminal,
+            int failureCode,
+            ActorSessionBinding binding,
+            String rejectionMessage) {
+        return new ZLinkServiceM6BWireCodec.BoundSessionBindReply(
+                correlation,
+                terminal,
+                failureCode,
+                binding == null ? 0 : binding.bindingGeneration(),
+                binding == null ? 0 : binding.authorityOwnerGeneration(),
+                rejectionMessage);
+    }
+
+    private static boolean samePhysicalSession(
+            ActorSessionBinding left, ActorSessionBinding right) {
+        return left.sameSessionOwnerEpoch(right) && left.sessionRid().equals(right.sessionRid());
+    }
+
+    private static ZLinkSessionBindingIdentity sessionBindingIdentity(ActorSessionBinding binding) {
+        return new ZLinkSessionBindingIdentity(
+                binding.sessionOwnerNodeRid(),
+                binding.sessionOwnerNodeGeneration(),
+                binding.bindingGeneration());
     }
 
     private ActorSessionBinding admitRemoteStreamBinding(
@@ -2429,23 +2684,42 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             }
             return candidate;
         }
+        if (!isAdmissibleRemoteStreamBinding(route, candidate, current)) {
+            return null;
+        }
+        if (current != null
+                && current.sameSessionOwnerEpoch(candidate)
+                && samePhysicalSession(current, candidate)
+                && current.bindingGeneration() == candidate.bindingGeneration()) {
+            return current;
+        }
+        applied.bind(candidate.route());
+        return candidate;
+    }
+
+    private boolean isAdmissibleRemoteStreamBinding(
+            ZLinkServiceM6BWireCodec.ActorRouteFence route,
+            ActorSessionBinding candidate,
+            ActorSessionBinding current) {
+        ZLinkBackendActorRef actor = route.actor();
+        if (!routingId().equals(actor.nodeRid())
+                || route.targetNodeGeneration() != owner.lifecycleGeneration()) {
+            return false;
+        }
         NativeActorStay stay = nativeActor(actor);
         if (stay == null
                 || stay.authority().authorityOwnerGeneration()
                         != route.authorityOwnerGeneration()) {
-            return null;
+            return false;
         }
         if (current != null && current.sameSessionOwnerEpoch(candidate)) {
-            if (current.sessionRid().equals(candidate.sessionRid())
+            if (samePhysicalSession(current, candidate)
                     && current.bindingGeneration() == candidate.bindingGeneration()) {
-                return current;
+                return true;
             }
-            if (candidate.bindingGeneration() <= current.bindingGeneration()) {
-                return null;
-            }
+            return candidate.bindingGeneration() > current.bindingGeneration();
         }
-        applied.bind(candidate.route());
-        return candidate;
+        return true;
     }
 
     private ZLinkServiceM6BWireCodec.RetiredSessionRouteFence sessionOwnerFence(
@@ -2999,6 +3273,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             () -> acceptedRecord,
                             copied,
                             ZLinkChannelContentTypeFrame.decode(parts),
+                            null,
                             requestId == 0
                                     ? null
                                     : replies -> {

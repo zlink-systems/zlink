@@ -34,6 +34,14 @@ context의 absolute deadline에 Framework가 stage completion 대기를 끝내�
 worker 실행 중단만 표현하는 SPI 전용 타입이다. 이 타입을 handler, Spot lifecycle, host termination이나 일반
 message API에 재사용하지 않는다.
 
+## Messaging hot path 전환 수 계측
+
+[Messaging hot path §3](../../01-execution/08-messaging-hot-path.ko.md)는 binding 완료 알림부터 caller continuation의 첫 instruction까지 Framework가 만드는 전환을 최대 1회로 제한한다. unit 시험은 binding callback과 continuation의 thread identity가 달라진 횟수를 세고, completion dispatcher turn 표식으로 그 전환이 Framework worker에서 일어났는지 확인한다. task 게시와 깨우기는 실행 자원 전환 수에 더하지 않는다.
+
+| 구간 | 상한 | 계측 지점 | 시험 식별자 |
+|---|---:|---|---|
+| binding 완료 알림 → caller continuation 첫 instruction | 1회 이하 | 시험 전용 identity 비교 [ZLinkOutsideLaneResumptionTest.java:48](../../../../../../../languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/execution/ZLinkOutsideLaneResumptionTest.java#L48); [ZLinkServiceCompletionDispatcher.java:53](../../../../../../../languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/service/ZLinkServiceCompletionDispatcher.java#L53) | `unit:ZLinkOutsideLaneResumptionTest.messagingHotPathCompletionTransitionCountIsOne` (기대 1회) |
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [언어별 interface 목차](../README.ko.md) | [스펙 목차](../../README.ko.md)

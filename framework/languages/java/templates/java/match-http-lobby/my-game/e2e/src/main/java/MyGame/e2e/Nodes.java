@@ -278,12 +278,28 @@ public final class Nodes implements AutoCloseable {
             Structure.require(process.isAlive(), id + " exited unexpectedly");
             command(Control.SHUTDOWN);
             waitFor(Control.STOPPED);
+            boolean exited = process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS);
+            if (!exited) dumpThreads();
             Structure.require(
-                    process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS),
-                    id + " failed to exit");
+                    exited, id + " failed to exit; thread dump is in " + id + "-stdout.log");
             Structure.require(
                     process.exitValue() == 0, id + " shutdown exit: " + process.exitValue());
             if (container != null) docker("rm", container);
+        }
+
+        // SIGQUIT makes HotSpot print a thread dump to stdout, which the output thread keeps copying.
+        private void dumpThreads() throws InterruptedException {
+            try {
+                if (container != null) docker("kill", "--signal=QUIT", container);
+                else if (!windows())
+                    new ProcessBuilder("kill", "-3", Long.toString(process.pid()))
+                            .start()
+                            .waitFor(Control.THREAD_DUMP_SECONDS, TimeUnit.SECONDS);
+                else return;
+            } catch (Exception ignored) {
+                return;
+            }
+            Thread.sleep(TimeUnit.SECONDS.toMillis(Control.THREAD_DUMP_SECONDS));
         }
 
         void cleanup() throws Exception {

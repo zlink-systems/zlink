@@ -143,9 +143,10 @@ inline raw_message_t copy_binding_parts (const std::vector<zlink::message_t> &pa
     return result;
 }
 
+template <typename TCompletion>
 inline binding_completion_observer_t observe_request_completion (
   request_submission_stages_t stages,
-  std::shared_ptr<task_completion_source_t<raw_request_completion_t>> source,
+  TCompletion completion,
   runtime::mesh::service_liveness_registry_t::connection_t admission = {},
   std::shared_ptr<task_completion_source_t<void>> admitted = {},
   std::shared_ptr<runtime::foundation::operation_registry_t> requests = {},
@@ -154,9 +155,9 @@ inline binding_completion_observer_t observe_request_completion (
     const auto finish = [&] (result_t<raw_request_completion_t> result) {
         if (requests) {
             if (requests->unregister (id))
-                source->complete (std::move (result));
+                completion (std::move (result));
         } else {
-            source->complete (std::move (result));
+            completion (std::move (result));
         }
     };
     try {

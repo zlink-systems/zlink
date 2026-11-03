@@ -11,9 +11,9 @@ internal sealed class ZLinkActorHandoffState(
     ZLinkBoundedIngressAdmission? sourceHoldAdmission = null
 )
 {
-    private readonly ZLinkStateLane _lane = new();
-    private readonly List<ZLinkActorHandoffFrame> _frames = [];
-    private readonly List<ZLinkActorHandoffFrame> _sourceHoldFrames = [];
+    internal readonly ZLinkStateLane _lane = new();
+    internal readonly List<ZLinkActorHandoffFrame> _frames = [];
+    internal readonly List<ZLinkActorHandoffFrame> _sourceHoldFrames = [];
 
     // A null value claims the arrival index while ReserveCanonicalMaintenanceTrailing
     // invokes the caller-owned reservation callback outside the state lane.

@@ -169,6 +169,7 @@ interface ServiceSpotMessageFollowState {
 export interface ServiceStatefulResult {
   readonly terminalResult: number;
   readonly failureCode: number;
+  readonly failureMessage?: string;
   readonly payload?: ServiceApplicationPayload;
   readonly kindData?: ReceiveKindData;
   readonly applicationMetadata?: Buffer;
@@ -478,7 +479,7 @@ export class ServiceStatefulRuntime {
 
   readonly registry: ServiceStatefulRegistry;
 
-  private readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult, bigint>;
+  readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult, bigint>;
   private readonly sessionDeliveries = new Map<string, ServiceSessionDelivery>();
   /**
    * A local Actor owner can replace its own session binding before the
@@ -522,7 +523,7 @@ export class ServiceStatefulRuntime {
   private dispatchErrors?: ZLinkDispatchErrorReporter;
   private sessionOwnerDescriptors?: ServiceSessionOwnerDescriptors;
   private dispatchErrorMeshName?: string;
-  private readonly admittedUserSpotOperations = new Map<
+  readonly admittedUserSpotOperations = new Map<
     string,
     {
       readonly request: string;
@@ -2505,7 +2506,7 @@ export class ServiceStatefulRuntime {
     }
   }
 
-  private async handleIngress(
+  async handleIngress(
     ingress: RawServiceIngressRecord,
     record: ServiceStatefulWireRecord,
     payloadFrame: Buffer | undefined,
@@ -2597,6 +2598,62 @@ export class ServiceStatefulRuntime {
             binding.sessionOwnerNodeRid !== ingress.sourceRoutingId
           ) {
             throw new ServiceStaleGenerationError('binding', record.target.actor.actorId);
+          }
+          if (
+            !this.registry.acceptBoundSessionSequence(
+              record.target.actor,
+              record.boundSession.bindingGeneration,
+              record.boundSession.sequence
+            )
+          ) {
+            const error = new ZLinkFrameworkException(
+              ZLinkFrameworkErrorKind.InvalidOperation,
+              'Bound Session relay sequence does not increase.'
+            );
+            const reporter = this.dispatchErrors;
+            if (record.kind === 'actorRequest') {
+              if (reporter?.captureEnabled() === true) {
+                reporter.report({
+                  surface: ZLinkDispatchErrorSurface.StreamSession,
+                  messageKind: ZLinkDispatchMessageKind.Request,
+                  reason: ZLinkDispatchErrorReason.StaleTarget,
+                  action: ZLinkDispatchErrorAction.ReplyError,
+                  meshName: this.dispatchErrorMeshName,
+                  sourceRid: ingress.sourceRoutingId,
+                  actorId: record.target.actor.actorId,
+                  correlationId: record.correlation?.toString(),
+                  error
+                });
+              }
+              const result = failure(error);
+              this.replyWire(
+                ingress,
+                record.correlation!,
+                result.terminalResult,
+                result.failureCode
+              );
+              return 'infrastructure';
+            }
+            const tracePoint = flowIfEnabled(reporter?.flow, ZLinkMessageFlowOutcome.Dropped);
+            if (tracePoint !== undefined) {
+              tracePoint.trace({
+                outcome: ZLinkMessageFlowOutcome.Dropped,
+                surface: ZLinkDispatchErrorSurface.StreamSession,
+                messageKind: ZLinkDispatchMessageKind.Send,
+                packetName: decodeApplicationPayloadView(payloadFrame!).packetName,
+                ...(this.dispatchErrorMeshName === undefined
+                  ? {}
+                  : { meshName: this.dispatchErrorMeshName }),
+                ...(record.correlation === undefined
+                  ? {}
+                  : { correlationId: record.correlation.toString() }),
+                sourceRid: ingress.sourceRoutingId,
+                actorId: record.target.actor.actorId,
+                streamSessionId: record.boundSession.sessionRid,
+                errorReason: ZLinkDispatchErrorReason.StaleTarget
+              });
+            }
+            return 'application';
           }
         }
         return this.enqueueApplicationFrame(
@@ -2757,7 +2814,7 @@ export class ServiceStatefulRuntime {
     return !lifecycle.isMaterialized(applicationTarget);
   }
 
-  private enqueueActivatedInstanceSpot(
+  enqueueActivatedInstanceSpot(
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'instanceSpot' }>,
     payloadFrame: Buffer,
@@ -2838,7 +2895,7 @@ export class ServiceStatefulRuntime {
     return result;
   }
 
-  private async continueMissingInstanceActivation(
+  async continueMissingInstanceActivation(
     ingress: RawServiceIngressRecord,
     record: Extract<
       ServiceStatefulWireRecord,
@@ -2937,7 +2994,7 @@ export class ServiceStatefulRuntime {
    * record only of a message whose handler turn started before it; a message queued
    * behind that Close is not counted, so it cannot hold the Close it follows.
    */
-  private activationTerminalCompletion(
+  activationTerminalCompletion(
     target: ServiceInstanceActivationTarget,
     route: ServiceInstanceRouteFence
   ): {
@@ -2984,7 +3041,7 @@ export class ServiceStatefulRuntime {
     return { onTerminalCompletion, onHandlerTurnStarted };
   }
 
-  private instanceApplicationTerminalCompletion(
+  instanceApplicationTerminalCompletion(
     target: ServiceInstanceApplicationTarget
   ): (() => Promise<void>) | undefined {
     const lifecycle = this.instanceApplicationLifecycle;
@@ -3054,7 +3111,7 @@ export class ServiceStatefulRuntime {
     for (const waiter of waiters) waiter();
   }
 
-  private finishMissingInstanceActivationFailure(
+  finishMissingInstanceActivationFailure(
     ingress: RawServiceIngressRecord,
     record: Extract<
       ServiceStatefulWireRecord,
@@ -3222,7 +3279,7 @@ export class ServiceStatefulRuntime {
     return { intent, route: current };
   }
 
-  private validateInstanceIngress(
+  validateInstanceIngress(
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'instanceSpot' }>
   ): void {
@@ -3324,7 +3381,7 @@ export class ServiceStatefulRuntime {
       : undefined;
   }
 
-  private activateMissingInstanceAsync(
+  activateMissingInstanceAsync(
     record: Extract<
       ServiceStatefulWireRecord,
       { readonly kind: 'instanceSpot'; readonly activation: 'missing' }
@@ -3395,7 +3452,7 @@ export class ServiceStatefulRuntime {
     return operation;
   }
 
-  private async runMissingInstanceActivation(
+  async runMissingInstanceActivation(
     record: Extract<
       ServiceStatefulWireRecord,
       { readonly kind: 'instanceSpot'; readonly activation: 'missing' }
@@ -4261,7 +4318,7 @@ export class ServiceStatefulRuntime {
     );
   }
 
-  private enqueueApplicationFrame(
+  enqueueApplicationFrame(
     ingress: RawServiceIngressRecord,
     owner: string,
     payloadFrame: Buffer,
@@ -5035,7 +5092,7 @@ export class ServiceStatefulRuntime {
     );
   }
 
-  private async submitLocalRequest(
+  async submitLocalRequest(
     ingress: RawServiceIngressRecord,
     pending: ServiceStatefulPendingOperation,
     operationKind:
@@ -5385,6 +5442,7 @@ export class ServiceStatefulRuntime {
     return {
       terminalResult,
       failureCode,
+      ...(tail?.kind === 'streamBindRejected' ? { failureMessage: tail.rejectionMessage } : {}),
       ...(payload === undefined ? {} : { payload }),
       ...(tail?.kind === 'streamBind'
         ? {
@@ -5398,7 +5456,7 @@ export class ServiceStatefulRuntime {
     };
   }
 
-  private validateActorFence(fence: ServiceActorRouteFence): ServiceActorState {
+  validateActorFence(fence: ServiceActorRouteFence): ServiceActorState {
     if (
       fence.actor.nodeRid !== this.nodeRid ||
       fence.targetNodeGeneration !== this.nodeGeneration
@@ -5412,7 +5470,7 @@ export class ServiceStatefulRuntime {
     return actor;
   }
 
-  private validateActorMessageFence(fence: ServiceActorRouteFence): ServiceActorState {
+  validateActorMessageFence(fence: ServiceActorRouteFence): ServiceActorState {
     if (
       fence.actor.nodeRid !== this.nodeRid ||
       fence.targetNodeGeneration !== this.nodeGeneration
@@ -5443,7 +5501,7 @@ export class ServiceStatefulRuntime {
     return spot;
   }
 
-  private validateDirectSpotFence(fence: ServiceSpotRouteFence): ServiceSpotState {
+  validateDirectSpotFence(fence: ServiceSpotRouteFence): ServiceSpotState {
     if (
       fence.targetNodeRid !== this.nodeRid ||
       fence.targetNodeGeneration !== this.nodeGeneration

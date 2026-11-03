@@ -362,7 +362,7 @@ export class ZLinkSpotActorDispatcher {
     );
   }
 
-  private invokeHandler<THandler, TResult>(
+  invokeHandler<THandler, TResult>(
     actor: ZLinkActor,
     descriptor: Pick<ZLinkActorPacketDescriptor, 'handlerType' | 'methodName'>,
     callback: (
@@ -398,7 +398,7 @@ export class ZLinkSpotActorDispatcher {
     return pending;
   }
 
-  private createContext(
+  createContext(
     packetName: string,
     context: Partial<ZLinkMessageContext> | undefined
   ): ZLinkMessageContext {
@@ -408,7 +408,8 @@ export class ZLinkSpotActorDispatcher {
       packetName,
       contentType: context?.contentType,
       metadata: context?.metadata ?? ZLinkMessageMetadataEmpty,
-      correlationId: context?.correlationId
+      correlationId: context?.correlationId,
+      receivedAt: context?.receivedAt ?? new Date()
     };
   }
 }

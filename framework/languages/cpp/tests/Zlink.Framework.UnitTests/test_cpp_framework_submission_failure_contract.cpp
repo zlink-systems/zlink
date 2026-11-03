@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/exception_payload.hpp"
 
 #include <zlink/framework.hpp>
 #include "runtime/channels/channel_runtime.hpp"
@@ -326,13 +327,13 @@ class CppFrameworkDecodeFailure : public ::testing::TestWithParam<int>
     void SetUp () override
     {
         if (GetParam () == 0)
-            original = std::make_exception_ptr (std::runtime_error ("decoder cause"));
+            original = std::make_exception_ptr (submission_failure_t (marker));
         else if (GetParam () == 1)
-            original = std::make_exception_ptr (nonstandard_submission_failure_t{
-              std::make_shared<const int> (3472), "non-standard decoder cause"});
+            original = std::make_exception_ptr (
+              nonstandard_submission_failure_t{marker, "non-standard decoder cause"});
         else {
             try {
-                throw std::runtime_error ("nested decoder cause");
+                throw submission_failure_t (marker);
             }
             catch (...) {
                 try {
@@ -358,7 +359,23 @@ class CppFrameworkDecodeFailure : public ::testing::TestWithParam<int>
         ASSERT_NE (result.error (), nullptr);
         EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::protocol_error);
         if (GetParam () == 2) {
-            EXPECT_EQ (result.exception (), original);
+            try {
+                result.value ();
+                FAIL () << "decode must fail";
+            }
+            catch (const fw::framework_exception_t &error) {
+                EXPECT_EQ (error.kind (), fw::framework_error_kind_t::protocol_error);
+                EXPECT_STREQ (error.what (), "typed decoder cause");
+                try {
+                    std::rethrow_exception (original);
+                }
+                catch (const fw::framework_exception_t &expected) {
+                    EXPECT_EQ (typeid (error), typeid (expected));
+                }
+                const auto *nested = dynamic_cast<const std::nested_exception *> (&error);
+                ASSERT_NE (nested, nullptr);
+                expect_original (nested->nested_ptr ());
+            }
             return;
         }
         try {
@@ -370,10 +387,26 @@ class CppFrameworkDecodeFailure : public ::testing::TestWithParam<int>
                        fw::detail::failure_origin_t::payload_decode);
             const auto *nested = dynamic_cast<const std::nested_exception *> (&error);
             ASSERT_NE (nested, nullptr);
-            EXPECT_EQ (nested->nested_ptr (), original);
+            expect_original (nested->nested_ptr ());
         }
     }
 
+    void expect_original (std::exception_ptr error)
+    {
+        if (GetParam () == 1)
+            EXPECT_TRUE (fw::test::exception_payload_matches<nonstandard_submission_failure_t> (
+              error, [&] (const auto &cause) {
+                  return cause.marker == marker && cause.detail == "non-standard decoder cause";
+              }));
+        else
+            EXPECT_TRUE (fw::test::exception_payload_matches<submission_failure_t> (
+              error, [&] (const auto &cause) {
+                  return cause.marker == marker
+                         && std::string (cause.what ()) == "submission failure cause";
+              }));
+    }
+
+    const std::shared_ptr<const int> marker = std::make_shared<const int> (369307);
     fw::serializer_registry_t serializers;
     std::exception_ptr original;
 };

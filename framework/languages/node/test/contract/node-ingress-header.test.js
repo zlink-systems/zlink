@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const envelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const json = require('../../packages/framework/dist/runtime/messaging/framework-json-v1');
+const { ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/contracts');
 
 function parts(changes = {}) {
   const bytes = Buffer.from(JSON.stringify({
@@ -75,6 +76,25 @@ test('header normalization preserves validation and Off ignores observation fiel
   assert.equal(off.flowId, undefined);
   assert.equal(off.flowOrigin, undefined);
   assert.equal(off.correlationId, 'request-1');
+});
+
+test('header integer fields reject decimal and exponent literals', () => {
+  const wire =
+    '{"formatMarker":242,"kind":3,"channelName":"channel","messageName":"Packet",' +
+    '"contentType":"application/json","correlationId":null,"metadata":{}}';
+  const cases = [
+    wire.replace('"formatMarker":242', '"formatMarker":242.0'),
+    wire.replace('"kind":3', '"kind":3e0'),
+    wire.replace('"metadata":{}', '"flowOrigin":3.0,"metadata":{}')
+  ];
+  for (const value of cases) {
+    assert.throws(
+      () => envelope.decodeChannelHeader(rawParts(value)),
+      error =>
+        error.kind === ZLinkFrameworkErrorKind.ProtocolError &&
+        /integer literal/.test(error.message)
+    );
+  }
 });
 
 function rawParts(value) {

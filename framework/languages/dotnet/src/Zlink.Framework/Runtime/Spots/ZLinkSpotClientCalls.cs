@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Messaging;
 
@@ -109,7 +108,7 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
     {
         var cancellationToken = runtime.ShutdownToken;
         _submission.Claim();
-        var submittedAt = DateTimeOffset.UtcNow;
+        var submittedAt = runtime.Registration.TimeProvider.GetUtcNow();
         using var flowScope = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled
@@ -304,7 +303,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
                 "InMesh is valid only for an Instance Spot intent."
             );
         var operationTimeout = _timeout ?? runtime.Registration.DefaultRequestTimeout;
-        var deadline = Stopwatch.GetElapsedTime(0) + operationTimeout;
+        var deadline = runtime.Registration.TimeProvider.GetElapsedTime(0) + operationTimeout;
 
         while (true)
         {
@@ -415,9 +414,9 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             .ConfigureAwait(false);
     }
 
-    private static TimeSpan Remaining(TimeSpan deadline)
+    private TimeSpan Remaining(TimeSpan deadline)
     {
-        var remaining = deadline - Stopwatch.GetElapsedTime(0);
+        var remaining = deadline - runtime.Registration.TimeProvider.GetElapsedTime(0);
         if (remaining <= TimeSpan.Zero)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,

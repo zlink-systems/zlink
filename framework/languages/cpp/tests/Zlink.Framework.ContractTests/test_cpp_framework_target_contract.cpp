@@ -8,6 +8,7 @@
 
 #include "../support/read_text_file.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <iostream>
@@ -87,6 +88,74 @@ std::vector<std::string> short_circuit_awaits (const std::filesystem::path &root
             if (end == std::string::npos)
                 break;
             start = end + 1;
+        }
+    }
+    return found;
+}
+
+// Per-message success traces must not construct even a lazy builder while Off.
+// Require an adjacent live guard; a mode snapshot at callback registration is
+// insufficient because the level may change before the callback runs.
+std::vector<std::string> ungated_message_flow_calls (const std::filesystem::path &root)
+{
+    const std::regex call (
+      R"((?:^|\n)[ \t]*((?:(?:[a-zA-Z_]\w*::)*[a-zA-Z_]\w*(?:\s*\([^;\n]*\))?\s*\.(?:trace|trace_bound_session_send_stage)|(?:detail::)?(?:report_actor_dispatch_stage_trace_lazy|report_actor_handoff_request_trace|trace_detached_bound_session_send_stage|trace_bound_session_send_stage))\s*\())");
+    const std::regex guard (
+      R"(if\s*\([^;{}]*(?:\.enabled(?:_for)?|trace_bound_session_send_stage_enabled)\s*\([^;{}]*\)[^;{}]*\)\s*\{\s*$)");
+    const auto guarded = [&guard] (const std::string &source, std::size_t start) {
+        // Only the immediately enclosing statement can guard this builder.
+        // Avoid rescanning the entire file prefix for every trace call.
+        const auto open = source.rfind ('{', start);
+        const auto boundary = open == std::string::npos || open == 0
+                                ? std::string::npos
+                                : source.find_last_of (";{}", open - 1);
+        const auto begin = boundary == std::string::npos ? 0 : boundary + 1;
+        return std::regex_search (source.substr (begin, start - begin), guard);
+    };
+    std::vector<std::string> found;
+    for (const auto &entry : std::filesystem::recursive_directory_iterator (root)) {
+        const auto ext = entry.path ().extension ();
+        if (!entry.is_regular_file () || (ext != ".hpp" && ext != ".cpp"))
+            continue;
+        const auto source = read_text_file (entry.path ());
+        for (auto it = std::sregex_iterator (source.begin (), source.end (), call);
+             it != std::sregex_iterator (); ++it) {
+            const auto start = static_cast<std::size_t> (it->position (1));
+            const auto args = start + static_cast<std::size_t> (it->length (1));
+            const auto builder = source.find ("[", args);
+            const auto end = source.find (';', args);
+            const auto arguments = source.substr (args, std::min (builder, end) - args);
+            // Failure/drop transitions retain their lazy construction contract.
+            if (arguments.find ("message_flow_outcome_t::dropped") != std::string::npos
+                || arguments.find ("message_flow_outcome_t::backpressured") != std::string::npos
+                || arguments.find ("message_flow_result_t::failed") != std::string::npos)
+                continue;
+            // Forwarding an existing builder constructs no event or lambda.
+            if (arguments.find ("std::forward<BuildResult>") != std::string::npos)
+                continue;
+            // Actor transfer markers are rare lifecycle transitions; their
+            // named builder is intentionally lazy, like failure transitions.
+            if (arguments.find ("transfer_id, build_event") != std::string::npos)
+                continue;
+            // RouteMesh's shared builder is checked through its callers below.
+            if (entry.path ().filename () == "route_packet_dispatcher.cpp")
+                continue;
+            if (!guarded (source, start)) {
+                const auto line = 1 + std::count (source.begin (), source.begin () + start, '\n');
+                found.push_back (entry.path ().string () + ":" + std::to_string (line));
+            }
+        }
+        if (entry.path ().filename () == "route_packet_dispatcher.cpp") {
+            const std::regex route_call (R"(\n[ \t]*trace_route_flow\s*\()");
+            for (auto it = std::sregex_iterator (source.begin (), source.end (), route_call);
+                 it != std::sregex_iterator (); ++it) {
+                const auto start = static_cast<std::size_t> (it->position ());
+                if (!guarded (source, start)) {
+                    const auto line =
+                      2 + std::count (source.begin (), source.begin () + start, '\n');
+                    found.push_back (entry.path ().string () + ":" + std::to_string (line));
+                }
+            }
         }
     }
     return found;
@@ -341,7 +410,8 @@ int main ()
 
     /* IMP-CP-05 — automatic RouteMesh discovery uses MeshNode descriptors. */
     gate.require (
-      location_auto_connect.find ("poll_mesh_sources (loop.mesh_name)") != std::string::npos
+      location_auto_connect.find ("poll_mesh_sources (loop.mesh_name, deadline, stopped)")
+          != std::string::npos
         && live_location_reader.find ("_store->list_mesh_nodes (mesh_name, page)")
              != std::string::npos,
       "IMP-CP-05", "RouteMesh discovery bypasses the shared MeshNode descriptor catalog");
@@ -350,9 +420,8 @@ int main ()
                   "IMP-CP-05", "RouteMesh discovery still uses legacy peer rows");
     gate.require (
       location_auto_connect.find ("const bool manual_endpoint") != std::string::npos
-        && location_auto_connect.find ("Manual routes still use the discovered descriptor")
-             != std::string::npos
-        && location_auto_connect.find ("mesh_node->expect_peer") != std::string::npos,
+        && location_auto_connect.find ("Manual routes still refresh admission") != std::string::npos
+        && location_auto_connect.find ("co_await node->expect_peer_async") != std::string::npos,
       "CPP-TOPO-001", "manual RouteMesh endpoints do not install descriptor admission fences");
 
     /* IMP-CP-04 — incomplete and duplicate STREAM declarations fail validation. */
@@ -828,17 +897,22 @@ int main ()
 
     /* IMP-CP-06 — recovery connects new targets immediately and defers missing-target removal by owner lease TTL. */
     const auto complete_recovery_snapshot =
-      location_auto_connect.find ("poll_mesh_sources (loop.mesh_name).result ().value ()");
+      location_auto_connect.find ("auto polled = co_await observe_until (");
     const auto recovery_owner_check =
       location_auto_connect.find ("owner_lease_usable ()", complete_recovery_snapshot);
-    const auto recovery_republish =
-      location_auto_connect.find ("republish_after_store_recovery (intent)", recovery_owner_check);
+    const auto recovery_republish = location_auto_connect.find (
+      "co_await _republish_after_store_recovery (intent, stopped, deadline)", recovery_owner_check);
     const auto recovery_invalidation = location_auto_connect.find (
-      "invalidate_all_routes_after_store_recovery ();", recovery_republish);
+      "invalidate_all_routes_after_store_recovery_async ();", recovery_republish);
     const auto recovery_diff =
       location_auto_connect.find ("auto desired = select_endpoint_winners", recovery_invalidation);
     gate.require (
       complete_recovery_snapshot != std::string::npos
+        && location_auto_connect.find ("poll_mesh_sources (loop.mesh_name, deadline, stopped)",
+                                       complete_recovery_snapshot)
+             < recovery_owner_check
+        && location_auto_connect.find ("co_await republish_after_store_recovery (intent)")
+             != std::string::npos
         && live_location_reader.find ("} while (page.continuation_token);") != std::string::npos
         && recovery_owner_check != std::string::npos && recovery_republish != std::string::npos
         && recovery_invalidation != std::string::npos && recovery_diff != std::string::npos
@@ -850,7 +924,7 @@ int main ()
         && location_auto_connect.find ("for (const auto &[key, target] : desired)", recovery_diff)
              != std::string::npos
         && location_auto_connect.find (
-             "invalidate_all_routes_after_store_recovery ();\n            return;",
+             "invalidate_all_routes_after_store_recovery_async ();\n            return;",
              recovery_republish)
              == std::string::npos,
       "IMP-CP-06",
@@ -1146,6 +1220,12 @@ int main ()
         && diagnostic_event_sink.find ("std::cerr") == std::string::npos,
       "CPP-OBS-003",
       "sampling or Off diagnostics build events before the gate, or use an implicit console sink");
+
+    /* CPP-OBS-004 — spec 26 §5: the live call-site gate precedes the
+     * per-message event builder, including callbacks and shared RouteMesh calls. */
+    const auto ungated_flow_calls = ungated_message_flow_calls (root / "framework/src");
+    for (const auto &site : ungated_flow_calls)
+        gate.require (false, "CPP-OBS-004", "ungated per-message trace: " + site);
 
     /* CPP-ASYNC-003 — a STREAM-to-Actor relay keeps its completion and wrapper
      * closure alive until target completion, preserving both per-Actor order and

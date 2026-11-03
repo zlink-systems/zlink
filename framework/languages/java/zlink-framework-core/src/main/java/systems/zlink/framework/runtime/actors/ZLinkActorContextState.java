@@ -241,8 +241,12 @@ final class ZLinkActorContextState {
                 : node.boundSessionRoute(actorRef).orElse(null);
     }
 
-    boolean clearBoundSession(long bindingToken) {
-        if (boundSession != null && bindingToken == sessionBindingToken) {
+    boolean clearBoundSession(long bindingToken, RoutingId expectedSessionRid) {
+        if (boundSession != null
+                && bindingToken == sessionBindingToken
+                && (expectedSessionRid == null
+                        || (boundSession instanceof ZLinkSessionBoundSession current
+                                && expectedSessionRid.equals(current.sessionRid())))) {
             boundSession = null;
             return true;
         }

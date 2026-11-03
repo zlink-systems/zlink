@@ -16,13 +16,13 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
     private readonly Queue<WorkerItem> _directQueue = new();
     private readonly Queue<WorkerItem> _queue = new();
     private readonly CancellationTokenSource _shutdownSource = new();
-    private readonly object _sync = new();
+    internal readonly object _sync = new();
     private readonly HashSet<Thread> _threads = [];
-    private TaskCompletionSource _directCapacityChanged = NewCapacitySignal();
+    internal TaskCompletionSource _directCapacityChanged = NewCapacitySignal();
     private int _directCapacityWaiters;
     private bool _disposed;
     private Task? _disposeTask;
-    private int _idleThreads;
+    internal int _idleThreads;
     private int _threadCount;
 
     public ZLinkWorkerPool(

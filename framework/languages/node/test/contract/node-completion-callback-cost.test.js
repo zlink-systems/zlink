@@ -2,8 +2,30 @@ const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runt
 'use strict';
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { threadId } = require('node:worker_threads');
 const { fixture } = require('./fixtures/raw-mesh-close');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+
+test('messaging hot path completion transition count is zero on the event loop', async () => {
+  const table = new ZLinkMeshCompletionTable();
+  const operationId = { high: 1n, low: 1n };
+  const completion = table.submit(() => operationId);
+  const notificationThreadId = threadId;
+  const transitionCount = completion.then(() =>
+    notificationThreadId === threadId ? 0 : 1
+  );
+
+  table.complete({
+    operationId,
+    terminalResult: 0,
+    failureErrno: 0,
+    operationKind: 0,
+    kindData: null,
+    parts: []
+  });
+
+  assert.equal(await transitionCount, 0);
+});
 
 test('terminal records reuse stateless rejection callbacks across operations', async t => {
   const f = fixture();

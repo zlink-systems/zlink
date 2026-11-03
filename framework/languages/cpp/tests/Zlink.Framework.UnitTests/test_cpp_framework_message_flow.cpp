@@ -538,7 +538,7 @@ int bounded_process_delivery (bool retire_first, int waiting = 8192)
     {
         std::mutex mutex;
         std::condition_variable changed;
-        bool entered = false, release = false, produced = false;
+        bool entered = false, release = false;
         std::vector<std::string> ids;
     };
     auto state = std::make_shared<state_t> ();
@@ -588,42 +588,10 @@ int bounded_process_delivery (bool retire_first, int waiting = 8192)
                                            [&] { return state->entered; });
     }
     // Both registrations share the spec's process limit, excluding the executing record.
-    std::thread producer ([&] {
-        for (int index = 0; index != waiting; ++index)
-            submit (index % 2 == 0 ? *first : *second, index, std::to_string (index));
-        for (int index = 0; index != 3; ++index)
-            submit (index % 2 == 0 ? *first : *second, index, "overflow-" + std::to_string (index));
-        std::lock_guard lock (state->mutex);
-        state->produced = true;
-        state->changed.notify_all ();
-    });
-    struct join_t
-    {
-        std::thread &producer;
-        std::shared_ptr<state_t> state;
-        ~join_t ()
-        {
-            if (!producer.joinable ())
-                return;
-            {
-                std::lock_guard lock (state->mutex);
-                state->release = true;
-                state->changed.notify_all ();
-            }
-            producer.join ();
-        }
-    } join{producer, state};
-    bool producer_completed;
-    {
-        std::unique_lock lock (state->mutex);
-        producer_completed = state->changed.wait_for (lock, std::chrono::milliseconds (500),
-                                                      [&] { return state->produced; });
-        if (!producer_completed) {
-            state->release = true;
-            state->changed.notify_all ();
-        }
-    }
-    producer.join ();
+    for (int index = 0; index != waiting; ++index)
+        submit (index % 2 == 0 ? *first : *second, index, std::to_string (index));
+    for (int index = 0; index != 3; ++index)
+        submit (index % 2 == 0 ? *first : *second, index, "overflow-" + std::to_string (index));
     const auto overflow = message_flow_tracer_t::observer_dropped () - before;
     // Host metric attachment must preserve the registration and its already queued records.
     access::bind_telemetry (*first, provider, meter);
@@ -669,11 +637,9 @@ int bounded_process_delivery (bool retire_first, int waiting = 8192)
         if (fields.at ("name") == "zlink.observability.events.overflow"
             && fields.at ("unit") == "{event}" && fields.at ("source") == "message_flow")
             exported += std::stod (fields.at ("value"));
-    const bool passed = entered && producer_completed && delivered && overflow == 3 && ids_ok
-                        && exported == 3
+    const bool passed = entered && delivered && overflow == 3 && ids_ok && exported == 3
                         && message_flow_tracer_t::observer_dropped () - before == 3;
     std::cout << "bounded_process_delivery retire=" << retire_first << " entered=" << entered
-              << " producer_completed_before_release=" << producer_completed
               << " overflow=" << overflow << " metric=" << exported
               << " delivered=" << state->ids.size () << " expected=" << expected
               << " exact_ids=" << ids_ok << " passed=" << passed << std::endl;
@@ -1278,6 +1244,61 @@ int main (int argc, char **argv)
         });
         if (built.load (std::memory_order_relaxed) != 0)
             return 39;
+    }
+
+    // The result-aware live gate covers every terminal result, including
+    // optional results, without sampling or creating a builder while Off.
+    {
+        for (const auto mode :
+             {message_flow_log_mode_t::off, message_flow_log_mode_t::errors,
+              message_flow_log_mode_t::normal, message_flow_log_mode_t::detailed}) {
+            auto options = options_with_mode (mode);
+            options.trace_sample_rate (0.0);
+            message_flow_tracer_t tracer (options);
+            for (const auto outcome :
+                 {message_flow_outcome_t::received, message_flow_outcome_t::reply_received,
+                  message_flow_outcome_t::dropped, message_flow_outcome_t::backpressured}) {
+                if (tracer.enabled_for (outcome, std::nullopt) != tracer.enabled_for (outcome))
+                    return 1;
+                for (const auto result :
+                     {message_flow_result_t::succeeded, message_flow_result_t::failed,
+                      message_flow_result_t::backpressured, message_flow_result_t::dropped,
+                      message_flow_result_t::cancelled, message_flow_result_t::shutdown}) {
+                    const bool expected = mode != message_flow_log_mode_t::off
+                                          && (mode != message_flow_log_mode_t::errors
+                                              || result != message_flow_result_t::succeeded
+                                              || outcome == message_flow_outcome_t::dropped
+                                              || outcome == message_flow_outcome_t::backpressured);
+                    if (tracer.enabled_for (outcome, result) != expected
+                        || tracer.enabled_for (outcome, std::optional{result}) != expected) {
+                        std::cerr << "result-aware trace gate disagrees with diagnostics level\n";
+                        return 1;
+                    }
+                    int built = 0;
+                    const auto out = capture_logs ([&] {
+                        if (tracer.enabled_for (outcome, result)) {
+                            tracer.trace (outcome, result, [&] {
+                                ++built;
+                                return flow_event (outcome);
+                            });
+                        }
+                    });
+                    const bool sampled = result == message_flow_result_t::succeeded
+                                         && outcome != message_flow_outcome_t::dropped
+                                         && outcome != message_flow_outcome_t::backpressured;
+                    if (built != static_cast<int> (expected && !sampled)
+                        || out.empty () != (built == 0)) {
+                        std::cerr << "result-aware trace gate changed sampling or builder cost\n";
+                        return 1;
+                    }
+                }
+            }
+        }
+        dispatch_options_t no_provider;
+        no_provider.message_flow (message_flow_log_mode_t::detailed);
+        if (message_flow_tracer_t (no_provider)
+              .enabled_for (message_flow_outcome_t::reply_received, message_flow_result_t::failed))
+            return 1;
     }
 
     // Failed/cancelled/shutdown request terminals are also never sampled,

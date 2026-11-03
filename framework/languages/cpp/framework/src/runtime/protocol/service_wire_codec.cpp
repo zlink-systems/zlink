@@ -2714,8 +2714,7 @@ application_payload_t application_payload_t::from_parts (multipart_t &&parts)
 namespace
 {
 template <typename CreatePart>
-application_payload_t::multipart_t
-decode_application_parts_bytes (std::span<const std::uint8_t> encoded, CreatePart create_part)
+auto decode_application_parts_bytes (std::span<const std::uint8_t> encoded, CreatePart create_part)
 {
     if (encoded.size () < 4)
         throw service_wire_error_t ("framework multipart payload is truncated");
@@ -2723,7 +2722,7 @@ decode_application_parts_bytes (std::span<const std::uint8_t> encoded, CreatePar
     const auto count = read_u32 (encoded, offset);
     if (count == 0 || count > (encoded.size () - offset) / sizeof (std::uint32_t))
         throw service_wire_error_t ("framework multipart part count is invalid");
-    application_payload_t::multipart_t parts;
+    std::vector<std::invoke_result_t<CreatePart, std::span<const std::uint8_t>>> parts;
     parts.reserve (count);
     for (std::uint32_t index = 0; index < count; ++index) {
         if (encoded.size () - offset < 4)
@@ -2952,6 +2951,31 @@ application_payload_t decode_application_payload (std::span<const std::uint8_t> 
 
 namespace
 {
+template <typename CreatePart>
+auto decode_application_parts_with (std::span<const std::uint8_t> bytes,
+                                    bool capture_flow,
+                                    CreatePart create_part)
+{
+    return decode_application_payload_bytes (
+      bytes, capture_flow,
+      [create_part] (auto packet_name, auto content_type, auto body, auto, auto) {
+          if (packet_name != framework_multipart_packet_name
+              || content_type != framework_multipart_content_type)
+              throw service_wire_error_t ("framework application payload profile is unsupported");
+          return decode_application_parts_bytes (body, create_part);
+      });
+}
+} // namespace
+
+std::vector<std::span<const std::byte>>
+decode_application_part_views (std::span<const std::uint8_t> bytes, bool capture_flow)
+{
+    return decode_application_parts_with (bytes, capture_flow,
+                                          [] (auto part) { return std::as_bytes (part); });
+}
+
+namespace
+{
 // One received message backs every part decoded from it. Each part holds one
 // reference; the message is released with the last part.
 struct retained_application_message_t
@@ -2977,28 +3001,20 @@ application_payload_t::multipart_t decode_application_parts (zlink::message_t &&
     auto *owner = new retained_application_message_t (std::move (bytes));
     application_payload_t::multipart_t parts;
     try {
-        (void) decode_application_payload_bytes (
-          message_bytes (owner->bytes), capture_flow,
-          [owner, &parts] (auto packet_name, auto content_type, auto body, auto, auto) {
-              if (packet_name != framework_multipart_packet_name
-                  || content_type != framework_multipart_content_type)
-                  throw service_wire_error_t (
-                    "framework application payload profile is unsupported");
-              parts = decode_application_parts_bytes (body, [owner] (auto part) {
-                  owner->references.fetch_add (1, std::memory_order_relaxed);
-                  auto message = zlink::advanced::external_message_t::from (
-                    std::span<std::uint8_t> (const_cast<std::uint8_t *> (part.data ()),
-                                             part.size ()),
-                    [] (void *, void *hint) {
-                        static_cast<retained_application_message_t *> (hint)->release ();
-                    },
-                    owner);
-                  if (!message.valid ()) {
-                      owner->release ();
-                      throw std::bad_alloc ();
-                  }
-                  return message;
-              });
+        parts = decode_application_parts_with (
+          message_bytes (owner->bytes), capture_flow, [owner] (auto part) {
+              owner->references.fetch_add (1, std::memory_order_relaxed);
+              auto message = zlink::advanced::external_message_t::from (
+                std::span<std::uint8_t> (const_cast<std::uint8_t *> (part.data ()), part.size ()),
+                [] (void *, void *hint) {
+                    static_cast<retained_application_message_t *> (hint)->release ();
+                },
+                owner);
+              if (!message.valid ()) {
+                  owner->release ();
+                  throw std::bad_alloc ();
+              }
+              return message;
           });
     }
     catch (...) {
@@ -3520,11 +3536,17 @@ std::vector<std::uint8_t> encode_stream_bind_reply (std::uint64_t correlation,
 {
     auto bytes = encode_reply_header (correlation, terminal_result, failure_code);
     if (terminal_result == 0) {
-        if (!binding || binding->binding_generation == 0
+        if (!binding || binding->rejection_message || binding->binding_generation == 0
             || binding->authority_owner_generation == 0)
             throw service_wire_error_t ("stream bind success requires accepted binding fence");
         append_u64 (bytes, binding->binding_generation);
         append_u64 (bytes, binding->authority_owner_generation);
+    } else if (terminal_result == static_cast<std::uint32_t> (request_terminal_result::rejected)) {
+        if (!binding || !binding->rejection_message || binding->binding_generation != 0
+            || binding->authority_owner_generation != 0)
+            throw service_wire_error_t ("stream bind rejection requires a content message");
+        append_text16 (bytes, *binding->rejection_message, "stream bind rejection message",
+                       0xffffu);
     } else if (binding) {
         throw service_wire_error_t ("stream bind failure cannot contain a success tail");
     }
@@ -3541,6 +3563,10 @@ stream_bind_reply_t decode_stream_bind_reply (std::span<const std::uint8_t> byte
         if (generation == 0 || authority == 0)
             throw service_wire_error_t ("stream bind success fence must be nonzero");
         reply.binding = stream_bind_reply_tail_t{generation, authority};
+    } else if (reply.header.terminal_result
+               == static_cast<std::uint32_t> (request_terminal_result::rejected)) {
+        reply.binding = stream_bind_reply_tail_t{
+          0, 0, read_text16 (bytes, offset, "stream bind rejection message", 0xffffu)};
     }
     if (offset != bytes.size ())
         throw service_wire_error_t ("stream bind reply has unexpected tail bytes");

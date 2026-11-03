@@ -181,9 +181,10 @@ Bind는 caller가 제출한 `ActorRef`의 위치를 최초 route로 사용해 co
 보낸다. Actor와 STREAM session이 서로 다른 MeshNode에 있으면 session owner가
 `boundSessionBind(38)` control request를 Actor owner에 보낸다. Actor owner는 Actor
 `ObjectGeneration`, target `NodeGeneration`(target node process lifecycle을 식별하는
-generation)과 `AuthorityOwnerGeneration`을 모두 확인한 뒤
-[binding generation](../00-foundation/02-glossary.ko.md#binding-generation)을 등록하고 terminal
-reply를 한 번만 반환한다. **승인 판정은 이 세 값으로만 한다.**
+generation)과 `AuthorityOwnerGeneration`을 모두 확인한 뒤 §6의 중복 bind 결정을 거쳐
+수락한 요청의 [binding generation](../00-foundation/02-glossary.ko.md#binding-generation)을 등록하고
+성공 또는 실패 terminal reply를 한 번만 반환한다. **Authority 검증은 이 세 값으로만 한다.** 콘텐츠가 중복 bind를 받아들일지 거부할지는
+[§6](#6-rebind와-이전-연결-교체)에서 정한다.
 Bind가 완료되면 session owner는 binding의 Actor slot과 `ActorId`를 `$zlink.actor.bound`
 control packet으로 client에 보낸다. **Session owner는 `$zlink.actor.bound`를 그 slot을 싣는 첫
 STREAM packet보다 먼저 제출하고, `$zlink.actor.unbound`를 그 slot을 싣는 마지막 STREAM packet
@@ -198,14 +199,14 @@ caller 측 lookup·projection이 실어 온 lease 사본과 Actor owner의 curre
 검증([routing](../03-spot-actor/08-routing.ko.md))의 관심사이고, bind 승인에까지 사용하면
 파생 사본 불일치가 stale 판정 근거가 되어 §8.1의 판정 권위 원칙과 충돌한다.
 
-**Actor owner는 승인한 요청을 current binding과 한 번 비교해 결과를 정한다.** binding generation의
+**Actor owner는 authority 검증을 통과한 요청을 current binding과 한 번 비교해 결과를 정한다.** binding generation의
 대소는 [§4](#4-binding이-잇는-값과-보관하는-정보)대로 같은 Session owner lifecycle 안에서만 비교한다.
 
 | 요청과 current binding의 관계 | 결과 |
 |---|---|
 | Binding identity(§4)와 SessionRid가 모두 같다. | current를 유지하고 성공한다. |
 | 첫 행에 해당하지 않고, Session owner Node RID·lifecycle generation이 같으며 요청 binding generation이 current 이하다. | current를 유지하고 [§12](#12-실패와-오류)의 binding fence stale(`Unavailable`)로 끝난다. |
-| 그 밖의 경우(current 없음, 같은 Session owner lifecycle의 더 큰 generation, 다른 Session owner lifecycle) | 요청 identity를 current로 등록한다([§6](#6-rebind와-이전-연결-교체)). |
+| 그 밖의 경우(current 없음, 같은 Session owner lifecycle의 더 큰 generation, 다른 Session owner lifecycle) | Current가 없으면 요청 identity를 등록한다. 다른 Session이 current이면 [§6](#6-rebind와-이전-연결-교체)의 중복 bind 결정이 받아들임일 때만 등록한다(callback이 없으면 항상 받아들인다). 같은 physical Session의 재제출은 §6의 기존 idempotent 규칙을 따른다. |
 
 `boundSessionBind(38)` 성공 reply의 tail은 이 비교에서 수락한 binding의 binding generation과
 `AuthorityOwnerGeneration`이다. 성공은 첫 행이거나 요청 identity를 등록한 경우뿐이므로 두 값은
@@ -219,6 +220,12 @@ application queue에 직접 추가한다. Seal 중에는 §8.1에 따라 Session
 다른 Actor를 session의 실행 문맥으로 직렬화하지 않는다. Actor 사이의 실행 순서는
 [Actor 모델](../03-spot-actor/04-actor-model.ko.md)의 실행 모드(`PerActor`·`SpotWide`)가
 정한다 — `SpotWide` User Spot에 속한 Actor들은 그 Spot의 공통 gate를 함께 사용한다.
+
+- Actor owner는 각 binding에서 이미 수락한 Session sequence보다 큰 sequence만 relay로 수락한다. 중복하거나
+  더 작은 sequence는 Actor handler에 전달하지 않는다. `Request`는 같은 request sequence의
+  `Error(InvalidOperation)`로 끝나고 `zlink.dispatch_error`에 `surface=stream`, `message_kind=request`,
+  `outcome=failed`, `reason=stale_target`, `action=reply_error`로 기록된다. `Send`는 버리고 message-flow에
+  `surface=stream`, `message_kind=send`, `outcome=dropped`, `reason=stale_target`으로 기록된다.
 
 - **session의 실행 권한과 Actor의 실행 권한은 서로 다른 권한이다.** Session callback을 실행하는 문맥은 Actor
   handler를 실행하지 않는다. 나누지 않으면 한 client가 보낸 packet 처리가 그 Actor가 속한
@@ -350,7 +357,7 @@ Close reply는 transport close terminal을 전달하며, 이 close가 일으킨 
 
 | Command | 이름 | 오가는 방향과 용도 | 완료 방식 |
 |---|---|---|---|
-| 38 | `boundSessionBind` | Session owner → Actor owner: bind 요청 | request/reply, terminal 1회 |
+| 38 | `boundSessionBind` | Session owner → Actor owner: bind 요청, 중복 bind의 콘텐츠 판정은 §6 | request/reply, terminal 1회 |
 | 24 | `actorSend` | Session owner → Actor owner: session→Actor payload(bound-session tail 포함) | send 또는 request relay — 기존 correlation·deadline 계약 그대로 |
 | 36 | `boundSessionSend` | Actor owner → Session owner: Actor→session push | send |
 | 51 | `boundSessionReplaced` | Actor owner → 이전 Session owner: binding 교체 통지 | one-way, 최대 1회 |
@@ -367,7 +374,32 @@ Public interface 발췌는 §13에 있다.
 이미 다른 session에 bind된 Actor를 새 session에 연결하면 physical connection 두 개가
 잠시 유지될 수 있다. 그러나 Actor owner의 current binding은 항상 하나여야 한다.
 
-- **새 연결을 즉시 확정하고 이전 session에는 one-way로 교체를 통지한다.** 새 identity를 Actor owner에 먼저
+**다른 Session이 current인 bind의 콘텐츠 판정은 Actor owner 한 곳에서 한다.** §5의 authority·binding
+fence 검증을 통과한 요청에 대해 Actor owner는 `onDuplicateBind(current, incoming)`를 해당 Actor의
+handler 순서 안에서 한 번 호출한다. `current`와 `incoming`은 판정 대상 Session을 구별하는 읽기 전용
+정보로, §4의 binding identity인 session owner node RID, 그 node lifecycle generation과 binding generation을
+담는다. Callback은 결과가 없거나 빈 문자열이면 받아들이고, 비어 있지 않은 문자열이 있으면 그 내용으로 거부한다.
+거부 메시지는 command 20의
+`streamBind` rejection tail로 반환한다. 정확한 언어별 표현은
+각 언어의 Actor interface가 소유한다. Current가 없거나 같은 physical Session의 idempotent 재제출이면
+이 callback을 호출하지 않는다. Callback이 없으면 항상 받아들여 기존의 뒤에 온 Session이 이기는 동작을 유지한다.
+
+Callback은 [Handler turn과 execution gate §2·§7](../01-execution/02-handler-turn-and-execution-gate.ko.md)의
+Actor gate와 lifecycle lane을 사용한다. `SpotWide`에서는 shared Spot gate를 사용하고, Entry Actor와
+`PerActor` Actor에서는 Actor gate를 사용한다. Session callback의 실행 문맥에서 직접 호출하거나
+중복 bind 판정을 위한 별도 queue·gate·current 상태를 두지 않는다. 판정과 그 결과의 binding 반영은
+같은 Actor owner 순서에서 수행한다.
+
+Callback 실행 제한 시간은 server 설정 `SessionReplacementCallbackTimeout`이며 기본값은 `30,000 ms`다.
+이 값은 Actor owner의 중복 bind callback에도 적용한다. 제한 시간 안에 결과가 없으면 incoming bind를 `DeadlineExceeded`로
+끝내고 callback에 취소를 전달한다. 늦게 반환한 받아들임은 binding을 바꾸지 않는다. 기존 bind operation의
+deadline을 연장하지 않으며, 취소와 callback continuation의 실행 권한은 위 execution gate 계약을 따른다.
+
+거부 또는 제한 시간 초과이면 current binding을 유지한다. Incoming bind는 §12의 오류로 끝내고,
+Framework는 incoming 연결을 종료하거나 command 51을 보내지 않는다. Callback 실행 중에도 판정 전의
+binding이 current다. 다음의 교체 절차는 받아들임일 때만 수행한다.
+
+- **중복 bind를 받아들이면 새 연결을 확정하고 이전 session에는 one-way로 교체를 통지한다.** 새 identity를 Actor owner에 먼저
   atomic하게 등록하고, 성공 reply를 받은 새 session owner가 새 route를 저장한다. Actor owner의 등록이 끝나는 시점부터
   Actor에는 새 session 하나만 current binding으로 존재한다. 이전 session의 ingress는 이전 binding
   generation이므로 거부하며, Actor에서 session으로 보내는 push는 새 session으로만 전달한다. 새 bind의 terminal은 새
@@ -381,6 +413,7 @@ sequenceDiagram
     participant PO as 이전 Session owner
 
     SO->>AO: 지정한 Actor를 새 session에 bind
+    AO->>AO: Actor turn에서 중복 bind 판정 · 받아들임
     AO->>AO: 새 current binding 설치
     AO-->>SO: bind terminal 반환
     SO->>SO: 새 route로 전환
@@ -436,8 +469,8 @@ application queue에 넣지 않으며 one-way record에는 별도 terminal route
 일반 physical disconnect 절차로 각각 한 번 정리한다. 이 cleanup이 교체된 Actor의 새
 binding identity를 제거해서는 안 된다.
 
-다른 owner나 다른 Actor generation으로 rebind할 때도 새 Actor owner는 새 identity를
-atomic하게 등록하고 bind terminal reply를 반환한다. 그 뒤 이전 binding route에
+다른 owner나 다른 Actor generation으로 rebind할 때도 새 Actor owner는 이 절의 중복 bind 판정이
+받아들임이면 새 identity를 atomic하게 등록하고 bind terminal reply를 반환한다. 그 뒤 이전 binding route에
 `boundSessionReplaced(51)`를 one-way로 보낸다. 이전 owner의 처리 완료를 확인하는 ACK나
 request/reply는 만들지 않는다. 같은 owner에서 새 identity가 이전 identity를 이미
 대체한 경우에도 늦은 통지나 tombstone이 새 identity를 제거하지 않는다.
@@ -800,6 +833,8 @@ session이나 새 binding의 reply로 사용하지 않는다. 서로 다른 sess
 | Actor factory가 없다. | `NotFound`로 끝난다. 등록되지 않은 type이므로 재시도로 해결되지 않는다. |
 | Current binding 없이 push 또는 close를 요청했다. | Session-not-bound 오류로 끝난다. Public kind는 `InvalidOperation`이다. 대상이 없는 것이 아니라 binding을 먼저 만들어야 하는 순서 문제이며, binding이 생기면 같은 호출이 성공한다. |
 | Actor·owner·binding fence가 stale하다. | `Unavailable`로 끝나며 다른 대상으로 넘어가지 않는다. |
+| §6의 중복 bind callback이 거부한다. | Bind admission을 `Rejected`로 끝내고 콘텐츠가 반환한 메시지를 오류에 보존한다. Binding과 연결의 처리는 §6을 따른다. |
+| §6의 중복 bind callback 제한 시간이 지난다. | Incoming bind를 `DeadlineExceeded`로 끝낸다. Binding과 연결의 처리는 §6을 따른다. |
 
 ## 13. Public interface 발췌
 
@@ -894,6 +929,9 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
   도달한다. Spot callback을 거치지 않는다.
 - 다른 MeshNode의 Actor에 bind·relay·push하면 node 사이에 command 38, bound-session tail을 포함한
   command 24, command 36 record가 각각 raw ROUTER 경로로 오간다.
+- 같은 binding에 중복하거나 더 작은 Session sequence를 relay하면 Actor handler에 도달하지 않는다. `Request`는
+  같은 request sequence의 `Error(InvalidOperation)`와 `zlink.dispatch_error`(`reason=stale_target`)로 끝나고,
+  `Send`는 message-flow에 `outcome=dropped`, `reason=stale_target`으로 남는다. 더 큰 sequence는 수락된다.
 - Actor handler가 반환한 reply는 원래 STREAM request correlation으로 정확히 한 번 완료된다.
 - Request 제출 뒤 timeout·cancellation이 나도 같은 request가 다른 Actor·owner·MeshNode로 다시
   보내지지 않는다.

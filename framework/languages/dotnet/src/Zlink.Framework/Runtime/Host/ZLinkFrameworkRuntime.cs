@@ -66,9 +66,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     private readonly ZLinkActorDrainCoordinator _actorDrainCoordinator;
     private readonly ZLinkStandaloneActorRelocationRuntime _standaloneActorRelocationRuntime;
-    private readonly ZLinkActorBoundSessionCoordinator _actorBoundSessionCoordinator;
+    internal readonly ZLinkActorBoundSessionCoordinator _actorBoundSessionCoordinator;
     private readonly ZLinkFrameworkActorFacade _actors;
-    private readonly ZLinkActorSessionManager _actorSessionManager;
+    internal readonly ZLinkActorSessionManager _actorSessionManager;
     private readonly ZLinkActorHandoffAdmissions _actorHandoffAdmissions;
     private readonly IZLinkBackendAdapterFactory _backendAdapterFactory;
     private readonly ZLinkLocationAutoConnectHost? _autoConnect;

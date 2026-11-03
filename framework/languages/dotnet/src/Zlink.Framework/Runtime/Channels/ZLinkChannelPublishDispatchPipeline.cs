@@ -6,7 +6,8 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
     ZLinkHandlerDispatcher dispatcher,
     Func<string, IReadOnlySet<string>> resolveMappedGroups,
     ZLinkDispatchErrorReporter dispatchErrors,
-    ZLinkCodecRegistryBuilder codecs
+    ZLinkCodecRegistryBuilder codecs,
+    TimeProvider? timeProvider = null
 )
 {
     internal ZLinkChannelPublishDispatchPipeline(
@@ -74,7 +75,8 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
             metadata,
             header.CorrelationId,
             topicMessage.Topic,
-            header.Source
+            header.Source,
+            timeProvider: timeProvider
         );
         foreach (var endpoint in endpoints)
         {

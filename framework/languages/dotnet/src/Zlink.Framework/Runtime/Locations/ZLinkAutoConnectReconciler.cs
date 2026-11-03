@@ -102,7 +102,7 @@ internal sealed class ZLinkAutoConnectReconciler
         _executor = executor;
         _errorSink = errorSink ?? new ZLinkRuntimeErrorSink();
         _options = options;
-        _time = timeProvider ?? TimeProvider.System;
+        _time = timeProvider ?? runtime.TimeProvider;
         _retainRemovedMembers = retainRemovedMembers;
         _localWriteStatus = initiallyPublished ? ZLinkLocationWriteStatus.Stored : null;
         _localGeneration = initialStoreGeneration;
@@ -281,10 +281,7 @@ internal sealed class ZLinkAutoConnectReconciler
             if (mutationStart.NoLocalRow)
                 return true;
 
-            await PublishLocalAsync(cancellationToken).ConfigureAwait(false);
-            return await _lane
-                .RunAsync(() => _localWriteStatus == ZLinkLocationWriteStatus.Stored)
-                .ConfigureAwait(false);
+            return await PublishLocalAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -423,11 +420,19 @@ internal sealed class ZLinkAutoConnectReconciler
         IReadOnlyList<ZLinkMeshNodeDescriptor> rows;
         try
         {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            deadline.CancelAfter(_options.OwnerLeaseRenewTimeout);
-            await PublishLocalAsync(deadline.Token).ConfigureAwait(false);
+            using var timeout = new CancellationTokenSource(_options.OwnerLeaseRenewTimeout, _time);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeout.Token
+            );
+            var published = await PublishLocalAsync(deadline.Token).ConfigureAwait(false);
             if (Volatile.Read(ref _ownerCleanupStarted) != 0)
                 return;
+            if (!published)
+            {
+                await _lane.RunAsync(EnterStoreFailure).ConfigureAwait(false);
+                return;
+            }
             rows = (
                 await _peers
                     .ListLiveMeshNodesAsync(_local.MeshName.Value, deadline.Token)
@@ -873,7 +878,7 @@ internal sealed class ZLinkAutoConnectReconciler
         }
     }
 
-    private async ValueTask PublishLocalAsync(CancellationToken cancellationToken)
+    private async ValueTask<bool> PublishLocalAsync(CancellationToken cancellationToken)
     {
         var local = await _lane
             .RunAsync(() =>
@@ -887,7 +892,7 @@ internal sealed class ZLinkAutoConnectReconciler
             })
             .ConfigureAwait(false);
         if (local is null)
-            return;
+            return true;
 
         if (local.Value.Generation > 0)
         {
@@ -899,7 +904,7 @@ internal sealed class ZLinkAutoConnectReconciler
                 )
                 .ConfigureAwait(false);
             await _lane.RunAsync(() => _localWriteStatus = renewed.Status).ConfigureAwait(false);
-            return;
+            return renewed.Status == ZLinkLocationWriteStatus.Stored;
         }
 
         var claim = await _runtime
@@ -920,7 +925,7 @@ internal sealed class ZLinkAutoConnectReconciler
                     _localWriteStatus = claim.Status;
                 })
                 .ConfigureAwait(false);
-            return;
+            return true;
         }
 
         await _lane.RunAsync(() => _localWriteStatus = claim.Status).ConfigureAwait(false);
@@ -930,6 +935,7 @@ internal sealed class ZLinkAutoConnectReconciler
                 $"MeshNode RID '{local.Value.Row.Rid}' is already claimed in mesh "
                     + $"'{local.Value.Row.MeshName}'."
             );
+        return false;
     }
 
     private ZLinkMeshNodeDescriptorKey LocalKey() => new(_localRow!.MeshName, _localRow.Rid);

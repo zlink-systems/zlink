@@ -346,14 +346,14 @@ export class DefaultZLinkSpotManager {
   }
 
   private readonly factories: ReadonlySet<Type<ZLinkSpot>>;
-  private readonly activations: ZLinkSpotActivationRegistry;
+  readonly activations: ZLinkSpotActivationRegistry;
   private readonly workerRuntime: ZLinkWorkerRuntime;
   private readonly locationClaim: ZLinkSpotLocationClaim;
   private readonly routedSpotPackets: ZLinkRoutedSpotPacketDispatch;
   private readonly actorMembership: ZLinkSpotActorMembership;
   private readonly activationLifecycle: ZLinkSpotActivationLifecycle;
   private readonly formalRemoteTransfers = new ZLinkFormalRemoteActorTransferRegistry();
-  private readonly formalRemoteActorAdmissions = new ZLinkFormalRemoteActorAdmissionRegistry();
+  readonly formalRemoteActorAdmissions = new ZLinkFormalRemoteActorAdmissionRegistry();
   private readonly pendingInstanceMaterializations = new Map<
     string,
     Promise<ZLinkSpotActivation>
@@ -365,7 +365,7 @@ export class DefaultZLinkSpotManager {
     string,
     Map<string, Promise<ZLinkSpotActivation>>
   >();
-  private readonly closeOperations = new Map<string, ZLinkTargetSpotCloseOperation>();
+  readonly closeOperations = new Map<string, ZLinkTargetSpotCloseOperation>();
   private readonly pendingInstanceTerminals = new Map<string, number>();
   private readonly pendingInstanceTerminalGenerations = new Map<string, Map<string, number>>();
   private readonly deferredInstanceAuthorityReleases = new Map<string, Set<bigint>>();
@@ -1684,6 +1684,30 @@ export class DefaultZLinkSpotManager {
     return this.admitRoutedActorPacketPrefix(owner.spotId, actorId, records);
   }
 
+  /** Runs an owner-side lifecycle decision in the Actor's existing execution gate. */
+  executeActorTurn<T>(
+    meshName: string,
+    spotId: RoutingId | undefined,
+    actorId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    if (spotId === undefined) {
+      if (this.options.executeEntryActor === undefined) {
+        throw new ZLinkConfigurationException(
+          `Entry Spot Actor '${actorId}' has no execution gate for MeshNode '${meshName}'.`
+        );
+      }
+      return this.options.executeEntryActor(meshName, actorId, operation);
+    }
+    const activation = this.resolveApplicationActivation(spotId, meshName);
+    if (activation === undefined) {
+      throw new ZLinkConfigurationException(
+        `Actor '${actorId}' has no active Spot execution gate for '${String(spotId)}'.`
+      );
+    }
+    return activation.executeActor(actorId, operation);
+  }
+
   async dispatchRoutedSpotSend(
     spotId: RoutingId,
     packetName: string | undefined,
@@ -2254,7 +2278,7 @@ export class DefaultZLinkSpotManager {
     }
   }
 
-  private async dispatchMeshActorJoinCore(
+  async dispatchMeshActorJoinCore(
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord,

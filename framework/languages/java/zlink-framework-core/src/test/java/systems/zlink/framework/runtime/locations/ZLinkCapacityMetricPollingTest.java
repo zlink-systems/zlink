@@ -170,11 +170,16 @@ final class ZLinkCapacityMetricPollingTest {
             reserve(fixture.repository, fixture.descriptor(), "local");
             assertEquals(1, fixture.metrics.observable(RESERVED, TAGS));
             fixture.store.fail = true;
-            int reads = fixture.store.reads.get();
-            fixture.poll();
-            assertEquals(reads + 1, fixture.store.reads.get());
-            assertEquals(1, fixture.metrics.observable(RESERVED, TAGS));
-            assertReadError(fixture.metrics, 1);
+            try {
+                int reads = fixture.store.reads.get();
+                fixture.poll();
+                assertEquals(reads + 1, fixture.store.reads.get());
+                assertEquals(1, fixture.metrics.observable(RESERVED, TAGS));
+                assertReadError(fixture.metrics, 1);
+            } finally {
+                // Owner cleanup returns reserved capacity after the polling fault has ended.
+                fixture.store.fail = false;
+            }
         }
     }
 

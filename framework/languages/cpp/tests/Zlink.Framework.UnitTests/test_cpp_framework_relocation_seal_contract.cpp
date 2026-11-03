@@ -3,6 +3,7 @@
 
 #include "../support/stateful_object_sync.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/exception_payload.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 #include "runtime/execution/serial_application_record.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
@@ -298,14 +299,19 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
 
     host::bound_session_operations_t operations;
-    operations.bind =
-      [] (const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
-          const location_owner_token_t &,
-          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
-          (void) submit_terminal_reply (
-            {bind.binding.generation, bind.actor.authority_owner_generation});
-          return host::bound_session_bind_operation_result_t{};
-      };
+    operations.bind = [] (const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &,
+                          std::uint64_t, const location_owner_token_t &,
+                          std::function<bool (std::uint32_t, std::uint32_t,
+                                              std::optional<protocol::stream_bind_reply_tail_t>)>
+                            submit_terminal_reply) {
+        (void) submit_terminal_reply (
+          static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+          static_cast<std::uint32_t> (protocol::framework_error_code::none),
+          protocol::stream_bind_reply_tail_t{bind.binding.generation,
+                                             bind.actor.authority_owner_generation});
+        using bind_result_t = host::bound_session_bind_operation_result_t;
+        return task_t<bind_result_t> (result_t<bind_result_t>::success (bind_result_t{}));
+    };
     operations.send = [deliveries, delivered] (const protocol::bound_session_send_t &,
                                                std::vector<zlink::message_t> parts) {
         if (parts.size () != 1)
@@ -1701,10 +1707,15 @@ TEST (FrameworkRelocationSealContract, throwing_claim_consumer_returns_all_credi
 TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_record)
 {
     auto failures = std::make_shared<runtime::runtime_failure_collector_t> ();
-    const auto injected = std::make_exception_ptr (std::runtime_error ("dispatch failed"));
+    const auto marker = std::make_shared<const int> (369303);
+    using failure_t = zlink::framework::test::marked_exception_t<std::runtime_error>;
+    const auto injected = std::make_exception_ptr (failure_t (marker, "dispatch failed"));
     unsigned reported = 0;
     failures->bind_runtime_reporter ([&] (auto error) {
-        EXPECT_EQ (error, injected);
+        EXPECT_TRUE (zlink::framework::test::exception_payload_matches<failure_t> (
+          error, [&] (const auto &cause) {
+              return cause.marker == marker && std::string (cause.what ()) == "dispatch failed";
+          }));
         ++reported;
     });
     auto host = std::make_shared<host::public_host_runtime_t> (
@@ -2570,14 +2581,20 @@ TEST (FrameworkRelocationSealContract, native_claim_target_failure_settles_only_
                     std::vector<std::exception_ptr> reported;
                     failures->bind_runtime_reporter (
                       [&] (auto error) { reported.push_back (error); });
+                    const auto marker = std::make_shared<const int> (369304);
+                    using failed_t = zlink::framework::test::marked_exception_t<std::runtime_error>;
+                    using cancelled_t =
+                      zlink::framework::test::marked_exception_t<std::system_error>;
+                    const cancelled_t cancellation (
+                      marker, std::make_error_code (std::errc::operation_canceled),
+                      "target preparation cancelled");
                     const auto error =
                       shutdown
                         ? std::make_exception_ptr (detail::make_framework_origin_exception (
                             framework_error_kind_t::shutting_down, "target admission closed"))
                       : cancelled
-                        ? detail::make_cancellation_exception ("target preparation cancelled")
-                        : std::make_exception_ptr (
-                            std::runtime_error ("target preparation failed"));
+                        ? std::make_exception_ptr (cancellation)
+                        : std::make_exception_ptr (failed_t (marker, "target preparation failed"));
                     auto host = std::make_shared<host::public_host_runtime_t> (
                       host::host_options_t{mesh::raw_mesh_node_options_t{
                         .descriptor = test_descriptor ("native-target-failure"),
@@ -2647,8 +2664,24 @@ TEST (FrameworkRelocationSealContract, native_claim_target_failure_settles_only_
                     EXPECT_EQ (dispatched, expected);
                     EXPECT_EQ (rejected, shutdown ? 4u - failed : 0u);
                     ASSERT_EQ (reported.size (), shutdown ? 0u : 1u);
-                    if (!shutdown)
-                        EXPECT_EQ (reported.front (), error);
+                    if (!shutdown) {
+                        if (cancelled)
+                            EXPECT_TRUE (
+                              zlink::framework::test::exception_payload_matches<cancelled_t> (
+                                reported.front (), [&] (const auto &cause) {
+                                    return cause.marker == marker
+                                           && cause.code () == cancellation.code ()
+                                           && std::string (cause.what ()) == cancellation.what ();
+                                }));
+                        else
+                            EXPECT_TRUE (
+                              zlink::framework::test::exception_payload_matches<failed_t> (
+                                reported.front (), [&] (const auto &cause) {
+                                    return cause.marker == marker
+                                           && std::string (cause.what ())
+                                                == "target preparation failed";
+                                }));
+                    }
                     EXPECT_EQ (claim->outstanding (), 0u);
                     EXPECT_FALSE (host->transport ().mailbox ().release (*claim));
                     EXPECT_EQ (host->transport ().mailbox ().pending_messages (

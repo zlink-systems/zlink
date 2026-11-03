@@ -4057,11 +4057,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 backendSpot)
                                         .thenCompose(
                                                 activation -> {
-                                                    activation.setAuthorityFence(
-                                                            route.ownerId(),
-                                                            route.leaseGeneration(),
-                                                            route.authorityOwnerGeneration(),
-                                                            route.targetNodeGeneration());
+                                                    activation.setAuthorityFence(route);
                                                     return publishInstanceActivation(
                                                                     activation,
                                                                     restoreFirst,
@@ -4180,12 +4176,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                         + " its reservation"));
                                                                     }
                                                                     activation.setAuthorityFence(
-                                                                            route.ownerId(),
-                                                                            route.leaseGeneration(),
-                                                                            route
-                                                                                    .authorityOwnerGeneration(),
-                                                                            route
-                                                                                    .targetNodeGeneration());
+                                                                            route);
                                                                     return publishInstanceActivation(
                                                                             activation,
                                                                             restoreFirst,
@@ -4312,7 +4303,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     public CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
             ZLinkBackendActorRef actorRef, ZLinkStreamHeader header, Message payload) {
-        return dispatchLocalSessionActor(actorRef, null, header, payload);
+        return dispatchLocalSessionActor(actorRef, null, header, payload, Instant.now());
+    }
+
+    CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
+            ZLinkBackendActorRef actorRef,
+            ZLinkStreamHeader header,
+            Message payload,
+            Instant receivedAt) {
+        return dispatchLocalSessionActor(actorRef, null, header, payload, receivedAt);
     }
 
     public CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
@@ -4334,21 +4333,22 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 acceptedSessionSequence,
                                 header,
                                 payload);
-        return dispatchLocalSessionActor(actorRef, acceptedRecord, header, payload);
+        return dispatchLocalSessionActor(actorRef, acceptedRecord, header, payload, Instant.now());
     }
 
     private CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
             ZLinkBackendActorRef actorRef,
             byte[] acceptedRecord,
             ZLinkStreamHeader header,
-            Message payload) {
+            Message payload,
+            Instant receivedAt) {
         return actorSessions.dispatchLocalSession(
                 actorRef,
                 acceptedRecord,
                 header,
                 payload,
                 spotId -> spotSurfaceFor(spotId) != null,
-                local -> dispatchLocalSessionActor(actorRef, header, payload, local));
+                local -> dispatchLocalSessionActor(actorRef, header, payload, local, receivedAt));
     }
 
     CompletionStage<Optional<Message>> dispatchTransferBacklog(
@@ -4356,6 +4356,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkStreamHeader header,
             Message payload,
             byte[] acceptedJournalRecord) {
+        return dispatchTransferBacklog(
+                actorRef, header, payload, acceptedJournalRecord, Instant.now());
+    }
+
+    CompletionStage<Optional<Message>> dispatchTransferBacklog(
+            ZLinkBackendActorRef actorRef,
+            ZLinkStreamHeader header,
+            Message payload,
+            byte[] acceptedJournalRecord,
+            Instant receivedAt) {
         return actorSessions.dispatchTransferBacklog(
                 actorRef,
                 header,
@@ -4363,7 +4373,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 acceptedJournalRecord,
                 spotId -> spotSurfaceFor(spotId) != null,
                 local ->
-                        dispatchLocalSessionActor(actorRef, header, payload, local)
+                        dispatchLocalSessionActor(actorRef, header, payload, local, receivedAt)
                                 .thenApply(reply -> reply.map(LocalActorReply::payload)));
     }
 
@@ -4372,12 +4382,22 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkStreamHeader header,
             Message payload,
             byte[] acceptedJournalRecord) {
+        return dispatchMessageFollow(
+                actorRef, header, payload, acceptedJournalRecord, Instant.now());
+    }
+
+    CompletionStage<Optional<LocalActorReply>> dispatchMessageFollow(
+            ZLinkBackendActorRef actorRef,
+            ZLinkStreamHeader header,
+            Message payload,
+            byte[] acceptedJournalRecord,
+            Instant receivedAt) {
         return actorSessions.dispatchMessageFollow(
                 actorRef,
                 header,
                 payload,
                 acceptedJournalRecord,
-                local -> dispatchLocalSessionActor(actorRef, header, payload, local));
+                local -> dispatchLocalSessionActor(actorRef, header, payload, local, receivedAt));
     }
 
     CompletionStage<Optional<byte[]>> replayPreparedActor(
@@ -4434,7 +4454,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             actor,
                             payload,
                             contentTypeFor(record.header().codec()),
-                            record.header().metadata());
+                            record.header().metadata(),
+                            Instant.now());
         } catch (RuntimeException failure) {
             payload.close();
             return CompletableFuture.failedFuture(failure);
@@ -4512,7 +4533,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkBackendActorRef actorRef,
             ZLinkStreamHeader header,
             Message payload,
-            ZLinkActorSessionCoordinator.LocalDispatch local) {
+            ZLinkActorSessionCoordinator.LocalDispatch local,
+            Instant receivedAt) {
         ZLinkActor actor = local.actor();
         Object spotSurface = localActorSpotSurface(actor);
         boolean isRequest =
@@ -4564,7 +4586,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 actor,
                 payload,
                 contentTypeFor(header.codec()),
-                header.metadata());
+                header.metadata(),
+                receivedAt);
     }
 
     public void drainRoutedDispatchQueues() {
@@ -4681,7 +4704,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                         ZLinkStreamCodec.fromValue(
                                                                                 packetHeader
                                                                                         .codec())),
-                                                                packetHeader.metadata())
+                                                                packetHeader.metadata(),
+                                                                headerPart.receivedAt())
                                                         : invokeActorSendHandler(
                                                                         handler,
                                                                         spotSurface,
@@ -4692,7 +4716,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                         .fromValue(
                                                                                                 packetHeader
                                                                                                         .codec())),
-                                                                        packetHeader.metadata())
+                                                                        packetHeader.metadata(),
+                                                                        headerPart.receivedAt())
                                                                 .thenApply(
                                                                         ignored ->
                                                                                 Optional.empty());
@@ -4886,7 +4911,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkActor actor,
             Message payload,
             String contentType,
-            Map<String, String> metadata) {
+            Map<String, String> metadata,
+            Instant receivedAt) {
         return admitApplicationJob(
                 () ->
                         spotHandlerInvoker.invokeActorSend(
@@ -4896,6 +4922,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 payload,
                                 contentType,
                                 metadata,
+                                receivedAt,
                                 handlerType ->
                                         systems.zlink.framework.runtime.internal.handlers
                                                 .ZLinkActorHandlerInstances.instance(
@@ -4909,7 +4936,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkActor actor,
             Message payload,
             String contentType,
-            Map<String, String> metadata) {
+            Map<String, String> metadata,
+            Instant receivedAt) {
         return admitApplicationJob(
                 () ->
                         spotHandlerInvoker.invokeActorRequest(
@@ -4919,6 +4947,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 payload,
                                 contentType,
                                 metadata,
+                                receivedAt,
                                 handlerType ->
                                         systems.zlink.framework.runtime.internal.handlers
                                                 .ZLinkActorHandlerInstances.instance(
@@ -5499,12 +5528,25 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkActor actor,
             Message payload,
             String contentType,
-            Map<String, String> metadata) {
+            Map<String, String> metadata,
+            Instant receivedAt) {
         return registration.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST
                 ? invokeLocalActorRequestHandler(
-                        registration, spotSurface, actor, payload, contentType, metadata)
+                        registration,
+                        spotSurface,
+                        actor,
+                        payload,
+                        contentType,
+                        metadata,
+                        receivedAt)
                 : invokeLocalActorSendHandler(
-                                registration, spotSurface, actor, payload, contentType, metadata)
+                                registration,
+                                spotSurface,
+                                actor,
+                                payload,
+                                contentType,
+                                metadata,
+                                receivedAt)
                         .thenApply(ignored -> Optional.empty());
     }
 
@@ -5514,7 +5556,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkActor actor,
             Message payload,
             String contentType,
-            Map<String, String> metadata) {
+            Map<String, String> metadata,
+            Instant receivedAt) {
         return admitApplicationJob(
                 () ->
                         spotHandlerInvoker.invokeActorSend(
@@ -5524,6 +5567,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 payload,
                                 contentType,
                                 metadata,
+                                receivedAt,
                                 handlerType ->
                                         systems.zlink.framework.runtime.internal.handlers
                                                 .ZLinkActorHandlerInstances.instance(
@@ -5537,7 +5581,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkActor actor,
             Message payload,
             String contentType,
-            Map<String, String> metadata) {
+            Map<String, String> metadata,
+            Instant receivedAt) {
         return admitApplicationJob(
                         () ->
                                 spotHandlerInvoker.invokeActorRequest(
@@ -5547,6 +5592,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         payload,
                                         contentType,
                                         metadata,
+                                        receivedAt,
                                         handlerType ->
                                                 systems.zlink.framework.runtime.internal.handlers
                                                         .ZLinkActorHandlerInstances.instance(
@@ -6384,25 +6430,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                         + " fence"
                                                                                                                         + " changed");
                                                                                                     }
-                                                                                                    fresh
-                                                                                                            .setAuthorityFence(
-                                                                                                                    stored
-                                                                                                                            .ownerId(),
-                                                                                                                    stored
-                                                                                                                            .ownerLeaseGeneration(),
-                                                                                                                    stored
-                                                                                                                            .authorityOwnerGeneration(),
-                                                                                                                    authority
-                                                                                                                            .nodeGeneration());
-                                                                                                    instanceSpotActivations
-                                                                                                            .put(
-                                                                                                                    authority
-                                                                                                                            .spotId(),
-                                                                                                                    fresh);
-                                                                                                    mesh
-                                                                                                            .registerInstanceIntent(
-                                                                                                                    authority
-                                                                                                                            .stableType(),
+                                                                                                    var
+                                                                                                            publishedRoute =
                                                                                                                     new systems
                                                                                                                             .zlink
                                                                                                                             .framework
@@ -6426,7 +6455,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                             stored
                                                                                                                                     .ownerLeaseGeneration(),
                                                                                                                             stored
-                                                                                                                                    .storeVersion()));
+                                                                                                                                    .storeVersion());
+                                                                                                    fresh
+                                                                                                            .setAuthorityFence(
+                                                                                                                    publishedRoute);
+                                                                                                    instanceSpotActivations
+                                                                                                            .put(
+                                                                                                                    authority
+                                                                                                                            .spotId(),
+                                                                                                                    fresh);
+                                                                                                    mesh
+                                                                                                            .registerInstanceIntent(
+                                                                                                                    authority
+                                                                                                                            .stableType(),
+                                                                                                                    publishedRoute);
                                                                                                     fresh
                                                                                                             .startIdleEviction(
                                                                                                                     instanceSpotIdleTimeouts
@@ -7252,32 +7294,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     static ZLinkBackendActorReceived copyActorReceived(ZLinkBackendActorReceived received) {
-        if (received.hasAcceptedJournalRecord()) {
-            return ZLinkBackendActorReceived.lazyJournal(
-                    received.actor(),
-                    received.sourceNodeRid(),
-                    received.sourceSessionRid(),
-                    received.requestSeq(),
-                    received.requestId(),
-                    received.flags(),
-                    Message.from(received.message()),
-                    received.hasMore(),
-                    received::acceptedJournalRecord,
-                    received.contentType(),
-                    () -> {},
-                    received.relocationRedirect());
-        }
-        return new ZLinkBackendActorReceived(
-                received.actor(),
-                received.sourceNodeRid(),
-                received.sourceSessionRid(),
-                received.requestSeq(),
-                received.requestId(),
-                received.flags(),
-                Message.from(received.message()),
-                received.hasMore(),
-                new byte[0],
-                received.contentType());
+        return received.copy();
     }
 
     static boolean isNoBindActorRequest(
@@ -7294,6 +7311,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     /** Spec 27 §4 capture gate shared by the spot/actor ingress points. */
     boolean flowCaptureEnabled() {
         return dispatchErrors.flow().captureEnabled();
+    }
+
+    ZLinkMessageFlowTracer relocationFlow() {
+        return dispatchErrors.flow();
     }
 
     boolean dispatchErrorsEnabled() {

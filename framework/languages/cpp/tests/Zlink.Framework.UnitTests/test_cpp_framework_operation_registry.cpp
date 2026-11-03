@@ -628,31 +628,39 @@ void verify_registration_does_not_wait_for_owner ()
 
 void verify_publication_allocation_failure ()
 {
-    runtime::offload_executor_t executor;
-    runtime::state_lane_t lane (executor);
-    std::latch entered (1), release (1);
-    assert (lane.try_post ([&] {
-        entered.count_down ();
-        release.wait ();
-    }));
-    entered.wait ();
-    std::size_t rejected = 0, accepted = 0;
-    for (std::size_t failure = 0; failure < 8; ++failure) {
+    std::size_t rejected = 0, accepted = 0, registration_allocations = 0;
+    // Enumerate every allocation failure until registration succeeds without
+    // reaching the injected failure. STL allocation counts vary by platform.
+    for (std::size_t failure = 0; accepted == 0; ++failure) {
+        // Each injection starts with the same mailbox capacity and hash state.
+        runtime::offload_executor_t executor;
+        runtime::state_lane_t lane (executor);
+        std::latch entered (1), release (1);
+        assert (lane.try_post ([&] {
+            entered.count_down ();
+            release.wait ();
+        }));
+        entered.wait ();
         std::stop_source cancellation;
         {
             foundation::operation_registry_t registry (lane);
             zlink::framework::tests::allocations_before_failure = failure;
             try {
-                const bool registered = registry.register_operation (
-                  {2002, failure + 1},
-                  foundation::operation_registry_t::clock_t::time_point::max (), [] (auto, auto) {},
-                  {}, {}, {}, cancellation.get_token ());
+                bool registered = false;
+                registration_allocations = zlink::framework::tests::count_allocations ([&] {
+                    registered = registry.register_operation (
+                      {2002, failure + 1},
+                      foundation::operation_registry_t::clock_t::time_point::max (),
+                      [] (auto, auto) {}, {}, {}, {}, cancellation.get_token ());
+                });
+                assert (zlink::framework::tests::allocations_before_failure.has_value ());
                 zlink::framework::tests::allocations_before_failure.reset ();
                 assert (registered && registry.size () == 1);
                 assert (registry.unregister ({2002, failure + 1}));
                 ++accepted;
             }
             catch (const std::bad_alloc &) {
+                assert (!zlink::framework::tests::allocations_before_failure.has_value ());
                 zlink::framework::tests::allocations_before_failure.reset ();
                 assert (registry.size () == 0 && !registry.contains ({2002, failure + 1}));
                 ++rejected;
@@ -662,10 +670,12 @@ void verify_publication_allocation_failure ()
         // A failed publication must have removed its stop subscription before
         // the registry is destroyed, even while its owner lane is unavailable.
         cancellation.request_stop ();
+        release.count_down ();
+        lane.run_sync ([] {});
     }
-    release.count_down ();
-    lane.run_sync ([] {});
-    assert (rejected >= 4 && accepted > 0);
+    std::cout << "registry_publication_failure rejected=" << rejected << " accepted=" << accepted
+              << " allocations=" << registration_allocations << std::endl;
+    assert (registration_allocations > 0 && rejected == registration_allocations && accepted == 1);
 }
 
 void verify_shutdown_cleanup_owner_lifetime ()

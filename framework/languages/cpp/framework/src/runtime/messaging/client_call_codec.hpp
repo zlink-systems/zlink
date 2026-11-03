@@ -32,8 +32,8 @@ class client_call_codec_t
                                           serialized_payload_t serialized) const
     {
         header.content_type = std::move (serialized.content_type);
-        return _codec.encode_raw_body_parts (header,
-                                             detail::encoded_payload_to_raw (serialized.payload));
+        return _codec.encode_raw_body_parts (
+          header, detail::encoded_payload_to_raw (std::move (serialized.payload)));
     }
 
     template <typename TEncodePayload>
@@ -49,19 +49,21 @@ class client_call_codec_t
           create_envelope (message_kind_t::command, channel_name, packet_name,
                            std::chrono::milliseconds (0), std::nullopt, std::nullopt, {});
         header.metadata = metadata;
-        detail::message_flow_tracer_t (dispatch).trace (message_flow_outcome_t::sent, [&] {
-            return message_flow_event_t{message_flow_outcome_t::sent,
-                                        dispatch_error_surface_t::route_mesh_channel,
-                                        dispatch_message_kind_t::send,
-                                        packet_name,
-                                        channel_name,
-                                        std::nullopt,
-                                        header.correlation_id,
-                                        target_node_rid.to_string (),
-                                        std::nullopt,
-                                        std::nullopt,
-                                        std::nullopt};
-        });
+        if (detail::message_flow_tracer_t (dispatch).enabled_for (message_flow_outcome_t::sent)) {
+            detail::message_flow_tracer_t (dispatch).trace (message_flow_outcome_t::sent, [&] {
+                return message_flow_event_t{message_flow_outcome_t::sent,
+                                            dispatch_error_surface_t::route_mesh_channel,
+                                            dispatch_message_kind_t::send,
+                                            packet_name,
+                                            channel_name,
+                                            std::nullopt,
+                                            header.correlation_id,
+                                            target_node_rid.to_string (),
+                                            std::nullopt,
+                                            std::nullopt,
+                                            std::nullopt};
+            });
+        }
         return encode_payload_parts (std::move (header), encode_payload (serializers));
     }
 
@@ -97,15 +99,15 @@ class client_call_codec_t
               header.value ().error_message.value_or (error_message), operation_name);
             return detail::result_access_t::failure<TReply> (error);
         }
-        auto body = _codec.decode_body (reply);
+        auto body = _codec.decode_body_view (reply);
         if (!body) {
             return result_t<TReply>::failure (body.error_kind (), body.error ()
                                                                     ? body.error ()->what ()
                                                                     : "Reply body is missing.");
         }
         try {
-            return result_t<TReply>::success (serializers.get<TReply> ().deserialize (
-              detail::encoded_payload_from_raw (body.value ())));
+            return result_t<TReply>::success (
+              serializers.get<TReply> ().deserialize (body.value ()));
         }
         catch (const framework_exception_t &error) {
             return detail::result_access_t::failure<TReply> (error);

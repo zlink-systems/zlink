@@ -48,14 +48,20 @@ namespace
 class empty_callback_failure_t final : public std::exception
 {
   public:
+    explicit empty_callback_failure_t (std::shared_ptr<const int> marker) :
+        marker (std::move (marker))
+    {
+    }
     const char *what () const noexcept override { return ""; }
+    std::shared_ptr<const int> marker;
 };
 
 TEST (LocalCallbackCause, UserSpotOnCreatePreservesEmptyApplicationException)
 {
     namespace fw = zlink::framework;
     using namespace fw::detail;
-    const auto original = std::make_exception_ptr (empty_callback_failure_t{});
+    const auto marker = std::make_shared<const int> (369305);
+    const auto original = std::make_exception_ptr (empty_callback_failure_t (marker));
     auto node = fw::test::runtime_failure_fixture<spot_node_builder_state_t> ("callback-cause");
     fw::serializer_registry_t serializers;
     node->channel_runtime = fw::test::runtime_failure_fixture<channel_runtime_state_t> ();
@@ -78,7 +84,7 @@ TEST (LocalCallbackCause, UserSpotOnCreatePreservesEmptyApplicationException)
         FAIL () << "onCreate must fail";
     }
     catch (const empty_callback_failure_t &error) {
-        EXPECT_EQ (original, std::current_exception ());
+        EXPECT_EQ (marker, error.marker);
         EXPECT_STREQ ("", error.what ());
     }
 }
@@ -228,7 +234,8 @@ void verify_timer_waits_for_creation (zlink::framework::user_spot_execution_mode
     }
 }
 
-TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilLateCompletion)
+void verify_cancelled_creation_callback_lifetime (
+  const std::shared_ptr<zlink::framework::test::manual_internal_scheduler_t> &late_completion = {})
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -242,6 +249,8 @@ TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilL
     node->spot_factories.emplace ("preparing", std::type_index (typeid (int)));
     std::shared_ptr<spot_context_state_t> context;
     std::weak_ptr<void> instance;
+    auto instance_released = std::make_shared<task_completion_source_t<void>> ();
+    auto released = instance_released->task ();
     std::promise<void> entered;
     auto started = entered.get_future ();
     task_completion_source_t<spot_create_response_t> release;
@@ -249,12 +258,21 @@ TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilL
     lifecycle.create_spot_context_instance = [&] (spot_context_t value,
                                                   service_provider_t &) -> std::shared_ptr<void> {
         context = spot_context_access_t::state (value);
-        auto created = std::make_shared<int> (1);
+        auto created = std::shared_ptr<int> (new int (1), [instance_released] (int *value) {
+            delete value;
+            instance_released->complete (result_t<void>::success ());
+        });
         instance = created;
         return created;
     };
     lifecycle.on_create = [&] (void *, const zlink::message_t &, serializer_registry_t &) {
         entered.set_value ();
+        if (late_completion)
+            return detail::with_task_resume_scheduler (
+              release.task (), [late_completion] (std::function<void ()> work) {
+                  if (!late_completion->try_submit_internal (std::move (work)))
+                      throw std::runtime_error ("late creation completion scheduler stopped");
+              });
         return release.task ();
     };
     node->spot_lifecycles.emplace ("preparing", std::move (lifecycle));
@@ -269,6 +287,8 @@ TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilL
         }
     });
     started.get ();
+    if (late_completion)
+        observe_scheduled_expiry (node->worker_executor);
     const auto barrier = context->spot_serial_executor->preparation_lifecycle ();
     auto terminal = barrier->terminal ();
     std::atomic_int terminal_count{0};
@@ -285,10 +305,26 @@ TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilL
     node->worker_executor->drain ();
     node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
     context.reset ();
+    // The cancelled barrier terminal and worker drain do not join the callback frame.
+    // Observe the instance's release before checking its weak reference.
+    if (late_completion)
+        late_completion->run_until (released);
+    released.result ().value ();
     EXPECT_TRUE (cancelled);
     EXPECT_TRUE (callback_retained);
     EXPECT_EQ (terminal_count.load (), 1);
     EXPECT_TRUE (instance.expired ());
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilLateCompletion)
+{
+    verify_cancelled_creation_callback_lifetime ();
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationAwaitsDeferredCallbackRelease)
+{
+    verify_cancelled_creation_callback_lifetime (
+      std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ());
 }
 
 TEST (ZLinkFrameworkSpotCloseConformance, SpotWideTimerWaitsForCreationPreparation)
@@ -1258,6 +1294,31 @@ std::string error_name (zf::framework_error_kind_t kind)
     }
 }
 
+zf::task_t<void>
+join_queued_behind_close_task (nlohmann::json *actual,
+                               std::shared_ptr<zf::detail::spot_node_builder_state_t> node,
+                               std::string spot_id,
+                               bool remote,
+                               zf::detail::spot_node_runtime_t runtime,
+                               zf::actor_ref_t actor_ref,
+                               zf::authority_snapshot_t authority)
+{
+    (*actual)["removedBeforeJoin"] =
+      node->lane.run ([&] { return !node->spot_contexts_by_id.contains (spot_id); }).get ();
+    if (remote) {
+        const auto result = co_await zf::runtime::await_result (runtime.admit_remote_actor_to_spot (
+          "queued-close-transfer", actor_ref, zf::spot_id_t ("source"), zf::spot_id_t (spot_id), {},
+          0, 0, authority.authority_owner_generation,
+          authority.allocation.target.node_lifecycle_generation,
+          static_cast<std::uint64_t> (authority.owner.lease_generation)));
+        (*actual)["joinResult"] = result ? "Accepted" : error_name (result.error_kind ());
+    } else {
+        const auto result = co_await zf::runtime::await_result (
+          runtime.join_actor_to_spot_erased (actor_ref, zf::spot_id_t (spot_id), {}));
+        (*actual)["joinResult"] = result ? "Accepted" : error_name (result.error_kind ());
+    }
+}
+
 template <typename T> nlohmann::json close_result (const zf::result_t<T> &result)
 {
     if (result)
@@ -2102,24 +2163,8 @@ class scenario_client_t final : public zf::hosted_service_t
             runtime.dispatch_wire_actor_join_admission (
               zf::spot_id_t (spot_id), {},
               [&, actor_ref] () -> zf::task_t<void> {
-                  actual["removedBeforeJoin"] =
-                    node->lane.run ([&] { return !node->spot_contexts_by_id.contains (spot_id); })
-                      .get ();
-                  if (remote) {
-                      const auto result =
-                        co_await zf::runtime::await_result (runtime.admit_remote_actor_to_spot (
-                          "queued-close-transfer", actor_ref, zf::spot_id_t ("source"),
-                          zf::spot_id_t (spot_id), {}, 0, 0, authority.authority_owner_generation,
-                          authority.allocation.target.node_lifecycle_generation,
-                          static_cast<std::uint64_t> (authority.owner.lease_generation)));
-                      actual["joinResult"] =
-                        result ? "Accepted" : error_name (result.error_kind ());
-                  } else {
-                      const auto result = co_await zf::runtime::await_result (
-                        runtime.join_actor_to_spot_erased (actor_ref, zf::spot_id_t (spot_id), {}));
-                      actual["joinResult"] =
-                        result ? "Accepted" : error_name (result.error_kind ());
-                  }
+                  return join_queued_behind_close_task (&actual, node, spot_id, remote, runtime,
+                                                        actor_ref, authority);
               },
               [join_done] (zf::result_t<void> result) { join_done->complete (std::move (result)); },
               [join_done] { join_done->complete (zf::result_t<void>::success ()); });
@@ -2992,7 +3037,9 @@ TEST (ZLinkFrameworkSpotCloseConformance, TimerCloseSucceedsAfterReadyPublicatio
         {"created", true}}}});
 }
 
-const auto public_callback_original = std::make_exception_ptr (empty_callback_failure_t{});
+const auto public_callback_marker = std::make_shared<const int> (369306);
+const auto public_callback_original =
+  std::make_exception_ptr (empty_callback_failure_t (public_callback_marker));
 
 class callback_cause_spot_t final : public zf::spot_t<member_actor_t>
 {
@@ -3091,7 +3138,7 @@ class callback_cause_client_t final : public zf::hosted_service_t
             ADD_FAILURE () << "callback must fail";
         }
         catch (const empty_callback_failure_t &error) {
-            EXPECT_EQ (public_callback_original, std::current_exception ());
+            EXPECT_EQ (public_callback_marker, error.marker);
             EXPECT_STREQ ("", error.what ());
         }
         catch (const std::exception &error) {

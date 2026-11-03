@@ -2,6 +2,7 @@
 #include "../support/telemetry_observation.hpp"
 
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/exception_payload.hpp"
 
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/channels/route_packet_dispatcher.hpp"
@@ -36,6 +37,30 @@ using namespace std::chrono_literals;
 namespace foundation = zlink::framework::runtime::foundation;
 namespace mesh = zlink::framework::runtime::mesh;
 namespace protocol = zlink::framework::runtime::protocol;
+
+TEST (CppFrameworkExceptionPayload, CopiesPreserveCauseAndReplacementsAreRejected)
+{
+    using failure_t = zlink::framework::test::marked_exception_t<std::runtime_error>;
+    const auto marker = std::make_shared<const int> (369300);
+    const failure_t original (marker, "original cause");
+    const auto first = std::make_exception_ptr (original);
+    const auto copy = std::make_exception_ptr (original);
+    // Model a capture implementation that owns a separate copy of the same cause.
+    EXPECT_NE (first, copy);
+    const auto preserved = [&] (std::exception_ptr error) {
+        return zlink::framework::test::exception_payload_matches<failure_t> (
+          error, [&] (const auto &cause) {
+              return cause.marker == marker && std::string (cause.what ()) == "original cause";
+          });
+    };
+    EXPECT_TRUE (preserved (first));
+    EXPECT_TRUE (preserved (copy));
+    EXPECT_FALSE (preserved (nullptr));
+    EXPECT_FALSE (preserved (std::make_exception_ptr (std::runtime_error ("original cause"))));
+    EXPECT_FALSE (preserved (std::make_exception_ptr (
+      failure_t (std::make_shared<const int> (369300), "original cause"))));
+    EXPECT_FALSE (preserved (std::make_exception_ptr (failure_t (marker, "changed cause"))));
+}
 
 TEST (CppFrameworkRawMeshStarted, ResourceQueryDoesNotWaitForPeerControlOwner)
 {
@@ -160,7 +185,16 @@ TEST (CppFrameworkTopologyNotifications, CommittedBatchDeliversEverySignalDespit
     second.node_routing_id = {'b'};
     second.advertised_endpoint = "inproc://notification-batch-second";
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
-    const auto injected = std::make_exception_ptr (std::runtime_error ("notification failure"));
+    const auto marker = std::make_shared<const int> (369301);
+    using failure_t = zlink::framework::test::marked_exception_t<std::runtime_error>;
+    const auto injected = std::make_exception_ptr (failure_t (marker, "notification failure"));
+    const auto preserved = [&] (std::exception_ptr error) {
+        return zlink::framework::test::exception_payload_matches<failure_t> (
+          error, [&] (const auto &cause) {
+              return cause.marker == marker
+                     && std::string (cause.what ()) == "notification failure";
+          });
+    };
     std::vector<std::size_t> observed_peers;
     int on_lane = 0;
     bool same_peer_state = true;
@@ -189,7 +223,7 @@ TEST (CppFrameworkTopologyNotifications, CommittedBatchDeliversEverySignalDespit
     catch (...) {
         first_error = std::current_exception ();
     }
-    EXPECT_EQ (injected, first_error);
+    EXPECT_TRUE (preserved (first_error));
     ASSERT_TRUE (source.topology ().peer (first.node_routing_id));
     ASSERT_TRUE (before_first.changed.await_ready ());
     EXPECT_TRUE (before_first.changed.result ());
@@ -201,7 +235,7 @@ TEST (CppFrameworkTopologyNotifications, CommittedBatchDeliversEverySignalDespit
     catch (...) {
         second_error = std::current_exception ();
     }
-    EXPECT_EQ (injected, second_error);
+    EXPECT_TRUE (preserved (second_error));
     ASSERT_TRUE (source.topology ().peer (second.node_routing_id));
     ASSERT_TRUE (before_second.changed.await_ready ());
     EXPECT_TRUE (before_second.changed.result ());
@@ -211,7 +245,7 @@ TEST (CppFrameworkTopologyNotifications, CommittedBatchDeliversEverySignalDespit
       source.tick_liveness (now + mesh::service_liveness_registry_t::default_peer_timeout);
     const auto &terminal = tick.result ();
     EXPECT_FALSE (terminal);
-    EXPECT_EQ (injected, terminal.exception ());
+    EXPECT_TRUE (preserved (terminal.exception ()));
     EXPECT_EQ ((std::vector<std::size_t>{1, 2, 0, 0}), observed_peers);
     EXPECT_EQ (0, on_lane);
     EXPECT_TRUE (same_peer_state);
@@ -225,7 +259,7 @@ TEST (CppFrameworkTopologyNotifications, CommittedBatchDeliversEverySignalDespit
     catch (...) {
         secondary = std::current_exception ();
     }
-    EXPECT_EQ (injected, secondary); // Exactly one additional callback failure was reported.
+    EXPECT_TRUE (preserved (secondary)); // Exactly one additional callback failure was reported.
     source.topology ().set_change_handler ({});
     source.close ();
 }

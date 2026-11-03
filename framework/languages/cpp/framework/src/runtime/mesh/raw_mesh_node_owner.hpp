@@ -134,6 +134,11 @@ struct actor_join_wire_outcome_t
 
 class raw_mesh_node_owner_t
 {
+    friend state_lane_t &auto_connect_owner_lane (raw_mesh_node_owner_t &owner)
+    {
+        return owner._lane;
+    }
+
   public:
     explicit raw_mesh_node_owner_t (raw_mesh_node_options_t options,
                                     std::shared_ptr<zlink::context_t> context = {});
@@ -189,6 +194,17 @@ class raw_mesh_node_owner_t
     void disconnect_peer_intent (const zlink::routing_id_t &expected_routing_id,
                                  const std::string &endpoint,
                                  bool automatic);
+    task_t<void> connect_peer_intent_async (std::string endpoint,
+                                            std::optional<zlink::routing_id_t> expected,
+                                            std::uint64_t expected_lifecycle_generation,
+                                            std::string security_identity,
+                                            bool automatic);
+    task_t<void> disconnect_peer_intent_async (zlink::routing_id_t expected_routing_id,
+                                               std::string endpoint,
+                                               bool automatic);
+    task_t<void> expect_peer_async (service_node_descriptor_t expected_descriptor);
+    task_t<void> forget_peer_async (std::vector<std::uint8_t> node_routing_id,
+                                    std::string endpoint);
     void clear_peer_connection_intents ();
     void expect_peer (service_node_descriptor_t expected_descriptor);
     // The auto-connect owner's per-peer reconcile request (MeshNode 7.1).
@@ -225,7 +241,8 @@ class raw_mesh_node_owner_t
                                   const protocol::application_payload_t &application_payload,
                                   std::chrono::milliseconds timeout,
                                   foundation::operation_registry_t::callback_t callback,
-                                  std::optional<std::uint64_t> correlation = std::nullopt);
+                                  std::optional<std::uint64_t> correlation = std::nullopt,
+                                  std::shared_ptr<task_completion_source_t<void>> admitted = {});
     task_t<bool> request_to_channel (const std::string &channel_name,
                                      const protocol::application_payload_t &application_payload,
                                      std::chrono::milliseconds timeout,
@@ -458,13 +475,15 @@ class raw_mesh_node_owner_t
      * readiness and applies a ready route snapshot (nullopt when the poll
      * failed), then receive_next reads one record per call until the ROUTER
      * reports none. pump_one is the single-record form of the same turn. */
-    std::optional<zlink::poll_event_flag_t> begin_receive_turn ();
+    std::optional<zlink::poll_event_flag_t>
+    begin_receive_turn (std::optional<zlink::poll_event_flag_t> readiness = {});
     raw_mesh_pump_result_t receive_next (service_liveness_registry_t::clock_t::time_point now);
     /* Wait for ROUTER input or an already admitted mailbox/control record.
      * This is the blocking wake-up used by the host ingress loop; it avoids
      * turning an idle node into a timed polling loop. */
-    bool wait_for_activity (std::chrono::milliseconds timeout,
-                            bool accept_application_receive = true) noexcept;
+    std::optional<zlink::poll_event_flag_t>
+    wait_for_activity (std::chrono::milliseconds timeout,
+                       bool accept_application_receive = true) noexcept;
     void signal_activity () noexcept;
     std::size_t last_pump_bytes () const;
     // A rotation with no probe, timeout or admission retry due returns at once (spec 08
@@ -493,6 +512,19 @@ class raw_mesh_node_owner_t
                 std::optional<std::uint64_t> lifecycle_generation = std::nullopt) const;
 
   private:
+    void connect_peer_intent_owned (const std::string &endpoint,
+                                    std::optional<zlink::routing_id_t> expected,
+                                    std::uint64_t expected_lifecycle_generation,
+                                    std::string security_identity,
+                                    bool automatic);
+    void disconnect_peer_intent_owned (const zlink::routing_id_t &expected_routing_id,
+                                       const std::string &endpoint,
+                                       bool automatic,
+                                       std::vector<std::function<void ()>> &notifications);
+    static bool valid_expected_peer (const service_node_descriptor_t &descriptor);
+    void expect_peer_owned (const service_node_descriptor_t &expected_descriptor);
+    void forget_peer_owned (const std::vector<std::uint8_t> &node_routing_id,
+                            const std::string &endpoint);
     bool connect_peer_owned (const std::string &endpoint,
                              std::optional<service_node_descriptor_t> expected_descriptor);
     bool disconnect_peer_owned (const std::vector<std::uint8_t> &expected_routing_id,
@@ -581,7 +613,8 @@ class raw_mesh_node_owner_t
       std::optional<std::uint64_t> correlation = std::nullopt,
       bool target_claimed = false,
       mesh_request_metric_t request_metric = {},
-      std::optional<foundation::operation_registry_t::request_identity_t> request = {});
+      std::optional<foundation::operation_registry_t::request_identity_t> request = {},
+      std::shared_ptr<task_completion_source_t<void>> admitted = {});
     task_t<bool> request_infrastructure (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
@@ -589,11 +622,10 @@ class raw_mesh_node_owner_t
         &decode_reply,
       foundation::operation_registry_t::clock_t::time_point deadline,
       foundation::operation_registry_t::callback_t callback);
-    static bool
-    observe_request (std::shared_ptr<foundation::operation_registry_t> operations,
-                     foundation::call_id_t operation,
-                     std::uint64_t correlation,
-                     std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running);
+    static void observe_request (std::shared_ptr<foundation::operation_registry_t> operations,
+                                 foundation::call_id_t operation,
+                                 std::uint64_t correlation,
+                                 result_t<detail::backend::raw_request_completion_t> settled);
     void trace_admission_phase (const std::vector<std::uint8_t> &node_routing_id,
                                 std::uint64_t lifecycle_generation,
                                 protocol::command command,

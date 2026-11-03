@@ -75,10 +75,11 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     void seal_application_dispatch () noexcept;
     bool
     wait_for_accepted_callbacks_until (std::chrono::steady_clock::time_point deadline) noexcept;
-    void stop ();
+    void request_stop () noexcept;
+    void stop (std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     bool empty () const noexcept;
     bool publish_descriptor_state (framework_runtime_state_t state) noexcept;
-    bool republish_after_store_recovery (
+    task_t<bool> republish_after_store_recovery (
       location_write_intent_t intent = location_write_intent_t::new_claim);
 
     client_server_channel_snapshot_t snapshot (std::string channel_name) const override;
@@ -116,6 +117,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
                             const raw_client_server_client_t::transport_turn_t &transport_turn);
     bool
     request_publication (location_write_intent_t intent = location_write_intent_t::renew) noexcept;
+    task_t<bool> request_publication_task (location_write_intent_t intent);
     task_t<void> request_transport_turn (std::function<void ()> work);
     void run_transport_turns ();
     task_t<bool> publish_servers_task (location_write_intent_t intent);
@@ -129,7 +131,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     drain_server_owner (std::shared_ptr<raw_client_server_server_t> server, std::string owner);
     task_t<void> dispatch_server_record (std::shared_ptr<raw_client_server_server_t> server,
                                          mesh::service_mailbox_record_t record);
-    void stop_servers ();
+    void stop_servers (std::chrono::steady_clock::time_point deadline);
     void stop_clients ();
 
     task_t<void> send (const std::string &channel_name,
@@ -205,7 +207,7 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::unique_ptr<zlink::poller_t> _transport_poller;
     std::shared_ptr<eventing::runtime_wake_timer_t> _wake_timer =
       std::make_shared<eventing::runtime_wake_timer_t> ();
-    std::shared_ptr<std::atomic_bool> _stop = std::make_shared<std::atomic_bool> (false);
+    std::shared_ptr<std::stop_source> _stop = std::make_shared<std::stop_source> ();
     // Guards short updates only and is never held across a wait: queued worker
     // requests, _active_application_drains, server_entry_t::pump_task and publication of
     // pump_task_state_t::task. The worker owns poller changes and publication.

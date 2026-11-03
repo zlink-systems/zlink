@@ -19,8 +19,9 @@ import {
 } from './channel-receive-task-tracker';
 import { ApplicationJobQueue, type ApplicationJobQueuePermit } from '../host/application-job-queue';
 import {
-  bindApplicationJobPermit,
-  runWithApplicationJobPermit
+  enterApplicationJobPermitScope,
+  leaveApplicationJobPermitScope,
+  releaseApplicationJobPermitTurn
 } from '../application-jobs/application-job-queue-scope';
 import {
   ZLinkSerialExecutionQueue,
@@ -29,20 +30,45 @@ import {
 
 export function createChannelApplicationDispatchQueue(): ZLinkSerialExecutionQueue {
   return new ZLinkSerialExecutionQueue(async (record: ZLinkSerialWorkRecord<unknown>) => {
+    const permit = record.context as ApplicationJobQueuePermit;
+    const previousPermit = enterApplicationJobPermitScope(permit);
     try {
       void Promise.resolve(record.operation()).then(
         (value) => {
-          record.resolve(value);
-          record.release();
+          try {
+            record.resolve(value);
+          } finally {
+            try {
+              record.release();
+            } finally {
+              releaseApplicationJobPermitTurn(permit);
+            }
+          }
         },
         (error) => {
-          record.reject(error);
-          record.release();
+          try {
+            record.reject(error);
+          } finally {
+            try {
+              record.release();
+            } finally {
+              releaseApplicationJobPermitTurn(permit);
+            }
+          }
         }
       );
     } catch (error) {
-      record.reject(error);
-      record.release();
+      try {
+        record.reject(error);
+      } finally {
+        try {
+          record.release();
+        } finally {
+          releaseApplicationJobPermitTurn(permit);
+        }
+      }
+    } finally {
+      leaveApplicationJobPermitScope(previousPermit);
     }
   });
 }
@@ -79,7 +105,8 @@ interface ZLinkChannelRequestDispatchLoop {
       reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
     },
     signal?: AbortSignal,
-    decodedHeader?: ZLinkChannelEnvelopeHeader
+    decodedHeader?: ZLinkChannelEnvelopeHeader,
+    receivedAt?: Date
   ): Promise<boolean | void>;
 }
 
@@ -87,7 +114,8 @@ interface ZLinkChannelPublishDispatchLoop {
   dispatch(
     topicMessage: { readonly topic: string; readonly parts: readonly Message[] },
     signal?: AbortSignal,
-    decodedHeader?: ZLinkChannelEnvelopeHeader
+    decodedHeader?: ZLinkChannelEnvelopeHeader,
+    receivedAt?: Date
   ): Promise<void>;
 }
 
@@ -118,7 +146,8 @@ interface ZLinkRoutePacketDispatchLoop {
     },
     signal?: AbortSignal,
     decodedHeader?: ZLinkChannelEnvelopeHeader,
-    infrastructureChecked?: boolean
+    infrastructureChecked?: boolean,
+    receivedAt?: Date
   ): Promise<boolean | void>;
 }
 
@@ -240,7 +269,8 @@ export class ZLinkChannelReceiveLoop {
     private readonly applicationJobQueue: ApplicationJobQueue,
     reportError?: ZLinkReceiveTaskErrorReporter,
     private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator,
-    private readonly applicationDispatchQueue = createChannelApplicationDispatchQueue()
+    private readonly applicationDispatchQueue = createChannelApplicationDispatchQueue(),
+    private readonly receivedAtClock: () => Date = () => new Date()
   ) {
     this.inFlight = new ZLinkReceiveTaskTracker(reportError);
     this.receiveOwner = roundRobin?.register() ?? Symbol('channel-receive-owner');
@@ -304,6 +334,7 @@ export class ZLinkChannelReceiveLoop {
                 this.roundRobin?.setReady(this.receiveOwner, false);
                 break;
               }
+              const receivedAt = this.receivedAtClock();
               const receivedBytes = messageBytes(received.parts);
               let classification: ReturnType<ZLinkChannelReceiveLoop['classify']>;
               try {
@@ -322,12 +353,18 @@ export class ZLinkChannelReceiveLoop {
                 break;
               } else {
                 applicationJobPermit.markApplicationQueued();
-                const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-                  this.applicationDispatchQueue.submitPreAdmitted(
-                    bindApplicationJobPermit(() =>
-                      this.dispatchAndClose(received, signal, classification.decodedHeader, true)
-                    )
-                  )
+                const task = this.applicationDispatchQueue.submitPreAdmitted(
+                  () =>
+                    this.dispatchAndClose(
+                      received,
+                      signal,
+                      classification.decodedHeader,
+                      true,
+                      undefined,
+                      receivedAt
+                    ),
+                  undefined,
+                  applicationJobPermit
                 );
                 this.inFlight.track(task);
               }
@@ -374,7 +411,8 @@ export class ZLinkChannelReceiveLoop {
     signal?: AbortSignal,
     decodedHeader?: ZLinkChannelEnvelopeHeader,
     infrastructureChecked = false,
-    releaseRawReceive?: () => void
+    releaseRawReceive?: () => void,
+    receivedAt: Date = this.receivedAtClock()
   ): Promise<void> {
     let closeReceived = true;
     try {
@@ -386,7 +424,13 @@ export class ZLinkChannelReceiveLoop {
         }
         decodedHeader = classification.decodedHeader;
       }
-      const consumed = await this.dispatcher.dispatch(received, this.router, signal, decodedHeader);
+      const consumed = await this.dispatcher.dispatch(
+        received,
+        this.router,
+        signal,
+        decodedHeader,
+        receivedAt
+      );
       if (consumed === true) {
         closeReceived = false;
       }
@@ -452,7 +496,8 @@ export class ZLinkSubscriberReceiveLoop {
     ) => boolean | ZLinkSubscriberInfrastructureResult,
     private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator,
     reportError?: ZLinkReceiveTaskErrorReporter,
-    private readonly applicationDispatchQueue = createChannelApplicationDispatchQueue()
+    private readonly applicationDispatchQueue = createChannelApplicationDispatchQueue(),
+    private readonly receivedAtClock: () => Date = () => new Date()
   ) {
     this.inFlight = new ZLinkReceiveTaskTracker(reportError);
     this.poller = adapter.createReadablePoller(subscriber);
@@ -523,6 +568,7 @@ export class ZLinkSubscriberReceiveLoop {
         if (!(await this.poller.waitForReadable(capacitySignal))) break;
         continue;
       }
+      const receivedAt = this.receivedAtClock();
       const receivedBytes = messageBytes(topicMessage.parts as readonly Message[]);
       let classification: ReturnType<ZLinkSubscriberReceiveLoop['classify']>;
       try {
@@ -551,12 +597,18 @@ export class ZLinkSubscriberReceiveLoop {
         break;
       }
       applicationJobPermit.markApplicationQueued();
-      const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-        this.applicationDispatchQueue.submitPreAdmitted(
-          bindApplicationJobPermit(() =>
-            this.dispatchAndClose(topicMessage, signal, classification.decodedHeader, true)
-          )
-        )
+      const task = this.applicationDispatchQueue.submitPreAdmitted(
+        () =>
+          this.dispatchAndClose(
+            topicMessage,
+            signal,
+            classification.decodedHeader,
+            true,
+            undefined,
+            receivedAt
+          ),
+        undefined,
+        applicationJobPermit
       );
       releaseRawReceive();
       this.inFlight.track(task);
@@ -593,7 +645,8 @@ export class ZLinkSubscriberReceiveLoop {
     signal?: AbortSignal,
     decodedHeader?: ZLinkChannelEnvelopeHeader,
     infrastructureChecked = false,
-    releaseRawReceive?: () => void
+    releaseRawReceive?: () => void,
+    receivedAt: Date = this.receivedAtClock()
   ): Promise<void> {
     try {
       if (!infrastructureChecked) {
@@ -601,7 +654,7 @@ export class ZLinkSubscriberReceiveLoop {
         if (classification.kind === 'consumed') return;
         decodedHeader = classification.decodedHeader;
       }
-      await this.dispatcher.dispatch(topicMessage, signal, decodedHeader);
+      await this.dispatcher.dispatch(topicMessage, signal, decodedHeader, receivedAt);
     } finally {
       releaseRawReceive?.();
       closeMessages(topicMessage.parts as readonly Message[]);
@@ -650,7 +703,8 @@ export class ZLinkRouteReceiveLoop {
     private readonly applicationJobQueue: ApplicationJobQueue,
     private readonly roundRobin?: ZLinkReceiveRoundRobinCoordinator,
     reportError?: ZLinkReceiveTaskErrorReporter,
-    private readonly applicationDispatchQueue = createChannelApplicationDispatchQueue()
+    private readonly applicationDispatchQueue = createChannelApplicationDispatchQueue(),
+    private readonly receivedAtClock: () => Date = () => new Date()
   ) {
     this.inFlight = new ZLinkReceiveTaskTracker(reportError);
     this.receiveOwner = roundRobin?.register() ?? Symbol('route-receive-owner');
@@ -712,6 +766,7 @@ export class ZLinkRouteReceiveLoop {
         if (!(await this.poller.waitForReadable(capacitySignal))) break;
         continue;
       }
+      const receivedAt = this.receivedAtClock();
       const receivedBytes = messageBytes(received.parts);
       let infrastructure: boolean | Promise<void> | undefined;
       try {
@@ -763,10 +818,10 @@ export class ZLinkRouteReceiveLoop {
         break;
       }
       applicationJobPermit.markApplicationQueued();
-      const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-        this.applicationDispatchQueue.submitPreAdmitted(
-          bindApplicationJobPermit(() => this.dispatchAndClose(received, signal, true))
-        )
+      const task = this.applicationDispatchQueue.submitPreAdmitted(
+        () => this.dispatchAndClose(received, signal, true, undefined, receivedAt),
+        undefined,
+        applicationJobPermit
       );
       releaseRawReceive();
       this.inFlight.track(task);
@@ -808,7 +863,8 @@ export class ZLinkRouteReceiveLoop {
     },
     signal?: AbortSignal,
     infrastructureChecked = false,
-    releaseRawReceive?: () => void
+    releaseRawReceive?: () => void,
+    receivedAt: Date = this.receivedAtClock()
   ): Promise<void> {
     let closeReceived = true;
     try {
@@ -817,7 +873,8 @@ export class ZLinkRouteReceiveLoop {
         this.router,
         signal,
         tryDecodeChannelHeader(received.parts, this.dispatcher.flowEnabled?.() ?? true),
-        infrastructureChecked
+        infrastructureChecked,
+        receivedAt
       );
       if (consumed === true) {
         closeReceived = false;

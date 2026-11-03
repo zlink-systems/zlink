@@ -11,7 +11,7 @@ const {
 } = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
 const {
   ServiceStatefulRuntime
-} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   SERVICE_WIRE_REQUIRED_CAPABILITY
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');

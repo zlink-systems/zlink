@@ -608,7 +608,7 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
     }
   }
 
-  private evaluatePressure(): void {
+  evaluatePressure(): void {
     const next =
       this.pressureStateValue === 'running'
         ? this.permitsInUse() >= this.pauseCount

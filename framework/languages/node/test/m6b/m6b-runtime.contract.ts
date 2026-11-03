@@ -14,6 +14,7 @@ import './m6b-execution-policy.contract';
 import './m6b-serial-execution-conformance.contract';
 import './m6b-user-spot-terminal-replay.contract';
 import './m6b-session-owner-identity.contract';
+import './m6b-duplicate-bind.contract';
 
 import {
   Message,
@@ -67,7 +68,7 @@ import {
   type ServiceAsyncInstanceActivationAuthority,
   type ServiceInstanceActivationAuthority,
   type ServiceSessionOwnerToken
-} from '../../packages/framework/src/runtime/foundation/service-stateful-runtime';
+} from '../../packages/framework/src/internal';
 import {
   ServiceStaleGenerationError,
   ServiceStatefulRegistry,
@@ -1754,6 +1755,163 @@ test('remote Actor request is fenced as moving when the target mailbox rejects a
     terminalResult: RequestResult.Conflict,
     failureCode: 34
   });
+  runtime.close();
+});
+
+test('Actor owner admits only increasing relayed session sequences and reports stale terminals', async () => {
+  let ingress:
+    | ((
+        record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime').RawServiceIngressRecord
+      ) => unknown)
+    | undefined;
+  const queued: unknown[] = [];
+  const replies: Buffer[][] = [];
+  const dispatchErrors: Array<{
+    surface: string;
+    messageKind: string;
+    reason: string;
+    action: string;
+  }> = [];
+  const dropped: Array<{
+    outcome: string;
+    surface: string;
+    messageKind: string;
+    errorReason: string;
+    packetName?: string;
+    correlationId?: string;
+    streamSessionId?: string;
+  }> = [];
+  const raw = {
+    mailbox: { tryEnqueue: (record: unknown) => (queued.push(record), true) },
+    topology: { peer: () => ({ descriptor: { lifecycleGeneration: 7n } }) },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
+    setServiceIngress(handler: typeof ingress) {
+      ingress = (record) => handler!(withIngressOwner(record));
+    },
+    replyService(_record: unknown, parts: readonly Buffer[]) {
+      replies.push([...parts]);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'actor-owner', 3n);
+  const actor = runtime.createActor('relay-sequence-actor');
+  let binding = {
+    actor: actor.ref,
+    sessionRid: 'session-rid',
+    sessionOwnerNodeRid: 'session-owner',
+    sessionOwnerNodeGeneration: 7n,
+    bindingGeneration: 33n,
+    membershipEpoch: actor.membershipEpoch
+  };
+  runtime.registry.installSessionBinding(binding);
+  runtime.setDispatchErrorReporter(
+    {
+      captureEnabled: () => true,
+      report: (event: (typeof dispatchErrors)[number]) => dispatchErrors.push(event),
+      flow: {
+        accepts: () => true,
+        trace: (event: (typeof dropped)[number]) => dropped.push(event)
+      }
+    } as unknown as ZLinkDispatchErrorReporter,
+    'test-mesh'
+  );
+
+  const send = async (kind: 'actorSend' | 'actorRequest', sequence: bigint, correlation: bigint) =>
+    ingress?.({
+      command:
+        kind === 'actorSend' ? M6bServiceWireCommand.actorSend : M6bServiceWireCommand.actorRequest,
+      flags: 0,
+      sourceRoutingId: 'session-owner',
+      sourceNodeGeneration: 7n,
+      requestSequence: kind === 'actorRequest' ? correlation : undefined,
+      parts: [
+        encodeActorHeader(
+          kind,
+          {
+            actor: actor.ref,
+            targetNodeGeneration: 3n,
+            authorityOwnerGeneration: actor.authorityOwnerGeneration,
+            ownerLeaseGeneration: 3n
+          },
+          kind === 'actorRequest' ? correlation : undefined,
+          undefined,
+          { sessionRid: binding.sessionRid, bindingGeneration: binding.bindingGeneration, sequence }
+        ),
+        encodeApplicationPayload({
+          packetName: kind === 'actorRequest' ? 'StaleRelayRequest' : 'StaleRelaySend',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('payload')
+        })
+      ]
+    });
+
+  assert.equal(await send('actorSend', 5n, 91n), 'application');
+  assert.equal(await send('actorSend', 5n, 92n), 'application');
+  assert.equal(await send('actorRequest', 4n, 93n), 'infrastructure');
+  assert.equal(await send('actorRequest', 6n, 94n), 'application');
+  assert.equal(queued.length, 2);
+  assert.equal(replies.length, 1);
+  assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 93n, 'actorRequest'), {
+    correlation: 93n,
+    terminalResult: RequestResult.InvalidState,
+    failureCode: ServiceWireFrameworkErrorCode.none
+  });
+  assert.deepEqual(
+    dispatchErrors.map(({ surface, messageKind, reason, action }) => ({
+      surface,
+      messageKind,
+      reason,
+      action
+    })),
+    [
+      {
+        surface: 'streamSession',
+        messageKind: 'request',
+        reason: 'stale_target',
+        action: 'reply_error'
+      }
+    ]
+  );
+  assert.deepEqual(
+    dropped.map(
+      ({
+        outcome,
+        surface,
+        messageKind,
+        errorReason,
+        packetName,
+        correlationId,
+        streamSessionId
+      }) => ({
+        outcome,
+        surface,
+        messageKind,
+        errorReason,
+        ...(packetName === undefined ? {} : { packetName }),
+        ...(correlationId === undefined ? {} : { correlationId }),
+        ...(streamSessionId === undefined ? {} : { streamSessionId })
+      })
+    ),
+    [
+      {
+        outcome: 'dropped',
+        surface: 'streamSession',
+        messageKind: 'send',
+        errorReason: 'stale_target',
+        packetName: 'StaleRelaySend',
+        streamSessionId: 'session-rid'
+      }
+    ]
+  );
+
+  binding = { ...binding, bindingGeneration: 34n };
+  runtime.registry.installSessionBinding(binding);
+  assert.equal(await send('actorSend', 1n, 95n), 'application');
+  assert.equal(queued.length, 3);
+  assert.equal(runtime.registry.unbindSession(actor.ref, 34n), true);
   runtime.close();
 });
 

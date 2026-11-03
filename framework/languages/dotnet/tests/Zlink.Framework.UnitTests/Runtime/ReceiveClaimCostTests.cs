@@ -91,35 +91,28 @@ public sealed class ReceiveClaimCostTests(Xunit.Abstractions.ITestOutputHelper o
         const int iterations = 1000;
         var actualSamples = new List<long>();
         var baselineSamples = new List<long>();
-        var warmupStart = GC.GetTotalAllocatedBytes(precise: true);
         for (var index = 0; index < warmup; index++)
         {
             completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
             source.Publish();
             await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
-        var warmupBytes = GC.GetTotalAllocatedBytes(precise: true) - warmupStart;
-        var noGcBudget = checked(warmupBytes * ((iterations + warmup - 1) / warmup));
         Assert.Equal(request ? batchSize * warmup : 0, replies);
-        await PerCallAllocation.MeasureWindowAsync(
-            async () =>
+        var beforeReplies = replies;
+        for (var index = 0; index < iterations; index++)
+        {
+            completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            // A background GC can add per-thread allocation-counter noise to this sample.
+            var collections = PerCallAllocation.CollectionCounts();
+            source.Publish();
+            var measured = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (PerCallAllocation.CollectionCountsUnchanged(collections))
             {
-                actualSamples.Clear();
-                baselineSamples.Clear();
-                var beforeReplies = replies;
-                for (var index = 0; index < iterations; index++)
-                {
-                    completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                    source.Publish();
-                    var measured = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                    actualSamples.Add(measured.Actual);
-                    baselineSamples.Add(measured.Baseline);
-                }
-                Assert.Equal(request ? batchSize * iterations : 0, replies - beforeReplies);
-                return 0;
-            },
-            noGcBudget
-        );
+                actualSamples.Add(measured.Actual);
+                baselineSamples.Add(measured.Baseline);
+            }
+        }
+        Assert.Equal(request ? batchSize * iterations : 0, replies - beforeReplies);
         var allocated = PerCallAllocation.MinWindow(actualSamples);
         var baselineBytes = PerCallAllocation.MinWindow(baselineSamples);
         output.WriteLine(

@@ -23,6 +23,7 @@
 #include <variant>
 #include <string>
 #include <string_view>
+#include <stop_token>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -102,6 +103,21 @@ class actor_client_t;
 class route_client_t;
 class actor_context_t;
 
+struct actor_session_binding_identity_t
+{
+    node_rid_t session_owner_node_rid;
+    std::uint64_t session_owner_node_generation = 0;
+    std::uint64_t binding_generation = 0;
+
+    friend bool operator== (const actor_session_binding_identity_t &left,
+                            const actor_session_binding_identity_t &right) noexcept
+    {
+        return left.session_owner_node_rid.value () == right.session_owner_node_rid.value ()
+               && left.session_owner_node_generation == right.session_owner_node_generation
+               && left.binding_generation == right.binding_generation;
+    }
+};
+
 struct actor_join_accepted_t
 {
     std::uint64_t operation_id_high = 0;
@@ -157,6 +173,14 @@ class actor_t
     virtual task_t<void> on_join_completed (const actor_join_completion_t &)
     {
         return task_t<void> (result_t<void>::success ());
+    }
+    virtual task_t<std::optional<std::string>>
+    on_duplicate_bind (const actor_session_binding_identity_t &,
+                       const actor_session_binding_identity_t &,
+                       std::stop_token)
+    {
+        return task_t<std::optional<std::string>> (
+          result_t<std::optional<std::string>>::success (std::nullopt));
     }
 };
 
@@ -964,6 +988,7 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory (
           created->configure ();
           return std::static_pointer_cast<void> (std::move (created));
       },
+      [] (void *actor) -> actor_t * { return static_cast<TActor *> (actor); },
       [] (void *actor, detail::actor_join_completion_outcome_t outcome,
           std::uint64_t operation_id_high, std::uint64_t operation_id_low,
           const actor_ref_t *committed, const std::optional<message_t> &reply,
@@ -972,7 +997,9 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory (
             outcome, operation_id_high, operation_id_low, committed, reply, error_kind);
           return static_cast<TActor *> (actor)->on_join_completed (completion);
       },
-      relocation, std::move (capture), std::move (restore));
+      relocation, std::move (capture), std::move (restore),
+      std::is_same_v<decltype (&TActor::on_duplicate_bind),
+                     decltype (&actor_t::on_duplicate_bind)>);
 }
 
 } // namespace zlink::framework

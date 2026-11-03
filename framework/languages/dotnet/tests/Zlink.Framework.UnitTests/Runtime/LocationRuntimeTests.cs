@@ -115,21 +115,22 @@ public sealed class LocationRuntimeTests
     [Fact]
     public async Task ClaimExhaustingTheRenewDeadline_DoesNotStartConfirmationRead()
     {
+        var time = new ControllableTimeProvider();
+        var timeout = TimeSpan.FromMilliseconds(25);
         var store = new NonCooperativeClaimStore();
         var runtime = new ZLinkLocationRuntime(
-            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25) },
-            store
+            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = timeout },
+            store,
+            time
         );
-        var startedAt = Stopwatch.GetTimestamp();
 
-        var renewed = await runtime
-            .RenewOwnerLeaseOnceAsync()
-            .AsTask()
-            .WaitAsync(TimeSpan.FromSeconds(1));
-
-        Assert.False(renewed);
+        var renew = runtime.RenewOwnerLeaseOnceAsync().AsTask();
+        Assert.False(renew.IsCompleted);
         Assert.Equal(0, store.ReadCalls);
-        Assert.True(Stopwatch.GetElapsedTime(startedAt) < TimeSpan.FromMilliseconds(500));
+        time.Advance(timeout);
+        Assert.False(await renew.WaitAsync(TimeSpan.FromSeconds(1)));
+        Assert.Equal(0, store.ReadCalls);
+        Assert.Equal(0, time.ActiveTimerCount);
     }
 
     [Fact]
@@ -476,7 +477,8 @@ public sealed class LocationRuntimeTests
     [Fact]
     public async Task Startup_Cancellation_ReleasesACommittedClaim_AndDoesNotStartHeartbeat()
     {
-        var inner = new ZLinkInMemoryLocationStore();
+        var time = new ControllableTimeProvider();
+        var inner = new ZLinkInMemoryLocationStore(time);
         var store = new CancelAfterCommittedClaimStore(inner);
         var runtime = new ZLinkLocationRuntime(
             new ZLinkLocationOptions
@@ -484,7 +486,8 @@ public sealed class LocationRuntimeTests
                 OwnerLeaseRenewTimeout = TimeSpan.FromSeconds(1),
                 OwnerLeaseRenewInterval = TimeSpan.FromHours(1),
             },
-            store
+            store,
+            time
         );
         using var cancellation = new CancellationTokenSource();
 
@@ -492,13 +495,12 @@ public sealed class LocationRuntimeTests
             .StartAsync(RoutingId.From("cancelled-claim-node"), cancellation.Token)
             .AsTask();
         await store.ClaimStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
-        var startedAt = Stopwatch.GetTimestamp();
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             start.WaitAsync(TimeSpan.FromMilliseconds(500))
         );
-        Assert.True(Stopwatch.GetElapsedTime(startedAt) < TimeSpan.FromMilliseconds(500));
+        Assert.Equal(0, time.ActiveTimerCount);
         Assert.Equal(1, store.ReadCalls);
         Assert.Equal(1, store.ReleaseCalls);
         Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(

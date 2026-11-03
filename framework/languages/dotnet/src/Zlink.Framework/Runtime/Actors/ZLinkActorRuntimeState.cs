@@ -23,7 +23,7 @@ internal sealed class ZLinkActorRuntimeState(
         2
     );
     private static readonly AsyncLocal<DispatchOwnership?> AmbientDispatch = new();
-    private readonly ZLinkActorSerialExecutor _dispatchMailbox = dispatchMailbox ?? new();
+    internal readonly ZLinkActorSerialExecutor _dispatchMailbox = dispatchMailbox ?? new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
@@ -309,7 +309,7 @@ internal sealed class ZLinkActorRuntimeState(
 
     private volatile ZLinkActorDestroyPhase _destroyPhase;
     private volatile bool _reservedCreationPending;
-    private int _deferredJoinPending;
+    internal int _deferredJoinPending;
 
     public bool IsDispatchBlocked =>
         _destroyPhase != ZLinkActorDestroyPhase.None || _reservedCreationPending;
@@ -560,7 +560,13 @@ internal sealed class ZLinkActorRuntimeState(
             {
                 if (SameBindingToken(current, replacement))
                 {
-                    _boundSession = replacement;
+                    _boundSession = replacement with
+                    {
+                        AcceptedHighWater = Math.Max(
+                            current.AcceptedHighWater,
+                            replacement.AcceptedHighWater
+                        ),
+                    };
                     return current;
                 }
                 RememberRetiredSessionBinding(current);
@@ -829,12 +835,12 @@ internal sealed class ZLinkActorRuntimeState(
     // A relayed frame carries the sequence assigned by the Session owner.
     // That value is authoritative across relay hops; incrementing it at
     // every hop counts one accepted frame more than once.
-    public void RecordRelocatedSessionAccepted(RoutingId sessionRid, ulong acceptedHighWater)
+    public bool RecordRelocatedSessionAccepted(RoutingId sessionRid, ulong acceptedHighWater)
     {
         if (acceptedHighWater == 0)
-            return;
+            return false;
 
-        RunState(() =>
+        return RunState(() =>
         {
             if (
                 _pendingSessionRoute is { } pending
@@ -843,12 +849,12 @@ internal sealed class ZLinkActorRuntimeState(
             )
             {
                 if (acceptedHighWater <= pending.Route.AcceptedHighWater)
-                    return;
+                    return false;
                 _pendingSessionRoute = pending with
                 {
                     Route = pending.Route with { AcceptedHighWater = acceptedHighWater },
                 };
-                return;
+                return true;
             }
 
             if (
@@ -856,8 +862,9 @@ internal sealed class ZLinkActorRuntimeState(
                 || current.SessionRid != sessionRid
                 || acceptedHighWater <= current.AcceptedHighWater
             )
-                return;
+                return false;
             _boundSession = current with { AcceptedHighWater = acceptedHighWater };
+            return true;
         });
     }
 
@@ -1969,18 +1976,14 @@ internal readonly record struct ZLinkActorBoundSession(
     internal bool IsSamePhysicalSessionOwner(
         RoutingId sessionNodeRid,
         ulong sessionOwnerNodeGeneration,
-        RoutingId sessionRid,
-        string sessionOwnerId,
-        ulong sessionOwnerLeaseGeneration
+        RoutingId sessionRid
     )
     {
         if (SessionNodeRid is not { } previousNodeRid)
             return false;
         return previousNodeRid == sessionNodeRid
             && SessionOwnerNodeGeneration == sessionOwnerNodeGeneration
-            && SessionRid == sessionRid
-            && string.Equals(SessionOwnerId, sessionOwnerId, StringComparison.Ordinal)
-            && SessionOwnerLeaseGeneration == sessionOwnerLeaseGeneration;
+            && SessionRid == sessionRid;
     }
 }
 

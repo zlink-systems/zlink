@@ -1045,9 +1045,11 @@ internal abstract partial class ZLinkSpotActivation
     internal ValueTask<bool> HasPendingCreationIntentOrSealAdmissionAsync() =>
         _serial.HasPendingAcceptedStateOrCloseApplicationAdmissionAsync(PendingCreationIntent());
 
-    private static Func<object, bool> PendingCreationIntent()
+    private Func<object, bool> PendingCreationIntent()
     {
-        var now = checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var now = checked(
+            (ulong)_runtime.Registration.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+        );
         return state =>
             state is DurableActivationDispatch pending
             && (pending.Operation is null || pending.Operation.Value.DeadlineUnixMs > now);
@@ -1679,7 +1681,9 @@ internal abstract partial class ZLinkSpotActivation
         if (
             originalOperation is { } operation
             && operation.DeadlineUnixMs
-                <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                <= checked(
+                    (ulong)_runtime.Registration.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+                )
         )
         {
             received.Dispose();

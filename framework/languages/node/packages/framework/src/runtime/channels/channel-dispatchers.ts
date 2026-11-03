@@ -50,6 +50,7 @@ import {
 export interface ZLinkChannelRequestDispatcherOptions {
   readonly meshName?: string;
   readonly channelName: string;
+  readonly receivedAtClock?: () => Date;
   /**
    * Mesh channels use the routed message context so a handler can associate
    * a report with the node that sent it.
@@ -124,7 +125,8 @@ export class ZLinkChannelRequestDispatcher {
       reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
     },
     signal?: AbortSignal,
-    decodedHeader?: ZLinkChannelEnvelopeHeader
+    decodedHeader?: ZLinkChannelEnvelopeHeader,
+    receivedAt: Date = this.options.receivedAtClock?.() ?? new Date()
   ): Promise<boolean | void> {
     if (received.spotId !== null && received.spotId !== undefined) {
       if (received.send === undefined) {
@@ -185,7 +187,8 @@ export class ZLinkChannelRequestDispatcher {
         contentType: envelope.header.contentType,
         packetName,
         metadata: zlinkMessageMetadata(envelope.header.metadata),
-        correlationId
+        correlationId,
+        receivedAt
       };
       await this.pipeline.dispatchOneWay({
         fields,
@@ -221,7 +224,8 @@ export class ZLinkChannelRequestDispatcher {
       contentType: envelope.header.contentType,
       packetName,
       metadata: zlinkMessageMetadata(envelope.header.metadata),
-      correlationId
+      correlationId,
+      receivedAt
     };
     await this.pipeline.dispatchRequest({
       fields: requestFields,
@@ -301,7 +305,7 @@ export class ZLinkChannelRequestDispatcher {
           codecs: this.options.codecs,
           handler: handler?.handler,
           messageType: handler?.messageType,
-          context: this.createMeshContext(envelope, record.sourceNodeRid),
+          context: this.createMeshContext(envelope, record.sourceNodeRid, record.receivedAt),
           signal
         },
         admit
@@ -323,7 +327,7 @@ export class ZLinkChannelRequestDispatcher {
         envelope,
         this.options.codecs,
         this.options.handlers.get(packetName),
-        this.createMeshContext(envelope, record.sourceNodeRid),
+        this.createMeshContext(envelope, record.sourceNodeRid, record.receivedAt),
         signal,
         record,
         'channel',
@@ -346,7 +350,8 @@ export class ZLinkChannelRequestDispatcher {
 
   private createMeshContext(
     envelope: ReturnType<typeof decodeChannelEnvelope>,
-    sourceNodeRid: unknown
+    sourceNodeRid: unknown,
+    receivedAt?: Date
   ): ZLinkMessageContext {
     const base = {
       meshName: this.options.meshName,
@@ -354,7 +359,8 @@ export class ZLinkChannelRequestDispatcher {
       contentType: envelope.header.contentType,
       packetName: envelope.packetName!,
       metadata: zlinkMessageMetadata(envelope.header.metadata),
-      correlationId: envelope.header.correlationId ?? undefined
+      correlationId: envelope.header.correlationId ?? undefined,
+      receivedAt: receivedAt ?? this.options.receivedAtClock?.() ?? new Date()
     };
     if (this.options.routeMesh !== true) {
       return base;
@@ -424,6 +430,7 @@ function requireMeshReplyAccepted(result: number): void {
 export interface ZLinkChannelPublishDispatcherOptions {
   readonly meshName?: string;
   readonly channelName: string;
+  readonly receivedAtClock?: () => Date;
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly dispatchErrors: ZLinkDispatchErrorReporter;
   readonly handlers: ReadonlyMap<
@@ -455,7 +462,8 @@ export class ZLinkChannelPublishDispatcher {
   async dispatch(
     topicMessage: { readonly topic: string; readonly parts: readonly Message[] },
     signal?: AbortSignal,
-    decodedHeader?: ZLinkChannelEnvelopeHeader
+    decodedHeader?: ZLinkChannelEnvelopeHeader,
+    receivedAt: Date = this.options.receivedAtClock?.() ?? new Date()
   ): Promise<void> {
     if (topicMessage.parts.length === 0 || topicMessage.parts[0].data().length === 0) {
       return;
@@ -507,7 +515,8 @@ export class ZLinkChannelPublishDispatcher {
       topic: publishTopic,
       source: publishSource,
       metadata: zlinkMessageMetadata(envelope.header.metadata),
-      correlationId: publishCorr
+      correlationId: publishCorr,
+      receivedAt
     };
     await this.pipeline.dispatchOneWay({
       fields,
@@ -523,6 +532,7 @@ export class ZLinkChannelPublishDispatcher {
 
 export interface ZLinkRoutePacketDispatcherOptions {
   readonly routerChannelId: string;
+  readonly receivedAtClock?: () => Date;
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly dispatchErrors: ZLinkDispatchErrorReporter;
   readonly handlers: readonly ZLinkRouteHandlerRegistration[];
@@ -557,11 +567,13 @@ export class ZLinkRoutePacketDispatcher {
     Pick<ZLinkRequestDispatch<ZLinkRouteMessageContext>, 'handler' | 'messageType'>
   >();
   private readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
+  private readonly receivedAtClock: () => Date;
   private readonly pipeline: ZLinkChannelDispatchPipeline;
 
   constructor(options: ZLinkRoutePacketDispatcherOptions) {
     this.routerChannelId = options.routerChannelId;
     this.codecs = options.codecs;
+    this.receivedAtClock = options.receivedAtClock ?? (() => new Date());
     this.dispatchErrors = options.dispatchErrors;
     this.pipeline = new ZLinkChannelDispatchPipeline({
       dispatchErrors: options.dispatchErrors,
@@ -635,7 +647,8 @@ export class ZLinkRoutePacketDispatcher {
     },
     signal?: AbortSignal,
     decodedHeader?: ZLinkChannelEnvelopeHeader,
-    infrastructureChecked = false
+    infrastructureChecked = false,
+    receivedAt: Date = this.receivedAtClock()
   ): Promise<boolean | void> {
     const channelHeader =
       decodedHeader ?? tryDecodeChannelHeader(received.parts, this.flowEnabled());
@@ -699,7 +712,7 @@ export class ZLinkRoutePacketDispatcher {
         codecs: codecsForFrameworkPacket(packetName, this.codecs),
         handler: handler?.handler,
         messageType: handler?.messageType,
-        context: this.createRouteContext(envelope, received.routingId),
+        context: this.createRouteContext(envelope, received.routingId, receivedAt),
         signal
       });
       return;
@@ -738,7 +751,7 @@ export class ZLinkRoutePacketDispatcher {
       codecs,
       handler: handler?.handler,
       messageType: handler?.messageType,
-      context: this.createRouteContext(envelope, received.routingId),
+      context: this.createRouteContext(envelope, received.routingId, receivedAt),
       signal,
       missingHandlerMessage: `No routed request handler is registered for '${this.routerChannelId}:${packetName}'.`,
       writeReply: (reply) =>
@@ -801,7 +814,8 @@ export class ZLinkRoutePacketDispatcher {
         sourceNodeRid,
         record.sourceNodeRid,
         signal,
-        admit
+        admit,
+        record.receivedAt ?? this.receivedAtClock()
       );
     }
     if (envelope.header.kind !== ZLinkChannelMessageKind.Request) {
@@ -821,7 +835,7 @@ export class ZLinkRoutePacketDispatcher {
         envelope,
         codecsForFrameworkPacket(packetName, this.codecs),
         this.requestHandlers.get(packetName),
-        this.createRouteContext(envelope, record.sourceNodeRid),
+        this.createRouteContext(envelope, record.sourceNodeRid, record.receivedAt),
         signal,
         record,
         'routed',
@@ -836,6 +850,7 @@ export class ZLinkRoutePacketDispatcher {
     sourceNodeRid: RoutingId,
     signal?: AbortSignal
   ): Promise<void> {
+    const receivedAt = this.receivedAtClock();
     if (parts.length === 0 || parts[0].data().length === 0) return;
     let envelope: ReturnType<typeof decodeChannelEnvelope>;
     try {
@@ -864,7 +879,9 @@ export class ZLinkRoutePacketDispatcher {
       packetName,
       String(sourceNodeRid),
       sourceNodeRid,
-      signal
+      signal,
+      undefined,
+      receivedAt
     );
   }
 
@@ -874,7 +891,8 @@ export class ZLinkRoutePacketDispatcher {
     sourceRid: string,
     sourceNodeRid: unknown,
     signal?: AbortSignal,
-    admit?: ZLinkMeshDispatchAdmission
+    admit?: ZLinkMeshDispatchAdmission,
+    receivedAt: Date = this.receivedAtClock()
   ): void | Promise<void> {
     const handler = this.sendHandlers.get(packetName);
     return this.pipeline.dispatchOneWay(
@@ -891,7 +909,7 @@ export class ZLinkRoutePacketDispatcher {
         codecs: codecsForFrameworkPacket(packetName, this.codecs),
         handler: handler?.handler,
         messageType: handler?.messageType,
-        context: this.createRouteContext(envelope, sourceNodeRid),
+        context: this.createRouteContext(envelope, sourceNodeRid, receivedAt),
         signal
       },
       admit
@@ -907,7 +925,8 @@ export class ZLinkRoutePacketDispatcher {
 
   private createRouteContext(
     envelope: ReturnType<typeof decodeChannelEnvelope>,
-    sourceRid: unknown
+    sourceRid: unknown,
+    receivedAt: Date = this.receivedAtClock()
   ): ZLinkRouteMessageContext {
     const sourceNodeRid = String(sourceRid ?? '');
     return {
@@ -916,7 +935,8 @@ export class ZLinkRoutePacketDispatcher {
       contentType: envelope.header.contentType,
       sourceNodeRid,
       metadata: zlinkMessageMetadata(envelope.header.metadata),
-      correlationId: envelope.header.correlationId ?? undefined
+      correlationId: envelope.header.correlationId ?? undefined,
+      receivedAt
     };
   }
 }

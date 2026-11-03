@@ -152,11 +152,23 @@ jobs:
         if: ${{ !inputs.skip_tests && (steps.linux-vcpkg-cache.outputs.cache-hit != 'true') }}
         run: |
           set -euo pipefail
-          "${VCPKG_ROOT}/vcpkg" install \
-            opentelemetry-cpp:x64-linux \
-            'redis-plus-plus[async-std]:x64-linux' \
-            --x-install-root="${VCPKG_INSTALLED_DIR}" \
-            --clean-after-build
+          # Self-hosted runners and local builds share VCPKG_ROOT. vcpkg gives up on its
+          # buildtrees lock after about a second, so wait while another vcpkg holds it;
+          # any other failure still fails the step.
+          log="${RUNNER_TEMP}/vcpkg-install.log"
+          for attempt in $(seq 1 60); do
+            if "${VCPKG_ROOT}/vcpkg" install \
+              opentelemetry-cpp:x64-linux \
+              'redis-plus-plus[async-std]:x64-linux' \
+              --x-install-root="${VCPKG_INSTALLED_DIR}" \
+              --clean-after-build 2>&1 | tee "${log}"; then
+              exit 0
+            fi
+            grep -q 'failed to take lock' "${log}" || exit 1
+            echo "vcpkg lock held by another build; waiting (${attempt}/60)"
+            sleep 30
+          done
+          exit 1
 
       - name: Build the checkout Core package
         if: ${{ !inputs.skip_tests }}
@@ -186,6 +198,15 @@ jobs:
             --core-prefix \
             "${ZLINK_LOCAL_PACKAGE_ROOT}/install/zlink-core/${core_version}"
 
+      - name: Give this runner its own sccache server
+        if: ${{ !inputs.skip_tests }}
+        run: |
+          set -euo pipefail
+          # Self-hosted WSL runners share one user, so the default port would
+          # share one server that dies when the job that started it ends.
+          port="$((4300 + $(printf %s "${RUNNER_NAME}" | cksum | cut -d' ' -f1) % 1000))"
+          echo "SCCACHE_SERVER_PORT=${port}" >> "${GITHUB_ENV}"
+
       - name: Setup sccache
         if: ${{ !inputs.skip_tests }}
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -206,6 +227,8 @@ jobs:
         run: |
           set -euo pipefail
           cmake --preset linux-ninja-release \
+            -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
+            -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \

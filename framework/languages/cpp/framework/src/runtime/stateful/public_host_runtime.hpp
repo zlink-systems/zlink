@@ -342,6 +342,9 @@ struct bound_session_bind_operation_result_t
 {
     stateful::stateful_error_t error = stateful::stateful_error_t::none;
     std::optional<protocol::bound_session_replaced_t> replacement;
+    std::optional<std::uint32_t> terminal_result;
+    std::uint32_t failure_code = 0;
+    std::optional<protocol::stream_bind_reply_tail_t> reply_tail;
 };
 
 struct bound_session_operations_t
@@ -354,12 +357,13 @@ struct bound_session_operations_t
     std::function<task_t<std::optional<location_owner_token_t>> (const zlink::routing_id_t &,
                                                                  std::uint64_t)>
       session_owner;
-    std::function<bound_session_bind_operation_result_t (
+    std::function<task_t<bound_session_bind_operation_result_t> (
       const protocol::bound_session_bind_t &,
       const zlink::routing_id_t &,
       std::uint64_t,
       const location_owner_token_t &,
-      std::function<bool (const protocol::stream_bind_reply_tail_t &)>)>
+      std::function<bool (
+        std::uint32_t, std::uint32_t, std::optional<protocol::stream_bind_reply_tail_t>)>)>
       bind;
     std::function<stateful::stateful_error_t (const protocol::bound_session_send_t &,
                                               std::vector<zlink::message_t>)>
@@ -635,6 +639,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                       std::uint64_t expected_lifecycle_generation,
                       std::string security_identity);
     void forget_peer (const std::string &endpoint, const zlink::routing_id_t &expected);
+    task_t<void> expect_peer_async (std::string endpoint,
+                                    zlink::routing_id_t expected,
+                                    std::uint64_t expected_lifecycle_generation,
+                                    std::string security_identity);
+    task_t<void> forget_peer_async (std::string endpoint, zlink::routing_id_t expected);
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
                           const std::string &endpoint) noexcept;
@@ -686,15 +695,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     using actor_join_relocation_prepare_validator_t =
       std::function<std::optional<bool> (const protocol::relocation_prepare_t &)>;
     using actor_join_recovery_consumer_t =
-      std::function<bool (stateful::frozen_object_state_t &,
-                          const stateful::object_ref_t &,
-                          const protocol::relocation_prepare_t &)>;
+      std::function<task_t<bool> (stateful::frozen_object_state_t &,
+                                  const stateful::object_ref_t &,
+                                  const protocol::relocation_prepare_t &)>;
     /* Cleanup symmetry for the consumer above (15 §4.2: each Actor is
      * admitted independently). Any staging failure after the consumer took
      * the ZLJR record must give the entry back, or every later attempt for
      * that Actor on this node is refused by the leftover. */
     using actor_join_recovery_rollback_t =
-      std::function<void (const std::string &, const stateful::object_ref_t &)>;
+      std::function<task_t<void> (const std::string &, const stateful::object_ref_t &)>;
     using actor_relocation_authority_resolver_t =
       std::function<std::optional<runtime::actor_authority_payload_t> (
         const stateful::object_ref_t &)>;
@@ -832,6 +841,16 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                  const std::vector<zlink::message_t> &parts);
     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
                                                  std::vector<zlink::message_t> &&parts);
+    task_t<zlink::submit_result_t>
+    request_to_node (const zlink::routing_id_t &target,
+                     std::vector<zlink::message_t> parts,
+                     std::chrono::milliseconds timeout,
+                     foundation::operation_registry_t::callback_t completion,
+                     std::shared_ptr<task_completion_source_t<void>> admitted = {});
+    result_t<receive_record_t> decode_operation_record (call_id_t operation,
+                                                        operation_kind_t kind,
+                                                        foundation::operation_terminal_t terminal,
+                                                        const zlink::message_t &payload) const;
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
                                                     std::vector<zlink::message_t> parts,
                                                     pending_operation_t &operation,
@@ -845,14 +864,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     // The coroutine owns both callbacks; a caller may discard the task.
     task_t<std::size_t> dispatch_ready (mesh::service_mailbox_t::application_dispatch_t dispatch,
                                         bool accept_application_receive = true,
-                                        std::function<bool ()> next_application_receive = {});
+                                        std::function<bool ()> next_application_receive = {},
+                                        std::optional<zlink::poll_event_flag_t> readiness = {});
     using application_owner_result_t = std::variant<bool, task_t<bool>>;
     application_owner_result_t
     dispatch_application_owner (std::string owner,
                                 const mesh::service_mailbox_t::application_dispatch_t dispatch,
                                 std::function<void ()> started,
                                 std::function<void ()> rejected);
-    bool wait_for_dispatch_activity (
+    std::optional<zlink::poll_event_flag_t> wait_for_dispatch_activity (
       std::chrono::milliseconds timeout,
       bool accept_application_receive,
       std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept;
@@ -888,6 +908,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                     mesh::service_mailbox_t::application_dispatch_t resume = {});
 
   private:
+    mesh::service_node_descriptor_t
+    expected_peer_descriptor (const std::string &endpoint,
+                              const zlink::routing_id_t &expected,
+                              std::uint64_t expected_lifecycle_generation,
+                              std::string security_identity) const;
+
     // Relocation flow §4.2 cut S of a source seal (stateful_object_runtime_t
     // relocation_source_cut_t), run in the first participant's execution queue.
     task_t<std::optional<std::vector<std::vector<stateful::turn_record_t>>>>
@@ -928,8 +954,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<spot_close_commit_t> begin_user_spot_close (protocol::user_spot_close_fence_t target);
 
     spot_handle_t bind_relocation_spot (stateful::object_ref_t object);
-    stateful::stateful_error_t
-    advance_local_actor_authority (const stateful::object_ref_t &committed);
+    task_t<stateful::stateful_error_t>
+    advance_local_actor_authority (stateful::object_ref_t committed);
 
     protocol::application_payload_t
     encode_application (const std::vector<zlink::message_t> &parts,
@@ -1102,7 +1128,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       const std::function<void (const std::vector<std::uint8_t> &)> &reconcile);
     using relocation_attempt_key_t = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
     struct relocation_target_attempt_t;
-    bool try_finalize_relocation_target (const relocation_attempt_key_t &key);
+    task_t<bool> try_finalize_relocation_target (relocation_attempt_key_t key);
     /* 28/52: command 44 (session_relocation_route) is submitted one-way
      * exactly once per route after the target CAS commits (S2) -- there is
      * no application reply and no retry loop; a late duplicate could cross
@@ -1215,8 +1241,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void reply_relocation_assembly_failure (
       const pending_relocation_assembly_t &pending,
       protocol::framework_error_code code = protocol::framework_error_code::relocationDataLost);
-    void rollback_actor_join_recoveries (
-      const std::vector<std::pair<std::string, stateful::object_ref_t>> &consumed) noexcept;
+    task_t<void> rollback_actor_join_recoveries (
+      const std::vector<std::pair<std::string, stateful::object_ref_t>> &consumed);
     void
     discard_relocation_assembly_staging (const pending_relocation_assembly_t &pending,
                                          const relocation_assembly_staging_t &staging) noexcept;
@@ -1234,11 +1260,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<void> await_relocation_session_routes (
       std::shared_ptr<const pending_relocation_assembly_t> pending,
       const std::vector<protocol::session_relocation_route_t> &routes);
-    task_t<void> finish_relocation_assembly (
-      relocation_attempt_key_t key,
-      std::shared_ptr<const pending_relocation_assembly_t> pending,
-      std::shared_ptr<relocation_assembly_staging_t> staging,
-      std::vector<std::pair<std::string, stateful::object_ref_t>> consumed);
+    task_t<void>
+    finish_relocation_assembly (relocation_attempt_key_t key,
+                                std::shared_ptr<const pending_relocation_assembly_t> pending,
+                                std::shared_ptr<relocation_assembly_staging_t> staging);
     task_t<bool> submit_relocation_ready_reply (protocol::relocation_prepare_t prepare,
                                                 const mesh::service_mailbox_record_t &request);
     void observe_relocation_ready (std::shared_ptr<task_completion_source_t<void>> ready,
@@ -1255,16 +1280,16 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<bool> stage_relocation_record (const stateful::object_ref_t &target,
                                           const protocol::relocation_data_t &data,
                                           std::uint64_t participant_id);
-    void poll_relocation_target_attempts ();
+    task_t<void> poll_relocation_target_attempts ();
     static bool relocation_target_wire_ready (const relocation_target_attempt_t &attempt) noexcept;
     static bool relocation_target_terminal (const relocation_target_attempt_t &attempt);
     static std::optional<relocation_target_attempt_t>
     take_relocation_target_discard (relocation_target_attempt_t &attempt);
-    void discard_unverified_relocation_targets (
-      const std::vector<relocation_attempt_key_t> &observed = {});
-    void discard_relocation_target_attempts (
+    task_t<void>
+    discard_unverified_relocation_targets (std::vector<relocation_attempt_key_t> observed = {});
+    task_t<void> discard_relocation_target_attempts (
       std::vector<relocation_target_attempt_t> attempts,
-      std::optional<framework_exception_t> failure = std::nullopt) noexcept;
+      std::optional<framework_exception_t> failure = std::nullopt);
     std::map<relocation_attempt_key_t, relocation_target_attempt_t> _relocation_target_attempts;
     std::shared_ptr<stateful::authority_relocation_port_t> _relocation_authority;
     std::shared_ptr<stateful::aggregate_authority_port_t> _aggregate_relocation_authority;

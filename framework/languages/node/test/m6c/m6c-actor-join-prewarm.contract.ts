@@ -12,7 +12,7 @@ import {
   ServiceWireExactTerminalByFailureCode,
   ServiceWireFrameworkErrorCode
 } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
-import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
+import { DefaultZLinkSpotManager } from '../../packages/framework/src/internal';
 import {
   internalFrameworkWireReply,
   wireReplyFailureException

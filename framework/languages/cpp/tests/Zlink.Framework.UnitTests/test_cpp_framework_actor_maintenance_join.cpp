@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/telemetry_observation.hpp"
 #include <zlink/json.hpp>
+#include <zlink/Contracts/Core/context.hpp>
 #include "metric_test_reader.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "../support/manual_internal_scheduler.hpp"
@@ -21,6 +22,7 @@
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
@@ -42,12 +44,6 @@
 #include <cstdio>
 #include <future>
 #include <functional>
-#if defined(__linux__)
-#include <filesystem>
-#include <set>
-#include <sys/syscall.h>
-#include <unistd.h>
-#endif
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -74,10 +70,27 @@ struct spot_node_runtime_test_access_t
 };
 }
 
+namespace zlink::framework::runtime
+{
+struct state_lane_test_access_t
+{
+    static bool pending_work (state_lane_t &lane)
+    {
+        const std::lock_guard lock (lane._mailbox_mutex);
+        return !lane._mailbox.empty ();
+    }
+};
+}
+
 namespace zlink::framework::runtime::stateful
 {
 struct stateful_object_runtime_test_access_t
 {
+    static bool pending_work (stateful_object_runtime_t &objects)
+    {
+        return runtime::state_lane_test_access_t::pending_work (objects._lane);
+    }
+
     static std::promise<void> hold_lane (stateful_object_runtime_t &objects)
     {
         return hold_lane (objects._lane);
@@ -145,6 +158,39 @@ namespace zlink::framework::runtime::host
 // Reproduce a superseded assembly at the activation boundary without timing races.
 struct public_host_runtime_test_access_t
 {
+    static task_t<stateful::stateful_error_t> advance_authority (public_host_runtime_t &host,
+                                                                 stateful::object_ref_t committed)
+    {
+        return host.advance_local_actor_authority (std::move (committed));
+    }
+
+    enum class authority_interleaving_t
+    {
+        unchanged,
+        superseded,
+        erased,
+        duplicate
+    };
+
+    static auto probe_actor_index (public_host_runtime_t &host,
+                                   stateful::object_ref_t replacement,
+                                   authority_interleaving_t change)
+    {
+        return host._spot_actor_index_lane.run (
+          [&host, replacement, change] () -> std::optional<stateful::object_ref_t> {
+              if (change == authority_interleaving_t::erased) {
+                  host._actors.erase (replacement.key);
+                  return std::nullopt;
+              }
+              const auto found = host._actors.find (replacement.key);
+              if (found == host._actors.end ())
+                  return std::nullopt;
+              if (change != authority_interleaving_t::unchanged)
+                  found->second.second = replacement;
+              return found->second.second;
+          });
+    }
+
     static std::promise<void> hold_objects (public_host_runtime_t &host)
     {
         return stateful::stateful_object_runtime_test_access_t::hold_lane (host._objects);
@@ -3437,12 +3483,14 @@ struct native_intake_fixture_t
     fw::runtime::in_memory_location_repository_t source_store;
     fw::runtime::live_location_reader_t source_reader{source_store};
     fw::runtime::stateful::accepted_record_authority_resolver_t resolver;
+    std::shared_ptr<zlink::context_t> core_context = std::make_shared<zlink::context_t> ();
     std::shared_ptr<fw::runtime::host::public_host_runtime_t> host;
     explicit native_intake_fixture_t (
       fw::dispatch_options_t dispatch = {},
       fw::runtime::stateful::accepted_record_authority_resolver_t authority = {})
     {
         fw::runtime::host::host_options_t options;
+        options.core_context = core_context;
         options.mesh.descriptor = {mesh_name,
                                    rid,
                                    1,
@@ -3489,6 +3537,13 @@ struct native_intake_fixture_t
                                                          fw::runtime::protocol::command::admit),
                    fw::runtime::mesh::peer_admission_result_t::admitted);
         host->start ();
+    }
+    ~native_intake_fixture_t ()
+    {
+        host->close ();
+        // Result publication can precede release of the dispatch coroutine's
+        // Host reference. The fixture owns Core teardown through that release.
+        core_context->term ();
     }
     fw::runtime::mesh::service_mailbox_record_t
     actor_record (std::uint64_t sequence, std::uint64_t authority_generation = 1) const
@@ -3962,6 +4017,152 @@ TEST (NativeIntake, RawAuthorityFailurePreservesTerminalKind)
         EXPECT_EQ (pair.target->objects ().pending (object, st::turn_domain_t::application), 0u);
     }
 }
+
+class ReceiveClaimAuthorityFailure : public ::testing::TestWithParam<std::tuple<bool, int, bool>>
+{
+};
+
+TEST_P (ReceiveClaimAuthorityFailure, UnexpectedFailureKeepsTerminalAndProcessesOtherRecords)
+{
+    namespace rt = fw::runtime;
+    namespace st = rt::stateful;
+    namespace wire = rt::protocol;
+    using authority_t = std::optional<st::accepted_record_authority_t>;
+    using reply_t = std::pair<rt::foundation::operation_terminal_t, fw::result_t<zlink::message_t>>;
+    const auto [spot, failed_index, suspended] = GetParam ();
+    constexpr int record_count = 4;
+    fw::task_completion_source_t<authority_t> authority;
+    std::promise<void> authority_entered;
+    auto authority_started = authority_entered.get_future ();
+    int queries = 0;
+    relay_peer_pair_t pair (
+      rt::mesh::service_object_role_t::server, rt::mesh::service_object_role_t::server,
+      [&] (st::accepted_record_authority_query_t query) -> fw::task_t<authority_t> {
+          const auto fail = spot
+                              ? query.source_spot_id
+                                  == std::optional{"claim-source-" + std::to_string (failed_index)}
+                              : queries == failed_index;
+          ++queries;
+          if (fail) {
+              authority_entered.set_value ();
+              if (suspended)
+                  return authority.task ();
+              throw std::runtime_error ("authority read failed within receive claim");
+          }
+          return fw::task_t<authority_t> (
+            fw::result_t<authority_t>::success (st::accepted_record_authority_t{
+              {"source", 1, query.source_node_routing_id, query.source_node_generation}, 1}));
+      });
+    ASSERT_TRUE (pair.await_ready ());
+    const st::object_ref_t object{spot ? st::object_kind_t::user_spot : st::object_kind_t::actor,
+                                  actor_id,
+                                  1,
+                                  1,
+                                  mesh_name,
+                                  "relay-target"};
+    const auto created = begin_reserved_object (pair.target->objects (), object, actor_type, {});
+    ASSERT_EQ (created.error, st::stateful_error_t::none);
+    ASSERT_EQ (pair.target->objects ().commit_create (created.attempt), st::stateful_error_t::none);
+    auto completions = std::make_shared<std::array<std::promise<reply_t>, record_count>> ();
+    std::array<std::future<reply_t>, record_count> replies;
+    for (int index = 0; index < record_count; ++index) {
+        replies[index] = (*completions)[index].get_future ();
+        const auto complete = [completions, index] (auto terminal,
+                                                    fw::result_t<zlink::message_t> payload) {
+            (*completions)[index].set_value ({terminal, std::move (payload)});
+        };
+        const wire::wire_operation_id_t operation{1, static_cast<std::uint64_t> (index + 1)};
+        rt::messaging::envelope_header_t envelope;
+        envelope.kind = rt::messaging::message_kind_t::request;
+        envelope.channel_name = mesh_name;
+        envelope.message_name = probe_t::packet_name;
+        envelope.correlation_id = std::to_string (index + 1);
+        auto parts =
+          fw::detail::encode_actor_packet (envelope, zlink::message_t::from (std::string ("{}")));
+        const auto payload =
+          wire::application_payload_t::from_parts (std::move (parts).take_items ());
+        const auto sent =
+          spot ? pair.source->transport ().request_to_spot (
+                   pair.target_wire.node_routing_id, "claim-source-" + std::to_string (index),
+                   {actor_id, 1, pair.target_wire.node_routing_id,
+                    pair.target_wire.lifecycle_generation, 1, 1},
+                   payload, wait_budget, complete, operation)
+               : pair.source->transport ().request_to_actor (
+                   pair.target_wire.node_routing_id, std::nullopt,
+                   {actor_id, 1, pair.target_wire.node_routing_id,
+                    pair.target_wire.lifecycle_generation, 1, 1},
+                   payload, wait_budget, complete, operation);
+        ASSERT_TRUE (sent.result ().value ());
+    }
+    auto &mailbox = pair.target->transport ().mailbox ();
+    constexpr auto domain = rt::mesh::service_mailbox_domain_t::application;
+    const auto deadline = std::chrono::steady_clock::now () + wait_budget;
+    while (mailbox.pending_messages (domain) != record_count
+           && std::chrono::steady_clock::now () < deadline) {
+        pair.target->transport ().pump_one (std::chrono::steady_clock::now ()).result ().value ();
+        std::this_thread::sleep_for (1ms);
+    }
+    ASSERT_EQ (mailbox.pending_messages (domain), record_count);
+    const auto owner = rt::mesh::service_mailbox_t::application_owner (
+      spot ? rt::host::owner_kind_t::spot : rt::host::owner_kind_t::actor, actor_id);
+    auto claim = mailbox.try_claim_owner (domain, owner, record_count,
+                                          rt::dispatch_limits::receive_batch_bytes);
+    ASSERT_TRUE (claim);
+    ASSERT_EQ (claim->claimed_messages, record_count);
+    std::vector<std::uint64_t> delivered;
+    auto pending = rt::host::public_host_runtime_test_access_t::dispatch_claim (
+      *pair.target, claim, [&] (const auto &, const auto &record, auto, auto) {
+          delivered.push_back (record.operation_id.low);
+          ASSERT_TRUE (record.complete_stateful_dispatch);
+          record.complete_stateful_dispatch ();
+      });
+    if (suspended) {
+        ASSERT_EQ (authority_started.wait_for (wait_budget), std::future_status::ready);
+        ASSERT_FALSE (pending.await_ready ());
+        EXPECT_GE (queries, failed_index + 1);
+        authority.complete (
+          fw::detail::result_access_t::failure<authority_t> (std::make_exception_ptr (
+            std::runtime_error ("authority read failed within receive claim"))));
+    }
+    const auto dispatch_result = pending.result ();
+    ASSERT_TRUE (dispatch_result);
+    if (spot)
+        EXPECT_GE (queries, record_count);
+    else
+        EXPECT_EQ (queries, record_count);
+    std::vector<std::uint64_t> expected;
+    for (int index = 0; index < record_count; ++index)
+        if (index != failed_index)
+            expected.push_back (static_cast<std::uint64_t> (index + 1));
+    EXPECT_EQ (delivered, expected);
+    EXPECT_EQ (claim->outstanding (), 0u);
+    EXPECT_EQ (mailbox.pending_messages (domain), 0u);
+    EXPECT_EQ (pair.target->objects ().pending (object, st::turn_domain_t::application), 0u);
+    while (replies[failed_index].wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < deadline)
+        pair.source->dispatch_ready ([] (const auto &, const auto &, auto, auto) {})
+          .result ()
+          .value ();
+    ASSERT_EQ (replies[failed_index].wait_for (0ms), std::future_status::ready);
+    const auto [terminal, payload] = replies[failed_index].get ();
+    EXPECT_EQ (terminal, rt::foundation::operation_terminal_t::transport_failed);
+    ASSERT_TRUE (payload);
+    const auto header = wire::decode_reply_header (payload.value ().to_bytes ());
+    EXPECT_EQ (header.terminal_result,
+               static_cast<std::uint32_t> (wire::request_terminal_result::internalError));
+    EXPECT_EQ (header.failure_code,
+               static_cast<std::uint32_t> (wire::framework_error_code::requestFailed));
+    EXPECT_EQ (rt::messaging::request_failure_mapper_t{}
+                 .reply_header_exception (header.terminal_result, header.failure_code, "authority")
+                 .kind (),
+               fw::framework_error_kind_t::internal_failure);
+}
+
+INSTANTIATE_TEST_SUITE_P (NativeIntake,
+                          ReceiveClaimAuthorityFailure,
+                          ::testing::Combine (::testing::Bool (),
+                                              ::testing::Values (0, 1, 3),
+                                              ::testing::Bool ()));
 
 TEST (NativeIntake, RawAuthorityFailureAfterSealKeepsClaimSuffix)
 {
@@ -6239,6 +6440,125 @@ TEST (ActorMaintenanceJoin, CreateEntryJoinWaitsOutsideConfigurationTurn)
     node->close ();
 }
 
+// Occupy the object owner, then observe its mailbox before probing the index.
+// The mailbox observation establishes ordering without a sleep or scheduler assumption.
+using authority_interleaving_t =
+  fw::runtime::host::public_host_runtime_test_access_t::authority_interleaving_t;
+
+void verify_actor_authority_turns (bool adopt, authority_interleaving_t change)
+{
+    namespace host = fw::runtime::host;
+    namespace sf = fw::runtime::stateful;
+    using access_t = host::public_host_runtime_test_access_t;
+    const auto rid = zlink::routing_id_t::from (first_rid);
+    auto node = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      fw::test::runtime_failure_options (fw::runtime::mesh::raw_mesh_node_options_t{
+        .descriptor = {mesh_name,
+                       rid.to_bytes (),
+                       1,
+                       1,
+                       "tcp://127.0.0.1:0",
+                       {},
+                       fw::runtime::mesh::service_node_state_t::preparing}})});
+    node->start ();
+    const sf::object_ref_t original{sf::object_kind_t::actor, actor_id, 1, 1, mesh_name,
+                                    rid.to_string ()};
+    ASSERT_TRUE (node->create_reserved_actor_async (actor_type, original).result ());
+    auto committed = original;
+    ++committed.authority_owner_generation;
+    if (adopt)
+        committed.node_id = second_rid;
+    const bool erased = change == authority_interleaving_t::erased;
+    const bool stale = change == authority_interleaving_t::superseded;
+    const bool conflict = erased || stale;
+    auto replacement = committed;
+    if (stale)
+        ++replacement.authority_owner_generation;
+
+    auto release = access_t::hold_objects (*node);
+    auto operation = std::async (std::launch::async, [&] {
+        if (adopt) {
+            const auto result = node->create_reserved_actor_async (actor_type, committed).result ();
+            EXPECT_EQ (static_cast<bool> (result), !conflict);
+            if (conflict && !result) {
+                EXPECT_EQ (result.error ()->kind (), fw::framework_error_kind_t::internal_failure);
+                EXPECT_STREQ (result.error ()->what (),
+                              "reserved Actor generation does not match the local Actor");
+            }
+        } else {
+            const auto result = access_t::advance_authority (*node, committed).result ();
+            EXPECT_TRUE (result);
+            if (result)
+                EXPECT_EQ (result.value (), erased  ? sf::stateful_error_t::not_found
+                                            : stale ? sf::stateful_error_t::generation_stale
+                                                    : sf::stateful_error_t::none);
+        }
+    });
+    const auto deadline = std::chrono::steady_clock::now () + wait_budget;
+    while (!sf::stateful_object_runtime_test_access_t::pending_work (node->objects ())
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    EXPECT_TRUE (sf::stateful_object_runtime_test_access_t::pending_work (node->objects ()));
+    auto probe = access_t::probe_actor_index (*node, replacement, change);
+    EXPECT_EQ (probe.wait_for (wait_budget), std::future_status::ready)
+      << "Actor-index turn must end before waiting for the object owner";
+    release.set_value ();
+    const auto observed = probe.get ();
+    if (erased)
+        EXPECT_FALSE (observed);
+    else
+        EXPECT_EQ (observed,
+                   change == authority_interleaving_t::unchanged ? original : replacement);
+    operation.get ();
+    const auto published =
+      access_t::probe_actor_index (*node, replacement, authority_interleaving_t::unchanged).get ();
+    if (erased)
+        EXPECT_FALSE (published);
+    else
+        EXPECT_EQ (published, stale ? replacement : committed);
+    node->close ();
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdoptionReleasesIndexWhileObjectLaneIsBusy)
+{
+    verify_actor_authority_turns (true, authority_interleaving_t::unchanged);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdvancementReleasesIndexWhileObjectLaneIsBusy)
+{
+    verify_actor_authority_turns (false, authority_interleaving_t::unchanged);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdoptionRejectsSupersededIndexGeneration)
+{
+    verify_actor_authority_turns (true, authority_interleaving_t::superseded);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdvancementRejectsSupersededIndexGeneration)
+{
+    verify_actor_authority_turns (false, authority_interleaving_t::superseded);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdoptionDoesNotReinsertErasedIdentity)
+{
+    verify_actor_authority_turns (true, authority_interleaving_t::erased);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdvancementDoesNotReinsertErasedIdentity)
+{
+    verify_actor_authority_turns (false, authority_interleaving_t::erased);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdoptionAcceptsDuplicatePublication)
+{
+    verify_actor_authority_turns (true, authority_interleaving_t::duplicate);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdvancementAcceptsDuplicatePublication)
+{
+    verify_actor_authority_turns (false, authority_interleaving_t::duplicate);
+}
+
 TEST (ActorMaintenanceJoin, DestroyStatefulActorYieldsWhileObjectsLaneIsBusy)
 {
     namespace host = fw::runtime::host;
@@ -6468,8 +6788,8 @@ TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
               .commit_relocation_materialization (objects);
         },
         [target_state] (const auto &objects) {
-            fw::detail::spot_node_runtime_t (target_state)
-              .abort_relocation_materialization (objects);
+            return fw::detail::spot_node_runtime_t (target_state)
+              .abort_relocation_materialization_async (objects);
         });
     auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
     ASSERT_TRUE (peer_ready (routes));
@@ -6603,11 +6923,12 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
               throw std::runtime_error ("injected restore commit failure");
           return false;
       },
-      [&, state, weak_target] (const auto &objects) {
+      [&, state, weak_target] (const auto &objects) -> fw::task_t<void> {
           const auto node = weak_target.lock ();
           const auto removed =
-            !candidate || !node || !node->resolve_actor_async (*candidate).result ().value ();
-          fw::detail::spot_node_runtime_t (state).abort_relocation_materialization (objects);
+            !candidate || !node || !(co_await node->resolve_actor_async (*candidate));
+          co_await fw::detail::spot_node_runtime_t (state).abort_relocation_materialization_async (
+            objects);
           {
               std::lock_guard lock (evidence.mutex);
               discarded = true;
@@ -7645,9 +7966,6 @@ TEST (ActorEntryPlacementRegression, EntrylessNodeTakesJoinAndRelocation)
 
 TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
 {
-#if !defined(__linux__)
-    GTEST_SKIP () << "Requires the public Linux thread inventory to identify the relocation caller";
-#else
     constexpr auto remaining_actor = "remaining-member";
     auto evidence_owner = std::make_shared<observations_t> ();
     auto &evidence = *evidence_owner;
@@ -7692,19 +8010,11 @@ TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
     evidence.hold_join_admission = true;
     ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), move_t{local_spot}).async ().result ());
     ASSERT_TRUE (evidence.join_admission_entered.task ().result_for (wait_budget));
-    auto &runtime = services.get_required<fw::framework_runtime_t> ();
-    // The topology scanner threads are already running. This fixture submits
-    // no new application work before Relocate creates its operation worker.
-    // Identify that caller at the public Store boundary, so a background scan
-    // cannot release the Join before the Host acquires its units.
-    std::set<long> existing_threads;
-    for (const auto &thread : std::filesystem::directory_iterator ("/proc/self/task"))
-        existing_threads.insert (std::stol (thread.path ().filename ().string ()));
+    // Relocation continuations can run on an existing worker. Release the
+    // earlier Join at the first Store scan after Host admission closes. The
+    // one-shot hook lets the Join's own Store calls make progress while it waits.
     store->before_scan_when (
-      [&] {
-          return !existing_threads.contains (::syscall (SYS_gettid))
-                 && runtime.status ().state == fw::framework_runtime_state_t::relocating;
-      },
+      [&] { return source.app.runtime_state () == fw::framework_runtime_state_t::relocating; },
       [&] () -> fw::task_t<void> {
           evidence.release_join_admission.complete (fw::result_t<void>::success ());
           co_await evidence.join_completed.task ();
@@ -7714,6 +8024,8 @@ TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
         .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
         .result ();
     store->before_scan_when ({}, {});
+    EXPECT_TRUE (evidence.release_join_admission.task ().await_ready ());
+    EXPECT_TRUE (evidence.join_completed.task ().await_ready ());
     ASSERT_TRUE (relocated);
     ASSERT_EQ (relocated.value ().outcome, fw::relocation_outcome_t::relocated)
       << "reason=" << static_cast<int> (relocated.value ().reason);
@@ -7736,7 +8048,6 @@ TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
         ASSERT_TRUE (reply);
         EXPECT_EQ (reply.value ().value, 7);
     }
-#endif
 }
 
 TEST (ActorMaintenanceJoin, RemoteJoinDoesNotLeaveLocalRelocationWork)
@@ -8469,9 +8780,7 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
         }
         held.reset ();
         mesh->application_jobs->stop ();
-        scheduler->run_all ();
-        node->worker_executor->request_stop ();
-        node->worker_executor->drain ();
+        scheduler->retire ();
         native->close ();
         node->native_node.reset ();
         detail::dispatch_options_access_t::set_observer_for_tests (node->dispatch, {});
@@ -8563,6 +8872,13 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
     if (finish_barrier) {
         auto complete = std::exchange (finish_barrier, {});
         complete (fw::result_t<void>::success ());
+    }
+    if (source_barrier) {
+        // The previous Spot's barrier settles on another lane. An empty manual
+        // queue does not establish that its final continuation has been published.
+        auto terminal = source_barrier->terminal ();
+        scheduler->run_until (terminal);
+        ASSERT_TRUE (terminal.result ());
     }
     scheduler->run_all ();
     scheduler->run_until (handler_finished);

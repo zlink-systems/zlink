@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
@@ -17,12 +17,62 @@ const {
 const {
   ZLinkRuntimeMetrics
 } = require('../../packages/framework/dist/runtime/diagnostics/runtime-metrics');
+const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 const {
   ZLinkSpotSerialTurnExecutor
 } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+
+test('source actor relocation terminal records its captured flow once', () => {
+  const events = [];
+  const samples = [];
+  const instrument = (name) => ({
+    add: (value, attributes) => samples.push({ name, value, attributes }),
+    record: (value, attributes) => samples.push({ name, value, attributes }),
+    addCallback() {}
+  });
+  const metrics = new ZLinkRuntimeMetrics({
+    getMeter: () => ({
+      createCounter: instrument,
+      createUpDownCounter: instrument,
+      createHistogram: instrument,
+      createObservableGauge: instrument
+    })
+  });
+  const tracer = {
+    flowCreationEnabled: () => true,
+    begin: () => ({ trace: (event) => events.push(event) })
+  };
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    metrics,
+    messageFlow: () => tracer
+  });
+  const flowId = '01930000-0000-7000-8000-000000000003';
+  let operation;
+  flowContext.runWithFlow({ flowId, flowOrigin: 'Application' }, () => {
+    operation = runtime.startSourceRelocationMetric('mesh', 'actor', 'snapshot', 'actor-1');
+  });
+  operation.complete('completed');
+  operation.complete('failed');
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0], {
+    outcome: 'completed',
+    result: 'succeeded',
+    surface: 'actorRelocation',
+    messageKind: 'control',
+    meshName: 'mesh',
+    actorId: 'actor-1',
+    flowId,
+    flowOrigin: 'Application',
+    errorMessage: undefined
+  });
+  assert.equal(
+    samples.filter((sample) => sample.name === 'zlink.relocation.completed').length,
+    1
+  );
+});
 
 for (const path of ['coordinator', 'shell', 'wide']) {
   for (const scenario of path === 'wide'

@@ -23,7 +23,7 @@ const {
 } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
 const {
   ZLinkChannelRuntimeLifecycle
-} = require('../../packages/framework/dist/runtime/channels/channel-runtime-lifecycle');
+} = require('../../packages/framework/dist/internal');
 const framework = require('../../packages/framework/dist/internal');
 const {
   stopRuntimeParts,

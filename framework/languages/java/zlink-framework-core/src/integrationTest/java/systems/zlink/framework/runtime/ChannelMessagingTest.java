@@ -1235,6 +1235,48 @@ final class ChannelMessagingTest {
     }
 
     @Test
+    void unawaitedChannelRequestDoesNotBlockFollowingSend() throws Exception {
+        CountDownLatch sendLatch = new CountDownLatch(1);
+        SEND_LATCH.set(sendLatch);
+        SEND_MESSAGE.set(null);
+        SEND_PACKET.set(null);
+        HeldHandler.RECEIVED.set(new CountDownLatch(1));
+        HeldHandler.release();
+
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        var channel = options.addClientServerChannel("profile").server().listen();
+        options.addClientServerChannel("profile").client();
+        channel.addRequestHandler(HeldHandler.class, HeldRequest.class, String.class);
+        channel.addSendHandler(ProfileChangedHandler.class, ProfileChanged.class);
+
+        try (ZLinkFrameworkRuntime runtime =
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+            CompletableFuture<String> request =
+                    runtime.client()
+                            .requestToChannel("profile", new HeldRequest("pending"))
+                            .submit(String.class)
+                            .toCompletableFuture();
+
+            assertTrue(HeldHandler.RECEIVED.get().await(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            runtime.client()
+                    .sendToChannel("profile", new ProfileChanged("following-send"))
+                    .submit();
+
+            assertTrue(sendLatch.await(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            assertEquals("following-send", SEND_MESSAGE.get());
+            assertFalse(request.isDone());
+
+            HeldHandler.release();
+            assertEquals("released", request.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        } finally {
+            HeldHandler.release();
+            SEND_LATCH.set(null);
+            SEND_MESSAGE.set(null);
+            SEND_PACKET.set(null);
+        }
+    }
+
+    @Test
     @DisplayName("PUB-001 partial REG-002 annotation fanout publish dispatches")
     void scannedMethodHandlerGroup_publishDispatches() throws InterruptedException {
         CountDownLatch latch = new CountDownLatch(1);

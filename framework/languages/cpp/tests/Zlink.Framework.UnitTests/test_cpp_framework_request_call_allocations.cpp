@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <gtest/gtest.h>
 #include "allocation_counter.hpp"
+#include "creation_counter.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
@@ -476,9 +477,8 @@ class ready_spot_resolver_t final : public fw::runtime::spot_address_resolver_t
     void invalidate_all_routes_after_store_recovery () override {}
 };
 
-// Measure the operation's promise, admission and selected-submission await with
-// the same value boundaries as the Spot submit. The frame size is deliberately
-// not compared: its compiler-owned locals differ from the real resolver path.
+// Retain the displaced operation and projection primitives as an allocation
+// ceiling. Compare allocation counts, rather than compiler-owned frame sizes.
 fw::request_task_t<zlink::message_t>
 spot_operation_primitive (fw::route_client_t::payload_encoder_t encode_payload,
                           fw::channel_request_call_t::metadata_map_t metadata,
@@ -566,12 +566,30 @@ allocation_sample_t spot_projection_allocations (
     return sample;
 }
 
-/* A Spot request resolves its address in its own operation coroutine, which
- * owns the operation's admission source and message reply (Spot address
- * messaging: one resolve per operation). The selected mesh request below it
- * is projected once and shares the transport's admission. */
-TEST (RequestCallAllocations, SpotRequestProjectsTheSelectedMeshRequestOnce)
+#if defined(ZLINK_TEST_COUNT_NATIVE_COPIES)
+std::size_t spot_transport_payload_copies ()
 {
+    // Match the selected transport fixture exactly, including its public reply
+    // observer. Its own retained header/body list is outside typed conversion.
+    fw::task_completion_source_t<transport_reply_t> physical;
+    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    admitted->complete (fw::result_t<void>::success ());
+    fw::request_task_t<transport_reply_t> selected (physical.task (), admitted);
+    auto frames = reply_parts (47);
+    fw::tests::native_call_scope_t native;
+    EXPECT_TRUE (physical.complete (
+      fw::result_t<transport_reply_t>::success (transport_reply_t::success (std::move (frames)))));
+    EXPECT_TRUE (selected.result ());
+    return native[6];
+}
+#endif
+
+/* Submit/completion §9 removes conversion-only message result states. The
+ * old primitive chain remains the cost ceiling: a prepared typed receiver
+ * must use fewer allocations and still own both final reply states. */
+TEST (RequestCallAllocations, SpotFinalReceiverUsesFewerAllocationsThanTheConversionChain)
+{
+    fw::tests::verify_creation_counter_controls ();
     fw::serializer_registry_t serializers;
     add_payload (serializers);
     auto builder = fw::test::runtime_failure_builder ();
@@ -615,31 +633,69 @@ TEST (RequestCallAllocations, SpotRequestProjectsTheSelectedMeshRequestOnce)
     SCOPED_TRACE ("spot target reference\n" + target_owner.diagnostics);
     SCOPED_TRACE ("spot internal projection reference\n" + projection.diagnostics);
     SCOPED_TRACE ("spot public projection reference\n" + public_projection.diagnostics);
-    prepared.emplace (physical.task (), admitted);
-    auto call = client.request_to_spot (fw::spot_id_t ("spot"), payload_t{});
-    std::optional<fw::request_task_t<payload_t>> pending;
-    const auto actual = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
-    print_allocation_sizes ("spot request above transport", actual);
-    SCOPED_TRACE (actual.diagnostics);
-    EXPECT_EQ (submitted, 1u);
-    EXPECT_EQ (actual.total, encode.total + operation.total + selection.total + target_owner.total
-                               + projection.total + public_projection.total);
-
-    ASSERT_TRUE (pending.has_value ());
-    const auto operation_admission = fw::detail::request_task_access_t::admission_source (*pending);
-    ASSERT_NE (operation_admission, admitted);
-    EXPECT_TRUE (allocation_containing (actual, operation_admission.get ()).has_value ());
-    auto operation_admission_task = operation_admission->task ();
-    EXPECT_TRUE (allocation_containing (actual, std::addressof (operation_admission_task.result ()))
-                   .has_value ());
-    EXPECT_TRUE (pending->admitted ().result ());
-    EXPECT_FALSE (pending->await_ready ());
-    EXPECT_TRUE (physical.complete (
-      fw::result_t<transport_reply_t>::success (transport_reply_t::success (reply_parts (47)))));
-    const auto &reply = pending->result ();
-    ASSERT_TRUE (reply);
-    EXPECT_EQ (reply.value ().value, 47);
-    expect_public_and_physical_reply_allocations (actual, *pending);
+#if defined(ZLINK_TEST_COUNT_NATIVE_COPIES)
+    const auto transport_copies = spot_transport_payload_copies ();
+    std::printf ("spot physical transport fixture copies=%zu\n", transport_copies);
+#endif
+    fw::tests::creation_counts_t single{};
+    for (const unsigned records : {1u, 4u, 7u}) {
+        fw::tests::creation_counts_t created{};
+        for (unsigned record = 0; record != records; ++record) {
+            physical = fw::task_completion_source_t<transport_reply_t> ();
+            prepared.emplace (physical.task (), admitted);
+            auto call = client.request_to_spot (fw::spot_id_t ("spot"), payload_t{});
+            auto reply_frames = reply_parts (47);
+            std::optional<fw::request_task_t<payload_t>> pending;
+#if defined(ZLINK_TEST_COUNT_NATIVE_COPIES)
+            fw::tests::native_call_scope_t native;
+#endif
+            const auto before = fw::tests::creation_counts ();
+            const auto actual =
+              sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
+            // Compare the public call with its components in the same process.
+            EXPECT_LT (actual.total, encode.total + operation.total + selection.total
+                                       + target_owner.total + projection.total
+                                       + public_projection.total);
+            ASSERT_TRUE (pending.has_value ());
+            const auto operation_admission =
+              fw::detail::request_task_access_t::admission_source (*pending);
+            ASSERT_NE (operation_admission, admitted);
+            EXPECT_TRUE (allocation_containing (actual, operation_admission.get ()).has_value ());
+            auto operation_admission_task = operation_admission->task ();
+            EXPECT_TRUE (
+              allocation_containing (actual, std::addressof (operation_admission_task.result ()))
+                .has_value ());
+            EXPECT_TRUE (pending->admitted ().result ());
+            EXPECT_FALSE (pending->await_ready ());
+            EXPECT_TRUE (physical.complete (fw::result_t<transport_reply_t>::success (
+              transport_reply_t::success (std::move (reply_frames)))));
+            const auto &reply = pending->result ();
+            ASSERT_TRUE (reply);
+            EXPECT_EQ (reply.value ().value, 47);
+            const auto delta = fw::tests::creation_counts () - before;
+            created.shared_states += delta.shared_states;
+            created.coroutine_states += delta.coroutine_states;
+            created.payload_copies += delta.payload_copies;
+#if defined(ZLINK_TEST_COUNT_NATIVE_COPIES)
+            // The typed Framework path adds no copy above this same transport.
+            EXPECT_EQ (native[6], transport_copies);
+#endif
+            expect_public_and_physical_reply_allocations (actual, *pending);
+        }
+        if (records == 1) {
+            single = created;
+            // Final public reply, physical typed reply, operation admission and
+            // the Spot submit coroutine. A ready resolver adds no shared state.
+            EXPECT_EQ (single.shared_states, 4u);
+            EXPECT_EQ (single.coroutine_states, 1u);
+        }
+        EXPECT_EQ (created.payload_copies, 0u);
+        std::printf ("spot creations: records=%u shared=%zu coroutine=%zu copies=%zu\n", records,
+                     created.shared_states, created.coroutine_states, created.payload_copies);
+        EXPECT_EQ (created.shared_states, single.shared_states + 4u * (records - 1));
+        EXPECT_EQ (created.coroutine_states, single.coroutine_states + 1u * (records - 1));
+    }
+    EXPECT_EQ (submitted, 12u);
 }
 
 /* Hot path E4: the MeshNode request submit of a target the topology already

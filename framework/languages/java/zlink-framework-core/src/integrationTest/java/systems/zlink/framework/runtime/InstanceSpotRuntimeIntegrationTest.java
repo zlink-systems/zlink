@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -257,9 +258,48 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     @Test
+    void readyRouteCapturedBeforeCloseAdmitsOnPublishedSuccessor() throws Exception {
+        verifyCloseFailure(CloseScenario.CREATING_CAPTURED_ADMISSION);
+    }
+
+    @Test
     void creatingIntentCrossingClosePendingCutRetainsPayloadUntilSuccessorCompletes()
             throws Exception {
         verifyCloseFailure(CloseScenario.CREATING_RETAINED);
+    }
+
+    @Test
+    void requestFailureDiagnosticIncludesRemoteDetailsAndMatchingFlow() {
+        String spotId = "diagnostic-spot";
+        String matchingFlow =
+                "zlink flow: event_id=zlink.message_flow phase=received spot=" + spotId;
+        matchingFlow += " corr=4 flow=after-close-flow";
+        String otherCorrelation =
+                "zlink flow: event_id=zlink.message_flow phase=received spot=" + spotId;
+        otherCorrelation += " corr=3 flow=prior-flow";
+        String otherSpot =
+                "zlink flow: event_id=zlink.message_flow phase=received spot=other-spot"
+                        + " corr=4 flow=other-flow";
+        var remoteFailure =
+                systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping
+                        .receivedFailure(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                "remote request failed",
+                                1,
+                                java.util.Map.of());
+        String diagnostic =
+                requestFailureDiagnostic(
+                        spotId,
+                        new java.util.concurrent.ExecutionException(
+                                new CompletionException(remoteFailure)),
+                        List.of(matchingFlow, otherCorrelation, otherSpot));
+
+        assertTrue(diagnostic.contains("ReceivedFailure"), diagnostic);
+        assertTrue(diagnostic.contains("kind=UNAVAILABLE"), diagnostic);
+        assertTrue(diagnostic.contains("message=remote request failed"), diagnostic);
+        assertTrue(diagnostic.contains(matchingFlow), diagnostic);
+        assertFalse(diagnostic.contains(otherCorrelation), diagnostic);
+        assertFalse(diagnostic.contains(otherSpot), diagnostic);
     }
 
     @Test
@@ -290,6 +330,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         CREATING_RELEASED,
         CREATING_REPLACED,
         CREATING_RETAINED,
+        CREATING_CAPTURED_ADMISSION,
         CREATING_ADMISSION_BEFORE_CLOSE,
         CREATING_ADMISSION_AFTER_CLOSE,
         CREATING_AUTHORITY_AFTER_CLOSE,
@@ -307,6 +348,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         boolean creating =
                 failureStage == CloseScenario.CREATING
                         || failureStage == CloseScenario.CREATING_RETAINED
+                        || failureStage == CloseScenario.CREATING_CAPTURED_ADMISSION
                         || failureStage == CloseScenario.CREATING_ADMISSION_BEFORE_CLOSE
                         || failureStage == CloseScenario.CREATING_ADMISSION_AFTER_CLOSE
                         || failureStage == CloseScenario.CREATING_AUTHORITY_AFTER_CLOSE
@@ -317,8 +359,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                 failureStage == CloseScenario.CREATING_ADMISSION_BEFORE_CLOSE
                         || failureStage == CloseScenario.CREATING_ADMISSION_AFTER_CLOSE
                         || failureStage == CloseScenario.CREATING_AUTHORITY_AFTER_CLOSE;
+        boolean capturedAdmission = failureStage == CloseScenario.CREATING_CAPTURED_ADMISSION;
         boolean retainedBoundary =
-                failureStage == CloseScenario.CREATING_RETAINED || admissionBoundary;
+                failureStage == CloseScenario.CREATING_RETAINED
+                        || capturedAdmission
+                        || admissionBoundary;
         boolean replacedBoundary = failureStage == CloseScenario.CREATING_REPLACED;
         boolean releasedBoundary = failureStage == CloseScenario.CREATING_RELEASED;
         boolean sealedBoundary = failureStage == CloseScenario.CREATING_SEALED || releasedBoundary;
@@ -430,6 +475,8 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
 
         var backend = new ObservedBackend();
+        FlowDiagnosticCapture requestFlowCapture =
+                retainedBoundary ? new FlowDiagnosticCapture() : null;
         try (ZLinkFrameworkRuntime target =
                         RuntimeTestSupport.startFramework(targetOptions, backend);
                 ZLinkFrameworkRuntime source =
@@ -506,7 +553,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                         return;
                     }
                     if (retainedBoundary || sealedBoundary) {
-                        if (retainedBoundary && !admissionBoundary)
+                        if (retainedBoundary && !admissionBoundary && !capturedAdmission)
                             SourceEntrySpot.afterCloseStart.complete(null);
                         SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
                         try (var boundary =
@@ -564,6 +611,43 @@ final class InstanceSpotRuntimeIntegrationTest {
                             boundary.resumeAdmission.complete(null);
                             boundary.admitted.get(5, TimeUnit.SECONDS);
                             assertEquals(0, boundary.releases.get());
+                            if (capturedAdmission) {
+                                backend.beforeInstanceAdmission = new CompletableFuture<>();
+                                try {
+                                    SourceEntrySpot.afterCloseStart.complete(null);
+                                    var captured =
+                                            backend.beforeInstanceAdmission.get(
+                                                    5, TimeUnit.SECONDS);
+                                    assertFalse(captured.ownerId().isBlank());
+                                    assertFalse(captured.storeVersion().isBlank());
+                                    assertEquals(
+                                            EchoInstanceSpot.generations.getFirst(),
+                                            captured.objectGeneration());
+                                    boundary.resumeClose.complete(null);
+                                    assertEquals(
+                                            "echo:retained",
+                                            boundary.reply.get(5, TimeUnit.SECONDS));
+                                    assertTrue(
+                                            EchoInstanceSpot.closeCompleted.get(
+                                                    5, TimeUnit.SECONDS));
+                                    assertNotEquals(
+                                            captured.objectGeneration(),
+                                            EchoInstanceSpot.generations.getLast());
+                                    assertEquals(
+                                            List.of(EchoInstanceSpot.generations.getLast()),
+                                            EchoInstanceSpot.retainedCalls);
+                                    backend.resumeInstanceAdmission.complete(null);
+                                    assertEquals(
+                                            "echo:hello|echo:again|echo:after-close",
+                                            awaitSourceReplyWithDiagnostics(
+                                                    spotId, requestFlowCapture));
+                                    boundary.released.get(5, TimeUnit.SECONDS);
+                                    assertEquals(1, boundary.releases.get());
+                                } finally {
+                                    backend.resumeInstanceAdmission.complete(null);
+                                }
+                                return;
+                            }
                             if (admissionBoundary) {
                                 try (var readBoundary =
                                         new InstanceAdmissionReadBoundary(
@@ -604,7 +688,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                                     readBoundary.resume.complete(null);
                                     assertEquals(
                                             "echo:hello|echo:again|echo:after-close",
-                                            SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
+                                            awaitSourceReplyWithDiagnostics(
+                                                    spotId, requestFlowCapture));
                                 }
                                 return;
                             }
@@ -612,7 +697,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                             assertEquals("echo:retained", boundary.reply.get(5, TimeUnit.SECONDS));
                             assertEquals(
                                     "echo:hello|echo:again|echo:after-close",
-                                    SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
+                                    awaitSourceReplyWithDiagnostics(spotId, requestFlowCapture));
                             assertEquals(
                                     List.of(EchoInstanceSpot.generations.getLast()),
                                     EchoInstanceSpot.retainedCalls);
@@ -772,13 +857,96 @@ final class InstanceSpotRuntimeIntegrationTest {
                 SourceEntrySpot.afterCloseStart.complete(null);
                 EchoInstanceSpot.closingFailure = null;
                 diagnosticLogger.removeHandler(diagnosticHandler);
+                if (requestFlowCapture != null) requestFlowCapture.close();
             }
         }
     }
 
-    private static void awaitSourceBeforeClose() {
-        CompletableFuture.anyOf(SourceEntrySpot.beforeClose, SourceEntrySpot.reply).join();
+    private static void awaitSourceBeforeClose() throws Exception {
+        CompletableFuture.anyOf(SourceEntrySpot.beforeClose, SourceEntrySpot.reply)
+                .get(5, TimeUnit.SECONDS);
         assertTrue(SourceEntrySpot.beforeClose.isDone());
+    }
+
+    private static String awaitSourceReplyWithDiagnostics(
+            String spotId, FlowDiagnosticCapture flowCapture) throws Exception {
+        try {
+            return SourceEntrySpot.reply.get(5, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.ExecutionException failure) {
+            List<String> flowEvents = flowCapture == null ? List.of() : flowCapture.records();
+            throw new AssertionError(
+                    requestFailureDiagnostic(spotId, failure, flowEvents), failure);
+        }
+    }
+
+    private static String requestFailureDiagnostic(
+            String spotId, Throwable failure, List<String> flowEvents) {
+        String correlation =
+                InstanceAdmissionReadBoundary.AFTER_CLOSE_CORRELATION.substring("corr=".length());
+        List<String> matchingFlowEvents =
+                flowEvents.stream()
+                        .filter(event -> event.contains("corr=" + correlation))
+                        .filter(event -> event.contains("spot=" + spotId + " "))
+                        .toList();
+        Throwable received = failure;
+        while ((received instanceof CompletionException
+                        || received instanceof java.util.concurrent.ExecutionException)
+                && received.getCause() != null) {
+            received = received.getCause();
+        }
+        StringBuilder diagnostic =
+                new StringBuilder("request failure spot=")
+                        .append(spotId)
+                        .append(" corr=")
+                        .append(correlation)
+                        .append(" exception=")
+                        .append(received.getClass().getName());
+        if (received instanceof ZLinkFrameworkException frameworkFailure) {
+            diagnostic.append(" kind=").append(frameworkFailure.kind());
+        }
+        diagnostic.append(" message=").append(received.getMessage());
+        diagnostic.append(" message_flow_events=").append(matchingFlowEvents);
+        return diagnostic.toString();
+    }
+
+    private static final class FlowDiagnosticCapture implements AutoCloseable {
+        private final java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(
+                        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                .getName());
+        private final java.util.logging.Level previousLevel = logger.getLevel();
+        private final List<String> records = new CopyOnWriteArrayList<>();
+        private final java.util.logging.Handler handler =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        String message = record.getMessage();
+                        if (message != null && message.startsWith("zlink flow:")) {
+                            records.add(message);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+
+        FlowDiagnosticCapture() {
+            logger.addHandler(handler);
+            logger.setLevel(java.util.logging.Level.ALL);
+        }
+
+        List<String> records() {
+            return List.copyOf(records);
+        }
+
+        @Override
+        public void close() {
+            logger.removeHandler(handler);
+            logger.setLevel(previousLevel);
+        }
     }
 
     /** Holds target authority reads or their completion while Close replaces the incarnation. */
@@ -1078,6 +1246,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                 new java.util.concurrent.ConcurrentHashMap<>();
         private volatile ZLinkInternalSpotNode spotNode;
         private volatile ZLinkInternalSpotNode.SpotAdmissionResolver resolver;
+        private volatile CompletableFuture<
+                        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                                .InstanceRouteFence>
+                beforeInstanceAdmission;
+        private final CompletableFuture<Void> resumeInstanceAdmission = new CompletableFuture<>();
 
         private ZLinkInternalSpotNode observe(ZLinkInternalSpotNode node) {
             spotNode = node;
@@ -1107,6 +1280,14 @@ final class InstanceSpotRuntimeIntegrationTest {
                     ZLinkInternalMeshNode.InstanceSpotActivationHandler.class,
                     handler,
                     (method, args) -> {
+                        if (method.getName().equals("admitExisting")
+                                && beforeInstanceAdmission != null) {
+                            beforeInstanceAdmission.complete(
+                                    (systems.zlink.framework.runtime.internal.service
+                                                    .ZLinkServiceM6BWireCodec.InstanceRouteFence)
+                                            args[0]);
+                            resumeInstanceAdmission.orTimeout(5, TimeUnit.SECONDS).join();
+                        }
                         if (method.getName().equals("activate")) {
                             args = args.clone();
                             var original = (ZLinkBackendSpot) args[2];
