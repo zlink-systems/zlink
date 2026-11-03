@@ -980,13 +980,13 @@ class application_job_queue_t
     {
         const auto amount = phase == permit_phase_t::reserved ? static_cast<std::uint64_t> (count)
                                                               : queued_credit * count;
-        std::list<std::shared_ptr<waiter_state_t>> ready;
-        permit_batch_t grants;
-        std::optional<pressure_transition_t> transition;
         const auto before = owner->credits.fetch_sub (amount, std::memory_order_acq_rel);
         if ((before & waiting_credit) == 0
             && desired_pressure (*owner, before - amount) == pressure_state (before))
             return;
+        std::list<std::shared_ptr<waiter_state_t>> ready;
+        permit_batch_t grants;
+        std::optional<pressure_transition_t> transition;
         {
             std::lock_guard lock (owner->mutex);
             settle_released_capacity_locked (owner, ready, grants, transition);
