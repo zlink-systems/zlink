@@ -112,11 +112,9 @@ final class ZLinkRelocationObservationPublicTest {
                                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
                     var publicationEntered = new CompletableFuture<Void>();
                     var publicationRelease = new CompletableFuture<Void>();
-                    var spotField = sessionActors.getClass().getDeclaredField("spotNode");
-                    spotField.setAccessible(true);
-                    var backendSpot = spotField.get(sessionActors);
-                    var laneField = backendSpot.getClass().getDeclaredField("stateLane");
-                    laneField.setAccessible(true);
+                    var backendSpot =
+                            systems.zlink.framework.runtime.actors
+                                    .ZLinkSessionActorsRuntimeTestAccess.spotNode(sessionActors);
                     var publicationLane =
                             new ZLinkStateLane(
                                     task ->
@@ -126,7 +124,8 @@ final class ZLinkRelocationObservationPublicTest {
                                                         publicationRelease.join();
                                                         task.run();
                                                     }));
-                    laneField.set(backendSpot, publicationLane);
+                    systems.zlink.framework.runtime.binding.ZLinkJavaRawSpotNodeTestAccess
+                            .replaceStateLaneForTest(backendSpot, publicationLane);
                     CompletableFuture<Void> submitted;
                     try {
                         var result =
@@ -156,21 +155,8 @@ final class ZLinkRelocationObservationPublicTest {
                         assertFalse(
                                 submitted.isDone(),
                                 "relay remains sealed while native publication is held");
-                        var terminalsField =
-                                sessionActors.getClass().getDeclaredField("sealTerminals");
-                        terminalsField.setAccessible(true);
-                        var terminal =
-                                ((Map<?, ?>) terminalsField.get(sessionActors))
-                                        .values()
-                                        .iterator()
-                                        .next();
-                        var expire =
-                                sessionActors
-                                        .getClass()
-                                        .getDeclaredMethod(
-                                                "expireRelocationSeal", terminal.getClass());
-                        expire.setAccessible(true);
-                        expire.invoke(sessionActors, terminal);
+                        systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntimeTestAccess
+                                .expireFirstRelocationSeal(sessionActors);
                         assertTrue(
                                 sessionActors.bound().contains(binding),
                                 "accepted command 44 keeps the physical Session binding live while"

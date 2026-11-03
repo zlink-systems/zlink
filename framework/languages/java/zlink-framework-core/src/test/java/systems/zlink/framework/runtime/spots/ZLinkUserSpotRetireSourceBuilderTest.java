@@ -76,11 +76,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             DefaultSpotContext context = (DefaultSpotContext) LiveSpot.last.get().context();
             ZLinkUserSpotRelocationBarrier barrier =
                     context.relocationBarrier(runtime.actorSessions());
-            var field = ZLinkUserSpotRelocationBarrier.class.getDeclaredField("stateLane");
-            field.setAccessible(true);
-            var lane =
-                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                            field.get(barrier);
+            var lane = barrier.stateLane;
             CountDownLatch entered = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
             CompletionStage<Void> held =
@@ -167,14 +163,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                         .toCompletableFuture()
                         .get();
                 var context = (DefaultSpotContext) LiveSpot.last.get().context();
-                var ownerField = DefaultSpotContext.class.getDeclaredField("relocationStateLane");
-                ownerField.setAccessible(true);
-                var owner =
-                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                                ownerField.get(context);
-                var boundary =
-                        DefaultSpotContext.class.getDeclaredMethod("reachRelocationReadyBoundary");
-                boundary.setAccessible(true);
+                var owner = context.relocationStateLane;
                 var signal = new CompletableFuture<Void>();
                 var claims = new java.util.concurrent.atomic.AtomicInteger();
                 var readiness =
@@ -196,15 +185,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                 var first =
                         context.enqueueDispatch(
                                 () -> {
-                                    try {
-                                        @SuppressWarnings("unchecked")
-                                        var completion =
-                                                (CompletionStage<Void>) boundary.invoke(context);
-                                        attempted.complete(null);
-                                        return completion;
-                                    } catch (ReflectiveOperationException failure) {
-                                        return CompletableFuture.failedFuture(failure);
-                                    }
+                                    var completion = context.reachRelocationReadyBoundary();
+                                    attempted.complete(null);
+                                    return completion;
                                 });
                 attempted.get(3, TimeUnit.SECONDS);
                 var second =
@@ -275,11 +258,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                                 });
                 boundaryReading.get(3, TimeUnit.SECONDS);
                 cancellationSignal.complete(null);
-                var ownerField = DefaultSpotContext.class.getDeclaredField("relocationStateLane");
-                ownerField.setAccessible(true);
-                var owner =
-                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                                ownerField.get(context);
+                var owner = context.relocationStateLane;
                 owner.runAsync(() -> null).toCompletableFuture().get(3, TimeUnit.SECONDS);
                 releaseRead.complete(null);
                 assertTrue(sealing.toCompletableFuture().get(3, TimeUnit.SECONDS).isEmpty());

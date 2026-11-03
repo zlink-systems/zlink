@@ -95,11 +95,7 @@ final class ZLinkSpotTimerRegistryTest {
             registry.add("timer", Duration.ofDays(1), BlockingTimerHandler.class, null)
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
-            var field = ZLinkSpotTimerRegistry.class.getDeclaredField("stateLane");
-            field.setAccessible(true);
-            var lane =
-                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                            field.get(registry);
+            var lane = registry.stateLane;
             laneRef.set(lane);
             scheduledTick.get().run();
             attempted.get(3, TimeUnit.SECONDS);
@@ -220,13 +216,7 @@ final class ZLinkSpotTimerRegistryTest {
                         "test",
                         (timerName, operation) -> {
                             try {
-                                var field =
-                                        ZLinkSpotTimerRegistry.class.getDeclaredField("stateLane");
-                                field.setAccessible(true);
-                                var lane =
-                                        (systems.zlink.framework.runtime.internal.execution
-                                                        .ZLinkStateLane)
-                                                field.get(registryRef.get());
+                                var lane = registryRef.get().stateLane;
                                 lane.runAsync(
                                         () -> {
                                             ownerEntered.complete(null);
@@ -234,7 +224,7 @@ final class ZLinkSpotTimerRegistryTest {
                                             return null;
                                         });
                                 ownerEntered.get(3, TimeUnit.SECONDS);
-                            } catch (ReflectiveOperationException | TimeoutException failure) {
+                            } catch (TimeoutException failure) {
                                 return CompletableFuture.failedFuture(failure);
                             } catch (ExecutionException failure) {
                                 return CompletableFuture.failedFuture(failure.getCause());
@@ -349,7 +339,16 @@ final class ZLinkSpotTimerRegistryTest {
 
     @Test
     void omittedTimerOptionsKeepTickingAfterAnUnhandledException() throws Exception {
-        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        var scheduledTicks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+        var executor =
+                new ScheduledThreadPoolExecutor(1) {
+                    @Override
+                    public ScheduledFuture<?> schedule(
+                            Runnable command, long delay, TimeUnit unit) {
+                        scheduledTicks.add(command);
+                        return super.schedule(() -> {}, 1, TimeUnit.HOURS);
+                    }
+                };
         AtomicInteger ticks = new AtomicInteger();
         ZLinkHandlerActivator activator =
                 new ZLinkHandlerActivator() {
@@ -378,8 +377,18 @@ final class ZLinkSpotTimerRegistryTest {
             // stopOnUnhandledException = false (explicit in the C++/.NET/Node
             // interfaces; the Java interface is silent and nothing authorizes
             // true), so a repeating timer keeps ticking after each exception.
-            registry.add("timer", Duration.ofMillis(5), ThrowingTimerHandler.class, null);
-            Thread.sleep(200);
+            registry.add("timer", Duration.ofDays(1), ThrowingTimerHandler.class, null);
+            long scheduleDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(200);
+            Runnable firstTick = pollScheduledTick(scheduledTicks, scheduleDeadline);
+            assertTrue(firstTick != null, "the first omitted-options timer tick must be scheduled");
+            firstTick.run();
+            Runnable secondTick = pollScheduledTick(scheduledTicks, scheduleDeadline);
+            assertTrue(
+                    secondTick != null,
+                    "an omitted-options timer must reschedule after an unhandled exception");
+            secondTick.run();
+            Runnable nextTick = pollScheduledTick(scheduledTicks, scheduleDeadline);
+            assertTrue(nextTick != null, "the omitted-options timer must keep ticking");
             assertTrue(
                     ticks.get() > 1,
                     "an omitted-options repeating timer must keep ticking after an "
@@ -390,6 +399,13 @@ final class ZLinkSpotTimerRegistryTest {
             handlers.close();
             executor.shutdownNow();
         }
+    }
+
+    private static Runnable pollScheduledTick(
+            java.util.concurrent.BlockingQueue<Runnable> scheduledTicks, long deadline)
+            throws InterruptedException {
+        long remaining = deadline - System.nanoTime();
+        return remaining <= 0 ? null : scheduledTicks.poll(remaining, TimeUnit.NANOSECONDS);
     }
 
     @Test

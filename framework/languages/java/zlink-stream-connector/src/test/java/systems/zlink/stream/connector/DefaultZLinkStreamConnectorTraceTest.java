@@ -13,12 +13,6 @@ final class DefaultZLinkStreamConnectorTraceTest {
                 new DefaultZLinkStreamConnector(
                         ZLinkStreamConnectorOptions.createDefault(
                                 java.net.URI.create("tcp://127.0.0.1:1")));
-        var method =
-                DefaultZLinkStreamConnector.class.getDeclaredMethod(
-                        "traceWrite",
-                        ZLinkStreamWireProtocol.Header.class,
-                        java.util.concurrent.CompletionStage.class);
-        method.setAccessible(true);
         var callbacks = new java.util.concurrent.atomic.AtomicInteger();
         var publication =
                 new java.util.concurrent.CompletableFuture<Void>() {
@@ -30,7 +24,7 @@ final class DefaultZLinkStreamConnectorTraceTest {
                     }
                 };
         org.junit.jupiter.api.Assertions.assertSame(
-                publication, method.invoke(connector, null, publication));
+                publication, connector.traceWrite(null, publication));
         org.junit.jupiter.api.Assertions.assertEquals(0, callbacks.get());
     }
 

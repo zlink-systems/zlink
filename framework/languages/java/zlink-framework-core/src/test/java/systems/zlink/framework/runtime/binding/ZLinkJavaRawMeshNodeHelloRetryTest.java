@@ -251,12 +251,12 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                                 Duration.ofSeconds(15));
                 var peerPort = new ZLinkJavaRawServicePort(context);
                 var peer = peerPort.openRouter(remoteRid)) {
-            var port = (ZLinkJavaRawServicePort) field(node, "port");
+            var port = node.port;
             var router = port.openRouter(localRid);
-            set(node, "router", router);
-            set(node, "localDescriptor", descriptor(localRid));
+            node.router = router;
+            node.localDescriptor = descriptor(localRid);
             var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane());
-            set(node, "topology", topology);
+            node.topology = topology;
             topology.observeChanges(node::publishPeerObservation);
             String endpoint = "inproc://hello-cadence-" + java.util.UUID.randomUUID();
             peer.bind(endpoint);
@@ -312,14 +312,14 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 var peerPort = new ZLinkJavaRawServicePort(context);
                 var peer = peerPort.openRouter(remoteRid);
                 var readyEvents = new PeerReadyEvents(remoteRid)) {
-            var port = (ZLinkJavaRawServicePort) field(node, "port");
+            var port = node.port;
             var router = port.openRouter(localRid);
             String endpoint = "inproc://hello-retry-" + java.util.UUID.randomUUID();
             router.bind(endpoint);
-            set(node, "router", router);
-            set(node, "localDescriptor", descriptor(localRid));
+            node.router = router;
+            node.localDescriptor = descriptor(localRid);
             var topology = new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane());
-            set(node, "topology", topology);
+            node.topology = topology;
             topology.observeChanges(node::publishPeerObservation);
             if (withIntent) {
                 String peerEndpoint = descriptor(remoteRid, 2).advertisedEndpoint();
@@ -427,20 +427,8 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                         node.requestChannel(
                                 "orders", null, List.of(body), IO_DEADLINE, null, null, null));
             }
-            var publish =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "publishLocalDescriptor", ZLinkServiceNodeDescriptor.class);
-            publish.setAccessible(true);
             var lane = node.descriptorStateLaneForTest();
-            lane.runAsync(
-                            () -> {
-                                try {
-                                    publish.invoke(node, descriptor(localRid, 2));
-                                } catch (ReflectiveOperationException failure) {
-                                    throw new AssertionError(failure);
-                                }
-                                return null;
-                            })
+            lane.runAsync(() -> node.publishLocalDescriptor(descriptor(localRid, 2)))
                     .toCompletableFuture()
                     .get(2, java.util.concurrent.TimeUnit.SECONDS);
             tick(node, firstPeriod + Duration.ofSeconds(5).toNanos());
@@ -653,18 +641,6 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
 
     private static void tick(ZLinkJavaRawMeshNode node, long now) {
         node.tickLiveness(now);
-    }
-
-    private static Object field(Object owner, String name) throws Exception {
-        var field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
-    }
-
-    private static void set(Object owner, String name, Object value) throws Exception {
-        var field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(owner, value);
     }
 
     private static ZLinkServiceNodeDescriptor descriptor(RoutingId rid) {

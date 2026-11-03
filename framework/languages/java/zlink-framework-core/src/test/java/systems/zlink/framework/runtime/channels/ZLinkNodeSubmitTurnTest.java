@@ -18,18 +18,17 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestAccess;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -681,30 +680,23 @@ final class ZLinkNodeSubmitTurnTest {
 
     private static void awaitQueued(ZLinkStateLane lane) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        Queue<?> mailbox;
         do {
-            mailbox = (Queue<?>) field(lane, "mailbox");
-            if (mailbox != null && !mailbox.isEmpty()) break;
+            if (ZLinkStateLaneTestAccess.queuedTurnCount(lane) > 0) break;
             Thread.yield();
         } while (System.nanoTime() < deadline);
-        org.junit.jupiter.api.Assertions.assertNotNull(mailbox, "the mailbox must be published");
-        assertFalse(mailbox.isEmpty(), "the replacement must be queued behind the submission turn");
-    }
-
-    private static Object field(Object object, String name) throws Exception {
-        Field field = object.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(object);
+        assertTrue(
+                ZLinkStateLaneTestAccess.queuedTurnCount(lane) > 0,
+                "the replacement must be queued behind the submission turn");
     }
 
     private static Message payloadMessage(Object call) throws Exception {
-        return ((ZLinkFrameworkMultipartView) field(call, "payload")).getFirst();
-    }
-
-    private static void setField(Object object, String name, Object value) throws Exception {
-        Field field = object.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(object, value);
+        ZLinkFrameworkMultipartView payload;
+        if (call instanceof RouteSendCall send) payload = send.payload;
+        else if (call instanceof RouteRequestCall request) payload = request.payload;
+        else if (call instanceof ChannelSendCall send) payload = send.payload;
+        else if (call instanceof ChannelRequestCall request) payload = request.payload;
+        else throw new AssertionError("unexpected channel call " + call.getClass().getName());
+        return payload.getFirst();
     }
 
     private static Object defaultValue(Class<?> type) {
@@ -747,20 +739,14 @@ final class ZLinkNodeSubmitTurnTest {
                                 systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
                                         .NORMAL);
             options.setDefaultRequestTimeout(DEFAULT_TIMEOUT);
+            lane = laneExecutor == null ? new ZLinkStateLane() : new ZLinkStateLane(laneExecutor);
             runtime =
                     new ZLinkChannelRuntime(
                             new EmptyBackend(),
                             options.registration(),
-                            new ZLinkJsonMessageSerializer());
-            sockets = (ZLinkChannelSocketRegistry) field(runtime, "sockets");
-            if (laneExecutor == null) {
-                lane = (ZLinkStateLane) field(sockets, "stateLane");
-            } else {
-                lane = new ZLinkStateLane(laneExecutor);
-                setField(sockets, "stateLane", lane);
-            }
-            // This unmanaged backend's operation owner is the fixture's source lane.
-            setField(field(field(runtime, "callRuntime"), "operations"), "owner", lane);
+                            new ZLinkJsonMessageSerializer(),
+                            lane);
+            sockets = runtime.sockets;
         }
 
         void register(Duration timeout) {

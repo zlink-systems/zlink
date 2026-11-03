@@ -13,7 +13,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
@@ -215,9 +214,7 @@ final class ZLinkJavaRawSpotNodeReplyLifetimeTest {
                             },
                             failure::complete));
             var received = ingress.get(1, TimeUnit.SECONDS);
-            var field = ZLinkJavaRawSpotNode.class.getDeclaredField("actorRemoteReplies");
-            field.setAccessible(true);
-            var routes = (Map<?, ?>) field.get(spots);
+            var routes = spots.actorRemoteReplies;
             assertEquals(1, routes.size(), "payload release must not release the reply route");
             if (terminal == Terminal.REPLY) {
                 try (var reply = Message.from("reply")) {

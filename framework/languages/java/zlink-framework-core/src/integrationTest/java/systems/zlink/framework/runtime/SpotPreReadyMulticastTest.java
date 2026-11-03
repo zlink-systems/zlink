@@ -15,12 +15,13 @@ import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderAuthorityRepositoryTestAccess;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting;
 import systems.zlink.framework.spots.*;
 
 import java.util.List;
-import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -82,16 +83,19 @@ final class SpotPreReadyMulticastTest {
             List<Message> retained = List.of();
             boolean applicationQueued = false;
             try {
-                HeldSpot.context
-                        .outbound()
-                        .publish("events", "orders", new Event("held"))
-                        .submit()
-                        .toCompletableFuture()
-                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
-                retained = awaitPendingTopic();
+                var observedTopic = new CompletableFuture<ZLinkBackendTopicMessage>();
+                try (var observation =
+                        ZLinkSpotRuntimeTesting.observeNextTopic(HeldSpot.context, observedTopic)) {
+                    HeldSpot.context
+                            .outbound()
+                            .publish("events", "orders", new Event("held"))
+                            .submit()
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    retained = observedTopic.get(WAIT_SECONDS, TimeUnit.SECONDS).parts();
+                }
                 applicationQueued =
-                        ((Queue<?>) field(field(HeldSpot.context, "backendSpot"), "subscriptions"))
-                                .isEmpty();
+                        ZLinkSpotRuntimeTesting.hasNoPendingSubscriptions(HeldSpot.context);
                 assertEquals(0, HeldSpot.calls.get());
                 assertFalse(creating.isDone());
             } finally {
@@ -162,25 +166,24 @@ final class SpotPreReadyMulticastTest {
             var creating = runtime.spotManager().create("HeldSpot").submit().toCompletableFuture();
             assertTrue(HeldSpot.entered.await(WAIT_SECONDS, TimeUnit.SECONDS));
             // Use the repository's existing key owner to observe this Spot's Ready write.
-            var keyOwner =
-                    Class.forName(
-                                    "systems.zlink.framework.runtime.internal.locations.ZLinkProviderAuthorityRepository")
-                            .getDeclaredMethod("authorityKey", String.class);
-            keyOwner.setAccessible(true);
             store.key.set(
-                    (ZLinkStoreKey)
-                            keyOwner.invoke(
-                                    null, ZLinkAuthorityKeyCodec.spot(HeldSpot.context.spotId())));
+                    ZLinkProviderAuthorityRepositoryTestAccess.authorityKey(
+                            ZLinkAuthorityKeyCodec.spot(HeldSpot.context.spotId())));
             HeldSpot.initializing.complete(null);
             store.entered.get(WAIT_SECONDS, TimeUnit.SECONDS);
             try {
-                HeldSpot.context
-                        .outbound()
-                        .publish("events", "orders", new Event("held"))
-                        .submit()
-                        .toCompletableFuture()
-                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
-                List<Message> retained = awaitPendingTopic();
+                List<Message> retained;
+                var observedTopic = new CompletableFuture<ZLinkBackendTopicMessage>();
+                try (var observation =
+                        ZLinkSpotRuntimeTesting.observeNextTopic(HeldSpot.context, observedTopic)) {
+                    HeldSpot.context
+                            .outbound()
+                            .publish("events", "orders", new Event("held"))
+                            .submit()
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    retained = observedTopic.get(WAIT_SECONDS, TimeUnit.SECONDS).parts();
+                }
                 assertEquals(0, HeldSpot.calls.get(), "initialization alone is not Ready");
                 assertFalse(creating.isDone());
                 store.release.complete(discard);
@@ -267,44 +270,8 @@ final class SpotPreReadyMulticastTest {
         }
     }
 
-    // Read-only inspection identifies the actual retained native frames. Publication and
-    // lifecycle control use the public API; no test-only dispatch or receive path is installed.
-    private static List<Message> awaitPendingTopic() throws Exception {
-        Object backend = field(HeldSpot.context, "backendSpot");
-        ZLinkSerialExecutionQueue queue = spotQueue();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
-        while (System.nanoTime() < deadline) {
-            Object pending = ((Queue<?>) field(backend, "subscriptions")).peek();
-            if (pending instanceof ZLinkBackendTopicMessage topic) return topic.parts();
-            synchronized (queue) {
-                for (String name : List.of("applicationPending", "publishedApplication")) {
-                    Object entries = field(queue, name);
-                    if (entries == null) continue;
-                    for (Object entry : (Iterable<?>) entries) {
-                        Object operation = field(entry, "operation");
-                        for (var captured : operation.getClass().getDeclaredFields()) {
-                            if (captured.getType() == ZLinkBackendTopicMessage.class) {
-                                captured.setAccessible(true);
-                                return ((ZLinkBackendTopicMessage) captured.get(operation)).parts();
-                            }
-                        }
-                    }
-                }
-            }
-            assertEquals(0, HeldSpot.calls.get(), "handler ran before Ready");
-            Thread.sleep(1);
-        }
-        throw new AssertionError("publication did not reach the target queue");
-    }
-
-    private static Object field(Object owner, String name) throws ReflectiveOperationException {
-        var field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
-    }
-
-    private static ZLinkSerialExecutionQueue spotQueue() throws ReflectiveOperationException {
-        return (ZLinkSerialExecutionQueue) field(field(HeldSpot.context, "serials"), "spotQueue");
+    private static ZLinkSerialExecutionQueue spotQueue() {
+        return ZLinkSpotRuntimeTesting.spotQueue(HeldSpot.context);
     }
 
     private static void awaitReleased(List<Message> parts) throws Exception {
@@ -379,11 +346,7 @@ final class SpotPreReadyMulticastTest {
 
         @Override
         public CompletionStage<Void> onInitialize() {
-            try {
-                initializeInOwnerTurn = spotQueue().isCurrent();
-            } catch (ReflectiveOperationException failure) {
-                return CompletableFuture.failedFuture(failure);
-            }
+            initializeInOwnerTurn = spotQueue().isCurrent();
             if (!holdInitialize) return CompletableFuture.completedFuture(null);
             entered.countDown();
             return initializing;

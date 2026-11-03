@@ -134,7 +134,7 @@ import java.util.stream.Collectors;
  */
 final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private static final Logger LOGGER = Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
-    private final List<StateObserver> stateListeners = new CopyOnWriteArrayList<>();
+    final List<StateObserver> stateListeners = new CopyOnWriteArrayList<>();
     private static final int PREFIX_BYTES = 5;
     private static final int MAX_INFRASTRUCTURE_CONTROL_PARTS = 64;
     private static final int MAX_INGRESS_BATCH = 64;
@@ -155,7 +155,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private final java.util.function.BiConsumer<
                     String, ZLinkServiceTopologyRegistry.ChannelSelectionFailure>
             selectionFailureObserver = this::recordChannelSelectionFailure;
-    private final ZLinkJavaRawServicePort port;
+    final ZLinkJavaRawServicePort port;
     private final LongSupplier currentTimeMillis;
     private final LongSupplier nanoTime;
     private final Supplier<Runnable> pumpManagement;
@@ -163,13 +163,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private final Map<Long, PeerIntent> peerIntents = new ConcurrentHashMap<>();
     private final Map<RoutingId, PeerAdmissionExpectation> peerAdmissionExpectations =
             new ConcurrentHashMap<>();
-    private final Map<RoutingId, Map<String, Integer>> knownPeerChannels =
-            new ConcurrentHashMap<>();
+    final Map<RoutingId, Map<String, Integer>> knownPeerChannels = new ConcurrentHashMap<>();
     private final Set<RoutingId> notRequiredPeers = ConcurrentHashMap.newKeySet();
-    private final Set<RoutingId> rejectedPeers = ConcurrentHashMap.newKeySet();
+    final Set<RoutingId> rejectedPeers = ConcurrentHashMap.newKeySet();
     private final Set<Long> closedPeerIntents = ConcurrentHashMap.newKeySet();
     private final Set<Long> closeRequestedPeerIntents = ConcurrentHashMap.newKeySet();
-    private final Map<Long, RoutingId> peerIntentRoutingIds = new ConcurrentHashMap<>();
+    final Map<Long, RoutingId> peerIntentRoutingIds = new ConcurrentHashMap<>();
     private final Map<RoutingId, AutomaticNotRequiredPeer> automaticNotRequiredPeers =
             new ConcurrentHashMap<>();
     private final AtomicLong nextIntent = new AtomicLong(1);
@@ -178,14 +177,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private final AtomicReference<LogicalCloseOperation> logicalClose = new AtomicReference<>();
     private final ZLinkStateLane transportStateLane;
     // Descriptor mutation and deferred-ready state are one C2 group.
-    private final ZLinkStateLane descriptorStateLane = new ZLinkStateLane();
+    final ZLinkStateLane descriptorStateLane = new ZLinkStateLane();
     // Lazy SpotNode construction is a separate C1 registry state.
     private final ZLinkStateLane spotNodeStateLane = new ZLinkStateLane();
     // User operation slots and their retention sweep form one C2 group.
     private final ZLinkStateLane userSpotTerminalStateLane = new ZLinkStateLane();
     private final ZLinkServiceM6AWireCodec wire = new ZLinkServiceM6AWireCodec();
     private final ZLinkServiceM6BWireCodec statefulWire = new ZLinkServiceM6BWireCodec();
-    private final ZLinkServiceLivenessRegistry liveness;
+    final ZLinkServiceLivenessRegistry liveness;
     private final ScheduledExecutorService deadlines = ZLinkProcessExecutionLanes.deadlines();
     private final Executor applicationDispatch;
     private final ZLinkServiceOperationRegistry operations;
@@ -197,7 +196,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     // RID -> route generation Core selected, as last observed by the receive pump (the ROUTER's
     // one route observer, Core ROUTER §10.1). Only that thread replaces this immutable copy while
     // the pump runs.
-    private volatile Map<RoutingId, Long> selectedRoutes = Map.of();
+    volatile Map<RoutingId, Long> selectedRoutes = Map.of();
 
     private record PeerObservationRoot(
             ZLinkServiceNodeDescriptor local,
@@ -270,7 +269,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private volatile RoutingId routingId;
     private volatile String bindEndpoint;
     private volatile String advertiseHost;
-    private volatile RouterSocket router;
+    volatile RouterSocket router;
     private volatile MeshNodeState state = MeshNodeState.CREATED;
     private volatile Consumer<ZLinkMeshDispatchRecord> receiver = ZLinkMeshDispatchRecord::close;
     private volatile ZLinkMeshApplicationReceiver applicationReceiver;
@@ -310,10 +309,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private volatile int placementWeight = 100;
     private volatile ZLinkServiceNodeDescriptor.ObjectRole objectRole =
             ZLinkServiceNodeDescriptor.ObjectRole.NONE;
-    private volatile ZLinkServiceTopologyRegistry topology;
-    private volatile ZLinkServiceNodeDescriptor localDescriptor;
+    volatile ZLinkServiceTopologyRegistry topology;
+    volatile ZLinkServiceNodeDescriptor localDescriptor;
     private boolean deferServiceReadyPublication;
-    private volatile java.util.function.BooleanSupplier peerAdmissionSealed = () -> false;
+    volatile java.util.function.BooleanSupplier peerAdmissionSealed = () -> false;
     private volatile ZLinkInternalMeshNode.UserSpotOperationHandler userSpotOperationHandler;
     private volatile ZLinkInternalMeshNode.ActorCreateOperationHandler actorCreateOperationHandler;
     private volatile ZLinkInternalMeshNode.CanonicalActorJoinHandler canonicalActorJoinHandler;
@@ -1063,7 +1062,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 });
     }
 
-    private void publishLocalDescriptor(ZLinkServiceNodeDescriptor updated) {
+    void publishLocalDescriptor(ZLinkServiceNodeDescriptor updated) {
         localDescriptor = updated;
         var targets =
                 port.inStateLane(
@@ -1242,7 +1241,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 expectedSecurityIdentity);
     }
 
-    private boolean peerIntentIsClosed(long connectionIntentId) {
+    boolean peerIntentIsClosed(long connectionIntentId) {
         PeerIntent intent = peerIntents.get(connectionIntentId);
         return intent == null || closedPeerIntents.contains(connectionIntentId);
     }
@@ -1274,7 +1273,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         signalStateChanged(intent.expectedRoutingId());
     }
 
-    private void drainPeerCloseRequests() {
+    void drainPeerCloseRequests() {
         PeerCloseRequest request = pendingPeerCloseRequests.poll();
         if (request == null) return;
         do {
@@ -8383,11 +8382,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         };
     }
 
-    private CompletionStage<Void> sendLiveness(RoutingId target, List<byte[]> frames) {
+    CompletionStage<Void> sendLiveness(RoutingId target, List<byte[]> frames) {
         return port.send(requireStarted(), target, frames);
     }
 
-    private static List<byte[]> encodeLiveness(int command, long probeId) {
+    static List<byte[]> encodeLiveness(int command, long probeId) {
         return new ZLinkServiceWireCodec()
                 .encode(
                         new ZLinkServiceWireFrame(
@@ -8841,7 +8840,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return ZLinkBackendRequestResult.fromWireTerminal(wireValue);
     }
 
-    private UserSpotTerminalAdmission admitUserSpotOperation(
+    UserSpotTerminalAdmission admitUserSpotOperation(
             UserSpotOperationKey key, byte[] fingerprint, long deadlineUnixMs) {
         return inUserSpotTerminalStateLane(
                 () -> {
@@ -8935,7 +8934,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return current;
     }
 
-    private record UserSpotOperationKey(
+    record UserSpotOperationKey(
             RoutingId sourceNodeRid,
             long sourceNodeGeneration,
             long operationHigh,
@@ -8993,10 +8992,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
-    private static final class UserSpotTerminalSlot {
+    static final class UserSpotTerminalSlot {
         private final byte[] fingerprint;
         private final long retentionDeadlineNanos;
-        private final CompletableFuture<UserSpotTerminalReply> terminal = new CompletableFuture<>();
+        final CompletableFuture<UserSpotTerminalReply> terminal = new CompletableFuture<>();
 
         private UserSpotTerminalSlot(byte[] fingerprint, long nowNanos, long remainingNanos) {
             this.fingerprint = fingerprint;
@@ -9011,19 +9010,19 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
-    private record UserSpotTerminalAdmission(
+    record UserSpotTerminalAdmission(
             UserSpotTerminalSlot slot,
             boolean owner,
             boolean fingerprintMismatch,
             boolean expiredNew) {}
 
-    private record UserSpotTerminalReply(
+    record UserSpotTerminalReply(
             int terminalResult,
             int failureCode,
             ZLinkServiceM6BWireCodec.UserSpotCreateTerminal create,
             Boolean closed,
             byte[] applicationFrame) {
-        private UserSpotTerminalReply {
+        UserSpotTerminalReply {
             applicationFrame = applicationFrame == null ? null : applicationFrame.clone();
         }
 

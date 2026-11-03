@@ -879,13 +879,9 @@ final class ZLinkCanonicalRelocationSettlementTest {
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
             runtime.setMessageFlowModeAsync(ZLinkMessageFlowLogMode.NORMAL).join();
-            var bridgeField = runtime.getClass().getDeclaredField("spotRetire");
-            bridgeField.setAccessible(true);
-            Object bridge = bridgeField.get(runtime);
+            Object bridge = ZLinkFrameworkRuntimeTestAccess.spotRetire(runtime);
             assertNotNull(bridge);
-            var machinesField = bridge.getClass().getDeclaredField("stateMachines");
-            machinesField.setAccessible(true);
-            machinesField.set(bridge, List.of(target));
+            ZLinkSpotRuntimeTestAccess.replaceRelocationStateMachines(bridge, List.of(target));
             return runtime;
         }
 

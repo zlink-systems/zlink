@@ -37,7 +37,7 @@ final class ZLinkActorSessionCoordinator {
 
     record LocalDispatch(ZLinkActor actor, Optional<String> joinedSpotId) {}
 
-    private ZLinkActorRuntime actors;
+    ZLinkActorRuntime actors;
 
     void attach(
             ZLinkActorRuntime actors,

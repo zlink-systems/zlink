@@ -78,7 +78,7 @@ final class ZLinkRedisLocationConnection<V> {
     private final String schemaKey;
     private final RedisCodec<String, V> codec;
     private final Function<String, V> literal;
-    private CompletableFuture<StatefulRedisConnection<String, V>> connection;
+    CompletableFuture<StatefulRedisConnection<String, V>> connection;
     private CompletableFuture<Void> schemaReady;
     private CompletionStage<Void> closeStage;
     private boolean closed;

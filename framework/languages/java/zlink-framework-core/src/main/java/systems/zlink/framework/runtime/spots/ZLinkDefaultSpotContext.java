@@ -56,7 +56,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     private final ZLinkSpotSerialExecutor serials;
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final List<DefaultSpotContext> timerContexts = new ArrayList<>();
-    private final Map<String, ZLinkSpotTimerRegistry> actorTimers = new ConcurrentHashMap<>();
+    final Map<String, ZLinkSpotTimerRegistry> actorTimers = new ConcurrentHashMap<>();
     private final ZLinkSpotHandlerCatalog handlerCatalog =
             new ZLinkSpotHandlerCatalog(
                     "EntrySpot handler registration is only allowed while configure is running");
@@ -431,21 +431,21 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     private final ZLinkWorkerPool workerPool;
     private final ZLinkSpotHandlerLoader handlerLoader;
     private final RoutingId nodeRid;
-    private final ZLinkBackendSpot backendSpot;
+    final ZLinkBackendSpot backendSpot;
     private final long objectGeneration;
     private final DefaultSpotOutbound outbound;
-    private final ZLinkSpotTimerRegistry timers;
+    final ZLinkSpotTimerRegistry timers;
     private final ZLinkHandlerInstanceOwner handlerInstances;
-    private final ZLinkSpotSerialExecutor serials;
+    final ZLinkSpotSerialExecutor serials;
     private java.util.function.BooleanSupplier closeCommitted = () -> false;
-    private final Map<String, ZLinkSpotTimerRegistry> actorTimers = new ConcurrentHashMap<>();
+    final Map<String, ZLinkSpotTimerRegistry> actorTimers = new ConcurrentHashMap<>();
     private final ZLinkUserSpotExecutionMode executionMode;
     private final ZLinkSpotRelocationCoordinationMode relocationCoordinationMode;
     private final boolean instanceSpot;
     // The relocation barrier and readiness waiter share one C2 ownership
     // region: a readiness claim must observe the same relocation boundary as
     // the barrier that later consumes it.
-    private final ZLinkStateLane relocationStateLane = new ZLinkStateLane();
+    final ZLinkStateLane relocationStateLane = new ZLinkStateLane();
     private RelocationReadyWaiter relocationReadyWaiter;
     private ZLinkUserSpotRelocationBarrier relocationBarrier;
     private final ZLinkSpotHandlerCatalog handlerCatalog =
@@ -1284,7 +1284,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         serials.enqueueSpotBarrierNext(this::reachRelocationReadyBoundary);
     }
 
-    private CompletionStage<Void> reachRelocationReadyBoundary() {
+    CompletionStage<Void> reachRelocationReadyBoundary() {
         CompletionStage<RelocationReadyWaiter> claim =
                 relocationStateLane.tryRunNow(
                         () -> {

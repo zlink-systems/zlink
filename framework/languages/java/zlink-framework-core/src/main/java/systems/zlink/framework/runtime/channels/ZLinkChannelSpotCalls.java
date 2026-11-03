@@ -38,7 +38,7 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
     private final SpotTransportAddressResolver resolver;
     private final Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots;
     private final String target;
-    private final ZLinkFrameworkMultipartView payload;
+    final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
     private final String contentType;
     private final boolean instanceIntent;
@@ -327,7 +327,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
     private final SpotTransportAddressResolver resolver;
     private final Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots;
     private final String target;
-    private final ZLinkFrameworkMultipartView payload;
+    final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
     private final Duration timeout;
     private final String contentType;

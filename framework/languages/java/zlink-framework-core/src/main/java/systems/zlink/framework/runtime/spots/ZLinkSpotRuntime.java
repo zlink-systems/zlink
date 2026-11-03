@@ -148,8 +148,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
-    private final ZLinkFrameworkRegistration frameworkRegistration;
-    private final List<ZLinkInternalSpotNode> nodes = new ArrayList<>();
+    final ZLinkFrameworkRegistration frameworkRegistration;
+    final List<ZLinkInternalSpotNode> nodes = new ArrayList<>();
     private final Map<String, ZLinkInternalSpotNode> nodesByName = new HashMap<>();
     private final ZLinkSpotLocationCoordinator spotLocations = new ZLinkSpotLocationCoordinator();
     private final ZLinkSpotLifecycle spotLifecycle;
@@ -161,10 +161,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final ZLinkSpotRouteMessages routeMessages;
     private final ZLinkSpotDirectOutbound directOutbound;
     private final ZLinkSpotRoutedOutbound routedOutbound;
-    private final ZLinkSpotPublisherRuntime publishers;
+    final ZLinkSpotPublisherRuntime publishers;
     private final ZLinkHandlerActivator handlerFactory;
-    private final ZLinkDispatchErrorReporter dispatchErrors;
-    private final Executor handlerExecutor;
+    final ZLinkDispatchErrorReporter dispatchErrors;
+    Executor handlerExecutor;
     private final systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
             applicationJobQueue;
     private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
@@ -174,25 +174,25 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final ZLinkSpotActivationFactory activationFactory;
     private final Duration defaultRequestTimeout;
     private final ZLinkActorBoundSessionSender boundSessionSender;
-    private final ZLinkChannelRuntime channels;
+    final ZLinkChannelRuntime channels;
     private final List<ChannelRegistration> routeMeshChannels = new ArrayList<>();
     private final Set<RoutingId> manualRouterPeerNodeRids = ConcurrentHashMap.newKeySet();
-    private final Map<String, ZLinkInstanceSpotActivation> instanceSpotActivations =
+    final Map<String, ZLinkInstanceSpotActivation> instanceSpotActivations =
             new ConcurrentHashMap<>();
 
-    private record ClosingFence(String spotId, long objectGeneration, long ownerGeneration) {}
+    record ClosingFence(String spotId, long objectGeneration, long ownerGeneration) {}
 
-    private record RetainedClose(ZLinkSpotCloseCoordinator coordinator, Object commandFence) {}
+    record RetainedClose(ZLinkSpotCloseCoordinator coordinator, Object commandFence) {}
 
-    private final Map<ClosingFence, RetainedClose> closingCoordinators = new ConcurrentHashMap<>();
-    private final Map<String, ZLinkUserSpotOperationHandler> userSpotOperationHandlers =
+    final Map<ClosingFence, RetainedClose> closingCoordinators = new ConcurrentHashMap<>();
+    final Map<String, ZLinkUserSpotOperationHandler> userSpotOperationHandlers =
             new ConcurrentHashMap<>();
     private final Map<String, Duration> instanceSpotIdleTimeouts = new HashMap<>();
     private final List<ZLinkInternalMeshNode> routeMeshNodes;
-    private final Map<String, ZLinkInternalMeshNode> routeMeshNodesByName;
+    Map<String, ZLinkInternalMeshNode> routeMeshNodesByName;
     private final Map<String, ZLinkActivationAdmission> activationAdmissions;
     private volatile ZLinkLocationRepository userSpotAuthorityStore;
-    private volatile ZLinkLocationRepository userSpotLocationStore;
+    volatile ZLinkLocationRepository userSpotLocationStore;
     private volatile systems.zlink.framework.runtime.locations.ZLinkLocationRuntime
             userSpotLocationRuntime;
     private volatile systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers
@@ -204,16 +204,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
             userSpotPayloads =
                     new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec();
-    private final ZLinkSpotRelocationReplyRoutes relocationReplyRoutes =
+    final ZLinkSpotRelocationReplyRoutes relocationReplyRoutes =
             new ZLinkSpotRelocationReplyRoutes();
     private final ZLinkSpotOutboundScope outboundScope = new ZLinkSpotOutboundScope();
     private volatile boolean closing;
     private volatile CompletionStage<Void> applicationCleanup =
             CompletableFuture.completedFuture(null);
-    private volatile boolean draining;
+    volatile boolean draining;
     private volatile boolean relocating;
     private final ZLinkWorkerPool workerPool;
-    private final ScheduledExecutorService timerExecutor =
+    ScheduledExecutorService timerExecutor =
             Executors.newScheduledThreadPool(
                     1,
                     task -> {
@@ -1023,46 +1023,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 .ZLinkServiceAuthorityPayloadCodec.State.CLOSING) {
                                     if (instanceIntent)
                                         return CompletableFuture.completedFuture(null);
-                                    ZLinkInstanceSpotActivation instance =
-                                            instanceSpotActivations.get(spotId);
-                                    SpotActivation user = spotLifecycle.spotActivationFor(spotId);
-                                    CompletionStage<Void> admission;
-                                    if (instance != null
-                                            && instance.authorityFenceMatches(
-                                                    authority.get().ownerId(),
-                                                    authority.get().ownerLeaseGeneration(),
-                                                    snapshot.authorityOwnerGeneration())) {
-                                        admission =
-                                                instance.context
-                                                        .ownerQueue()
-                                                        .admitIngress(
-                                                                () ->
-                                                                        CompletableFuture
-                                                                                .completedFuture(
-                                                                                        null));
-                                    } else if (user != null
-                                            && user.backendSpot.lifecycleGeneration()
-                                                    == snapshot.objectGeneration()) {
-                                        admission =
-                                                user.context.admitIngress(
-                                                        () ->
-                                                                CompletableFuture.completedFuture(
-                                                                        null));
-                                    } else {
-                                        return CompletableFuture.completedFuture(
-                                                ZLinkFrameworkErrorOrigin.framework(
-                                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                        "Spot activation is unavailable: "
-                                                                + spotId));
-                                    }
-                                    return admission.handle(
-                                            (ignored, failure) -> {
-                                                if (failure == null) return null;
-                                                Throwable cause = unwrapCompletion(failure);
-                                                if (cause instanceof RuntimeException error)
-                                                    return error;
-                                                throw new CompletionException(cause);
-                                            });
+                                    return CompletableFuture.completedFuture(
+                                            ZLinkFrameworkErrorOrigin.framework(
+                                                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                                                    "Spot is closing: " + spotId));
                                 }
                                 if (authority.get().state()
                                                 == systems.zlink.framework.runtime.locations
@@ -1155,7 +1119,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     @Override
     CompletionStage<Boolean> closeSpot(String spotId, long objectGeneration) {
-        return closeIntent(spotId, objectGeneration)
+        long deadline = userSpotCloseDeadlineUnixMs();
+        return closeIntent(spotId, objectGeneration, deadline)
                 .thenCompose(
                         target -> {
                             if (target.isEmpty()) {
@@ -1177,7 +1142,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return activation == null || activation.context != context
                 ? CompletableFuture.completedFuture(false)
                 : ZLinkSerialExecutionQueue.yieldCurrent(
-                                closeIntent(context.spotId(), context.objectGeneration()))
+                                closeIntent(
+                                        context.spotId(),
+                                        context.objectGeneration(),
+                                        userSpotCloseDeadlineUnixMs()))
                         .thenCompose(
                                 intent ->
                                         intent.isEmpty()
@@ -1221,7 +1189,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
      * only reports an absent row as the idempotent {@code false}.
      */
     private CompletionStage<Optional<CloseIntent>> closeIntent(
-            String spotId, long objectGeneration) {
+            String spotId, long objectGeneration, long deadline) {
         ZLinkLocationRepository store = requireUserSpotAuthorityStore();
         return store.read(
                         systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
@@ -1249,8 +1217,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         "Object client Mesh is not configured: "
                                                 + authority.meshName());
                             }
-                            long deadline =
-                                    System.currentTimeMillis() + defaultRequestTimeout.toMillis();
                             return Optional.of(
                                     new CloseIntent(
                                             authority.meshName(),
@@ -1267,6 +1233,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             snapshot.storeVersion()),
                                                     deadline)));
                         });
+    }
+
+    private long userSpotCloseDeadlineUnixMs() {
+        return System.currentTimeMillis() + defaultRequestTimeout.toMillis();
     }
 
     Instant defaultCloseDeadline(Instant startedAt) {
@@ -2692,8 +2662,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return frameworkRegistration.locations().options().messageFollowDuration();
     }
 
-    private static RuntimeException closeRuntimeComponent(
-            Runnable close, RuntimeException firstFailure) {
+    static RuntimeException closeRuntimeComponent(Runnable close, RuntimeException firstFailure) {
         try {
             close.run();
         } catch (RuntimeException error) {
@@ -3133,7 +3102,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .orElse(null);
     }
 
-    private CompletionStage<String> resolveInstanceType(
+    CompletionStage<String> resolveInstanceType(
             ZLinkLocationRepository store, String meshName, String requestedType) {
         if (requestedType != null) {
             return CompletableFuture.completedFuture(requireStableType(requestedType));
@@ -3183,7 +3152,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
-    private CompletionStage<InstanceTarget> selectInstanceSpotTarget(
+    CompletionStage<InstanceTarget> selectInstanceSpotTarget(
             ZLinkLocationRepository store, String meshName, String stableType) {
         var admissionFailure = spotHostAdmissionFailure(stableType);
         if (admissionFailure != null) {
@@ -3324,7 +3293,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private static final int INSTANCE_TARGET_PAGE_SIZE = 1000;
     private static final Duration ACTIVATION_RECOVERY_RETENTION = Duration.ofHours(24);
 
-    private CompletionStage<ZLinkAuthorityReadResult> readInstanceSpotActivationTarget(
+    CompletionStage<ZLinkAuthorityReadResult> readInstanceSpotActivationTarget(
             ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
         var store = requireUserSpotLocationStore();
         String key =
@@ -3448,7 +3417,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 failure, envelope.deadlineUnixMs())));
     }
 
-    private CompletionStage<
+    CompletionStage<
                     systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceRouteFence>
             reserveInstanceSpotTarget(
@@ -3459,7 +3428,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .thenCompose(read -> reserveInstanceSpotTarget(envelope, read));
     }
 
-    private CompletionStage<
+    CompletionStage<
                     systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceRouteFence>
             reserveInstanceSpotTarget(
@@ -5086,7 +5055,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return spotLifecycle.spotSurfaceFor(spotId);
     }
 
-    private EntrySpotActivation entrySpotActivationFor(String spotId) {
+    EntrySpotActivation entrySpotActivationFor(String spotId) {
         return spotLifecycle.entrySpotActivationFor(spotId);
     }
 

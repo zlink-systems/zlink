@@ -562,15 +562,21 @@ final class ZLinkJavaSubmissionTest {
                                                 }));
                 var router = new ZLinkJavaRouterSocket(binding.router);
                 var port = new ZLinkJavaRawServicePort(binding.context, binding.lane)) {
-            for (Object owner : List.of(dealer, router, port)) {
-                var registryField = owner.getClass().getDeclaredField("operations");
-                registryField.setAccessible(true);
-                var registry = (ZLinkServiceOperationRegistry) registryField.get(owner);
-                var maintenanceField =
-                        ZLinkServiceOperationRegistry.class.getDeclaredField("maintenance");
-                maintenanceField.setAccessible(true);
-                assertNull(maintenanceField.get(registry), owner.getClass().getSimpleName());
-            }
+            assertFalse(
+                    systems.zlink.framework.runtime.internal.service
+                            .ZLinkServiceOperationRegistryTestAccess.maintenanceStarted(
+                            dealer.operations),
+                    "dealer");
+            assertFalse(
+                    systems.zlink.framework.runtime.internal.service
+                            .ZLinkServiceOperationRegistryTestAccess.maintenanceStarted(
+                            router.operations),
+                    "router");
+            assertFalse(
+                    systems.zlink.framework.runtime.internal.service
+                            .ZLinkServiceOperationRegistryTestAccess.maintenanceStarted(
+                            port.operations),
+                    "service port");
         }
     }
 
@@ -602,10 +608,8 @@ final class ZLinkJavaSubmissionTest {
                     lifetime == SocketLifetime.ROUTER
                             ? new ZLinkJavaRouterSocket(binding.router)
                             : null;
+            var registry = dealer != null ? dealer.operations : router.operations;
             Object owner = dealer != null ? dealer : router;
-            var registryField = owner.getClass().getDeclaredField("operations");
-            registryField.setAccessible(true);
-            var registry = (ZLinkServiceOperationRegistry) registryField.get(owner);
             var stage =
                     dealer != null
                             ? dealer.send(List.of(Message.from("pending")))

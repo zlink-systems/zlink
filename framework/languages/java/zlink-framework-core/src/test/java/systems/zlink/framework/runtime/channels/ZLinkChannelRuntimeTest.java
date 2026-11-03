@@ -116,9 +116,7 @@ final class ZLinkChannelRuntimeTest {
 
     private static ZLinkChannelDispatchRegistry dispatchRegistry(ZLinkChannelRuntime runtime)
             throws ReflectiveOperationException {
-        var field = ZLinkChannelRuntime.class.getDeclaredField("dispatchRegistry");
-        field.setAccessible(true);
-        return (ZLinkChannelDispatchRegistry) field.get(runtime);
+        return runtime.dispatchRegistry;
     }
 
     @Test

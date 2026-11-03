@@ -49,9 +49,7 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
@@ -121,9 +119,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         f.stateSubmitted.join();
         assertEquals(1, f.endpoint.staged.get());
         assertEquals(List.of(Map.entry(RoutingId.from("session-owner"), 13L)), f.securedRoutes);
-        var carriedPrepare =
-                (ZLinkCanonicalRelocationProtocol.Prepare)
-                        attemptMember(targetAttempt(f.target, f.boundRequest().fence()), "prepare");
+        var carriedPrepare = targetAttempt(f.target, f.boundRequest().fence()).prepare();
         assertEquals(
                 STAGE_DEADLINE.toEpochMilli(),
                 carriedPrepare.deadlineUnixMs(),
@@ -287,8 +283,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 .stage(fixture.targetRid, request, Duration.ofSeconds(2), STAGE_DEADLINE)
                 .toCompletableFuture()
                 .join();
-        Object attempt = targetAttempt(fixture.target, request.fence());
-        var accepted = (ZLinkCanonicalRelocationProtocol.Prepare) attemptMember(attempt, "prepare");
+        var accepted = targetAttempt(fixture.target, request.fence()).prepare();
         if (hostSealed) drains.sealAll();
         else fixture.targetState.set(MeshNodeState.DRAINING);
         var late =
@@ -635,7 +630,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         AtomicBoolean reentered = new AtomicBoolean();
         AtomicReference<CompletionStage<byte[]>> reentrantPublication = new AtomicReference<>();
         ZLinkSpotRetireControl.StageRequest request = fixture.request(new byte[] {1});
-        byte[] publish = retireControlCodec("encodeFence", 2, request.fence());
+        byte[] publish = ZLinkSpotRetireControl.encodeFence(2, request.fence());
         ZLinkSpotRetireControl.TargetEndpoint endpoint =
                 new ZLinkSpotRetireControl.TargetEndpoint() {
                     @Override
@@ -670,7 +665,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         target.set(newRetireTarget(endpoint));
 
         target.get()
-                .handle(request.sourceNodeRid(), retireControlCodec("encodeStage", request))
+                .handle(request.sourceNodeRid(), ZLinkSpotRetireControl.encodeStage(request))
                 .toCompletableFuture()
                 .join();
         CompletionStage<byte[]> firstPublication =
@@ -700,18 +695,12 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 command -> {
                     if (command == ServiceWireConstants.COMMAND_RELOCATION_READY
                             && reentered.compareAndSet(false, true)) {
-                        try {
-                            reentrantPublication.set(
-                                    invokeCanonicalPublication(
-                                            fixture.target,
-                                            "publishReady",
-                                            targetFence(fixture.target),
-                                            targetAttempt(fixture.target, request.fence()),
-                                            request.sourceNodeRid()));
-                            reenteredReady.countDown();
-                        } catch (Exception failure) {
-                            throw new AssertionError(failure);
-                        }
+                        reentrantPublication.set(
+                                fixture.target.publishReady(
+                                        targetFence(fixture.target),
+                                        targetAttempt(fixture.target, request.fence()),
+                                        request.sourceNodeRid()));
+                        reenteredReady.countDown();
                     }
                 });
         try {
@@ -724,9 +713,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             canonicalControlHook.set(null);
         }
 
-        Object attempt = targetAttempt(fixture.target, request.fence());
         assertSame(
-                attemptMember(attempt, "readyPublication"),
+                targetAttempt(fixture.target, request.fence()).readyPublication,
                 reentrantPublication.get(),
                 "the completed ready prefix must share the exact READY publication");
     }
@@ -739,22 +727,14 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         fixture.endpoint.onPublish =
                 () -> {
                     if (reentered.compareAndSet(false, true)) {
-                        try {
-                            fixture.target
-                                    .apply(
-                                            request.sourceNodeRid(),
-                                            ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
-                                            (byte[])
-                                                    attemptMember(
-                                                            targetAttempt(
-                                                                    fixture.target,
-                                                                    request.fence()),
-                                                            "receivedCutover"))
-                                    .toCompletableFuture()
-                                    .join();
-                        } catch (Exception failure) {
-                            throw new AssertionError(failure);
-                        }
+                        fixture.target
+                                .apply(
+                                        request.sourceNodeRid(),
+                                        ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
+                                        targetAttempt(fixture.target, request.fence())
+                                                .receivedCutover)
+                                .toCompletableFuture()
+                                .join();
                     }
                 };
 
@@ -1664,58 +1644,16 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         return ZLinkSpotRetireControl.install(node, endpoint);
     }
 
-    private static byte[] retireControlCodec(String name, Object... arguments) throws Exception {
-        Method method =
-                java.util.Arrays.stream(ZLinkSpotRetireControl.class.getDeclaredMethods())
-                        .filter(
-                                candidate ->
-                                        candidate.getName().equals(name)
-                                                && candidate.getParameterCount()
-                                                        == arguments.length)
-                        .findFirst()
-                        .orElseThrow();
-        method.setAccessible(true);
-        return (byte[]) method.invoke(null, arguments);
-    }
-
-    private static Object targetAttempt(
-            ZLinkCanonicalRelocationStateMachine machine, ZLinkSpotRetireControl.Fence fence)
-            throws Exception {
-        Field field = ZLinkCanonicalRelocationStateMachine.class.getDeclaredField("targets");
-        field.setAccessible(true);
-        Map<?, ?> targets = (Map<?, ?>) field.get(machine);
-        Object attempt = targets.get(fence);
+    private static ZLinkCanonicalRelocationStateMachine.TargetAttempt targetAttempt(
+            ZLinkCanonicalRelocationStateMachine machine, ZLinkSpotRetireControl.Fence fence) {
+        var targets = machine.targets;
+        var attempt = targets.get(ZLinkCanonicalRelocationStateMachine.Fence.from(fence));
         return attempt != null ? attempt : targets.values().stream().findFirst().orElse(null);
     }
 
-    private static Object targetFence(ZLinkCanonicalRelocationStateMachine machine)
-            throws Exception {
-        Field field = ZLinkCanonicalRelocationStateMachine.class.getDeclaredField("targets");
-        field.setAccessible(true);
-        return ((Map<?, ?>) field.get(machine)).keySet().stream().findFirst().orElse(null);
-    }
-
-    private static Object invokeCanonicalPublication(
-            ZLinkCanonicalRelocationStateMachine machine, String name, Object... arguments)
-            throws Exception {
-        Method method =
-                java.util.Arrays.stream(
-                                ZLinkCanonicalRelocationStateMachine.class.getDeclaredMethods())
-                        .filter(
-                                candidate ->
-                                        candidate.getName().equals(name)
-                                                && candidate.getParameterCount()
-                                                        == arguments.length)
-                        .findFirst()
-                        .orElseThrow();
-        method.setAccessible(true);
-        return method.invoke(machine, arguments);
-    }
-
-    private static Object attemptMember(Object attempt, String name) throws Exception {
-        Method method = attempt.getClass().getDeclaredMethod(name);
-        method.setAccessible(true);
-        return method.invoke(attempt);
+    private static ZLinkCanonicalRelocationStateMachine.Fence targetFence(
+            ZLinkCanonicalRelocationStateMachine machine) {
+        return machine.targets.keySet().stream().findFirst().orElse(null);
     }
 
     private static ZLinkMeshNodeDescriptor descriptor(

@@ -8,12 +8,10 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.*;
 import systems.zlink.framework.locations.*;
-import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
-import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 
 import java.lang.reflect.Proxy;
@@ -83,7 +81,6 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
     void inferredTypeIgnoresPreparingDescriptors() throws Exception {
         assertTypeSelection(
                 List.of(descriptor(TYPE, ZLinkFrameworkRuntimeState.PREPARING)),
-                "resolveInstanceType",
                 null,
                 ZLinkFrameworkErrorKind.NOT_FOUND);
     }
@@ -92,14 +89,12 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
     void explicitTypeWithoutServingCapabilityIsNotFound() throws Exception {
         assertTypeSelection(
                 List.of(descriptor(TYPE + "-other", ZLinkFrameworkRuntimeState.SERVING)),
-                "selectInstanceSpotTarget",
                 TYPE,
                 ZLinkFrameworkErrorKind.NOT_FOUND);
     }
 
     private static void assertTypeSelection(
             List<ZLinkMeshNodeDescriptor> descriptors,
-            String methodName,
             String requestedType,
             ZLinkFrameworkErrorKind expected)
             throws Exception {
@@ -119,12 +114,12 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                                                     new ZLinkLocationPage<>(descriptors, null));
                                         throw new UnsupportedOperationException(method.getName());
                                     });
-            var method =
-                    ZLinkSpotRuntime.class.getDeclaredMethod(
-                            methodName, ZLinkLocationRepository.class, String.class, String.class);
-            method.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            var result = (CompletionStage<?>) method.invoke(host, repository, MESH, requestedType);
+            var result =
+                    requestedType == null
+                            ? ZLinkSpotRuntimeTestAccess.resolveInstanceType(
+                                    host, repository, MESH, null)
+                            : ZLinkSpotRuntimeTestAccess.selectInstanceSpotTarget(
+                                    host, repository, MESH, requestedType);
             var failure =
                     assertThrows(
                             ExecutionException.class,
@@ -171,18 +166,9 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                                                         throw new UnsupportedOperationException(
                                                                 method.getName());
                                             });
-            var storeField = ZLinkSpotRuntime.class.getDeclaredField("userSpotLocationStore");
-            storeField.setAccessible(true);
-            var originalStore = storeField.get(host);
-            storeField.set(host, repository);
-            var nodesField = ZLinkSpotRuntime.class.getDeclaredField("routeMeshNodesByName");
-            nodesField.setAccessible(true);
-            var nodes =
-                    (Map<
-                                    String,
-                                    systems.zlink.framework.runtime.internal.backend
-                                            .ZLinkInternalMeshNode>)
-                            nodesField.get(host);
+            var originalStore = host.userSpotLocationStore;
+            host.userSpotLocationStore = repository;
+            var nodes = host.routeMeshNodesByName;
             var originalNode = nodes.get(MESH);
             var wireRoute = new CompletableFuture<Object>();
             var admission = new CompletableFuture<Void>();
@@ -209,13 +195,11 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                                     });
             var substituted = new HashMap<>(nodes);
             substituted.put(MESH, source);
-            nodesField.set(host, Map.copyOf(substituted));
+            host.routeMeshNodesByName = Map.copyOf(substituted);
             var routeResolve = new CompletableFuture<Optional<SpotTransportAddress>>();
-            var resolverField = ZLinkChannelRuntime.class.getDeclaredField("spotAddressResolver");
-            resolverField.setAccessible(true);
-            var originalResolver = resolverField.get(runtime.route());
-            resolverField.set(
-                    runtime.route(), (SpotTransportAddressResolver) spotId -> routeResolve);
+            var originalResolver =
+                    ZLinkSpotRuntimeTestAccess.replaceSpotAddressResolver(
+                            host, spotId -> routeResolve);
             try {
                 long started = System.currentTimeMillis();
                 var send =
@@ -246,9 +230,9 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
             } finally {
                 admission.complete(null);
                 routeResolve.complete(Optional.empty());
-                nodesField.set(host, nodes);
-                resolverField.set(runtime.route(), originalResolver);
-                storeField.set(host, originalStore);
+                host.routeMeshNodesByName = nodes;
+                ZLinkSpotRuntimeTestAccess.replaceSpotAddressResolver(host, originalResolver);
+                host.userSpotLocationStore = originalStore;
             }
         }
     }

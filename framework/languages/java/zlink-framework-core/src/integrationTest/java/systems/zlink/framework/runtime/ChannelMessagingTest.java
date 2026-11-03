@@ -42,9 +42,11 @@ import systems.zlink.framework.handlers.ZLinkSend;
 import systems.zlink.framework.handlers.ZLinkSpotRequest;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.channels.ZLinkChannelRuntimeTestAccess;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
@@ -75,7 +77,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -171,13 +172,9 @@ final class ChannelMessagingTest {
                     client.requestToChannel("profile", new EchoRequest("warmup"))
                             .submit(String.class)
                             .toCompletableFuture()
-                            .get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS));
-            var channelsField = ZLinkFrameworkRuntime.class.getDeclaredField("channels");
-            channelsField.setAccessible(true);
-            Object channels = channelsField.get(runtime);
-            var timerField = channels.getClass().getDeclaredField("timeoutExecutor");
-            timerField.setAccessible(true);
-            var timer = (ScheduledExecutorService) timerField.get(channels);
+                            .join());
+            var channels = ZLinkFrameworkRuntimeTestAccess.channels(runtime);
+            var timer = ZLinkChannelRuntimeTestAccess.timeoutExecutor(channels);
             var timerHeld = new CompletableFuture<Void>();
             var releaseTimer = new CompletableFuture<Void>();
             Future<?> held =
@@ -562,12 +559,23 @@ final class ChannelMessagingTest {
     void manualClientServer_payloadDecodeFailureRepliesErrorAndRecordsDiagnostics()
             throws Exception {
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> decodeFailureLogged = new CompletableFuture<>();
+        Predicate<String> decodeFailureDiagnostic =
+                message ->
+                        message.contains("reason=decode_error")
+                                && message.contains("action=reply_error")
+                                && message.contains("packet=DecodeReq")
+                                && message.contains("channel=profile");
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Handler logHandler =
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
-                        logMessages.add(record.getMessage());
+                        String message = record.getMessage();
+                        logMessages.add(message);
+                        if (decodeFailureDiagnostic.test(message)) {
+                            decodeFailureLogged.complete(null);
+                        }
                     }
 
                     @Override
@@ -634,14 +642,9 @@ final class ChannelMessagingTest {
                 }
 
                 assertEquals(0, DecodeProbeHandler.invocations.get());
+                decodeFailureLogged.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 assertTrue(
-                        logMessages.stream()
-                                .anyMatch(
-                                        message ->
-                                                message.contains("reason=decode_error")
-                                                        && message.contains("action=reply_error")
-                                                        && message.contains("packet=DecodeReq")
-                                                        && message.contains("channel=profile")),
+                        logMessages.stream().anyMatch(decodeFailureDiagnostic),
                         "dispatch error log marker was not written");
 
                 String after =

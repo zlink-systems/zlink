@@ -12,12 +12,10 @@ import systems.zlink.contracts.errors.CloseResult;
 import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 
 import java.lang.reflect.Proxy;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
@@ -38,15 +36,10 @@ final class ZLinkSpotRuntimeCloseTest {
                 .server();
         try (var framework = ZLinkFrameworkRuntimeTestAccess.start(options)) {
             var host = (ZLinkSpotRuntime) framework.spotManager();
-            var nodesField = ZLinkSpotRuntime.class.getDeclaredField("nodes");
-            nodesField.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            var nodes = (List<ZLinkInternalSpotNode>) nodesField.get(host);
+            var nodes = host.nodes;
             var original = nodes.getFirst();
             var failure = new ZlinkCloseException(CloseResult.BUSY, 16);
-            var reporterField = ZLinkSpotRuntime.class.getDeclaredField("dispatchErrors");
-            reporterField.setAccessible(true);
-            var reporter = (ZLinkDispatchErrorReporter) reporterField.get(host);
+            var reporter = host.dispatchErrors;
             long reportedBefore = reporter.reportedCount();
             nodes.set(
                     0,
@@ -84,10 +77,7 @@ final class ZLinkSpotRuntimeCloseTest {
                 .server();
         try (var framework = ZLinkFrameworkRuntimeTestAccess.start(options)) {
             var host = (ZLinkSpotRuntime) framework.spotManager();
-            var nodesField = ZLinkSpotRuntime.class.getDeclaredField("nodes");
-            nodesField.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            var nodes = (List<ZLinkInternalSpotNode>) nodesField.get(host);
+            var nodes = host.nodes;
             var original = nodes.getFirst();
             var terminal = new CompletableFuture<Void>();
             var completionReturned = new CompletableFuture<Void>();
@@ -131,18 +121,14 @@ final class ZLinkSpotRuntimeCloseTest {
 
     @Test
     void socketCloseFailureIsReturnedAndLaterFailuresAreSuppressed() throws Exception {
-        var close =
-                ZLinkSpotRuntime.class.getDeclaredMethod(
-                        "closeRuntimeComponent", Runnable.class, RuntimeException.class);
-        close.setAccessible(true);
         var busy = new ZlinkCloseException(CloseResult.BUSY, 16);
         Runnable fail =
                 () -> {
                     throw busy;
                 };
-        assertSame(busy, close.invoke(null, fail, null));
+        assertSame(busy, ZLinkSpotRuntime.closeRuntimeComponent(fail, null));
         var first = new IllegalStateException("earlier cleanup failure");
-        assertSame(first, close.invoke(null, fail, first));
+        assertSame(first, ZLinkSpotRuntime.closeRuntimeComponent(fail, first));
         assertEquals(1, first.getSuppressed().length);
         assertSame(busy, first.getSuppressed()[0]);
     }

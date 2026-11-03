@@ -45,7 +45,7 @@ public final class ZLinkUserSpotRetireRuntime {
     private final Duration sessionRelocationSealTimeout;
     private final Map<String, Lane> lanes;
     private final Map<String, ActorLane> actorLanes;
-    private final List<ZLinkCanonicalRelocationStateMachine> stateMachines;
+    List<ZLinkCanonicalRelocationStateMachine> stateMachines;
 
     public static class RelocationBlockedException extends IllegalStateException {
         private final ZLinkFrameworkRelocationReason reason;

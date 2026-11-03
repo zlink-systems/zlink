@@ -8,9 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
+import systems.zlink.framework.runtime.channels.ZLinkChannelRuntimeTestAccess;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
+import systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
@@ -23,7 +24,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkInfrastructureShutdownDeadlineTest {
     private static final long WAIT_SECONDS = 30;
@@ -47,7 +47,10 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
     void closePreservesShutdownTerminalAfterTeardownFailure() throws Exception {
         var runtime = ZLinkFrameworkRuntimeTestAccess.start(new DefaultZLinkFrameworkOptions());
         runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
-        var executor = failChannelCleanup(runtime);
+        var channels = ZLinkFrameworkRuntimeTestAccess.channels(runtime);
+        var executor = ZLinkChannelRuntimeTestAccess.infrastructureExecutor(channels);
+        ZLinkChannelRuntimeTestAccess.replaceInfrastructureExecutor(
+                channels, failChannelCleanup(executor));
         var terminal =
                 runtime.shutdown(Duration.ofSeconds(WAIT_SECONDS))
                         .toCompletableFuture()
@@ -69,22 +72,18 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
     void directCloseStillPropagatesCleanupFailure() throws Exception {
         var runtime = ZLinkFrameworkRuntimeTestAccess.start(new DefaultZLinkFrameworkOptions());
         runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
-        var executor = failChannelCleanup(runtime);
+        var channels = ZLinkFrameworkRuntimeTestAccess.channels(runtime);
+        var executor = ZLinkChannelRuntimeTestAccess.infrastructureExecutor(channels);
+        ZLinkChannelRuntimeTestAccess.replaceInfrastructureExecutor(
+                channels, failChannelCleanup(executor));
         var failure = assertThrows(ZLinkFrameworkShutdown.Failure.class, runtime::close);
         assertEquals("injected executor cleanup failure", failure.getCause().getMessage());
         assertTrue(executor.isTerminated());
     }
 
-    private ExecutorService failChannelCleanup(ZLinkFrameworkRuntime runtime) throws Exception {
-        var channelsField = ZLinkFrameworkRuntime.class.getDeclaredField("channels");
-        channelsField.setAccessible(true);
-        var channels = (ZLinkChannelRuntime) channelsField.get(runtime);
-        var executorField = ZLinkChannelRuntime.class.getDeclaredField("infrastructureExecutor");
-        executorField.setAccessible(true);
-        var executor = (ExecutorService) executorField.get(channels);
+    private ExecutorService failChannelCleanup(ExecutorService executor) {
         var failure = new IllegalStateException("injected executor cleanup failure");
-        executorField.set(
-                channels,
+        return (ExecutorService)
                 Proxy.newProxyInstance(
                         ExecutorService.class.getClassLoader(),
                         new Class<?>[] {ExecutorService.class},
@@ -97,8 +96,7 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
                             } catch (InvocationTargetException error) {
                                 throw error.getCause();
                             }
-                        }));
-        return executor;
+                        });
     }
 
     private void assertDeadlineOutcome(boolean executorDeadline, boolean spotPublisher)
@@ -110,20 +108,15 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
                     .channelName("events")
                     .client();
         }
-        var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
-        runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         var waiting = new CompletableFuture<Void>();
+        var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
+        runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
         ExecutorService executor;
         if (spotPublisher) {
             var spots = (ZLinkSpotRuntime) runtime.spotManager();
-            var publishersField = ZLinkSpotRuntime.class.getDeclaredField("publishers");
-            publishersField.setAccessible(true);
-            var publishers = publishersField.get(spots);
-            var poolField = publishers.getClass().getDeclaredField("multicastExecutor");
-            poolField.setAccessible(true);
-            ((ExecutorService) poolField.get(publishers)).shutdown();
+            ZLinkSpotRuntimeTestAccess.multicastExecutor(spots).shutdown();
             var pool =
                     new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>()) {
                         @Override
@@ -133,34 +126,15 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
                             return super.awaitTermination(timeout, unit);
                         }
                     };
-            poolField.set(publishers, pool);
+            ZLinkSpotRuntimeTestAccess.replaceMulticastExecutor(spots, pool);
             executor = pool;
         } else {
-            var channelsField = ZLinkFrameworkRuntime.class.getDeclaredField("channels");
-            channelsField.setAccessible(true);
-            var channels = (ZLinkChannelRuntime) channelsField.get(runtime);
-            var executorField =
-                    ZLinkChannelRuntime.class.getDeclaredField("infrastructureExecutor");
-            executorField.setAccessible(true);
-            executor = (ExecutorService) executorField.get(channels);
-            var firstWait = new AtomicBoolean(true);
-            executorField.set(
-                    channels,
-                    Proxy.newProxyInstance(
-                            ExecutorService.class.getClassLoader(),
-                            new Class<?>[] {ExecutorService.class},
-                            (proxy, method, arguments) -> {
-                                if (method.getName().equals("awaitTermination")) {
-                                    if (executorDeadline && firstWait.getAndSet(false))
-                                        return false;
-                                    waiting.complete(null);
-                                }
-                                try {
-                                    return method.invoke(executor, arguments);
-                                } catch (InvocationTargetException error) {
-                                    throw error.getCause();
-                                }
-                            }));
+            executor =
+                    ZLinkChannelRuntimeTestAccess.infrastructureExecutor(
+                            ZLinkFrameworkRuntimeTestAccess.channels(runtime));
+            ZLinkChannelRuntimeTestAccess.replaceInfrastructureExecutor(
+                    ZLinkFrameworkRuntimeTestAccess.channels(runtime),
+                    observeExecutor(executor, waiting, executorDeadline));
         }
         executor.execute(
                 () -> {
@@ -178,12 +152,7 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
             CompletableFuture.anyOf(waiting, shutdown).get(WAIT_SECONDS, TimeUnit.SECONDS);
             assertFalse(shutdown.isDone());
             if (!executorDeadline) {
-                var deadlineField =
-                        ZLinkFrameworkRuntime.class.getDeclaredField("terminationDeadline");
-                deadlineField.setAccessible(true);
-                @SuppressWarnings("unchecked")
-                var deadline = (AtomicReference<Instant>) deadlineField.get(runtime);
-                deadline.set(Instant.EPOCH);
+                runtime.terminationDeadline.set(Instant.EPOCH);
             }
         } finally {
             release.countDown();
@@ -199,5 +168,25 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
         assertEquals(ZLinkFrameworkTerminationReason.DEADLINE_EXCEEDED, result.reason());
         assertEquals(ZLinkFrameworkRuntimeState.STOPPED, runtime.status().state());
         assertEquals(result, runtime.status().terminationResult().orElseThrow());
+    }
+
+    private ExecutorService observeExecutor(
+            ExecutorService executor, CompletableFuture<Void> waiting, boolean deadlineFailure) {
+        var firstWait = new AtomicBoolean(true);
+        return (ExecutorService)
+                Proxy.newProxyInstance(
+                        ExecutorService.class.getClassLoader(),
+                        new Class<?>[] {ExecutorService.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("awaitTermination")) {
+                                if (deadlineFailure && firstWait.getAndSet(false)) return false;
+                                waiting.complete(null);
+                            }
+                            try {
+                                return method.invoke(executor, arguments);
+                            } catch (InvocationTargetException error) {
+                                throw error.getCause();
+                            }
+                        });
     }
 }

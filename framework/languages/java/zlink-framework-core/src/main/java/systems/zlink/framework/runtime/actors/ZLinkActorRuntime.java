@@ -193,7 +193,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private final ZLinkInternalSpotNode spotNode;
-    private volatile String meshName;
+    volatile String meshName;
     private final ConcurrentHashMap<
                     String, systems.zlink.framework.runtime.internal.metrics.ZLinkPopulationMetrics>
             populationMetrics = new ConcurrentHashMap<>();
@@ -221,11 +221,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     private final ZLinkMessageSerializer serializer;
     private final ZLinkHandlerActivator handlerFactory;
     private final ZLinkStreamCodec defaultStreamCodec;
-    private final ActorRegistry actorRegistry = new ActorRegistry();
+    final ActorRegistry actorRegistry = new ActorRegistry();
     private volatile Runnable countChanged = () -> {};
     private static final java.util.logging.Logger COUNT_LOGGER =
             java.util.logging.Logger.getLogger(ZLinkActorRuntime.class.getName());
-    private final ZLinkActorDispatchSerials dispatches;
+    final ZLinkActorDispatchSerials dispatches;
     private volatile Function<String, CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>>
             actorDispatchTargetResolver =
                     actorId ->
@@ -238,7 +238,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                             actor == null
                                                                     ? null
                                                                     : actor.context()));
-    private final ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
+    final ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
     private final Map<String, CompletableFuture<Void>> actorCreationTails = new HashMap<>();
     private CreatedNotifier createdNotifier =
             (ignoredNode, ignoredActor, ignoredRequest, ignoredContext) ->
@@ -2007,7 +2007,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .map(ZLinkActorTransferHandoff.MessageFollowSource::targetActorRef);
     }
 
-    private void removeMessageFollowSource(ZLinkActorTransferHandoff.MessageFollowSource source) {
+    void removeMessageFollowSource(ZLinkActorTransferHandoff.MessageFollowSource source) {
         cleanupMessageFollowNativeSource(source);
     }
 
@@ -4601,7 +4601,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                         context::clearAfterDestroy)));
     }
 
-    private final class ActorRegistry {
+    final class ActorRegistry {
         private final Map<String, ActorEntry> byId = new HashMap<>();
         private final Map<ZLinkActor, ActorEntry> byActor = new IdentityHashMap<>();
         private final ZLinkStateLane stateLane = new ZLinkStateLane();

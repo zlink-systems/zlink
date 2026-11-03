@@ -106,14 +106,8 @@ final class ZLinkSpotCloseConformanceTest {
         try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
             create(runtime, spotId);
             var host = (ZLinkSpotRuntime) runtime.spotManager();
-            var handlersField =
-                    ZLinkSpotRuntime.class.getDeclaredField("userSpotOperationHandlers");
-            handlersField.setAccessible(true);
-            var handlers = (java.util.Map<?, ?>) handlersField.get(host);
-            var handler = handlers.get("close-mesh");
-            var field = ZLinkUserSpotOperationHandler.class.getDeclaredField("authorityStore");
-            field.setAccessible(true);
-            var original = (ZLinkLocationRepository) field.get(handler);
+            var handler = ZLinkSpotRuntimeTestAccess.userSpotOperationHandler(host, "close-mesh");
+            var original = ZLinkSpotRuntimeTestAccess.authorityStore(handler);
             var raced = new AtomicBoolean();
             var proxy =
                     (ZLinkLocationRepository)
@@ -166,7 +160,7 @@ final class ZLinkSpotCloseConformanceTest {
                                             throw failure.getCause();
                                         }
                                     });
-            field.set(handler, proxy);
+            ZLinkSpotRuntimeTestAccess.replaceAuthorityStore(handler, proxy);
             try {
                 var context = host.spotLifecycle().spotActivationFor(spotId).context;
                 var closing = context.close().toCompletableFuture();
@@ -186,7 +180,7 @@ final class ZLinkSpotCloseConformanceTest {
                 assertEquals(0, ON_CLOSING_CALLS.get());
                 assertTrue(host.activeUserSpotIds().contains(spotId));
             } finally {
-                field.set(handler, original);
+                ZLinkSpotRuntimeTestAccess.replaceAuthorityStore(handler, original);
             }
         }
     }

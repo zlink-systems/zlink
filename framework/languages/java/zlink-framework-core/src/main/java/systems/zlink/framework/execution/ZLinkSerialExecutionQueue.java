@@ -67,7 +67,7 @@ public final class ZLinkSerialExecutionQueue {
     private final ZLinkSerialExecutionQueue timerOwner;
     private final int lifecycleBurstLimit;
     private final long ownerTimeBudgetNanos;
-    private final Deque<Entry> applicationPending = new ArrayDeque<>();
+    Deque<Entry> applicationPending = new ArrayDeque<>();
     private boolean pendingApplicationTailDurable;
     // A resumed application turn is kept separate so it can pass a relocation
     // boundary without inserting at the front of the application FIFO.
@@ -75,7 +75,7 @@ public final class ZLinkSerialExecutionQueue {
     private final ArrayDeque<Entry> lifecyclePending;
     // Only producers append here. The shared gate moves the published prefix into the
     // corresponding owner lane before selecting a record.
-    private ConcurrentLinkedDeque<Entry> publishedApplication;
+    ConcurrentLinkedDeque<Entry> publishedApplication;
     private ConcurrentLinkedQueue<Entry> publishedContinuation;
     private ConcurrentLinkedQueue<Entry> publishedLifecycle;
     private SharedSpotGate sharedSpotGate;
@@ -94,14 +94,14 @@ public final class ZLinkSerialExecutionQueue {
 
     private long nextSequence = 1L;
     private long nextRelocationSerial = 1L;
-    private volatile Entry active;
+    volatile Entry active;
     private Entry suspendedLifecycle;
     private volatile ActivationPreparation<?> activationPreparation;
     private boolean drainScheduled;
     private volatile int suspendedApplicationContinuations;
     private volatile int suspendedLifecycleContinuations;
     private long turnClaimedAtNanos;
-    private volatile RelocationState relocation;
+    volatile RelocationState relocation;
     private boolean closingAdmissionSealed;
     private boolean relocated;
     private final List<QuiescenceWaiter> quiescenceWaiters = new ArrayList<>();
@@ -1590,7 +1590,7 @@ public final class ZLinkSerialExecutionQueue {
                 record, operation, relocationRelease, message, admission, null);
     }
 
-    private Entry holdRelocationIngress(
+    Entry holdRelocationIngress(
             byte[] record,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
@@ -1655,7 +1655,7 @@ public final class ZLinkSerialExecutionQueue {
         }
     }
 
-    private void settleOwnership(Entry entry) {
+    void settleOwnership(Entry entry) {
         if (entry == null || entry.applicationJobOwnership == null) return;
         Object settled = entry.applicationJobOwnership.settleAdmission();
         if (settled
@@ -3173,12 +3173,12 @@ public final class ZLinkSerialExecutionQueue {
         private byte[] record;
         private final Supplier<byte[]> lazyRecord;
         private Supplier<CompletionStage<Void>> operation;
-        private Object message;
+        Object message;
         private final Runnable relocationRelease;
         private final CompletableFuture<Void> result;
         private final CompletableFuture<Void> admission;
         private final ZLinkFlowContext.State flow;
-        private final ZLinkApplicationJobContext.QueuedOwnership applicationJobOwnership;
+        final ZLinkApplicationJobContext.QueuedOwnership applicationJobOwnership;
         private final RelocationBoundary relocationBoundary;
         private final Lane lane;
         private final boolean continuation;

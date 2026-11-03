@@ -8,7 +8,6 @@ import io.lettuce.core.api.StatefulRedisConnection;
 
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -35,9 +34,7 @@ final class ZLinkRedisLocationConnectionTest {
                                     }
                                     throw new UnsupportedOperationException(method.getName());
                                 });
-        Field current = ZLinkRedisLocationConnection.class.getDeclaredField("connection");
-        current.setAccessible(true);
-        current.set(connection, CompletableFuture.completedFuture(transport));
+        connection.connection = CompletableFuture.completedFuture(transport);
 
         CompletionStage<Void> first = connection.closeAsync();
         first.toCompletableFuture().join();

@@ -95,11 +95,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private static final long RELOCATION_TARGET_WAIT_POLL_MILLIS = 25;
     private static final long EXECUTOR_GRACEFUL_SHUTDOWN_SECONDS = 1;
     private static final long EXECUTOR_FORCED_SHUTDOWN_SECONDS = 4;
-    private ZLinkChannelRuntime channels;
-    private final ZLinkMeshNodesRuntime meshNodes = new ZLinkMeshNodesRuntime();
+    ZLinkChannelRuntime channels;
+    final ZLinkMeshNodesRuntime meshNodes = new ZLinkMeshNodesRuntime();
     private ZLinkSpotRuntime spots;
     private ZLinkActorRuntime actors;
-    private systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime spotRetire;
+    systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime spotRetire;
     private ZLinkActorDirectory actorDirectory;
     private ZLinkActorClient actorClient;
     private ZLinkStreamRuntime streams;
@@ -120,17 +120,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private final AtomicBoolean coreHwmContextActive = new AtomicBoolean(false);
     private final ZLinkFrameworkRegistration registration;
     private ZLinkRegisteredLocationStores locationStores;
-    private final ZLinkMeshDrainCoordinator meshDrains;
-    private ZLinkLocationRuntime locationRuntime;
+    ZLinkMeshDrainCoordinator meshDrains;
+    ZLinkLocationRuntime locationRuntime;
     private ZLinkLocationRuntimeQuery locationRuntimeQuery;
     private ZLinkLocationLifecycle locationLifecycle;
-    private ZLinkLocationAutoConnectHost locationAutoConnectHost;
-    private ZLinkStatefulAuthorityRouteRuntime authorityRouteRuntime;
+    ZLinkLocationAutoConnectHost locationAutoConnectHost;
+    ZLinkStatefulAuthorityRouteRuntime authorityRouteRuntime;
     private systems.zlink.framework.runtime.internal.locations.ZLinkObjectServerDescriptorPublisher
             objectDescriptors;
     private volatile ZLinkRouteMeshRuntimeOptions routeMeshRuntimeOptions;
     private SpotTransportAddressResolver spotTransportAddressResolver;
-    private ZLinkStoreLocationResolvers storeLocationResolvers;
+    ZLinkStoreLocationResolvers storeLocationResolvers;
     private final AtomicBoolean spotRuntimeStopped = new AtomicBoolean(false);
     private final CompletableFuture<Void> startupReady = new CompletableFuture<>();
     private final AtomicReference<ZLinkFrameworkRuntimeState> runtimeState =
@@ -138,7 +138,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private final AtomicReference<CompletableFuture<ZLinkTerminationResult>> activeTermination =
             new AtomicReference<>();
     private final AtomicReference<RelocationOperation> activeRelocation = new AtomicReference<>();
-    private final AtomicReference<Instant> terminationDeadline = new AtomicReference<>();
+    final AtomicReference<Instant> terminationDeadline = new AtomicReference<>();
     private final AtomicReference<ZLinkFrameworkRelocationResult> lastRelocationResult =
             new AtomicReference<>();
     private final AtomicReference<ZLinkFrameworkTerminationResult> lastTerminationResult =
@@ -1657,7 +1657,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return beginTermination(deadline, null).thenApply(this::toPublicTerminationResult);
     }
 
-    private CompletionStage<ZLinkTerminationResult> beginTermination(
+    CompletionStage<ZLinkTerminationResult> beginTermination(
             Duration deadline, ZLinkTerminationReason forcedReason) {
         Objects.requireNonNull(deadline, "deadline");
         if (deadline.isNegative()) {

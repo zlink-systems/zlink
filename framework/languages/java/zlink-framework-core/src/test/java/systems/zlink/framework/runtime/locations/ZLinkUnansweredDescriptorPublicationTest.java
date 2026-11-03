@@ -14,17 +14,14 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.function.LongSupplier;
 
 final class ZLinkUnansweredDescriptorPublicationTest {
     @ParameterizedTest
@@ -45,15 +42,14 @@ final class ZLinkUnansweredDescriptorPublicationTest {
         try (var host =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
-            var runtime = (ZLinkLocationRuntime) field(host, "locationRuntime").get(host);
-            var previousScheduler =
-                    (ScheduledExecutorService) field(runtime, "heartbeatExecutor").get(runtime);
+            var runtime = ZLinkFrameworkRuntimeTestAccess.locationRuntime(host);
+            var previousScheduler = runtime.heartbeatExecutor;
             var scheduler = new PublicationScheduler(renewTimeout);
             // The claim is held before startup continues. Observe the publication deadline
             // at its scheduler boundary rather than assuming the claim completes startup inline.
-            field(runtime, "heartbeatExecutor").set(runtime, scheduler);
+            runtime.heartbeatExecutor = scheduler;
             long now = System.nanoTime();
-            field(runtime, "monotonicNow").set(runtime, (LongSupplier) () -> now);
+            runtime.monotonicNow = () -> now;
             try {
                 store.releaseClaim();
                 var startup =
@@ -93,12 +89,6 @@ final class ZLinkUnansweredDescriptorPublicationTest {
                 assertTrue(previousScheduler.awaitTermination(30, TimeUnit.SECONDS));
             }
         }
-    }
-
-    private static Field field(Object target, String name) throws Exception {
-        var field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field;
     }
 
     private static final class PublicationScheduler extends ScheduledThreadPoolExecutor {

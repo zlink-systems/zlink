@@ -542,7 +542,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
             var host = controlled.host;
             var original =
                     (systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository)
-                            ControlledTimerRuntime.field(host, "userSpotLocationStore");
+                            ZLinkSpotRuntimeTestAccess.userSpotLocationStore(host);
             var observed =
                     (systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository)
                             java.lang.reflect.Proxy.newProxyInstance(
@@ -621,7 +621,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                                                                                         recoveryFailure)
                                                                         : apply.get());
                                     });
-            controlled.replace(host, "userSpotLocationStore", observed);
+            controlled.replaceUserSpotLocationStore(observed);
             var first =
                     controlled
                             .framework
@@ -647,7 +647,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                     if (failedTransition.equals("initialize")) {
                         ReadyTimerInstance.initializeRelease.completeExceptionally(recoveryFailure);
                     } else {
-                        controlled.replace(host, "draining", true);
+                        controlled.markDraining();
                         ReadyTimerInstance.initializeRelease.complete(null);
                     }
                     assertThrows(
@@ -913,35 +913,48 @@ final class ZLinkRelocatedTimerLifecycleTest {
         ControlledTimerRuntime(DefaultZLinkFrameworkOptions options) throws Exception {
             framework = ZLinkFrameworkRuntimeTestAccess.start(options);
             host = (ZLinkSpotRuntime) framework.spotManager();
-            lifecycle = (ZLinkSpotLifecycle) field(host, "spotLifecycle");
-            replace(host, "timerExecutor", scheduler);
-            replace(host, "handlerExecutor", serial);
-            replace(field(host, "frameworkRegistration"), "serialExecutor", serial);
+            lifecycle = host.spotLifecycle();
+            replaceTimerExecutor(scheduler);
+            replaceHandlerExecutor(serial);
+            var previousSerialExecutor =
+                    systems.zlink.framework.runtime.configuration
+                            .ZLinkFrameworkRegistrationTestAccess.replaceSerialExecutor(
+                            host.frameworkRegistration, serial);
+            restorations.add(
+                    () ->
+                            systems.zlink.framework.runtime.configuration
+                                    .ZLinkFrameworkRegistrationTestAccess.replaceSerialExecutor(
+                                    host.frameworkRegistration, previousSerialExecutor));
         }
 
         void controlTimerLane(Object context) throws Exception {
-            replace(field(field(context, "timers"), "stateLane"), "executor", serial);
-        }
-
-        private static Object field(Object owner, String name) throws Exception {
-            var field = owner.getClass().getDeclaredField(name);
-            field.setAccessible(true);
-            return field.get(owner);
-        }
-
-        void replace(Object owner, String name, Object value) throws Exception {
-            var field = owner.getClass().getDeclaredField(name);
-            field.setAccessible(true);
-            Object original = field.get(owner);
-            field.set(owner, value);
+            var previous = ZLinkSpotRuntimeTestAccess.replaceTimerLaneExecutor(context, serial);
             restorations.add(
-                    () -> {
-                        try {
-                            field.set(owner, original);
-                        } catch (IllegalAccessException failure) {
-                            throw new CompletionException(failure);
-                        }
-                    });
+                    () -> ZLinkSpotRuntimeTestAccess.replaceTimerLaneExecutor(context, previous));
+        }
+
+        void replaceTimerExecutor(java.util.concurrent.ScheduledExecutorService executor) {
+            var previous = ZLinkSpotRuntimeTestAccess.replaceTimerExecutor(host, executor);
+            restorations.add(() -> ZLinkSpotRuntimeTestAccess.replaceTimerExecutor(host, previous));
+        }
+
+        void replaceHandlerExecutor(java.util.concurrent.Executor executor) {
+            var previous = ZLinkSpotRuntimeTestAccess.replaceHandlerExecutor(host, executor);
+            restorations.add(
+                    () -> ZLinkSpotRuntimeTestAccess.replaceHandlerExecutor(host, previous));
+        }
+
+        void replaceUserSpotLocationStore(
+                systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository store) {
+            var previous = ZLinkSpotRuntimeTestAccess.replaceUserSpotLocationStore(host, store);
+            restorations.add(
+                    () -> ZLinkSpotRuntimeTestAccess.replaceUserSpotLocationStore(host, previous));
+        }
+
+        void markDraining() {
+            boolean previous = host.draining;
+            host.draining = true;
+            restorations.add(() -> host.draining = previous);
         }
 
         @Override

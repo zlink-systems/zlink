@@ -73,7 +73,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private final String entrySpotId;
     private final ZLinkLocationRepository locations;
     private final ZLinkAggregateRelocationCoordinator coordinator;
-    private final ZLinkSpotRetireControl.TargetEndpoint target;
+    final ZLinkSpotRetireControl.TargetEndpoint target;
     private final RetentionScheduler retentionScheduler;
     private final LongSupplier monotonicNanos;
     private final DelayScheduler delayScheduler;
@@ -83,7 +83,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private final long localNodeGeneration;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<Fence, SourceAttempt> sources = new HashMap<>();
-    private final Map<Fence, TargetAttempt> targets = new HashMap<>();
+    final Map<Fence, TargetAttempt> targets = new HashMap<>();
     private final Map<Fence, TerminalTarget> terminalTargets = new HashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
     private Runnable sourceQuiescenceChanged = () -> {};
@@ -942,8 +942,7 @@ final class ZLinkCanonicalRelocationStateMachine
         return secured;
     }
 
-    private CompletionStage<Void> publishReady(
-            Fence fence, TargetAttempt attempt, RoutingId source) {
+    CompletionStage<Void> publishReady(Fence fence, TargetAttempt attempt, RoutingId source) {
         CompletableFuture<Void> created = new CompletableFuture<>();
         PublicationClaim claim = attempt.claimReadyPublication(created);
         if (!claim.owner()) {
@@ -2191,7 +2190,7 @@ final class ZLinkCanonicalRelocationStateMachine
         }
     }
 
-    private record Fence(UUID id, long attempt) {
+    record Fence(UUID id, long attempt) {
         static Fence from(ZLinkSpotRetireControl.Fence fence) {
             return new Fence(fence.aggregateId(), fence.aggregateGeneration());
         }
@@ -2372,7 +2371,7 @@ final class ZLinkCanonicalRelocationStateMachine
         void schedule(Duration delay, Runnable work);
     }
 
-    private static final class TargetAttempt {
+    static final class TargetAttempt {
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private final ZLinkCanonicalRelocationProtocol.Prepare prepare;
         private final ZLinkRelocationPayloadTransfer.Assembler assembler;
@@ -2386,11 +2385,11 @@ final class ZLinkCanonicalRelocationStateMachine
         private final CompletableFuture<Void> ready = new CompletableFuture<>();
         private final CompletableFuture<Void> terminal = new CompletableFuture<>();
         private CompletionStage<Void> publication;
-        private CompletionStage<Void> readyPublication;
+        CompletionStage<Void> readyPublication;
         private boolean relayReadyAccepted;
         private boolean committed;
         private volatile long committedNanos;
-        private byte[] receivedCutover;
+        byte[] receivedCutover;
 
         TargetAttempt(ZLinkCanonicalRelocationProtocol.Prepare prepare) {
             this.prepare = prepare;

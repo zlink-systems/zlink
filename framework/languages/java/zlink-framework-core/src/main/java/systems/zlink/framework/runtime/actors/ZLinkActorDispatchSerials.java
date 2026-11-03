@@ -36,7 +36,7 @@ final class ZLinkActorDispatchSerials {
     // Retain accepted Actor turns until retirement, including turns that still
     // belong to the source Spot after membership moves to another Spot.
     private final Map<String, QueuedTurn> actorTargets = new HashMap<>();
-    private final ZLinkStateLane stateLane;
+    final ZLinkStateLane stateLane;
     private final Map<String, TeardownSetup> teardowns = new HashMap<>();
     // A deferred Join barrier is queued on the Actor's dispatch target at
     // registration time, but a same-node Join re-targets the Actor to the

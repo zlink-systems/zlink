@@ -7,9 +7,10 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.eventing.Poller;
+import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
 
-import java.lang.reflect.Field;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -29,47 +30,31 @@ final class ZLinkJavaSocketMonitorTest {
         var sourceFailure = new IllegalStateException("source close failed");
         var pollerFailure = new IllegalStateException("poller close failed");
         var closeCalls = new java.util.concurrent.atomic.AtomicInteger();
-        try (var context = Zlink.createContext();
-                var socket = context.createStreamSocket();
-                var source = socket.monitorOpen(MonitorEventType.CONNECTION_READY)) {
-            var monitor = new ZLinkJavaSocketMonitor(source);
-            Field pollerField = ZLinkJavaSocketMonitor.class.getDeclaredField("poller");
-            Field sourceField = ZLinkJavaSocketMonitor.class.getDeclaredField("monitor");
-            pollerField.setAccessible(true);
-            sourceField.setAccessible(true);
-            var originalPoller = (systems.zlink.contracts.eventing.Poller) pollerField.get(monitor);
-            try {
-                sourceField.set(
-                        monitor,
+        var source =
+                (SocketMonitor)
                         java.lang.reflect.Proxy.newProxyInstance(
-                                systems.zlink.contracts.eventing.SocketMonitor.class
-                                        .getClassLoader(),
-                                new Class<?>[] {
-                                    systems.zlink.contracts.eventing.SocketMonitor.class
-                                },
+                                SocketMonitor.class.getClassLoader(),
+                                new Class<?>[] {SocketMonitor.class},
                                 (proxy, method, args) -> {
                                     throw sourceFailure;
-                                }));
-                pollerField.set(
-                        monitor,
+                                });
+        var poller =
+                (Poller)
                         java.lang.reflect.Proxy.newProxyInstance(
-                                systems.zlink.contracts.eventing.Poller.class.getClassLoader(),
-                                new Class<?>[] {systems.zlink.contracts.eventing.Poller.class},
+                                Poller.class.getClassLoader(),
+                                new Class<?>[] {Poller.class},
                                 (proxy, method, args) -> {
                                     closeCalls.incrementAndGet();
                                     throw pollerFailure;
-                                }));
-                var actual =
-                        org.junit.jupiter.api.Assertions.assertThrows(
-                                IllegalStateException.class, monitor::close);
-                org.junit.jupiter.api.Assertions.assertSame(sourceFailure, actual);
-                org.junit.jupiter.api.Assertions.assertEquals(1, closeCalls.get());
-                org.junit.jupiter.api.Assertions.assertArrayEquals(
-                        new Throwable[] {pollerFailure}, actual.getSuppressed());
-            } finally {
-                originalPoller.close();
-            }
-        }
+                                });
+        var monitor = new ZLinkJavaSocketMonitor(source, poller);
+        var actual =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        IllegalStateException.class, monitor::close);
+        org.junit.jupiter.api.Assertions.assertSame(sourceFailure, actual);
+        org.junit.jupiter.api.Assertions.assertEquals(1, closeCalls.get());
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+                new Throwable[] {pollerFailure}, actual.getSuppressed());
     }
 
     private static void verifyCloseWakesWait(boolean interruptCloser) throws Exception {
@@ -92,13 +77,11 @@ final class ZLinkJavaSocketMonitorTest {
                                             result.completeExceptionally(failure);
                                         }
                                     });
-            Field waiting = ZLinkJavaSocketMonitor.class.getDeclaredField("waiting");
-            waiting.setAccessible(true);
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             boolean entered = false;
             while (!entered && System.nanoTime() < deadline) {
                 synchronized (monitor) {
-                    entered = waiting.getBoolean(monitor);
+                    entered = monitor.waiting;
                 }
                 Thread.yield();
             }

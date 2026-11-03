@@ -248,10 +248,12 @@ final class ZLinkCapacityMetricPollingTest {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
-            var location = (ZLinkLocationRuntime) field(runtime, "locationRuntime");
+            var location = ZLinkFrameworkRuntimeTestAccess.locationRuntime(runtime);
             repository = location.locationStore();
-            var host = field(runtime, "locationAutoConnectHost");
-            loops = (List<ZLinkAutoConnectLoop>) field(host, "loops");
+            var host =
+                    (ZLinkLocationAutoConnectHost)
+                            ZLinkFrameworkRuntimeTestAccess.locationAutoConnectHost(runtime);
+            loops = host.loops;
             loop = loops.getFirst();
         }
 
@@ -270,18 +272,11 @@ final class ZLinkCapacityMetricPollingTest {
 
         @SuppressWarnings("unchecked")
         void poll(ZLinkAutoConnectLoop target) throws Exception {
-            var refresh =
-                    (java.util.function.Supplier<CompletionStage<Void>>)
-                            field(target, "refreshCapacity");
-            refresh.get().toCompletableFuture().get(10, TimeUnit.SECONDS);
+            target.refreshCapacity.get().toCompletableFuture().get(10, TimeUnit.SECONDS);
         }
 
         void discoveryTick() throws Exception {
-            var method = ZLinkAutoConnectLoop.class.getDeclaredMethod("tick");
-            method.setAccessible(true);
-            ((CompletionStage<?>) method.invoke(loop))
-                    .toCompletableFuture()
-                    .get(10, TimeUnit.SECONDS);
+            loop.tick().toCompletableFuture().get(10, TimeUnit.SECONDS);
         }
 
         public void close() throws Exception {
@@ -291,12 +286,6 @@ final class ZLinkCapacityMetricPollingTest {
                 metrics.close();
             }
         }
-    }
-
-    private static Object field(Object owner, String name) throws Exception {
-        var field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
     }
 
     private static final class CountingStore {

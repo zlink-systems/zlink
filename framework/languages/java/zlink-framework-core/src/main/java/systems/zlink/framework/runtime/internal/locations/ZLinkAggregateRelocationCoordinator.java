@@ -34,7 +34,7 @@ import java.util.zip.CRC32C;
 public final class ZLinkAggregateRelocationCoordinator {
     private static final ZLinkStoreCancellation NEVER_CANCELLED = () -> false;
 
-    private final ZLinkLocationRepository authorityStore;
+    ZLinkLocationRepository authorityStore;
 
     public ZLinkAggregateRelocationCoordinator(ZLinkLocationRepository authorityStore) {
         this.authorityStore = Objects.requireNonNull(authorityStore, "authorityStore");

@@ -14,17 +14,16 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestAccess;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -309,25 +308,18 @@ final class ZLinkChannelSubmitTurnTest {
 
     private static void awaitQueued(ZLinkStateLane lane) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        Queue<?> mailbox;
+        int queuedTurns;
         do {
-            mailbox = (Queue<?>) field(lane, "mailbox");
-            if (mailbox != null && !mailbox.isEmpty()) break;
+            queuedTurns = ZLinkStateLaneTestAccess.queuedTurnCount(lane);
+            if (queuedTurns > 0) break;
             Thread.yield();
         } while (System.nanoTime() < deadline);
-        org.junit.jupiter.api.Assertions.assertNotNull(mailbox, "the mailbox must be published");
-        assertFalse(mailbox.isEmpty(), "the mutation must be queued behind the submission turn");
-    }
-
-    private static Object field(Object object, String name) throws Exception {
-        Field field = object.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(object);
+        assertTrue(queuedTurns > 0, "the mutation must be queued behind the submission turn");
     }
 
     private static final class Fixture implements AutoCloseable {
         final ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
-        final ZLinkStateLane lane = (ZLinkStateLane) field(sockets, "stateLane");
+        final ZLinkStateLane lane = sockets.stateLane;
         final ZLinkStateLane operationLane = new ZLinkStateLane();
         final ZLinkChannelCallRuntime runtime;
 
@@ -382,7 +374,7 @@ final class ZLinkChannelSubmitTurnTest {
                             new Class<?>[] {ZLinkInternalSpotNode.class},
                             (proxy, method, args) -> {
                                 if (method.getName().equals("operationRegistry")) {
-                                    return field(runtime, "operations");
+                                    return runtime.operations;
                                 }
                                 if (method.getName().equals("sourceTransportLane")) {
                                     return operationLane;

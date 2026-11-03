@@ -201,12 +201,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                     .submit(Reply.class)
                     .toCompletableFuture()
                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-            var activations = ZLinkSpotRuntime.class.getDeclaredField("instanceSpotActivations");
-            activations.setAccessible(true);
             ZLinkInstanceSpotActivation activation =
-                    ((Map<String, ZLinkInstanceSpotActivation>)
-                                    activations.get(runtime.spotManager()))
-                            .get(spotId);
+                    ((ZLinkSpotRuntime) runtime.spotManager()).instanceSpotActivations.get(spotId);
             CompletableFuture<Void> started = new CompletableFuture<>();
             CompletableFuture<Void> release = new CompletableFuture<>();
             CompletionStage<Void> accepted =
@@ -575,13 +571,9 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                 before.authorityOwnerGeneration(),
                                 before.ownerLeaseGeneration(),
                                 before.storeVersion());
-                var activations =
-                        ZLinkSpotRuntime.class.getDeclaredField("instanceSpotActivations");
-                activations.setAccessible(true);
                 ZLinkInstanceSpotActivation activation =
-                        ((Map<String, ZLinkInstanceSpotActivation>)
-                                        activations.get(runtime.spotManager()))
-                                .get(spotId);
+                        ((ZLinkSpotRuntime) runtime.spotManager())
+                                .instanceSpotActivations.get(spotId);
                 store.deleteHold = new CompletableFuture<>();
                 runtime.route()
                         .sendToSpot(spotId, new CloseProbe())
@@ -874,12 +866,9 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                     }
                     if (host.equals("Relocating")) {
                         // Only the before/after seal fixture needs private mesh drain access.
-                        var field = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
-                        field.setAccessible(true);
                         var drains =
-                                (systems.zlink.framework.runtime.internal.drain
-                                                .ZLinkMeshDrainCoordinator)
-                                        field.get(runtime);
+                                systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess
+                                        .meshDrains(runtime);
                         assertFalse(drains.isSealed(MESH));
                         if (relocationSeal.equals("after")) {
                             drains.seal(MESH);

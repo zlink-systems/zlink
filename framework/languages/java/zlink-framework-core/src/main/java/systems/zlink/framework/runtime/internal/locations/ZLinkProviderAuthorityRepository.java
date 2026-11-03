@@ -4619,7 +4619,7 @@ final class ZLinkProviderAuthorityRepository {
     // of this class carries as its authority-key contract value.
     private static final String AUTHORITY_PREIMAGE_PREFIX = "authority\0";
 
-    private static ZLinkStoreKey authorityKey(String key) {
+    static ZLinkStoreKey authorityKey(String key) {
         ZLinkAuthorityKeyCodec.AuthorityIdentity identity = ZLinkAuthorityKeyCodec.decode(key);
         return ZLinkOpaqueRecordKey.of("authority", identity.kind(), identity.id());
     }

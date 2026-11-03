@@ -60,9 +60,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private final Duration heartbeatInterval;
     private final Duration ownerLeaseRenewTimeout;
     private final Duration ownerLeaseFencingMargin;
-    private final ScheduledExecutorService heartbeatExecutor;
-    private final LongSupplier monotonicNow;
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    ScheduledExecutorService heartbeatExecutor;
+    LongSupplier monotonicNow;
+    final ZLinkStateLane stateLane = new ZLinkStateLane();
     private ScheduledFuture<?> heartbeatTask;
     private StartupLifecycle startupLifecycle;
     private RoutingId nodeRid;

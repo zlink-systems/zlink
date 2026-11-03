@@ -49,10 +49,8 @@ final class ZLinkSpotPublisherRuntimeTest {
                         awaitUninterruptibly(release);
                     }
                 };
-        var field = ZLinkSpotPublisherRuntime.class.getDeclaredField("multicastExecutor");
-        field.setAccessible(true);
-        ((java.util.concurrent.ThreadPoolExecutor) field.get(runtime)).shutdownNow();
-        field.set(runtime, worker);
+        runtime.multicastExecutor.shutdownNow();
+        runtime.multicastExecutor = worker;
         try {
             var held = submit(runtime, "not-started");
             assertTrue(entered.await(3, TimeUnit.SECONDS));

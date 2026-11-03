@@ -1,10 +1,15 @@
 package systems.zlink.framework.runtime.host;
 
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
+import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
+import systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
 import java.util.concurrent.CompletionStage;
 
@@ -33,6 +38,36 @@ public final class ZLinkFrameworkRuntimeTestAccess {
 
     public static CompletionStage<Void> startupCompletion(ZLinkFrameworkRuntime runtime) {
         return runtime.startupCompletion();
+    }
+
+    public static ZLinkChannelRuntime channels(ZLinkFrameworkRuntime runtime) {
+        return runtime.channels;
+    }
+
+    public static ZLinkMeshDrainCoordinator meshDrains(ZLinkFrameworkRuntime runtime) {
+        return runtime.meshDrains;
+    }
+
+    public static ZLinkStatefulAuthorityRouteRuntime authorityRouteRuntime(
+            ZLinkFrameworkRuntime runtime) {
+        return runtime.authorityRouteRuntime;
+    }
+
+    public static ZLinkLocationRuntime locationRuntime(ZLinkFrameworkRuntime runtime) {
+        return runtime.locationRuntime;
+    }
+
+    public static Object locationAutoConnectHost(ZLinkFrameworkRuntime runtime) {
+        return runtime.locationAutoConnectHost;
+    }
+
+    public static Object spotRetire(ZLinkFrameworkRuntime runtime) {
+        return runtime.spotRetire;
+    }
+
+    public static ZLinkStoreLocationResolvers storeLocationResolvers(
+            ZLinkFrameworkRuntime runtime) {
+        return runtime.storeLocationResolvers;
     }
 
     public static boolean ownerAdmissionOpen(ZLinkFrameworkRuntime runtime) {

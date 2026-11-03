@@ -42,7 +42,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
             Logger.getLogger(ZLinkSpotPublisherRuntime.class.getName());
     private final ZLinkMessageSerializer serializer;
     private final ZLinkSpotRouteMessages messages;
-    private final ThreadPoolExecutor multicastExecutor;
+    ThreadPoolExecutor multicastExecutor;
     private final Function<Class<?>, String> contentTypeResolver;
     private final ZLinkMessageFlowTracer flow;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();

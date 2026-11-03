@@ -33,7 +33,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private static final String RESERVED_PACKET_NAME_PREFIX = "$zlink.";
     private static final boolean STREAM_TRACE =
             "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    private final ScheduledExecutorService timeouts =
+    final ScheduledExecutorService timeouts =
             Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory());
 
     private final ZLinkStreamConnectorConfiguration configuration;
@@ -49,14 +49,14 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private final ZLinkStreamDispatchQueue dispatchQueue;
     private final ZLinkStreamActorRegistry actorRegistry;
     private final ZLinkStreamConnectorPayloadCodec payloadCodec;
-    private final AtomicLong nextRequestSeq = new AtomicLong();
+    final AtomicLong nextRequestSeq = new AtomicLong();
     //  Process-global monotonic correlation id (hex), stamped on outbound
     //  request packets only. Spec 27 §2: a one-way message that has no reply
     //  never creates a correlation_id.
     private final AtomicLong correlationCounter = new AtomicLong();
     private final ZLinkStreamPendingRequests pendingRequests = new ZLinkStreamPendingRequests();
     private final ZLinkStreamReceiveDispatcher receiveDispatcher;
-    private final ZLinkStreamConnectionLifecycle lifecycle;
+    final ZLinkStreamConnectionLifecycle lifecycle;
 
     private final ZLinkStreamSendChain sendChain = new ZLinkStreamSendChain();
     //  Common connector spec 32 6.2. `lastCloseReason` is the read surface:
@@ -539,7 +539,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         return lifecycle.enqueueFrame(sendChain, frame, enqueue);
     }
 
-    private CompletionStage<Void> traceWrite(
+    CompletionStage<Void> traceWrite(
             ZLinkStreamWireProtocol.Header header, CompletionStage<Void> publication) {
         if (!STREAM_TRACE) return publication;
         publication.whenComplete(

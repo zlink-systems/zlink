@@ -38,7 +38,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final String sourceName;
     private final Dispatch dispatch;
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, ManagedTimer> timers = new LinkedHashMap<>();
     private Object spot;
     private Phase phase = Phase.RUNNING;

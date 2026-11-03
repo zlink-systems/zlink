@@ -122,9 +122,7 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
                 Thread.sleep(1);
             }
             assertTrue(runtime.isReady());
-            var drainsField = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
-            drainsField.setAccessible(true);
-            drainsField.set(runtime, null);
+            runtime.meshDrains = null;
 
             var first = runtime.shutdown(Duration.ofSeconds(2)).toCompletableFuture();
             var concurrent = runtime.shutdown(Duration.ofSeconds(2)).toCompletableFuture();
@@ -149,21 +147,11 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
                 Thread.sleep(5);
             }
             assertTrue(runtime.isReady());
-            var drainsField = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
-            drainsField.setAccessible(true);
-            var drains =
-                    (systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator)
-                            drainsField.get(runtime);
-            var nodesField = ZLinkFrameworkRuntime.class.getDeclaredField("meshNodes");
-            nodesField.setAccessible(true);
-            var node =
-                    ((systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime)
-                                    nodesField.get(runtime))
-                            .nodesByName()
-                            .get("shutdown-mesh");
-            var gateField = node.getClass().getDeclaredField("peerAdmissionSealed");
-            gateField.setAccessible(true);
-            var seal = (java.util.function.BooleanSupplier) gateField.get(node);
+            var drains = runtime.meshDrains;
+            var node = runtime.meshNodes.nodesByName().get("shutdown-mesh");
+            var seal =
+                    systems.zlink.framework.runtime.binding.ZLinkJavaRawMeshNodeTestAccess
+                            .peerAdmissionSealed(node);
             assertFalse(seal.getAsBoolean());
             try (var claim = drains.tryClaim("shutdown-mesh")) {
                 assertTrue(claim != null);

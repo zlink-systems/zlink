@@ -66,13 +66,8 @@ final class ZLinkSpotShutdownInFlightTest {
                         new ZLinkStringMessageSerializer(),
                         ZLinkHandlerActivator.services(),
                         null);
-        var field = ZLinkSpotRuntime.class.getDeclaredField("publishers");
-        field.setAccessible(true);
-        ZLinkSpotPublisherRuntime publishers = (ZLinkSpotPublisherRuntime) field.get(runtime);
-
-        var executorField = ZLinkSpotPublisherRuntime.class.getDeclaredField("multicastExecutor");
-        executorField.setAccessible(true);
-        ((ThreadPoolExecutor) executorField.get(publishers)).shutdown();
+        var publishers = runtime.publishers;
+        publishers.multicastExecutor.shutdown();
         CompletableFuture<Void> waiting = new CompletableFuture<>();
         ThreadPoolExecutor executor =
                 new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>()) {
@@ -83,7 +78,7 @@ final class ZLinkSpotShutdownInFlightTest {
                         return super.awaitTermination(timeout, unit);
                     }
                 };
-        executorField.set(publishers, executor);
+        publishers.multicastExecutor = executor;
         CompletableFuture<Void> closing = null;
         try {
             publishers

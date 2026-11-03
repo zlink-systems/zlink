@@ -41,7 +41,7 @@ final class ZLinkNettyTransportConnection implements ZLinkStreamTransportConnect
     private final Queue<ZLinkStreamWireProtocol.Frame> frames = new ArrayDeque<>();
     private final Queue<CompletableFuture<ZLinkStreamWireProtocol.Frame>> waiters =
             new ArrayDeque<>();
-    private volatile Channel channel;
+    volatile Channel channel;
     private volatile Throwable failure;
 
     private ZLinkNettyTransportConnection() {}

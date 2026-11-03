@@ -106,9 +106,7 @@ final class ZLinkInstanceSpotStaleCacheTest {
                 var payload = Message.from(new byte[] {1})) {
             var host = (ZLinkSpotRuntime) runtime.spotManager();
             host.installUserSpotOperationHandlers(repository, repository, locationRuntime, routes);
-            var nodesField = ZLinkSpotRuntime.class.getDeclaredField("routeMeshNodesByName");
-            nodesField.setAccessible(true);
-            var nodes = (Map<String, ZLinkInternalMeshNode>) nodesField.get(host);
+            var nodes = host.routeMeshNodesByName;
             var originalNode = nodes.get(MESH);
             var submissions = new AtomicInteger();
             var accepted = new AtomicInteger();
@@ -189,7 +187,7 @@ final class ZLinkInstanceSpotStaleCacheTest {
                                     });
             var substituted = new HashMap<>(nodes);
             substituted.put(MESH, source);
-            nodesField.set(host, Map.copyOf(substituted));
+            host.routeMeshNodesByName = Map.copyOf(substituted);
             try {
                 var ready = resolver.resolve(SPOT).toCompletableFuture().join().orElseThrow();
                 assertEquals("old", ready.ownerId());
@@ -242,7 +240,7 @@ final class ZLinkInstanceSpotStaleCacheTest {
                         invalidations.get(),
                         "successful next operation must not invalidate again");
             } finally {
-                nodesField.set(host, nodes);
+                host.routeMeshNodesByName = nodes;
             }
         } finally {
             routes.close();

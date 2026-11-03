@@ -25,13 +25,11 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
-import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.spots.*;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -108,8 +106,7 @@ final class ZLinkCommittedActorLocalIngressTest {
                         .toCompletableFuture()
                         .get(WAIT_SECONDS, TimeUnit.SECONDS);
                 committed.get(WAIT_SECONDS, TimeUnit.SECONDS);
-                var resolvers =
-                        (ZLinkStoreLocationResolvers) field(target, "storeLocationResolvers");
+                var resolvers = ZLinkFrameworkRuntimeTestAccess.storeLocationResolvers(target);
                 var route =
                         resolvers
                                 .resolveActor(ACTOR)
@@ -319,10 +316,9 @@ final class ZLinkCommittedActorLocalIngressTest {
                     .get(WAIT_SECONDS, TimeUnit.SECONDS);
             var targetNode = node(target);
             var targetCleanup = new CompletableFuture<CompletionStage<Void>>();
-            @SuppressWarnings("unchecked")
             var targetMachines =
-                    (List<ZLinkCanonicalRelocationStateMachine>)
-                            field(field(target, "spotRetire"), "stateMachines");
+                    ZLinkSpotRuntimeTestAccess.relocationStateMachines(
+                            ZLinkFrameworkRuntimeTestAccess.spotRetire(target));
             Runnable observeTargetCleanup =
                     () ->
                             targetCleanup.complete(
@@ -483,9 +479,16 @@ final class ZLinkCommittedActorLocalIngressTest {
             ZLinkInternalSpotNode node,
             BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> commit)
             throws Exception {
-        Object endpoint = field(node, "relocationStagingIngressHandler");
-        Object coordinator = field(endpoint, "coordinator");
-        var delegate = (ZLinkLocationRepository) field(coordinator, "authorityStore");
+        Object endpoint =
+                systems.zlink.framework.runtime.binding.ZLinkJavaRawSpotNodeTestAccess
+                        .relocationStagingIngressHandler(node);
+        Object coordinator = ZLinkSpotRuntimeTestAccess.aggregateCoordinator(endpoint);
+        var delegate =
+                systems.zlink.framework.runtime.internal.locations
+                        .ZLinkAggregateRelocationCoordinatorTestAccess.authorityStore(
+                        (systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkAggregateRelocationCoordinator)
+                                coordinator);
         var observed =
                 Proxy.newProxyInstance(
                         ZLinkLocationRepository.class.getClassLoader(),
@@ -499,15 +502,12 @@ final class ZLinkCommittedActorLocalIngressTest {
                                 throw failure.getCause();
                             }
                         });
-        Field repository = coordinator.getClass().getDeclaredField("authorityStore");
-        repository.setAccessible(true);
-        repository.set(coordinator, observed);
-    }
-
-    private static Object field(Object owner, String name) throws Exception {
-        Field field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
+        systems.zlink.framework.runtime.internal.locations
+                .ZLinkAggregateRelocationCoordinatorTestAccess.replaceAuthorityStore(
+                (systems.zlink.framework.runtime.internal.locations
+                                .ZLinkAggregateRelocationCoordinator)
+                        coordinator,
+                (ZLinkLocationRepository) observed);
     }
 
     private static ZLinkInternalSpotNode node(ZLinkFrameworkRuntime host) throws Exception {

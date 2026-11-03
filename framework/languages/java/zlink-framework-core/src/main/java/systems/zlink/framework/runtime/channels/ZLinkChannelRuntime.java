@@ -41,6 +41,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorRe
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
@@ -101,8 +102,8 @@ public final class ZLinkChannelRuntime
             "__zlink.routed_spot.egress.request";
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
-    private final ZLinkChannelSocketRegistry sockets;
-    private final ZLinkChannelDispatchRegistry dispatchRegistry;
+    final ZLinkChannelSocketRegistry sockets;
+    final ZLinkChannelDispatchRegistry dispatchRegistry;
     private final ZLinkMessageSerializer serializer;
     private final ZLinkChannelReplyDecoder replyDecoder;
     private final ZLinkCodecRegistration codecs;
@@ -112,8 +113,8 @@ public final class ZLinkChannelRuntime
     private final ZLinkChannelHandlerInvoker channelHandlerInvoker;
     private final ZLinkChannelReceiveLoops receiveLoops;
     private final Duration defaultRequestTimeout;
-    private final ZLinkChannelCallRuntime callRuntime;
-    private final SpotTransportAddressResolver spotAddressResolver;
+    final ZLinkChannelCallRuntime callRuntime;
+    SpotTransportAddressResolver spotAddressResolver;
     private final ZLinkSpotRouteBridgeDrainer spotRouteBridgeDrainer;
     private final ZLinkBackendAdapterProvider backendFactory;
     private final ZLinkBackendAdapterOptions adapterOptions;
@@ -127,21 +128,19 @@ public final class ZLinkChannelRuntime
     private final Map<String, List<String>> fanoutApplicationTopics;
     private ZLinkFanoutLocationRuntime fanoutLocationRuntime;
     private ZLinkManualFanoutRuntime manualFanoutRuntime;
-    private ZLinkClientServerLocationRuntime clientServerLocationRuntime;
+    ZLinkClientServerLocationRuntime clientServerLocationRuntime;
     private volatile Supplier<ZLinkFrameworkRuntimeState> hostState =
             () -> ZLinkFrameworkRuntimeState.SERVING;
     private final ZLinkClientServerRuntime clientServerRuntime;
     private final ZLinkFanoutRuntime fanoutRuntime;
     private Supplier<ZLinkInternalSpotNode> spotRouteBridgeOwner;
     private volatile Supplier<ZLinkInternalSpotNode> requestSourceMeshOwner;
-    private final ScheduledExecutorService timeoutExecutor;
+    final ScheduledExecutorService timeoutExecutor;
     // Provider/backend work can block without occupying the deadline thread.
     // Each periodic source below owns one admission bit, so this shared
     // virtual-thread lane receives at most one queued or running task from
     // that source regardless of timer frequency.
-    private final ExecutorService infrastructureExecutor =
-            Executors.newThreadPerTaskExecutor(
-                    Thread.ofVirtual().name("zlink-java-channel-infrastructure-", 0).factory());
+    ExecutorService infrastructureExecutor;
     private volatile boolean running = true;
 
     public record AutoConnectSurface(
@@ -249,6 +248,38 @@ public final class ZLinkChannelRuntime
             ZLinkFrameworkRegistration registration,
             ZLinkMessageSerializer serializer) {
         this(backend, registration, serializer, ZLinkHandlerActivator.reflection());
+    }
+
+    ZLinkChannelRuntime(
+            ZLinkChannelBackendAdapter backend,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkStateLane stateLane) {
+        this(
+                backend,
+                backend.createContext(),
+                true,
+                null,
+                null,
+                registration,
+                serializer,
+                ZLinkHandlerActivator.reflection(),
+                null,
+                (ignoredBackend, ignoredKey) ->
+                        (ignoredSubmission, ignoredCleanup) ->
+                                CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "one-way admission factory is required")),
+                System::nanoTime,
+                java.util.concurrent.locks.LockSupport::parkNanos,
+                Executors.newSingleThreadScheduledExecutor(
+                        task -> {
+                            Thread thread = new Thread(task, "zlink-java-channel-timeout");
+                            thread.setDaemon(true);
+                            return thread;
+                        }),
+                createInfrastructureExecutor(),
+                stateLane);
     }
 
     public ZLinkChannelRuntime(
@@ -455,10 +486,86 @@ public final class ZLinkChannelRuntime
             LongSupplier nanoTime,
             LongConsumer parkNanos,
             ScheduledExecutorService timeoutExecutor) {
+        this(
+                backend,
+                context,
+                ownsContext,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                admission,
+                nanoTime,
+                parkNanos,
+                timeoutExecutor,
+                createInfrastructureExecutor());
+    }
+
+    ZLinkChannelRuntime(
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            BiFunction<
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission,
+            LongSupplier nanoTime,
+            LongConsumer parkNanos,
+            ScheduledExecutorService timeoutExecutor,
+            ExecutorService infrastructureExecutor) {
+        this(
+                backend,
+                context,
+                ownsContext,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                admission,
+                nanoTime,
+                parkNanos,
+                timeoutExecutor,
+                infrastructureExecutor,
+                new ZLinkStateLane());
+    }
+
+    ZLinkChannelRuntime(
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            BiFunction<
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission,
+            LongSupplier nanoTime,
+            LongConsumer parkNanos,
+            ScheduledExecutorService timeoutExecutor,
+            ExecutorService infrastructureExecutor,
+            ZLinkStateLane stateLane) {
         this.timeoutExecutor = timeoutExecutor;
+        this.infrastructureExecutor =
+                Objects.requireNonNull(infrastructureExecutor, "infrastructureExecutor");
         this.sockets =
                 new ZLinkChannelSocketRegistry(
-                        registration.applicationJobQueue(), nanoTime, () -> !running);
+                        registration.applicationJobQueue(), nanoTime, () -> !running, stateLane);
         this.clientServerRuntime = new ZLinkClientServerRuntimeView(sockets, () -> hostState.get());
         this.fanoutRuntime =
                 new ZLinkFanoutRuntimeView(
@@ -600,6 +707,11 @@ public final class ZLinkChannelRuntime
                     ZLinkClassicFanoutLiveness.DEFAULT_BEACON_INTERVAL.toMillis(),
                     TimeUnit.MILLISECONDS);
         }
+    }
+
+    static ExecutorService createInfrastructureExecutor() {
+        return Executors.newThreadPerTaskExecutor(
+                Thread.ofVirtual().name("zlink-java-channel-infrastructure-", 0).factory());
     }
 
     public List<AutoConnectSurface> autoConnectSurfaces() {
@@ -1646,7 +1758,7 @@ public final class ZLinkChannelRuntime
         return publisher;
     }
 
-    private ZLinkBackendRouterSocket requireRouteRouter(String channelName) {
+    ZLinkBackendRouterSocket requireRouteRouter(String channelName) {
         ZLinkBackendRouterSocket router = sockets.routeRouter(channelName);
         if (router == null) {
             throw new ZLinkConfigurationException(

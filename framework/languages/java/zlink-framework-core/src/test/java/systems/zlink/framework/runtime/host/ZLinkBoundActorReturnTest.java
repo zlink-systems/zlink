@@ -475,9 +475,6 @@ final class ZLinkBoundActorReturnTest {
                             source, targetRef, CompletableFuture.completedFuture(target))
                     .toCompletableFuture()
                     .join();
-            var handoffField = runtime.getClass().getDeclaredField("handoff");
-            handoffField.setAccessible(true);
-            var handoff = handoffField.get(runtime);
             var route =
                     new systems.zlink.framework.runtime.internal.service
                             .ZLinkServiceMessageFollowWireCodec.ActorRoute(
@@ -487,21 +484,13 @@ final class ZLinkBoundActorReturnTest {
                             node.actorNodeGeneration(actorRef),
                             oldAuthority,
                             ownerLease);
-            var lookup =
-                    handoff.getClass().getDeclaredMethod("messageFollowSource", route.getClass());
-            lookup.setAccessible(true);
-            var retained = ((Optional<?>) lookup.invoke(handoff, route)).orElseThrow();
             try {
                 // Model the same Actor returning: ObjectGeneration stays unchanged; authority
                 // advances.
                 long returnedAuthority = oldAuthority + 2;
                 node.rememberActorAuthority(actorRef, returnedAuthority, ownerLease);
-                var cleanup =
-                        runtime.getClass()
-                                .getDeclaredMethod(
-                                        "removeMessageFollowSource", retained.getClass());
-                cleanup.setAccessible(true);
-                cleanup.invoke(runtime, retained);
+                systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess
+                        .removeMessageFollowSource(runtime, route);
                 runtime.applyRemoteSessionBinding(node, actorRef, ignored -> true)
                         .toCompletableFuture()
                         .join();

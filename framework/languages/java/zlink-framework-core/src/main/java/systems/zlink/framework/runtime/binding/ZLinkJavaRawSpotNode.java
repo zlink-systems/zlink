@@ -66,9 +66,9 @@ import java.util.logging.Logger;
 final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private static final Logger LOGGER = Logger.getLogger(ZLinkJavaRawSpotNode.class.getName());
     private final ZLinkJavaRawMeshNode owner;
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, ZLinkJavaRawSpot> spots = new ConcurrentHashMap<>();
-    private final Map<String, NativeActorStay> actors = new ConcurrentHashMap<>();
+    final Map<String, NativeActorStay> actors = new ConcurrentHashMap<>();
     private final Map<SpotAuthorityKey, AuthorityFence> spotAuthorities = new ConcurrentHashMap<>();
     private final Map<ZLinkBackendActorRef, AuthorityFence> actorAuthorities =
             new ConcurrentHashMap<>();
@@ -78,7 +78,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private final AtomicLong nextStreamBindingGeneration = new AtomicLong();
     private final Map<Long, CompletableFuture<List<Message>>> actorRequests =
             new ConcurrentHashMap<>();
-    private final Map<Long, Consumer<List<Message>>> actorRemoteReplies = new ConcurrentHashMap<>();
+    final Map<Long, Consumer<List<Message>>> actorRemoteReplies = new ConcurrentHashMap<>();
     // Session owner index of this node's published Session routes, by Actor. Only the Session
     // owner changes it, in this node's lane; push and command 36 delivery read it.
     private final Map<String, StreamBinding> streamBindings = new ConcurrentHashMap<>();
@@ -90,18 +90,17 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             (node, actor, transition) ->
                     this.stateLane.runNowOrQueue(
                             () -> transition.apply(RemoteSessionBindingTransition.NONE));
-    private final ZLinkJavaInstanceSpotRegistry instanceSpots;
+    final ZLinkJavaInstanceSpotRegistry instanceSpots;
     private volatile Function<
                     ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope,
                     CompletionStage<ZLinkAuthorityReadResult>>
             instanceActivationValidator = envelope -> CompletableFuture.completedFuture(null);
 
-    private final Map<String, InstanceAuthority> instanceAuthorities = new ConcurrentHashMap<>();
+    final Map<String, InstanceAuthority> instanceAuthorities = new ConcurrentHashMap<>();
     private volatile ZLinkJavaRawSpot entrySpot;
     private volatile ZLinkMeshApplicationReceiver applicationReceiver;
-    private volatile ZLinkInternalSpotNode.MessageFollowRelayHandler messageFollowRelayHandler;
-    private volatile ZLinkInternalSpotNode.RelocationStagingIngressHandler
-            relocationStagingIngressHandler;
+    volatile ZLinkInternalSpotNode.MessageFollowRelayHandler messageFollowRelayHandler;
+    volatile ZLinkInternalSpotNode.RelocationStagingIngressHandler relocationStagingIngressHandler;
     private volatile ZLinkInternalSpotNode.SpotAdmissionResolver spotAdmissionResolver;
     private final Map<
                     ZLinkServiceM6BWireCodec.SpotRouteFence,
@@ -1128,7 +1127,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return requestExactActor(actor, parts, SendFlags.DONT_WAIT, timeout, null);
     }
 
-    private void replyBoundStreamSession(
+    void replyBoundStreamSession(
             ZLinkJavaStreamSocket stream,
             RoutingId sessionRid,
             int actorSlot,
@@ -1162,7 +1161,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         }
     }
 
-    private void replyBoundStreamError(
+    void replyBoundStreamError(
             ZLinkJavaStreamSocket stream,
             RoutingId sessionRid,
             int actorSlot,
@@ -3637,7 +3636,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     private record AuthorityFence(long authorityOwnerGeneration, long ownerLeaseGeneration) {}
 
-    private record NativeActorStay(
+    record NativeActorStay(
             ZLinkBackendActorRef actor,
             String spotId,
             long membershipEpoch,

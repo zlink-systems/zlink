@@ -14,13 +14,10 @@ import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess;
 import systems.zlink.framework.spots.*;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -84,36 +81,15 @@ final class ZLinkCommittedTargetCloseTest {
                                 status -> status.isReady() && status.readyPeerCount() > 0)) {
                     ready.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 }
-                var retire = value(target, "spotRetire");
-                var machines = (List<?>) value(retire, "stateMachines");
-                assertEquals(1, machines.size());
-                var machine = machines.getFirst();
-                var targetEndpoint = value(machine, "target");
-                Field normalizer = targetEndpoint.getClass().getDeclaredField("normalizer");
-                normalizer.setAccessible(true);
-                Object original = normalizer.get(targetEndpoint);
+                var retire = ZLinkFrameworkRuntimeTestAccess.spotRetire(target);
+                assertEquals(1, ZLinkSpotRuntimeTestAccess.relocationStateMachineCount(retire));
+                var machine = ZLinkSpotRuntimeTestAccess.firstRelocationStateMachine(retire);
+                var targetEndpoint =
+                        ZLinkSpotRuntimeTestAccess.firstRelocationTargetEndpoint(retire);
+                Object original =
+                        ZLinkSpotRuntimeTestAccess.gateTargetNormalizer(
+                                targetEndpoint, entered, publicationRelease);
                 var release = publicationRelease;
-                normalizer.set(
-                        targetEndpoint,
-                        Proxy.newProxyInstance(
-                                normalizer.getType().getClassLoader(),
-                                new Class<?>[] {normalizer.getType()},
-                                (proxy, method, args) -> {
-                                    method.setAccessible(true);
-                                    try {
-                                        Object result = method.invoke(original, args);
-                                        if (!method.getName().equals("normalize")) return result;
-                                        @SuppressWarnings("unchecked")
-                                        var normalized = (CompletionStage<Void>) result;
-                                        return normalized.thenCompose(
-                                                ignored -> {
-                                                    entered.complete(null);
-                                                    return release;
-                                                });
-                                    } catch (InvocationTargetException failure) {
-                                        throw failure.getCause();
-                                    }
-                                }));
                 try {
                     var relocation =
                             source.relocate(
@@ -129,11 +105,8 @@ final class ZLinkCommittedTargetCloseTest {
                                     .get(WAIT.toSeconds(), TimeUnit.SECONDS)
                                     .outcome());
                     // The real Steady write finished, but this accepted target still owns ingress.
-                    var targets = (Map<?, ?>) value(machine, "targets");
-                    assertEquals(1, targets.size());
-                    var terminal =
-                            (CompletableFuture<?>)
-                                    value(targets.values().iterator().next(), "terminal");
+                    var terminal = ZLinkSpotRuntimeTestAccess.firstTargetAttemptTerminal(machine);
+                    assertEquals(1, ZLinkSpotRuntimeTestAccess.targetAttemptCount(machine));
                     assertFalse(terminal.isDone());
                     publicationTerminal = terminal;
                     int observers = terminal.getNumberOfDependents();
@@ -159,19 +132,13 @@ final class ZLinkCommittedTargetCloseTest {
                             "target OnClosing must follow accepted publication terminal");
                 } finally {
                     release.complete(null);
-                    normalizer.set(targetEndpoint, original);
+                    ZLinkSpotRuntimeTestAccess.replaceTargetNormalizer(targetEndpoint, original);
                 }
             }
         } finally {
             publicationRelease.complete(null);
             logger.removeHandler(handler);
         }
-    }
-
-    private static Object value(Object owner, String name) throws ReflectiveOperationException {
-        Field field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
     }
 
     private static DefaultZLinkFrameworkOptions options(
