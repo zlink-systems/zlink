@@ -8787,7 +8787,8 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
     const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
     const auto registered = _transport->register_prepared_local_operation (
       reservation, deadline,
-      [source, result, completion = std::move (completion),
+      [source, result, receiver = std::exchange (operation.receiver, {}),
+       completion = std::move (completion),
        incomplete] (foundation::operation_terminal_t terminal,
                     ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
           auto payload = std::move (completion_payload.value ());
@@ -8828,17 +8829,22 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
                   : result_t<std::vector<zlink::message_t>>::failure (
                       framework_error_kind_t::internal_failure, terminal_message);
               completion (terminal, std::move (decoded));
-          } else if (terminal == foundation::operation_terminal_t::completed) {
-              source->complete (result_t<operation_completion_t>::success (std::move (*result)));
-          } else if (terminal == foundation::operation_terminal_t::shutdown) {
-              source->complete (detail::boundary_failure<operation_completion_t> (
-                detail::boundary_error_t::shutdown, terminal_message));
-          } else if (terminal == foundation::operation_terminal_t::timed_out) {
-              source->complete (detail::boundary_failure<operation_completion_t> (
-                detail::boundary_error_t::timed_out, terminal_message));
           } else {
-              source->complete (result_t<operation_completion_t>::failure (
-                framework_error_kind_t::internal_failure, terminal_message));
+              auto decoded = terminal == foundation::operation_terminal_t::completed
+                               ? result_t<operation_completion_t>::success (std::move (*result))
+                             : terminal == foundation::operation_terminal_t::shutdown
+                               ? detail::boundary_failure<operation_completion_t> (
+                                   detail::boundary_error_t::shutdown, terminal_message)
+                             : terminal == foundation::operation_terminal_t::timed_out
+                               ? detail::boundary_failure<operation_completion_t> (
+                                   detail::boundary_error_t::timed_out, terminal_message)
+                               : result_t<operation_completion_t>::failure (
+                                   framework_error_kind_t::internal_failure, terminal_message);
+              // This callback owns the registry claim for every local terminal.
+              // Reply tokens retain no receiver after registration.
+              if (receiver)
+                  receiver (decoded);
+              source->complete (std::move (decoded));
           }
       },
       request_surface);
@@ -8855,19 +8861,9 @@ bool public_host_runtime_t::enqueue_completion (const pending_operation_t &opera
                                                 receive_record_t record,
                                                 std::vector<zlink::message_t> parts)
 {
-    const auto complete_local = [&] () noexcept {
+    return _transport->complete_local_operation (operation.id, [&] {
         *operation.local_result = operation_completion_t{std::move (record), std::move (parts)};
-    };
-    const auto completed = _transport->complete_local_operation (operation.id, [&] {
-        complete_local ();
-        operation.receive (result_t<operation_completion_t>::success (*operation.local_result),
-                           true);
     });
-    if (!completed)
-        operation.receive (
-          result_t<operation_completion_t>::success ({std::move (record), std::move (parts)}),
-          false);
-    return completed;
 }
 
 task_t<zlink::submit_result_t>

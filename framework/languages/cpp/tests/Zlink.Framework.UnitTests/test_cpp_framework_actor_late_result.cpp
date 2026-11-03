@@ -7,8 +7,11 @@
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/timers/async_delay.hpp"
+#include "runtime/execution/serial_application_record.hpp"
+#include "runtime/stateful/raw_stateful_dispatch.hpp"
 
 #include <gtest/gtest.h>
+#include <zlink/Contracts/Core/context.hpp>
 #include <atomic>
 #include <future>
 
@@ -39,6 +42,21 @@ struct raw_mesh_node_owner_test_access_t
           foundation::operation_registry_t::clock_t::now ()
             + (expired_deadline ? -std::chrono::hours (1) : std::chrono::hours (1)),
           std::move (callback), 17, true, {}, {}, {}, std::move (receiver));
+    }
+    static void end_local (raw_mesh_node_owner_t &owner,
+                           foundation::call_id_t id,
+                           foundation::operation_terminal_t terminal)
+    {
+        if (terminal == foundation::operation_terminal_t::cancelled)
+            EXPECT_TRUE (owner._operations->cancel (id));
+        else if (terminal == foundation::operation_terminal_t::timed_out)
+            EXPECT_EQ (owner._operations
+                         ->expire (foundation::operation_registry_t::clock_t::time_point::max ())
+                         .result ()
+                         .value (),
+                       1);
+        else
+            EXPECT_TRUE (owner.fail_local_operation (id, terminal));
     }
     static void deliver (std::shared_ptr<foundation::operation_registry_t> registry,
                          foundation::call_id_t operation,
@@ -365,6 +383,220 @@ TEST (ActorSendFence, MissingAuthorityInvalidatesOnlyTheUsedFence)
         ASSERT_FALSE (result);
         EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::not_found);
         EXPECT_EQ (access::cached (*client, used.actor_id), changed != -1);
+    }
+}
+
+// These requests use the production client, local host registration and dispatcher.
+// Only the registry clock/cancellation is controlled by the fixture.
+class local_actor_receiver_t : public testing::Test
+{
+  protected:
+    std::mutex delay_mutex;
+    fw::detail::delay_owner_t delays{delay_mutex};
+    rt::in_memory_location_repository_t store;
+    rt::live_location_reader_t locations{store};
+    fw::serializer_registry_t serializers;
+    std::shared_ptr<fw::detail::mesh_node_runtime_t> runtime;
+    std::shared_ptr<fw::actor_client_t> client;
+    std::optional<rt::host::receive_record_t> request;
+    wire::actor_route_fence_t fence;
+
+    void SetUp () override
+    {
+        auto state =
+          fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("mesh");
+        state->listen_endpoint = "tcp://127.0.0.1:0";
+        state->routing_id = zlink::routing_id_t::from ("local-receiver");
+        state->core_context = std::make_shared<zlink::context_t> ();
+        state->spot_state->snapshot.actor_types.push_back ("late-result");
+        runtime = std::make_shared<fw::detail::mesh_node_runtime_t> (state);
+        runtime->configure_stateful_dispatch (
+          [] (const rt::stateful::accepted_record_authority_query_t &query)
+            -> fw::task_t<std::optional<rt::stateful::accepted_record_authority_t>> {
+              co_return rt::stateful::accepted_record_authority_t{
+                {"owner", 1, query.source_node_routing_id, query.source_node_generation}, 1};
+          });
+        runtime->start ();
+        const auto actor = runtime->create_actor ("late-result", "actor");
+        fence = {"actor",
+                 actor.ref ().object_generation (),
+                 runtime->status ().routing_id ().to_bytes (),
+                 runtime->status ().lifecycle_generation (),
+                 1,
+                 1};
+        serializers.add<std::string> (
+          [] (const std::string &value) { return fw::encoded_payload_t::from_string (value); },
+          [] (const fw::encoded_payload_t &value) { return value.to_string (); },
+          "application/json");
+        client = rt::make_actor_client (locations, serializers, {runtime}, {}, {}, delays);
+        access::cache (*client, fence);
+    }
+
+    void TearDown () override
+    {
+        request.reset ();
+        client.reset ();
+        runtime->stop ();
+    }
+
+    void dispatch_request ()
+    {
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (!request && std::chrono::steady_clock::now () < deadline) {
+            const auto dispatched = runtime
+                                      ->dispatch_ready ([this] (const auto &, const auto &record,
+                                                                auto, auto) { request = record; })
+                                      .result ();
+            ASSERT_TRUE (dispatched);
+            std::this_thread::yield ();
+        }
+        ASSERT_TRUE (request);
+    }
+
+    void end (terminal_t terminal)
+    {
+        rt::mesh::raw_mesh_node_owner_test_access_t::end_local (
+          runtime->native_node ().transport (), request->operation_id, terminal);
+    }
+
+    void expect_released (const std::weak_ptr<fw::actor_client_t> &retained)
+    {
+        client.reset ();
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (!retained.expired () && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        EXPECT_TRUE (retained.expired ());
+    }
+};
+
+TEST_F (local_actor_receiver_t, LocalStaleReplyInvalidatesOnlyTheUsedFence)
+{
+    for (int changed = -1; changed != 5; ++changed) {
+        SCOPED_TRACE (changed);
+        access::cache (*client, fence);
+        auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                         .timeout (1h)
+                         .async<std::string> ();
+        dispatch_request ();
+        ASSERT_TRUE (request);
+        auto newer = fence;
+        switch (changed) {
+            case 0:
+                ++newer.object_generation;
+                break;
+            case 1:
+                newer.target_node_routing_id.push_back ('2');
+                break;
+            case 2:
+                ++newer.target_node_generation;
+                break;
+            case 3:
+                ++newer.authority_owner_generation;
+                break;
+            case 4:
+                ++newer.owner_lease_generation;
+                break;
+        }
+        access::cache (*client, newer);
+        rt::messaging::envelope_header_t header;
+        header.kind = rt::messaging::message_kind_t::error;
+        header.error_code = "unavailable";
+        header.error_message = "old Actor route is unavailable";
+        auto reply = fw::detail::encode_actor_reply (header, {});
+        EXPECT_TRUE (runtime->native_node ().reply (request->reply_token, reply.items ()));
+        EXPECT_FALSE (pending.result ());
+        EXPECT_EQ (access::cached (*client, "actor"), changed != -1);
+        request.reset ();
+    }
+}
+
+TEST_F (local_actor_receiver_t, PublicRequestReleasesClientAfterNoReply)
+{
+    auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                     .timeout (1h)
+                     .async<std::string> ();
+    dispatch_request ();
+    ASSERT_TRUE (request);
+    ASSERT_TRUE (request->application_record);
+    ASSERT_TRUE (request->application_record->native_reply);
+    EXPECT_TRUE (request->application_record->native_reply (std::nullopt));
+    EXPECT_FALSE (pending.result ());
+    EXPECT_TRUE (access::cached (*client, "actor"));
+    expect_released (client);
+}
+
+TEST_F (local_actor_receiver_t, PublicRequestReleasesClientAfterTimeout)
+{
+    auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                     .timeout (1h)
+                     .async<std::string> ();
+    dispatch_request ();
+    ASSERT_TRUE (request);
+    end (terminal_t::timed_out);
+    EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+    EXPECT_TRUE (access::cached (*client, "actor"));
+    expect_released (client);
+}
+
+TEST_F (local_actor_receiver_t, PublicRequestReleasesClientAfterCancel)
+{
+    auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                     .timeout (1h)
+                     .async<std::string> ();
+    dispatch_request ();
+    ASSERT_TRUE (request);
+    end (terminal_t::cancelled);
+    EXPECT_FALSE (pending.result ());
+    EXPECT_TRUE (access::cached (*client, "actor"));
+    expect_released (client);
+}
+
+TEST_F (local_actor_receiver_t, PublicRequestReleasesClientAfterForcedStop)
+{
+    auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                     .timeout (1h)
+                     .async<std::string> ();
+    dispatch_request ();
+    ASSERT_TRUE (request);
+    runtime->stop ();
+    EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::shutting_down);
+    expect_released (client);
+}
+
+TEST_F (local_actor_receiver_t, LocalRegistryTerminalsReachPreparedReceiverOnce)
+{
+    for (auto terminal : {terminal_t::transport_failed, terminal_t::timed_out,
+                          terminal_t::cancelled, terminal_t::shutdown, terminal_t::completed}) {
+        SCOPED_TRACE (static_cast<int> (terminal));
+        rt::host::pending_operation_t operation;
+        std::atomic_int calls{0};
+        operation.receiver = [&] (const auto &) { ++calls; };
+        auto actor = fw::detail::actor_ref_access_t::make (
+          fw::node_rid_t::from_string (runtime->status ().routing_id ().to_string ()),
+          "late-result", "actor", fence.object_generation);
+        std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("request"))};
+        ASSERT_EQ (runtime->request_to_actor (actor, parts, operation, 1h).result ().value (),
+                   zlink::submit_result_t::ok);
+        dispatch_request ();
+        ASSERT_TRUE (request);
+        if (terminal == terminal_t::completed)
+            EXPECT_TRUE (runtime->native_node ().reply (request->reply_token, parts));
+        else if (terminal == terminal_t::transport_failed) {
+            ASSERT_TRUE (request->application_record);
+            EXPECT_TRUE (request->application_record->native_reply (std::nullopt));
+        } else
+            end (terminal);
+        (void) operation.completion->task ().result ();
+        EXPECT_EQ (calls, 1);
+        EXPECT_FALSE (runtime->native_node ().transport ().fail_local_operation (
+          operation.id, terminal_t::transport_failed));
+        EXPECT_EQ (calls, 1);
+        // End the held handler turn before submitting the next case. The
+        // registry terminal is already fixed and this cannot publish another result.
+        if (request->application_record)
+            (void) request->application_record->native_reply (std::nullopt);
+        request.reset ();
+        EXPECT_EQ (calls, 1);
     }
 }
 
