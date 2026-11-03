@@ -492,6 +492,7 @@ internal static class ZLinkFrameworkServiceRegistrar
         services.AddSingleton(provider => new ZLinkLocationRuntime(
             provider.GetRequiredService<ZLinkLocationOptions>(),
             provider.GetRequiredService<IZLinkLocationRepository>(),
+            registration.TimeProvider,
             metricScopes: registration
                 .SpotNodes.Keys.Select(static name => new KeyValuePair<string, string>(
                     "mesh",

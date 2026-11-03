@@ -188,7 +188,9 @@ internal sealed partial class ZLinkFrameworkRuntime
             );
         var deadlineUnixMs =
             activationDeadlineUnixMs
-            ?? checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds());
+            ?? checked(
+                (ulong)Registration.TimeProvider.GetUtcNow().Add(timeout).ToUnixTimeMilliseconds()
+            );
         var target = new InstanceSpotActivationTarget(
             address.MeshName,
             selected.Rid,
