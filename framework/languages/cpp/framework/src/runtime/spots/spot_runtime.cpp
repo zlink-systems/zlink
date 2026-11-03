@@ -14099,10 +14099,9 @@ void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
     service::run_authority_close (std::move (begin), std::move (done), {});
 }
 
-bool spot_node_runtime_t::close_all_user_spots (
-  std::chrono::steady_clock::time_point deadline_at,
-  std::chrono::system_clock::time_point closing_deadline,
-  std::stop_source &cleanup_cancellation)
+bool spot_node_runtime_t::close_all_spots (std::chrono::steady_clock::time_point deadline_at,
+                                           std::chrono::system_clock::time_point closing_deadline,
+                                           std::stop_source &cleanup_cancellation)
 {
     const auto remaining = [deadline_at] {
         return std::max (std::chrono::milliseconds::zero (),
@@ -14116,13 +14115,13 @@ bool spot_node_runtime_t::close_all_user_spots (
       _state->actor_transfer_coordinator->wait_for_source_completions ().result_for (remaining ());
     if (!moves_closed || !*moves_closed)
         return false;
-    std::vector<spot_id_t> user_spots;
+    std::vector<spot_id_t> spots;
     std::vector<task_t<bool>> running_closes;
     _state->lane
       .run ([&] {
-          user_spots.reserve (_state->spot_contexts_by_id.size ());
+          spots.reserve (_state->spot_contexts_by_id.size ());
           for (const auto &[rid, context] : _state->spot_contexts_by_id) {
-              if (!context._state || context._state->is_entry_spot ())
+              if (!context._state)
                   continue;
               // A Close already running releases its authority before the
               // owner cleanup (Host relocation §14). Shutdown waits for it.
@@ -14135,7 +14134,7 @@ bool spot_node_runtime_t::close_all_user_spots (
               }
               if (context._state->closed || context._state->native_spot.expired ())
                   continue;
-              user_spots.push_back (spot_id_t (rid));
+              spots.push_back (spot_id_t (rid));
           }
       })
       .get ();
@@ -14148,15 +14147,15 @@ bool spot_node_runtime_t::close_all_user_spots (
         }
         return result && result->value ();
     };
-    if (static_cast<std::size_t> (std::ranges::count_if (running_closes, wait_for_close))
-        != running_closes.size ())
-        return false;
-    for (auto &spot_id : user_spots) {
-        if (!wait_for_close (close_spot (std::move (spot_id), spot_close_reason_t::host_shutdown,
-                                         closing_deadline, cleanup_cancellation.get_token ())))
-            return false;
-    }
-    return active_user_spot_count () == 0;
+    // Every Spot enters its existing Close gate before the host observes the
+    // shared deadline. Entry closing must precede owner and transport teardown.
+    for (auto &spot_id : spots)
+        running_closes.push_back (close_spot (std::move (spot_id),
+                                              spot_close_reason_t::host_shutdown, closing_deadline,
+                                              cleanup_cancellation.get_token ()));
+    return static_cast<std::size_t> (std::ranges::count_if (running_closes, wait_for_close))
+             == running_closes.size ()
+           && active_user_spot_count () == 0;
 }
 
 node_rid_t spot_node_runtime_t::node_rid () const

@@ -4387,7 +4387,7 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
             for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
                 auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
                 if (runtime
-                    && !runtime->close_all_user_spots (
+                    && !runtime->close_all_spots (
                       deadline_at, state.termination_operation.deadline_at.value (),
                       state.termination_operation.cleanup_cancellation)) {
                     spots_closed = false;
