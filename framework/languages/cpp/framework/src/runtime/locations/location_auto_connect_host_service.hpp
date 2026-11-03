@@ -96,8 +96,21 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         request_stop ();
         // Unlike stop(), destruction cannot return while a coroutine still
         // borrows this service, its loop iterators or its callback captures.
-        if (_loop_finished)
+        if (_loop_finished) {
+            const auto deadline = stop_deadline ();
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+              std::max (std::chrono::steady_clock::duration::zero (),
+                        deadline - std::chrono::steady_clock::now ()));
+            const auto finished =
+              detail::observe_task_result_for (_loop_finished->task (), remaining, {});
+            if (!finished && _runtime && _runtime->monitoring ()) {
+                _runtime_failures->capture ([&] {
+                    _runtime->monitoring ()->diagnostics_logger.warn (
+                      "Location coordinator destructor is waiting for the loop to finish");
+                });
+            }
             _runtime_failures->capture ([&] { _loop_finished->task ().result ().value (); });
+        }
         finish_stop (stop_deadline ());
     }
 
@@ -253,8 +266,17 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                     throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
                                                  "Location coordinator stop timed out");
                 _runtime_failures->capture ([&] { finished->value (); });
-            }))
+            })) {
+            // The loop still borrows its state and runtime pointers, but the
+            // independent runtime producers and manual publishers can stop now.
+            if (_client_server)
+                _runtime_failures->capture ([&] { _client_server->stop (deadline); });
+            if (_fanout)
+                _runtime_failures->capture ([&] { _fanout->stop (deadline); });
+            _runtime_failures->capture (
+              [&] { detail::channel_runtime_t::from (_bus).close_manual_channel_publishers (); });
             return;
+        }
         finish_stop (deadline);
     }
 

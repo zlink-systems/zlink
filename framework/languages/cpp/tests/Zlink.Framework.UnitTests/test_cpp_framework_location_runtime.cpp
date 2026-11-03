@@ -35,6 +35,28 @@ namespace zlink::framework::runtime
 {
 constexpr auto auto_connect_wait = std::chrono::seconds (5);
 
+namespace client_server
+{
+struct client_server_location_runtime_test_access_t
+{
+    static bool stop_requested (const client_server_location_runtime_t &runtime)
+    {
+        return runtime._stop->stop_requested ();
+    }
+};
+} // namespace client_server
+
+namespace fanout
+{
+struct fanout_location_runtime_test_access_t
+{
+    static bool stop_requested (const fanout_location_runtime_t &runtime)
+    {
+        return runtime._stop.stop_requested ();
+    }
+};
+} // namespace fanout
+
 struct state_lane_test_access_t
 {
     static std::size_t pending_work (state_lane_t &lane)
@@ -3174,6 +3196,74 @@ TEST (AutoConnectSyncTest, StopTimeoutLeavesPendingLoopToDisconnectTargets)
     }
 }
 
+TEST (AutoConnectSyncTest, StopTimeoutStopsIndependentLocationRuntimesAndDrainsLoop)
+{
+    in_memory_location_repository_t repository;
+    location_options_t options;
+    options.owner_lease_renew_timeout = std::chrono::milliseconds::zero ();
+    location_runtime_t locations (repository, options, "timeout-owner");
+    auto builder = test::runtime_failure_builder ();
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    service_provider_t services;
+    auto bus = builder.message_bus ();
+    auto channel_runtime = detail::channel_runtime_t::from (bus);
+    channel_runtime.bind_core_context (std::make_shared<zlink::context_t> ());
+    channel_snapshot_t server_channel;
+    server_channel.name = "timeout-server";
+    server_channel.server.enabled = true;
+    server_channel.server.bind_endpoints = {"tcp://127.0.0.1:0"};
+    channel_snapshot_t publisher_channel;
+    publisher_channel.name = "timeout-fanout";
+    publisher_channel.publisher.enabled = true;
+    publisher_channel.publisher.discovery = true;
+    publisher_channel.publisher.routing_id = zlink::routing_id_t::from ("timeout-publisher");
+    publisher_channel.publisher.bind_endpoints = {"inproc://timeout-fanout"};
+    const std::vector<channel_snapshot_t> channels{server_channel, publisher_channel};
+    auto listener_statuses = std::make_shared<listener_status_registry_t> ();
+    auto client_server_runtime = std::make_shared<client_server::client_server_location_runtime_t> (
+      bus, channels, locations, repository, repository, services, serializers, handlers,
+      [] { return framework_runtime_state_t::serving; }, std::map<std::string, std::string>{},
+      listener_statuses);
+    auto fanout_runtime = std::make_shared<fanout::fanout_location_runtime_t> (
+      bus, channels, locations, repository, repository, services, serializers, handlers,
+      [] { return framework_runtime_state_t::serving; }, detail::handler_invocation_executor ());
+    client_server_runtime->start ();
+    fanout_runtime->start ();
+    ASSERT_TRUE (listener_statuses->find (listener_kind_t::client_server, "timeout-server"));
+    auto failures = std::make_shared<runtime_failure_collector_t> ();
+    location_auto_connect_host_service_t service (
+      failures, bus, channels, handlers, serializers,
+      [] { return framework_runtime_state_t::serving; }, {}, {}, {}, {}, {}, client_server_runtime,
+      fanout_runtime, listener_statuses);
+    detail::route_channel_runtime_t route ("l4-mesh");
+    auto release = std::make_shared<task_completion_source_t<void>> ();
+    auto finished = location_auto_connect_test_access_t::start_timeout_probe (service, locations,
+                                                                              route, release, 0);
+
+    service.stop ();
+
+    EXPECT_TRUE (client_server::client_server_location_runtime_test_access_t::stop_requested (
+      *client_server_runtime));
+    EXPECT_TRUE (fanout::fanout_location_runtime_test_access_t::stop_requested (*fanout_runtime));
+    EXPECT_FALSE (listener_statuses->find (listener_kind_t::client_server, "timeout-server"));
+    EXPECT_EQ (1u, location_auto_connect_test_access_t::loop_count (service));
+    EXPECT_TRUE (client_server_runtime->republish_after_store_recovery ().result ().value ());
+    EXPECT_FALSE (fanout_runtime->republish_after_store_recovery ().result ().value ());
+
+    auto replacement_publisher = std::make_shared<fanout::fanout_location_runtime_t> (
+      bus, channels, locations, repository, repository, services, serializers, handlers,
+      [] { return framework_runtime_state_t::serving; }, detail::handler_invocation_executor ());
+    EXPECT_NO_THROW (replacement_publisher->start ());
+    replacement_publisher->stop ();
+
+    release->complete (result_t<void>::success ());
+    const auto result = finished.result_for (auto_connect_wait);
+    ASSERT_TRUE (result);
+    EXPECT_TRUE (*result);
+    EXPECT_TRUE (route.list_connections ().empty ());
+}
+
 TEST (AutoConnectSyncTest, DestructorDrainsPendingLoopAfterStopTimeout)
 {
     auto executor = infrastructure_executor ();
@@ -3182,6 +3272,15 @@ TEST (AutoConnectSyncTest, DestructorDrainsPendingLoopAfterStopTimeout)
     location_options_t options;
     options.owner_lease_renew_timeout = std::chrono::milliseconds::zero ();
     location_runtime_t runtime (store, options, "timeout-owner");
+    std::promise<void> destructor_wait_logged;
+    logging_builder_t logging;
+    logging.use_callback_sink ([&] (const log_record_t &record) {
+        if (record.message == "Location coordinator destructor is waiting for the loop to finish")
+            destructor_wait_logged.set_value ();
+    });
+    auto monitoring = std::make_shared<detail::monitoring_runtime_state_t> ();
+    monitoring->diagnostics_logger = logging.create_logger ("zlink.framework.runtime");
+    runtime.bind_monitoring (monitoring);
     auto builder = test::runtime_failure_builder ();
     handler_registry_t handlers;
     serializer_registry_t serializers;
@@ -3200,6 +3299,8 @@ TEST (AutoConnectSyncTest, DestructorDrainsPendingLoopAfterStopTimeout)
         service.reset ();
     });
     destructor_stopping.get_future ().wait ();
+    EXPECT_EQ (std::future_status::ready,
+               destructor_wait_logged.get_future ().wait_for (auto_connect_wait));
     EXPECT_EQ (std::future_status::timeout,
                destroying.wait_for (std::chrono::milliseconds::zero ()));
     // Host destruction runs on its owning caller. The pending loop must still
