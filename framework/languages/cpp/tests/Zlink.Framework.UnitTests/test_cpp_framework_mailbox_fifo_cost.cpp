@@ -78,7 +78,11 @@ void verify_cost ()
     // sentinel even for an empty/moved-from container.
     using ready_reference_t =
       std::optional<std::pair<std::list<std::string>, mailbox_t::application_ready_t>>;
-    const auto take_reference = [&] {
+    const auto take_reference = [&] () -> ready_reference_t {
+        // Match the owner's mixed nullopt/value returns: NRVO is optional and
+        // MSVC moves the list when this function returns an engaged optional.
+        if (ready_owners.empty ())
+            return std::nullopt;
         ready_reference_t value (std::in_place);
         value->second = ready_callback;
         value->first.swap (ready_owners);
@@ -90,7 +94,9 @@ void verify_cost ()
     std::cout << "record_size=" << sizeof (record_t) << " enqueue_count=" << enqueue.count
               << " enqueue_bytes=" << enqueue.bytes << " reference_count=" << reference.count
               << " reference_bytes=" << reference.bytes << " transfer_count=" << transfer.count
-              << " transfer_bytes=" << transfer.bytes << '\n';
+              << " transfer_bytes=" << transfer.bytes
+              << " reference_transfer_count=" << transfer_reference.count
+              << " reference_transfer_bytes=" << transfer_reference.bytes << '\n';
     mailbox_t::notify_application_ready (*batch);
     require (notifications == 1, "ready owner notification was lost or duplicated");
     require (enqueue.count == reference.count,

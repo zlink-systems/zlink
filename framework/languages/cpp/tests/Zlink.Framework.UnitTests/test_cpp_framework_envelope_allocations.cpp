@@ -272,27 +272,7 @@ TEST (EnvelopeAllocations, ReplyInitializesOnlyItsFinalFields)
     EXPECT_TRUE (reply->metadata.empty ());
 }
 
-TEST (EnvelopeAllocations, DecodeDoesNotAllocateADiscardedJsonDefault)
-{
-    msg::envelope_codec_t codec;
-    const msg::envelope_header_t header{
-      .channel_name = "c", .message_name = "m", .content_type = "x/y"};
-    const auto wire = codec.encode_header (header);
-    auto warm = codec.decode_header (wire, false);
-    ASSERT_TRUE (warm);
-    std::optional<decltype (warm)> decoded;
-    // Parser diagnostics grow geometrically; the discarded JSON default alone
-    // requests exactly strlen(application/json) + 1 bytes with libstdc++.
-    const auto allocations = count_allocations (
-      [&] { decoded.emplace (codec.decode_header (wire, false)); }, json_content_type.size () + 1);
-    ASSERT_TRUE (*decoded);
-    EXPECT_EQ (decoded->value ().content_type, "x/y");
-    EXPECT_EQ (decoded->value ().channel_name, "c");
-    EXPECT_EQ (decoded->value ().message_name, "m");
-    EXPECT_EQ (allocations, 0u);
-}
-
-TEST (EnvelopeAllocations, CanonicalHeaderDecodeDoesNotAllocate)
+TEST (EnvelopeAllocations, CanonicalHeaderDecodeAddsNoStorageBeyondHeaderOwnership)
 {
     msg::envelope_codec_t codec;
     const msg::envelope_header_t header{
@@ -307,7 +287,21 @@ TEST (EnvelopeAllocations, CanonicalHeaderDecodeDoesNotAllocate)
     EXPECT_EQ (decoded->value ().channel_name, "c");
     EXPECT_EQ (decoded->value ().message_name, "m");
     EXPECT_EQ (decoded->value ().content_type, "x/y");
-    EXPECT_EQ (allocations, 0u);
+    // The SAX metadata owner, final header and result moves are required
+    // storage. MSVC allocates a head node even for an empty map. This also
+    // rejects a discarded JSON default without assuming string capacity.
+    const auto reference = [] {
+        std::map<std::string, std::string> metadata;
+        msg::envelope_header_t value{
+          .channel_name = "c", .message_name = "m", .content_type = "x/y"};
+        value.metadata = std::move (metadata);
+        return fw::result_t<msg::envelope_header_t>::success (std::move (value));
+    };
+    std::optional<decltype (warm)> reference_decoded;
+    const auto reference_allocations =
+      count_allocations ([&] { reference_decoded.emplace (reference ()); });
+    ASSERT_TRUE (*reference_decoded);
+    EXPECT_EQ (allocations, reference_allocations);
 }
 
 TEST (EnvelopeAllocations, CanonicalHeaderDecodeMatchesFallbackForEscapesAndUnicode)
