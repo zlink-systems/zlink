@@ -319,6 +319,8 @@ class raw_mesh_node_owner_t
         std::nullopt,
       std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
       std::uint8_t message_follow_hop_count = 0);
+    using physical_receiver_t =
+      std::function<void (foundation::operation_terminal_t, result_t<zlink::message_t>, bool)>;
     task_t<bool> request_to_actor (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
@@ -330,7 +332,8 @@ class raw_mesh_node_owner_t
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
         std::nullopt,
       std::optional<std::uint64_t> correlation = std::nullopt,
-      std::uint8_t message_follow_hop_count = 0);
+      std::uint8_t message_follow_hop_count = 0,
+      physical_receiver_t receiver = {});
     task_t<bool> send_bound_session (const std::vector<std::uint8_t> &session_owner_routing_id,
                                      const protocol::bound_session_send_t &record,
                                      protocol::application_payload_t application_payload);
@@ -495,6 +498,8 @@ class raw_mesh_node_owner_t
     peer_route (const std::vector<std::uint8_t> &rid,
                 std::optional<std::uint64_t> lifecycle_generation = std::nullopt) const;
 
+    friend struct raw_mesh_node_owner_test_access_t;
+
   private:
     bool connect_peer_owned (const std::string &endpoint,
                              std::optional<service_node_descriptor_t> expected_descriptor);
@@ -585,7 +590,8 @@ class raw_mesh_node_owner_t
       bool target_claimed = false,
       mesh_request_metric_t request_metric = {},
       std::optional<foundation::operation_registry_t::request_identity_t> request = {},
-      std::shared_ptr<task_completion_source_t<void>> admitted = {});
+      std::shared_ptr<task_completion_source_t<void>> admitted = {},
+      physical_receiver_t receiver = {});
     task_t<bool> request_infrastructure (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
@@ -596,7 +602,8 @@ class raw_mesh_node_owner_t
     static void observe_request (std::shared_ptr<foundation::operation_registry_t> operations,
                                  foundation::call_id_t operation,
                                  std::uint64_t correlation,
-                                 result_t<detail::backend::raw_request_completion_t> settled);
+                                 result_t<detail::backend::raw_request_completion_t> settled,
+                                 physical_receiver_t receiver = {});
     void trace_admission_phase (const std::vector<std::uint8_t> &node_routing_id,
                                 std::uint64_t lifecycle_generation,
                                 protocol::command command,

@@ -364,6 +364,11 @@ class serializer_registry_t
     friend struct detail::serializer_registry_test_access_t;
     friend class codec_registration_context_t;
 
+    explicit serializer_registry_t (std::shared_ptr<detail::serializer_registry_state_t> state) :
+        _state (std::move (state))
+    {
+    }
+
     template <typename T>
     serializer_registry_t &
     add_for_registration (typename serializer_t<T>::serialize_fn_t serialize,
@@ -404,7 +409,7 @@ class serializer_registry_t
                                        std::string content_type,
                                        std::optional<std::size_t> registration);
 
-    std::unique_ptr<detail::serializer_registry_state_t> _state;
+    std::shared_ptr<detail::serializer_registry_state_t> _state;
 };
 
 namespace detail
@@ -412,6 +417,11 @@ namespace detail
 
 struct serializer_registry_access_t
 {
+    static serializer_registry_t retain (const serializer_registry_t &registry)
+    {
+        return serializer_registry_t (registry._state);
+    }
+
     static void freeze (serializer_registry_t &registry) noexcept { registry.freeze (); }
 };
 

@@ -3209,6 +3209,26 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         co_return zlink::submit_result_t::not_found;
     }
     const auto host = shared_from_this ();
+    auto public_operation = operation;
+    public_operation.receiver = {};
+    foundation::operation_registry_t::callback_t complete_public;
+    if (operation.receiver) {
+        complete_public = [host, public_operation] (auto terminal, auto payload) {
+            // The prepared receiver owns application decoding. This task publishes only
+            // the registry's terminal, including a timeout whose dispatcher ran later.
+            auto record = host->decode_operation_record (
+              public_operation.id, operation_kind_t::none, terminal, payload.value ());
+            public_operation.completion->complete (
+              record
+                ? result_t<operation_completion_t>::success ({record.value (), {}})
+                : detail::result_access_t::failure<operation_completion_t> (record.exception ()));
+        };
+    } else {
+        complete_public = [host, public_operation] (auto terminal, auto payload) {
+            host->complete_operation (public_operation, operation_kind_t::none, terminal,
+                                      payload.value ());
+        };
+    }
     const auto accepted = co_await _transport->request_to_actor (
       zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes (),
       std::nullopt,
@@ -3216,16 +3236,21 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
         std::string (target.actor_id ().value ()), target.object_generation (),
         zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes (),
         node_generation, authority_generation, route_fence->fence.owner_lease_generation},
-      encode_application (parts, metadata), timeout,
-      [host,
-       operation] (foundation::operation_terminal_t terminal,
-                   ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
-          auto payload = std::move (completion_payload.value ());
-          host->complete_operation (operation, operation_kind_t::none, terminal,
-                                    std::move (payload));
-      },
+      encode_application (parts, metadata), timeout, std::move (complete_public),
       protocol::wire_operation_id_t{operation.id.high, operation.id.low},
-      std::move (bound_session_source), std::nullopt);
+      std::move (bound_session_source), std::nullopt, 0,
+      operation.receiver
+        ? mesh::raw_mesh_node_owner_t::physical_receiver_t{[host, operation] (auto terminal,
+                                                                              auto payload,
+                                                                              bool claimed) {
+              operation.receive (
+                payload
+                  ? host->decode_operation_completion (operation, operation_kind_t::none, terminal,
+                                                       payload.value ())
+                  : detail::result_access_t::failure<operation_completion_t> (payload.exception ()),
+                claimed);
+          }}
+        : mesh::raw_mesh_node_owner_t::physical_receiver_t{});
     co_return submitted (accepted);
 }
 
@@ -8805,11 +8830,17 @@ bool public_host_runtime_t::enqueue_completion (const pending_operation_t &opera
                                                 receive_record_t record,
                                                 std::vector<zlink::message_t> parts)
 {
-    return _transport->complete_local_operation (
-      operation.id, [result = operation.local_result, record = std::move (record),
-                     parts = std::move (parts)] () mutable noexcept {
-          *result = operation_completion_t{std::move (record), std::move (parts)};
+    const auto completed =
+      _transport->complete_local_operation (operation.id, [operation, record, parts] () mutable {
+          *operation.local_result = operation_completion_t{std::move (record), std::move (parts)};
+          operation.receive (result_t<operation_completion_t>::success (*operation.local_result),
+                             true);
       });
+    if (!completed)
+        operation.receive (
+          result_t<operation_completion_t>::success ({std::move (record), std::move (parts)}),
+          false);
+    return completed;
 }
 
 task_t<zlink::submit_result_t>
@@ -9771,18 +9802,17 @@ public_host_runtime_t::decode_operation_record (call_id_t operation,
     return result_t<receive_record_t>::success (std::move (record));
 }
 
-void public_host_runtime_t::complete_operation (const pending_operation_t &operation,
-                                                operation_kind_t kind,
-                                                foundation::operation_terminal_t terminal,
-                                                zlink::message_t payload)
+result_t<operation_completion_t>
+public_host_runtime_t::decode_operation_completion (const pending_operation_t &operation,
+                                                    operation_kind_t kind,
+                                                    foundation::operation_terminal_t terminal,
+                                                    zlink::message_t payload)
 {
     try {
         auto decoded_record = decode_operation_record (operation.id, kind, terminal, payload);
         if (!decoded_record) {
-            operation.completion->complete (
-              detail::result_access_t::failure<operation_completion_t> (
-                decoded_record.exception ()));
-            return;
+            return detail::result_access_t::failure<operation_completion_t> (
+              decoded_record.exception ());
         }
         auto record = std::move (decoded_record.value ());
         std::vector<zlink::message_t> parts;
@@ -9794,13 +9824,22 @@ void public_host_runtime_t::complete_operation (const pending_operation_t &opera
                 record.terminal_result = static_cast<int> (zlink::request_result_t::protocol_error);
             }
         }
-        operation.completion->complete (result_t<operation_completion_t>::success (
-          operation_completion_t{std::move (record), std::move (parts)}));
+        return result_t<operation_completion_t>::success (
+          operation_completion_t{std::move (record), std::move (parts)});
     }
     catch (const std::exception &error) {
-        operation.completion->complete (result_t<operation_completion_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ()));
+        return result_t<operation_completion_t>::failure (framework_error_kind_t::internal_failure,
+                                                          error.what ());
     }
+}
+
+void public_host_runtime_t::complete_operation (const pending_operation_t &operation,
+                                                operation_kind_t kind,
+                                                foundation::operation_terminal_t terminal,
+                                                zlink::message_t payload)
+{
+    operation.completion->complete (
+      decode_operation_completion (operation, kind, terminal, std::move (payload)));
 }
 
 task_t<bool> actor_transfer_token_t::commit (std::uint64_t membership_epoch)

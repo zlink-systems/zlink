@@ -213,9 +213,26 @@ struct pending_operation_t
             *this = pending_operation_t{};
     }
 
+    // `claimed` is the existing registry arbitration result, not a second terminal.
+    void receive (result_t<operation_completion_t> physical, bool claimed) const
+    {
+        if (!receiver)
+            return;
+        if (claimed)
+            receiver (physical);
+        else {
+            auto published = completion->task ();
+            ::zlink::framework::detail::observe_task_terminal (
+              published, [deliver = receiver, physical = std::move (physical)] (const auto &) {
+                  deliver (physical);
+              });
+        }
+    }
+
     call_id_t id;
     std::shared_ptr<task_completion_source_t<operation_completion_t>> completion =
       std::make_shared<task_completion_source_t<operation_completion_t>> ();
+    std::function<void (const result_t<operation_completion_t> &)> receiver;
     // Local replies have typed records rather than service-wire bytes. Only
     // the registry's terminal winner fills this value before dispatcher post.
     std::shared_ptr<operation_completion_t> local_result;
@@ -1007,6 +1024,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                               std::uint64_t target_spot_generation);
     bool complete_local_request (const pending_operation_t &operation,
                                  const std::vector<zlink::message_t> &parts);
+    result_t<operation_completion_t>
+    decode_operation_completion (const pending_operation_t &operation,
+                                 operation_kind_t kind,
+                                 foundation::operation_terminal_t terminal,
+                                 zlink::message_t payload);
     void complete_operation (const pending_operation_t &operation,
                              operation_kind_t kind,
                              foundation::operation_terminal_t terminal,
