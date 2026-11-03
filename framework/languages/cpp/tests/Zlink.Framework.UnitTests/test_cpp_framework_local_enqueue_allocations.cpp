@@ -325,10 +325,13 @@ struct stateful_spot_fixture_t
           store->commit ({request.key, fence, ready}).result ().value ()));
         runtime = make_host ();
         runtime->configure_spot_route_fence_resolver ({});
-        runtime->configure_user_spot_operations (store,
-                                                 [] (const auto &, const auto &, const auto &) {
-                                                     return host::user_spot_materialize_result_t{};
-                                                 });
+        runtime->configure_user_spot_operations (
+          store,
+          [] (const auto &, const auto &, const auto &)
+            -> zlink::framework::task_t<
+              zlink::framework::runtime::host::user_spot_materialize_result_t> {
+              co_return host::user_spot_materialize_result_t{};
+          });
         runtime->configure_stateful_dispatch ([lease] { return lease; }, &reader);
         auto gate = std::make_shared<serial_execution_queue_t> (
           worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},

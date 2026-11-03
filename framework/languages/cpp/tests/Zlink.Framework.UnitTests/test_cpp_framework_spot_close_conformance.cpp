@@ -483,7 +483,7 @@ void verify_target_staging_commit (bool initialize_throws)
     owner.bind_relocation_authority (
       std::make_shared<zlink::framework::test::committed_authority_fixture_t> (target));
     frozen.owner = target;
-    ASSERT_TRUE (owner.restore_spot_relocation_state (frozen, target));
+    ASSERT_TRUE (owner.restore_spot_relocation_state (frozen, target).result ().value ());
     const auto initializes_before_commit = initializes->load ();
     const auto callbacks = std::make_shared<std::atomic_int> (0);
     auto timer = std::make_shared<timer_state_t> ();

@@ -5455,7 +5455,7 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
               co_return captured;
           },
           [] (const stateful::frozen_object_state_t &, const stateful::object_ref_t &,
-              std::stop_token) { return true; });
+              std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
         const stateful::object_ref_t source_object{
           stateful::object_kind_t::actor, "early-leave-actor", 7, 1, "no-follow", "actor-a"};
         const auto reserved = begin_reserved_object (objects, source_object, "player", {});

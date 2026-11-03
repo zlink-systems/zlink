@@ -304,8 +304,8 @@ class stateful_object_runtime_t
 
     using relocation_state_capture_t = std::function<task_t<frozen_object_state_t> (
       const object_ref_t &, const std::string &, std::stop_token)>;
-    using relocation_state_restore_t =
-      std::function<bool (const frozen_object_state_t &, const object_ref_t &, std::stop_token)>;
+    using relocation_state_restore_t = std::function<task_t<bool> (
+      const frozen_object_state_t &, const object_ref_t &, std::stop_token)>;
     // Application materialization is a second, internal boundary from the
     // persisted state machine.  Aggregate restore supplies the target Spot to
     // member Actors and invokes this callback in Spot-before-Actor order. The

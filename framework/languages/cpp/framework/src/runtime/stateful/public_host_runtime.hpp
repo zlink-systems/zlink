@@ -271,7 +271,7 @@ struct user_spot_materialize_result_t
     std::function<task_t<void> (bool)> preparation_terminal;
 };
 
-using user_spot_materializer_t = std::function<user_spot_materialize_result_t (
+using user_spot_materializer_t = std::function<task_t<user_spot_materialize_result_t> (
   const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &)>;
 
 /* Close step 1 of one authority kind (Spot address messaging §7). An empty
@@ -457,9 +457,9 @@ struct instance_spot_activation_result_t
 
 struct instance_spot_activation_materializer_t
 {
-    std::function<bool (const protocol::instance_spot_activation_header_t &,
-                        const authority_snapshot_t &,
-                        std::function<task_t<void> (bool)> &)>
+    std::function<task_t<bool> (const protocol::instance_spot_activation_header_t &,
+                                const authority_snapshot_t &,
+                                std::function<task_t<void> (bool)> &)>
       prepare;
     std::function<task_t<instance_spot_activation_result_t> (
       std::shared_ptr<const protocol::instance_activation_recovery_t>,

@@ -2725,19 +2725,19 @@ void test_spot_restore_stages_before_publication (test_context_t &test)
 
     auto oversized = frozen;
     oversized.application_state.assign (64u * 1024u * 1024u + 1u, 0x5a);
-    test.require (!runtime.restore_spot_relocation_state (oversized, target)
+    test.require (!runtime.restore_spot_relocation_state (oversized, target).result ().value ()
                     && fail_first_restore_spot_t::factory_count == 0
                     && fail_first_restore_spot_t::restore_count == 0,
                   "oversized state must be rejected before Spot materialization");
 
-    test.require (!runtime.restore_spot_relocation_state (frozen, target)
+    test.require (!runtime.restore_spot_relocation_state (frozen, target).result ().value ()
                     && !runtime.find_spot (zlink::framework::spot_id_t ("staged-spot"))
                     && fail_first_restore_spot_t::factory_count == 1
                     && fail_first_restore_spot_t::create_count == 0
                     && fail_first_restore_spot_t::initialize_count == 0,
                   "failed restore must discard the private Spot before publication");
 
-    test.require (runtime.restore_spot_relocation_state (frozen, target)
+    test.require (runtime.restore_spot_relocation_state (frozen, target).result ().value ()
                     && runtime.find_spot (zlink::framework::spot_id_t ("staged-spot"))
                     && fail_first_restore_spot_t::factory_count == 2
                     && fail_first_restore_spot_t::restore_count == 2
@@ -2810,7 +2810,8 @@ void test_concurrent_spot_restore_owns_one_reservation (test_context_t &test)
                               .node_id = "target"};
 
     bool first = false;
-    std::thread owner ([&] { first = runtime.restore_spot_relocation_state (frozen, target); });
+    std::thread owner (
+      [&] { first = runtime.restore_spot_relocation_state (frozen, target).result ().value (); });
     {
         std::unique_lock lock (concurrent_restore_spot_t::restore_mutex);
         concurrent_restore_spot_t::restore_condition.wait (
@@ -2865,9 +2866,10 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
           captured.application_state = std::vector<std::uint8_t>{};
           co_return captured;
       },
-      [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
+      [&] (const frozen_object_state_t &, const object_ref_t &,
+           std::stop_token) -> zlink::framework::task_t<bool> {
           ++single_restore_count;
-          return true;
+          co_return true;
       });
     auto single_frozen = frozen_object_state_t{.owner = {.kind = object_kind_t::user_spot,
                                                          .key = "stale-single",
@@ -2918,9 +2920,10 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
           captured.application_state = std::vector<std::uint8_t>{};
           co_return captured;
       },
-      [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
+      [&] (const frozen_object_state_t &, const object_ref_t &,
+           std::stop_token) -> zlink::framework::task_t<bool> {
           ++aggregate_restore_count;
-          return true;
+          co_return true;
       });
     std::vector<frozen_object_state_t> participants{{.owner = {.kind = object_kind_t::user_spot,
                                                                .key = "aggregate-spot",
@@ -2995,9 +2998,8 @@ void test_return_relocation_replaces_departed_remnant (test_context_t &test)
           captured.application_state = std::vector<std::uint8_t>{};
           co_return captured;
       },
-      [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
-          return restore_succeeds;
-      });
+      [&] (const frozen_object_state_t &, const object_ref_t &,
+           std::stop_token) -> zlink::framework::task_t<bool> { co_return restore_succeeds; });
     const auto spot = create_spot (objects, object_kind_t::user_spot, "returning-spot");
 
     auto sealed = await_task (objects.try_seal_relocation_aggregate ({spot}));
@@ -3058,12 +3060,13 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
           captured.application_state = std::vector<std::uint8_t>{};
           co_return captured;
       },
-      [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
+      [&] (const frozen_object_state_t &, const object_ref_t &,
+           std::stop_token) -> zlink::framework::task_t<bool> {
           std::unique_lock lock (callback_mutex);
           callback_entered = true;
           callback_condition.notify_all ();
           callback_condition.wait (lock, [&] { return release_callback; });
-          return false;
+          co_return false;
       });
     const frozen_object_state_t frozen{.owner = {.kind = object_kind_t::user_spot,
                                                  .key = "rollback-spot",
@@ -3106,7 +3109,8 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
           captured.application_state = std::vector<std::uint8_t>{};
           co_return captured;
       },
-      [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
+      [] (const frozen_object_state_t &, const object_ref_t &,
+          std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
     test.require (target.restore_relocation (frozen, restored_target, identity).result ().value ()
                       == stateful_error_t::none
                     && target.inventory_async ().result ().value ().size () == 1,
@@ -3450,7 +3454,9 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
           captured.application_state = std::vector<std::uint8_t>{};
           co_return captured;
       },
-      [] (const auto &, const auto &, std::stop_token) { return true; });
+      [] (const auto &, const auto &, std::stop_token) -> zlink::framework::task_t<bool> {
+          co_return true;
+      });
     target.configure_maintenance (
       {authority, std::make_shared<memory_aggregate_authority_t> (authority), roots});
     target.configure_stateful_dispatch (
@@ -3956,9 +3962,8 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
               captured.application_state = {0x41};
               co_return captured;
           },
-          [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
-              return true;
-          });
+          [] (const frozen_object_state_t &, const object_ref_t &,
+              std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
         const auto actor = create_actor (objects, "metric-actor");
         public_memory_authority_store_t store;
         const auto store_now = std::chrono::system_clock::time_point{std::chrono::seconds{100}};
@@ -4135,9 +4140,8 @@ void test_relocation_metric_starts_only_after_unit_admission (test_context_t &te
               captured.application_state = {0x41};
               co_return captured;
           },
-          [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
-              return true;
-          });
+          [] (const frozen_object_state_t &, const object_ref_t &,
+              std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
         const auto actor = create_actor (objects, "metric-admission-a");
         const auto other = create_actor (objects, "metric-admission-b");
         auto authority = std::make_shared<memory_authority_store_t> ();
@@ -4198,7 +4202,8 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
           captured.application_state = std::vector<std::uint8_t> (256, 0x5a);
           co_return captured;
       },
-      [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
+      [] (const frozen_object_state_t &, const object_ref_t &,
+          std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
     const auto actor = create_actor (objects, "live-failure-actor");
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<memory_authority_store_t> ();
@@ -4376,9 +4381,8 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
               captured.application_state = std::vector<std::uint8_t>{0x41};
               co_return captured;
           },
-          [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
-              return true;
-          });
+          [] (const frozen_object_state_t &, const object_ref_t &,
+              std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
         const auto actor = create_actor (objects, "chain-actor");
         public_memory_authority_store_t store;
         store.snapshot = framework::authority_snapshot_t{"1",
@@ -4621,7 +4625,9 @@ void test_relocation_request_source_registration (test_context_t &test,
         -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           co_return frozen_object_state_t{};
       },
-      [] (const auto &, const auto &, std::stop_token) { return true; });
+      [] (const auto &, const auto &, std::stop_token) -> zlink::framework::task_t<bool> {
+          co_return true;
+      });
     auto actor = create_actor (objects, "registered-request");
     std::vector<object_ref_t> participants;
     if (aggregate) {
@@ -5122,9 +5128,8 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
               captured.application_state = std::vector<std::uint8_t>{1};
               co_return captured;
           },
-          [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
-              return true;
-          });
+          [] (const frozen_object_state_t &, const object_ref_t &,
+              std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
     };
     configure (objects);
     configure (restored);
@@ -5388,7 +5393,8 @@ void test_boundary_preserve_restores_acceptance_order (test_context_t &test)
           captured.application_state = std::vector<std::uint8_t>{1};
           co_return captured;
       },
-      [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
+      [] (const frozen_object_state_t &, const object_ref_t &,
+          std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
     const auto actor = create_actor (objects, "preserve-late");
     (void) objects.enqueue (actor, turn_domain_t::application, {1, {1}});
     const auto sealed = await_task (objects.try_seal_relocation_aggregate ({actor}));
@@ -5467,7 +5473,8 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
           captured.application_state = std::vector<std::uint8_t>{0x41};
           co_return captured;
       },
-      [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
+      [] (const frozen_object_state_t &, const object_ref_t &,
+          std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
     const auto actor = create_actor (objects, "network-actor", "Z-network-source");
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<settlement_authority_t> ();
@@ -5641,9 +5648,8 @@ void test_source_relocation_settles_by_authority (test_context_t &test,
               captured.application_state = std::vector<std::uint8_t> (16, 0x5a);
               co_return captured;
           },
-          [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
-              return true;
-          });
+          [] (const frozen_object_state_t &, const object_ref_t &,
+              std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
         const auto actor = create_actor (objects, "settled-actor");
         auto roots = std::make_shared<memory_relocation_repository_t> ();
         auto authority = std::make_shared<settlement_authority_t> ();
@@ -7349,7 +7355,7 @@ void test_relocation_adapter_single_capture_restore_path (test_context_t &test)
                               .authority_owner_generation = 2,
                               .mesh_name = "mesh",
                               .node_id = "target"};
-    test.require (runtime.restore_spot_relocation_state (frozen, target)
+    test.require (runtime.restore_spot_relocation_state (frozen, target).result ().value ()
                     && fail_first_restore_spot_t::restore_count == 1
                     && fail_first_restore_spot_t::restored_payload
                          == std::vector<std::byte>{std::byte{0xca}, std::byte{0xfe}},
@@ -8206,7 +8212,8 @@ void test_aggregate_seal_failure_preserves_earlier_application_work (test_contex
           captured.application_state = std::vector<std::uint8_t>{0x41};
           co_return captured;
       },
-      [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
+      [] (const frozen_object_state_t &, const object_ref_t &,
+          std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
 
     const auto [error, seal] = await_task (objects.try_seal_relocation_aggregate ({first, second}));
     test.require (error == stateful_error_t::conflict && seal.participants.empty (),
@@ -8280,7 +8287,8 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
 
           co_return zlink::framework::runtime::stateful::frozen_object_state_t{};
       },
-      [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
+      [] (const frozen_object_state_t &, const object_ref_t &,
+          std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
 
     std::atomic<bool> capture_done = false;
     stateful_error_t capture_error = stateful_error_t::none;
@@ -8523,12 +8531,13 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
           captured.application_state = std::vector<std::uint8_t>{};
           co_return captured;
       },
-      [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
+      [&] (const frozen_object_state_t &, const object_ref_t &,
+           std::stop_token) -> zlink::framework::task_t<bool> {
           std::unique_lock lock (target_mutex);
           target_restore_entered = true;
           target_condition.notify_all ();
           target_condition.wait (lock, [&] { return release_target_restore; });
-          return true;
+          co_return true;
       });
     const frozen_object_state_t target_frozen{.owner = {.kind = object_kind_t::user_spot,
                                                         .key = "target-unbounded-hold",
@@ -8605,12 +8614,13 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
           captured.application_state = std::vector<std::uint8_t>{};
           co_return captured;
       },
-      [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
+      [&] (const frozen_object_state_t &, const object_ref_t &,
+           std::stop_token) -> zlink::framework::task_t<bool> {
           std::unique_lock lock (abort_mutex);
           abort_restore_entered = true;
           abort_condition.notify_all ();
           abort_condition.wait (lock, [&] { return release_abort_restore; });
-          return true;
+          co_return true;
       });
     auto abort_frozen = target_frozen;
     abort_frozen.owner.key = "target-abort-hold";
@@ -8656,7 +8666,8 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
           captured.application_state = std::vector<std::uint8_t>{};
           co_return captured;
       },
-      [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
+      [] (const frozen_object_state_t &, const object_ref_t &,
+          std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
     test.require (target_abort.restore_relocation (abort_frozen, abort_target, abort_identity)
                         .result ()
                         .value ()

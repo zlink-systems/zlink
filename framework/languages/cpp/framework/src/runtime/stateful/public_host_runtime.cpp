@@ -2703,8 +2703,11 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
             if (recovery_pointer.replay_cursor < recovery_pointer.inbox_sequence) {
                 bool prepared = false;
                 try {
-                    prepared = materializer->prepare (recovery.activation, entry.snapshot,
-                                                      activation_terminal.preparation);
+                    prepared = materializer
+                                 ->prepare (recovery.activation, entry.snapshot,
+                                            activation_terminal.preparation)
+                                 .result ()
+                                 .value ();
                 }
                 catch (...) {
                     prepared = false;
@@ -5708,9 +5711,10 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             bool prepared = false;
             std::exception_ptr preparation_error;
             try {
-                prepared = ready_state->state == instance_spot_authority_state_t::closing
-                           || instance_materializer->prepare (request, *snapshot,
-                                                              activation_terminal->preparation);
+                prepared = ready_state->state == instance_spot_authority_state_t::closing;
+                if (!prepared)
+                    prepared = co_await instance_materializer->prepare (
+                      request, *snapshot, activation_terminal->preparation);
             }
             catch (...) {
                 preparation_error = std::current_exception ();
@@ -5936,8 +5940,8 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     bool prepared = false;
     std::exception_ptr preparation_error;
     try {
-        prepared = instance_materializer->prepare (request, reservation->creating,
-                                                   activation_terminal->preparation);
+        prepared = co_await instance_materializer->prepare (request, reservation->creating,
+                                                            activation_terminal->preparation);
     }
     catch (...) {
         preparation_error = std::current_exception ();
@@ -7135,7 +7139,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
                     user_spot_materialize_result_t materialized;
                     try {
                         materialized =
-                          materializer (exact_ref, request.stable_type, *creation_payload);
+                          co_await materializer (exact_ref, request.stable_type, *creation_payload);
                     }
                     catch (...) {
                         const auto failure = detail::current_exception_result<void> ();

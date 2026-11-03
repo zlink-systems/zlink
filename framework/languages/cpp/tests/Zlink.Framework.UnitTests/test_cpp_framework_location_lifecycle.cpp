@@ -161,9 +161,9 @@ TEST (ZLinkFrameworkLocationLifecycle, TracksSpotMaterializationPerProcess)
     const auto key = spot_location_key_t{.spot_id = "spot-1"};
 
     ASSERT_EQ (location_write_status_t::stored,
-               lifecycle_a.claim_spot (make_spot ("spot-1")).status);
+               lifecycle_a.claim_spot (make_spot ("spot-1")).result ().value ().status);
     EXPECT_EQ (location_write_status_t::stored,
-               lifecycle_b.claim_spot (make_spot ("spot-1")).status);
+               lifecycle_b.claim_spot (make_spot ("spot-1")).result ().value ().status);
 
     const auto release_b = lifecycle_b.release_spot (key);
     EXPECT_EQ (location_write_status_t::stored, release_b.status);
@@ -182,7 +182,7 @@ TEST (ZLinkFrameworkLocationLifecycle, ClaimsAndReleasesTrackedSpot)
     runtime.start (zlink::routing_id_t::from ("node-a"));
     location_lifecycle_t lifecycle (runtime);
 
-    const auto claim = lifecycle.claim_spot (make_spot ("spot-1"));
+    const auto claim = lifecycle.claim_spot (make_spot ("spot-1")).result ().value ();
     ASSERT_EQ (location_write_status_t::stored, claim.status);
     EXPECT_EQ (1, claim.spot.generation);
     const auto key = spot_location_key_t{.spot_id = "spot-1"};

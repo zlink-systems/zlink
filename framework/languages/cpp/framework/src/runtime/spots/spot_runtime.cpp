@@ -1052,7 +1052,7 @@ namespace
 struct spot_execution_snapshot_t
 {
     std::vector<std::shared_ptr<spot_context_state_t>> contexts;
-    std::vector<std::shared_future<void>> creations;
+    std::vector<task_t<void>> creations;
 };
 
 spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state_t &node)
@@ -1070,8 +1070,8 @@ spot_execution_snapshot_t snapshot_spot_execution_owned (spot_node_builder_state
         include (spot_context_access_t::state (context));
     for (const auto &[_, creation] : node.pending_spot_creations_by_id) {
         include (creation.context.lock ());
-        if (creation.future.valid ())
-            result.creations.push_back (creation.future);
+        if (creation.completion)
+            result.creations.push_back (creation.completion->task ());
     }
     return result;
 }
@@ -1090,7 +1090,7 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
             task_t<void> admitted_callbacks;
         };
         std::vector<context_t> contexts;
-        std::vector<std::shared_future<void>> creations;
+        std::vector<task_t<void>> creations;
         std::shared_ptr<runtime::offload_executor_t> deadline_executor;
         std::shared_ptr<runtime::offload_executor_t> worker_executor;
         std::stop_source cancellation;
@@ -1159,7 +1159,7 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
     // The creation caller owns its result. Keep its execution resources until
     // that existing terminal has settled, including cancellation cleanup.
     for (const auto &creation : plan.creations)
-        creation.wait ();
+        (void) detail::task_result_access_t::read (creation);
     if (plan.deadline_executor)
         plan.deadline_executor->drain ();
     if (plan.worker_executor)
@@ -6023,78 +6023,74 @@ spot_manager_t spot_node_runtime_t::manager () const
     return spot_manager_t (_state);
 }
 
-spot_node_runtime_t::actor_join_state_snapshot_t spot_node_runtime_t::actor_join_state_snapshot (
-  const actor_ref_t &actor_ref, spot_id_t spot_id, const zlink::message_t &request)
+task_t<std::shared_ptr<spot_node_runtime_t::actor_join_state_snapshot_t>>
+spot_node_runtime_t::actor_join_state_snapshot (const actor_ref_t &actor_ref,
+                                                spot_id_t spot_id,
+                                                const zlink::message_t &request)
 {
-    struct selection_t
-    {
-        actor_join_state_snapshot_t snapshot;
-        std::optional<std::string> dynamic_spot_name;
-    };
+    std::optional<std::string> dynamic_spot_name;
     const auto key = actor_key (actor_ref);
     auto select = [&] {
-        return _state->lane
-          .run ([&] {
-              selection_t result;
-              auto context = find_context_core (spot_id);
-              if (context && context->_state->accepts_membership_core (*_state)) {
-                  auto &snapshot = result.snapshot;
-                  snapshot.context.emplace (std::move (*context));
-                  const auto &context_state = snapshot.context->_state;
-                  snapshot.spot_instance = context_state->spot_instance;
-                  snapshot.serializers = context_state->channel_runtime
-                                           ? context_state->channel_runtime->serializers
-                                           : nullptr;
-                  snapshot.mesh_name = context_state->mesh_name;
-                  snapshot.node_rid = detail::effective_spot_node_rid (_state->snapshot);
-                  if (const auto source = _state->actor_spot_ids.find (key);
-                      source != _state->actor_spot_ids.end ()) {
-                      snapshot.source_spot_id = source->second;
-                  }
-                  snapshot.message_follow_duration = _state->message_follow_duration;
+        return _state->lane.run_task ([&] {
+            auto snapshot_state = std::make_shared<actor_join_state_snapshot_t> ();
+            auto &snapshot = *snapshot_state;
+            dynamic_spot_name.reset ();
+            auto context = find_context_core (spot_id);
+            if (context && context->_state->accepts_membership_core (*_state)) {
+                snapshot.context.emplace (std::move (*context));
+                const auto &context_state = snapshot.context->_state;
+                snapshot.spot_instance = context_state->spot_instance;
+                snapshot.serializers = context_state->channel_runtime
+                                         ? context_state->channel_runtime->serializers
+                                         : nullptr;
+                snapshot.mesh_name = context_state->mesh_name;
+                snapshot.node_rid = detail::effective_spot_node_rid (_state->snapshot);
+                if (const auto source = _state->actor_spot_ids.find (key);
+                    source != _state->actor_spot_ids.end ()) {
+                    snapshot.source_spot_id = source->second;
+                }
+                snapshot.message_follow_duration = _state->message_follow_duration;
 
-                  const auto factory = _state->actor_factories.find (std::string (
-                    ::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
-                  if (factory != _state->actor_factories.end ()) {
-                      snapshot.registration.emplace (factory->second);
-                      const auto admission =
-                        context_state->actor_admissions.find (factory->second.actor_type);
-                      if (admission != context_state->actor_admissions.end ()
-                          && (context_state->is_entry_spot () || admission->second.join)) {
-                          snapshot.admission.emplace (admission->second);
-                      }
-                  }
+                const auto factory = _state->actor_factories.find (std::string (
+                  ::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
+                if (factory != _state->actor_factories.end ()) {
+                    snapshot.registration.emplace (factory->second);
+                    const auto admission =
+                      context_state->actor_admissions.find (factory->second.actor_type);
+                    if (admission != context_state->actor_admissions.end ()
+                        && (context_state->is_entry_spot () || admission->second.join)) {
+                        snapshot.admission.emplace (admission->second);
+                    }
+                }
 
-                  const auto instance = _state->actor_instances.find (key);
-                  if (instance != _state->actor_instances.end () && instance->second) {
-                      snapshot.actor_instance = instance->second;
-                      detail::record_actor_instance_index_unlocked (*_state, actor_ref,
-                                                                    snapshot.actor_instance.get ());
-                  }
-                  return result;
-              }
-              for (const auto &[spot_name, _] : _state->spot_factories) {
-                  if (_state->snapshot.entry_spot_name
-                      && spot_name == *_state->snapshot.entry_spot_name) {
-                      continue;
-                  }
-                  if (result.dynamic_spot_name) {
-                      result.dynamic_spot_name.reset ();
-                      break;
-                  }
-                  result.dynamic_spot_name = spot_name;
-              }
-              return result;
-          })
-          .get ();
+                const auto instance = _state->actor_instances.find (key);
+                if (instance != _state->actor_instances.end () && instance->second) {
+                    snapshot.actor_instance = instance->second;
+                    detail::record_actor_instance_index_unlocked (*_state, actor_ref,
+                                                                  snapshot.actor_instance.get ());
+                }
+                return snapshot_state;
+            }
+            for (const auto &[spot_name, _] : _state->spot_factories) {
+                if (_state->snapshot.entry_spot_name
+                    && spot_name == *_state->snapshot.entry_spot_name) {
+                    continue;
+                }
+                if (dynamic_spot_name) {
+                    dynamic_spot_name.reset ();
+                    break;
+                }
+                dynamic_spot_name = spot_name;
+            }
+            return snapshot_state;
+        });
     };
-    auto selected = select ();
-    if (!selected.snapshot.context && selected.dynamic_spot_name) {
-        (void) get_or_create_spot (*selected.dynamic_spot_name, spot_id, request);
-        auto refreshed = select ();
-        return std::move (refreshed.snapshot);
+    auto selected = co_await select ();
+    if (!selected->context && dynamic_spot_name) {
+        (void) co_await get_or_create_spot_async (*dynamic_spot_name, spot_id, request);
+        co_return co_await select ();
     }
-    return std::move (selected.snapshot);
+    co_return selected;
 }
 
 result_t<spot_actor_admission_callbacks_t>
@@ -6745,7 +6741,8 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
                                                          "actor ref is empty");
     }
     const auto key = actor_key (actor_ref);
-    auto join_snapshot = actor_join_state_snapshot (actor_ref, spot_id, request);
+    auto join_state = co_await actor_join_state_snapshot (actor_ref, spot_id, request);
+    auto &join_snapshot = *join_state;
     if (!join_snapshot.context) {
         co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                          "target spot is not registered");
@@ -6911,7 +6908,8 @@ task_t<actor_join_reply_t> spot_node_runtime_t::join_remote_actor_to_spot_erased
                                                          "actor ref is empty");
     }
     const auto key = actor_key (actor_ref);
-    auto join_snapshot = actor_join_state_snapshot (actor_ref, spot_id, request);
+    auto join_state = co_await actor_join_state_snapshot (actor_ref, spot_id, request);
+    auto &join_snapshot = *join_state;
     if (!join_snapshot.context) {
         co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                          "target spot is not registered");
@@ -7799,45 +7797,44 @@ spot_node_runtime_t::prepare_spot_dispatch (
     });
 }
 
-bool spot_node_runtime_t::restore_spot_relocation_state (
-  const runtime::stateful::frozen_object_state_t &frozen,
-  const runtime::stateful::object_ref_t &target,
-  std::stop_token cancellation)
+task_t<bool>
+spot_node_runtime_t::restore_spot_relocation_state (runtime::stateful::frozen_object_state_t frozen,
+                                                    runtime::stateful::object_ref_t target,
+                                                    std::stop_token cancellation)
 {
+    const auto state = _state;
+    spot_node_runtime_t owner (state);
     // MeshNode §5.1: a relocation target's Restore holds one activation admission until the
     // target commit or asynchronous materialization abort, or its failure here.
     const auto admission_key = activation_admission_t::spot_key (target.key);
-    if (!_state->activation_admission->try_enter (admission_key))
-        return false;
+    if (!state->activation_admission->try_enter (admission_key))
+        co_return false;
     std::uint64_t reservation = 0;
-    std::shared_ptr<std::promise<void>> completion;
+    std::shared_ptr<task_completion_source_t<void>> completion;
+    std::exception_ptr failure;
     try {
         detail::factory_relocation_configuration_t relocation;
-        const auto admitted =
-          _state->lane
-            .run ([&] {
-                const auto configured = _state->spot_factory_relocations.find (frozen.stable_type);
-                if (configured == _state->spot_factory_relocations.end ())
-                    return false;
-                if (_state->spot_contexts_by_id.contains (target.key)
-                    || _state->pending_spot_creations_by_id.contains (target.key)
-                    || _state->next_pending_spot_creation_reservation == 0)
-                    return false;
-                reservation = _state->next_pending_spot_creation_reservation++;
-                completion = std::make_shared<std::promise<void>> ();
-                const auto inserted = _state->pending_spot_creations_by_id.emplace (
-                  target.key,
-                  detail::spot_node_builder_state_t::pending_spot_creation_t{
-                    frozen.stable_type, completion->get_future ().share (), reservation});
-                if (!inserted.second)
-                    return false;
-                relocation = configured->second;
-                return true;
-            })
-            .get ();
+        const auto admitted = co_await state->lane.run_task ([&] {
+            const auto configured = state->spot_factory_relocations.find (frozen.stable_type);
+            if (configured == state->spot_factory_relocations.end ())
+                return false;
+            if (state->spot_contexts_by_id.contains (target.key)
+                || state->pending_spot_creations_by_id.contains (target.key)
+                || state->next_pending_spot_creation_reservation == 0)
+                return false;
+            reservation = state->next_pending_spot_creation_reservation++;
+            completion = std::make_shared<task_completion_source_t<void>> ();
+            const auto inserted = state->pending_spot_creations_by_id.emplace (
+              target.key, detail::spot_node_builder_state_t::pending_spot_creation_t{
+                            frozen.stable_type, completion, reservation});
+            if (!inserted.second)
+                return false;
+            relocation = configured->second;
+            return true;
+        });
         if (!admitted) {
-            _state->activation_admission->leave (admission_key);
-            return false;
+            state->activation_admission->leave (admission_key);
+            co_return false;
         }
         if (frozen.application_state.size () > max_spot_relocation_state_bytes)
             throw std::length_error ("Spot relocation state exceeds 64 MiB");
@@ -7860,80 +7857,69 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
         } else {
             throw std::logic_error ("Spot relocation policy does not permit restore");
         }
-        const auto owned = _state->lane
-                             .run ([&] {
-                                 const auto found =
-                                   _state->pending_spot_creations_by_id.find (target.key);
-                                 return found != _state->pending_spot_creations_by_id.end ()
-                                        && found->second.reservation == reservation;
-                             })
-                             .get ();
+        const auto owned = co_await state->lane.run_task ([&] {
+            const auto found = state->pending_spot_creations_by_id.find (target.key);
+            return found != state->pending_spot_creations_by_id.end ()
+                   && found->second.reservation == reservation;
+        });
         if (!owned)
             throw std::logic_error ("Relocation Spot reservation ownership was lost");
-        auto materialization =
-          create_spot_context (frozen.stable_type, spot_id_t (target.key), zlink::message_t{},
-                               target.object_generation, target.mesh_name,
-                               std::move (staged_restore), target.authority_owner_generation)
-            .result ()
-            .value ();
+        auto materialization = co_await owner.create_spot_context (
+          frozen.stable_type, spot_id_t (target.key), zlink::message_t{}, target.object_generation,
+          target.mesh_name, std::move (staged_restore), target.authority_owner_generation);
         auto materialized = std::move (*materialization);
         const auto created = materialized.state == spot_create_state_t::created;
         if (created && materialized.context._state
             && materialized.context._state->execution_mode == user_spot_execution_mode_t::spot_wide
             && materialized.context._state->relocation_coordination_mode
                  == spot_relocation_coordination_mode_t::application_signaled) {
-            _state->lane
-              .run ([state = materialized.context._state] {
-                  state->relocation_boundary_active = true;
-                  state->relocation_ready_deferred = true;
-              })
-              .get ();
+            co_await state->lane.run_task ([state = materialized.context._state] {
+                state->relocation_boundary_active = true;
+                state->relocation_ready_deferred = true;
+            });
         }
-        const auto completed_reservation =
-          _state->lane
-            .run ([&] {
-                const auto current = _state->pending_spot_creations_by_id.find (target.key);
-                if (current == _state->pending_spot_creations_by_id.end ()
+        const auto completed_reservation = co_await state->lane.run_task ([&] {
+            const auto current = state->pending_spot_creations_by_id.find (target.key);
+            if (current == state->pending_spot_creations_by_id.end ()
+                || current->second.reservation != reservation) {
+                return false;
+            }
+            state->pending_spot_creations_by_id.erase (current);
+            return true;
+        });
+        if (completed_reservation) {
+            if (created)
+                completion->complete (result_t<void>::success ());
+            else
+                completion->complete (
+                  result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                           "Relocation Spot activation was rejected"));
+        }
+        if (!created)
+            state->activation_admission->leave (admission_key);
+        co_return created;
+    }
+    catch (...) {
+        failure = std::current_exception ();
+    }
+    {
+        state->activation_admission->leave (admission_key);
+        if (reservation != 0) {
+            const auto error = failure;
+            const auto owned = co_await state->lane.run_task ([&] {
+                const auto current = state->pending_spot_creations_by_id.find (target.key);
+                if (current == state->pending_spot_creations_by_id.end ()
                     || current->second.reservation != reservation) {
                     return false;
                 }
-                _state->pending_spot_creations_by_id.erase (current);
+                state->pending_spot_creations_by_id.erase (current);
                 return true;
-            })
-            .get ();
-        if (completed_reservation) {
-            if (created)
-                completion->set_value ();
-            else
-                completion->set_exception (std::make_exception_ptr (
-                  framework_exception_t (framework_error_kind_t::internal_failure,
-                                         "Relocation Spot activation was rejected")));
-        }
-        if (!created)
-            _state->activation_admission->leave (admission_key);
-        return created;
-    }
-    catch (...) {
-        _state->activation_admission->leave (admission_key);
-        if (reservation != 0) {
-            const auto error = std::current_exception ();
-            const auto owned = _state->lane
-                                 .run ([&] {
-                                     const auto current =
-                                       _state->pending_spot_creations_by_id.find (target.key);
-                                     if (current == _state->pending_spot_creations_by_id.end ()
-                                         || current->second.reservation != reservation) {
-                                         return false;
-                                     }
-                                     _state->pending_spot_creations_by_id.erase (current);
-                                     return true;
-                                 })
-                                 .get ();
+            });
             if (owned)
-                completion->set_exception (error);
+                completion->complete (detail::result_access_t::failure<void> (error));
         }
     }
-    return false;
+    co_return false;
 }
 
 std::optional<bool> spot_node_runtime_t::validate_actor_join_relocation_prepare (
@@ -8213,7 +8199,7 @@ task_t<bool> spot_node_runtime_t::materialize_relocation_state_in (
   std::stop_token cancellation)
 {
     if (target.kind != runtime::stateful::object_kind_t::actor)
-        co_return self.restore_spot_relocation_state (frozen, target, cancellation);
+        co_return co_await self.restore_spot_relocation_state (frozen, target, cancellation);
 
     // MeshNode §5.1: a standalone Actor Restore holds one activation admission until the
     // target commit or abort. An Actor restored into a Spot whose own Restore holds an
@@ -13450,69 +13436,66 @@ task_t<std::shared_ptr<local_spot_create_result_t>> spot_node_runtime_t::create_
         std::optional<spot_location_t> location;
         bool entry_spot = false;
     };
-    auto plan =
-      _state->lane
-        .run ([&] {
-            /* graceful-drain-handoff §4-2: a draining node blocks new spot creation.
+    auto plan = co_await _state->lane.run_task ([&] {
+        /* graceful-drain-handoff §4-2: a draining node blocks new spot creation.
          * Existing spots (and in-progress transfer commits) keep running. */
-            if (_state->host_draining () || _state->stopping.load (std::memory_order_acquire)) {
-                throw framework_exception_t (framework_error_kind_t::shutting_down,
-                                             "spot node is draining and rejects new spot creation");
-            }
-            const auto found = _state->spot_factories.find (spot_name);
-            if (found == _state->spot_factories.end ()) {
-                throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                             "spot factory is not registered");
-            }
+        if (_state->host_draining () || _state->stopping.load (std::memory_order_acquire)) {
+            throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                         "spot node is draining and rejects new spot creation");
+        }
+        const auto found = _state->spot_factories.find (spot_name);
+        if (found == _state->spot_factories.end ()) {
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "spot factory is not registered");
+        }
 
-            creation_plan_t result;
-            if (const auto lifecycle = _state->spot_lifecycles.find (spot_name);
-                lifecycle != _state->spot_lifecycles.end ()) {
-                result.lifecycle = lifecycle->second;
-            }
-            const auto instance_spot =
-              std::find (_state->snapshot.instance_spot_names.begin (),
-                         _state->snapshot.instance_spot_names.end (), spot_name)
-              != _state->snapshot.instance_spot_names.end ();
-            result.entry_spot =
-              _state->snapshot.entry_spot_name && *_state->snapshot.entry_spot_name == spot_name;
-            result.root_services = _state->root_services;
-            result.worker_executor = framework_worker_executor_core (_state);
-            result.location_lifecycle = _state->location_lifecycle;
-            result.monitoring = _state->monitoring;
-            if (result.location_lifecycle)
-                result.location.emplace (make_spot_location (*_state, spot_name, spot_id));
+        creation_plan_t result;
+        if (const auto lifecycle = _state->spot_lifecycles.find (spot_name);
+            lifecycle != _state->spot_lifecycles.end ()) {
+            result.lifecycle = lifecycle->second;
+        }
+        const auto instance_spot =
+          std::find (_state->snapshot.instance_spot_names.begin (),
+                     _state->snapshot.instance_spot_names.end (), spot_name)
+          != _state->snapshot.instance_spot_names.end ();
+        result.entry_spot =
+          _state->snapshot.entry_spot_name && *_state->snapshot.entry_spot_name == spot_name;
+        result.root_services = _state->root_services;
+        result.worker_executor = framework_worker_executor_core (_state);
+        result.location_lifecycle = _state->location_lifecycle;
+        result.monitoring = _state->monitoring;
+        if (result.location_lifecycle)
+            result.location.emplace (make_spot_location (*_state, spot_name, spot_id));
 
-            context_state->node = _state;
-            context_state->lane_owner = _state;
-            context_state->channel_runtime = _state->channel_runtime;
-            context_state->node_rid =
-              node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot));
-            context_state->mesh_name =
-              mesh_name.empty () ? _state->snapshot.name : std::move (mesh_name);
-            context_state->spot_id = spot_id;
-            context_state->object_generation = object_generation;
-            context_state->authority_owner_generation = authority_owner_generation;
-            context_state->spot_name = spot_name;
-            context_state->lifecycle_domain = result.entry_spot ? spot_lifecycle_domain_t::entry ()
-                                              : instance_spot ? spot_lifecycle_domain_t::instance ()
-                                                              : spot_lifecycle_domain_t::user ();
-            if (const auto mode = _state->snapshot.spot_execution_modes.find (spot_name);
-                mode != _state->snapshot.spot_execution_modes.end ()) {
-                context_state->execution_mode = mode->second;
-            }
-            if (const auto mode = _state->spot_relocation_coordination_modes.find (spot_name);
-                mode != _state->spot_relocation_coordination_modes.end ()) {
-                context_state->relocation_coordination_mode = mode->second;
-            }
-            context_state->lifecycle = result.lifecycle;
-            configure_spot_execution (context_state, result.worker_executor, retained_queue);
-            if (const auto pending = _state->pending_spot_creations_by_id.find (id_value);
-                pending != _state->pending_spot_creations_by_id.end ())
-                pending->second.context = context_state;
-            return result;
-        })
-        .get ();
+        context_state->node = _state;
+        context_state->lane_owner = _state;
+        context_state->channel_runtime = _state->channel_runtime;
+        context_state->node_rid =
+          node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot));
+        context_state->mesh_name =
+          mesh_name.empty () ? _state->snapshot.name : std::move (mesh_name);
+        context_state->spot_id = spot_id;
+        context_state->object_generation = object_generation;
+        context_state->authority_owner_generation = authority_owner_generation;
+        context_state->spot_name = spot_name;
+        context_state->lifecycle_domain = result.entry_spot ? spot_lifecycle_domain_t::entry ()
+                                          : instance_spot   ? spot_lifecycle_domain_t::instance ()
+                                                            : spot_lifecycle_domain_t::user ();
+        if (const auto mode = _state->snapshot.spot_execution_modes.find (spot_name);
+            mode != _state->snapshot.spot_execution_modes.end ()) {
+            context_state->execution_mode = mode->second;
+        }
+        if (const auto mode = _state->spot_relocation_coordination_modes.find (spot_name);
+            mode != _state->spot_relocation_coordination_modes.end ()) {
+            context_state->relocation_coordination_mode = mode->second;
+        }
+        context_state->lifecycle = result.lifecycle;
+        configure_spot_execution (context_state, result.worker_executor, retained_queue);
+        if (const auto pending = _state->pending_spot_creations_by_id.find (id_value);
+            pending != _state->pending_spot_creations_by_id.end ())
+            pending->second.context = context_state;
+        return result;
+    });
 
     // MeshNode §5.1: creating a User Spot or cold-activating an Instance Spot holds one
     // activation admission until this activation ends. The Entry Spot never enters, and a
@@ -13570,90 +13553,85 @@ task_t<std::shared_ptr<local_spot_create_result_t>> spot_node_runtime_t::create_
         // The barrier may keep this callable after the turn, so it holds only weak references
         // and the running frame alone owns the turn; a failed creation then releases the
         // staged native Spot when this caller returns.
-        created.emplace ([&] () -> local_spot_create_result_t {
-            preparation->lifecycle
-              ->run ([weak_turn = std::weak_ptr (turn),
-                      weak_preparation = std::weak_ptr (preparation),
-                      inherited = static_cast<bool> (inherited_operation),
-                      weak_context = std::weak_ptr (context_state)] {
-                  auto turn = weak_turn.lock ();
-                  auto preparation = weak_preparation.lock ();
-                  auto context_state = weak_context.lock ();
-                  if (!turn || !preparation || !context_state)
-                      return task_t<void> (
-                        result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                                 "Spot creation caller has returned"));
-                  return [] (std::shared_ptr<creation_turn_t> turn,
-                             std::shared_ptr<spot_serial_executor_t::preparation_t> preparation,
-                             bool inherited,
-                             std::shared_ptr<spot_context_state_t> context_state) -> task_t<void> {
-                      auto &plan = *turn;
-                      auto &request = turn->request;
-                      auto &staged_restore = turn->staged_restore;
-                      auto &response = turn->response;
-                      auto &create_reply = turn->create_reply;
-                      auto &staged_native = turn->staged_native;
-                      if (inherited)
-                          context_state->spot_serial_executor->attach_preparation (preparation);
-                      if (plan.lifecycle.create_entry_context_instance
-                          || plan.lifecycle.create_instance_context_instance
-                          || plan.lifecycle.create_spot_context_instance) {
-                          service_provider_t empty_services;
-                          auto &activation_services =
-                            context_state->activation_scope
-                              ? context_state->activation_scope->provider ()
-                              : empty_services;
-                          if (plan.lifecycle.create_entry_context_instance) {
-                              context_state->spot_instance =
-                                plan.lifecycle.create_entry_context_instance (
-                                  entry_spot_context_t (context_state), activation_services);
-                          } else if (plan.lifecycle.create_instance_context_instance) {
-                              context_state->spot_instance =
-                                plan.lifecycle.create_instance_context_instance (
-                                  instance_spot_context_t (context_state), activation_services);
-                          } else {
-                              context_state->spot_instance =
-                                plan.lifecycle.create_spot_context_instance (
-                                  spot_context_t (context_state), activation_services);
-                          }
-                          if (!context_state->spot_instance)
-                              throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                                           "SPOT factory returned null");
-                      }
-                      if (context_state->spot_instance) {
-                          if (staged_restore) {
-                              co_await staged_restore (context_state->spot_instance.get ());
-                          } else {
-                              staged_native = attach_native_spot (context_state, false, false);
-                              if (!context_state->is_instance_spot () && plan.lifecycle.on_create)
-                                  response = co_await plan.lifecycle.on_create (
-                                    context_state->spot_instance.get (), request,
-                                    *context_state->channel_runtime->serializers);
-                          }
-                          if (!response.accepted)
-                              co_return;
-                          create_reply = response.reply;
-                          if (!staged_restore && plan.lifecycle.on_initialize)
-                              co_await plan.lifecycle.on_initialize (
-                                context_state->spot_instance.get ());
-                          if (staged_restore)
-                              staged_native = attach_native_spot (context_state, true, false);
-                      } else {
-                          staged_native = attach_native_spot (context_state, false, false);
-                      }
-                      co_return;
-                  }(std::move (turn), std::move (preparation), inherited,
-                                                                                  std::move (
-                                                                                    context_state));
-              })
-              .result ()
-              .value ();
+        do {
+            co_await preparation->lifecycle->run ([weak_turn = std::weak_ptr (turn),
+                                                   weak_preparation = std::weak_ptr (preparation),
+                                                   inherited =
+                                                     static_cast<bool> (inherited_operation),
+                                                   weak_context = std::weak_ptr (context_state)] {
+                auto turn = weak_turn.lock ();
+                auto preparation = weak_preparation.lock ();
+                auto context_state = weak_context.lock ();
+                if (!turn || !preparation || !context_state)
+                    return task_t<void> (result_t<void>::failure (
+                      framework_error_kind_t::shutting_down, "Spot creation caller has returned"));
+                return [] (std::shared_ptr<creation_turn_t> turn,
+                           std::shared_ptr<spot_serial_executor_t::preparation_t> preparation,
+                           bool inherited,
+                           std::shared_ptr<spot_context_state_t> context_state) -> task_t<void> {
+                    auto &plan = *turn;
+                    auto &request = turn->request;
+                    auto &staged_restore = turn->staged_restore;
+                    auto &response = turn->response;
+                    auto &create_reply = turn->create_reply;
+                    auto &staged_native = turn->staged_native;
+                    if (inherited)
+                        context_state->spot_serial_executor->attach_preparation (preparation);
+                    if (plan.lifecycle.create_entry_context_instance
+                        || plan.lifecycle.create_instance_context_instance
+                        || plan.lifecycle.create_spot_context_instance) {
+                        service_provider_t empty_services;
+                        auto &activation_services = context_state->activation_scope
+                                                      ? context_state->activation_scope->provider ()
+                                                      : empty_services;
+                        if (plan.lifecycle.create_entry_context_instance) {
+                            context_state->spot_instance =
+                              plan.lifecycle.create_entry_context_instance (
+                                entry_spot_context_t (context_state), activation_services);
+                        } else if (plan.lifecycle.create_instance_context_instance) {
+                            context_state->spot_instance =
+                              plan.lifecycle.create_instance_context_instance (
+                                instance_spot_context_t (context_state), activation_services);
+                        } else {
+                            context_state->spot_instance =
+                              plan.lifecycle.create_spot_context_instance (
+                                spot_context_t (context_state), activation_services);
+                        }
+                        if (!context_state->spot_instance)
+                            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                                         "SPOT factory returned null");
+                    }
+                    if (context_state->spot_instance) {
+                        if (staged_restore) {
+                            co_await staged_restore (context_state->spot_instance.get ());
+                        } else {
+                            staged_native = attach_native_spot (context_state, false, false);
+                            if (!context_state->is_instance_spot () && plan.lifecycle.on_create)
+                                response = co_await plan.lifecycle.on_create (
+                                  context_state->spot_instance.get (), request,
+                                  *context_state->channel_runtime->serializers);
+                        }
+                        if (!response.accepted)
+                            co_return;
+                        create_reply = response.reply;
+                        if (!staged_restore && plan.lifecycle.on_initialize)
+                            co_await plan.lifecycle.on_initialize (
+                              context_state->spot_instance.get ());
+                        if (staged_restore)
+                            staged_native = attach_native_spot (context_state, true, false);
+                    } else {
+                        staged_native = attach_native_spot (context_state, false, false);
+                    }
+                    co_return;
+                }(std::move (turn), std::move (preparation), inherited, std::move (context_state));
+            });
             auto &response = turn->response;
             create_reply = turn->create_reply;
             staged_native = turn->staged_native;
             if (!response.accepted) {
-                return local_spot_create_result_t{spot_id, spot_create_state_t::rejected,
-                                                  response.reply, std::move (context)};
+                created.emplace (local_spot_create_result_t{spot_id, spot_create_state_t::rejected,
+                                                            response.reply, std::move (context)});
+                break;
             }
 
             bool location_claimed = false;
@@ -13661,39 +13639,40 @@ task_t<std::shared_ptr<local_spot_create_result_t>> spot_node_runtime_t::create_
                 auto location = std::move (*plan.location);
                 if (const auto native = context_state->native_spot.lock ())
                     location.spot_generation = native->status ().lifecycle_generation ();
-                const auto claimed = plan.location_lifecycle->claim_spot (std::move (location));
+                const auto claimed =
+                  co_await plan.location_lifecycle->claim_spot (std::move (location));
                 if (claimed.status != location_write_status_t::stored) {
-                    return local_spot_create_result_t{spot_id, spot_create_state_t::rejected,
-                                                      std::nullopt, std::move (context)};
+                    created.emplace (local_spot_create_result_t{
+                      spot_id, spot_create_state_t::rejected, std::nullopt, std::move (context)});
+                    break;
                 }
                 location_claimed = true;
             }
 
             const auto native = staged_native ? staged_native : context_state->native_spot.lock ();
-            const auto published =
-              _state->lane
-                .run ([&] {
-                    const auto previous = _state->spot_contexts_by_id.find (id_value);
-                    if ((previous != _state->spot_contexts_by_id.end ()
-                         && (!retained_queue || !previous->second._state->closed))
-                        || (_state->native_spots_by_id.contains (id_value)
-                            && _state->native_spots_by_id.at (id_value) != native)) {
-                        return false;
-                    }
-                    _state->spot_contexts_by_id.erase (id_value);
-                    _state->spot_contexts_by_id.emplace (id_value, spot_context_t (context_state));
-                    _state->spot_ids_by_name[spot_name] = spot_id;
-                    _state->spot_names_by_id[id_value] = spot_name;
-                    if (native)
-                        _state->native_spots_by_id[id_value] = native;
-                    return true;
-                })
-                .get ();
+            const auto published = co_await _state->lane.run_task ([&] {
+                const auto previous = _state->spot_contexts_by_id.find (id_value);
+                if ((previous != _state->spot_contexts_by_id.end ()
+                     && (!retained_queue || !previous->second._state->closed))
+                    || (_state->native_spots_by_id.contains (id_value)
+                        && _state->native_spots_by_id.at (id_value) != native)) {
+                    return false;
+                }
+                _state->spot_contexts_by_id.erase (id_value);
+                _state->spot_contexts_by_id.emplace (id_value, spot_context_t (context_state));
+                _state->spot_ids_by_name[spot_name] = spot_id;
+                _state->spot_names_by_id[id_value] = spot_name;
+                if (native)
+                    _state->native_spots_by_id[id_value] = native;
+                return true;
+            });
             if (!published) {
                 if (location_claimed && plan.location_lifecycle)
-                    (void) plan.location_lifecycle->release_spot (spot_location_key_t{id_value});
-                return local_spot_create_result_t{spot_id, spot_create_state_t::rejected,
-                                                  std::nullopt, std::move (context)};
+                    (void) co_await plan.location_lifecycle->release_spot_async (
+                      spot_location_key_t{id_value});
+                created.emplace (local_spot_create_result_t{spot_id, spot_create_state_t::rejected,
+                                                            std::nullopt, std::move (context)});
+                break;
             }
 
             if (plan.monitoring) {
@@ -13715,9 +13694,9 @@ task_t<std::shared_ptr<local_spot_create_result_t>> spot_node_runtime_t::create_
                 else if (!staged_restore)
                     context_state->complete_preparation (true);
             }
-            return local_spot_create_result_t{spot_id, spot_create_state_t::created, create_reply,
-                                              std::move (context)};
-        }());
+            created.emplace (local_spot_create_result_t{spot_id, spot_create_state_t::created,
+                                                        create_reply, std::move (context)});
+        } while (false);
     }
     catch (...) {
         creation_failure = std::current_exception ();
@@ -13766,130 +13745,126 @@ spot_node_runtime_t::get_or_create_spot (std::string spot_name,
                                          std::uint64_t authority_owner_generation,
                                          std::function<task_t<void> (bool)> *preparation_terminal)
 {
+    auto creation =
+      get_or_create_spot_async (std::move (spot_name), std::move (spot_id), std::move (request),
+                                object_generation, std::move (mesh_name),
+                                authority_owner_generation, preparation_terminal)
+        .result ()
+        .value ();
+    return std::move (*creation);
+}
+
+task_t<std::shared_ptr<local_spot_create_result_t>> spot_node_runtime_t::get_or_create_spot_async (
+  std::string spot_name,
+  spot_id_t spot_id,
+  zlink::message_t request,
+  std::uint64_t object_generation,
+  std::string mesh_name,
+  std::uint64_t authority_owner_generation,
+  std::function<task_t<void> (bool)> *preparation_terminal)
+{
+    const auto state = _state;
+    spot_node_runtime_t owner (state);
     const auto id_value = std::string (spot_id);
     struct creation_admission_t
     {
-        std::optional<local_spot_create_result_t> existing;
-        std::shared_future<void> pending;
-        std::shared_ptr<std::promise<void>> promise;
+        std::shared_ptr<local_spot_create_result_t> existing;
+        std::shared_ptr<task_completion_source_t<void>> pending;
+        std::shared_ptr<task_completion_source_t<void>> completion;
         std::uint64_t reservation = 0;
     };
-    auto admission =
-      _state->lane
-        .run ([&] {
-            auto same_spot_type = [&] (const std::string &existing_name) {
-                const auto existing_factory = _state->spot_factories.find (existing_name);
-                const auto requested_factory = _state->spot_factories.find (spot_name);
-                return existing_factory == _state->spot_factories.end ()
-                       || requested_factory == _state->spot_factories.end ()
-                       || existing_factory->second == requested_factory->second;
-            };
-            creation_admission_t result;
-            if (const auto existing = _state->spot_contexts_by_id.find (id_value);
-                existing != _state->spot_contexts_by_id.end ()) {
-                const auto existing_name = _state->spot_names_by_id.find (id_value);
-                if (existing_name != _state->spot_names_by_id.end ()
-                    && !same_spot_type (existing_name->second)) {
-                    throw framework_exception_t (
-                      framework_error_kind_t::type_mismatch,
-                      "spot id is already bound to a different spot type");
-                }
-                result.existing.emplace (
-                  local_spot_create_result_t{spot_id, spot_create_state_t::existing, std::nullopt,
-                                             spot_context_t (existing->second._state)});
-                return result;
+    auto admission = co_await state->lane.run_task ([&] {
+        auto same_spot_type = [&] (const std::string &existing_name) {
+            const auto existing_factory = state->spot_factories.find (existing_name);
+            const auto requested_factory = state->spot_factories.find (spot_name);
+            return existing_factory == state->spot_factories.end ()
+                   || requested_factory == state->spot_factories.end ()
+                   || existing_factory->second == requested_factory->second;
+        };
+        creation_admission_t result;
+        if (const auto existing = state->spot_contexts_by_id.find (id_value);
+            existing != state->spot_contexts_by_id.end ()) {
+            const auto existing_name = state->spot_names_by_id.find (id_value);
+            if (existing_name != state->spot_names_by_id.end ()
+                && !same_spot_type (existing_name->second)) {
+                throw framework_exception_t (framework_error_kind_t::type_mismatch,
+                                             "spot id is already bound to a different spot type");
             }
-            if (const auto pending = _state->pending_spot_creations_by_id.find (id_value);
-                pending != _state->pending_spot_creations_by_id.end ()) {
-                if (!same_spot_type (pending->second.spot_name)) {
-                    throw framework_exception_t (
-                      framework_error_kind_t::type_mismatch,
-                      "spot id is already bound to a different spot type");
-                }
-                result.pending = pending->second.future;
-                return result;
-            }
-            result.promise = std::make_shared<std::promise<void>> ();
-            if (_state->next_pending_spot_creation_reservation == 0) {
-                throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                             "spot creation reservation sequence is exhausted");
-            }
-            result.reservation = _state->next_pending_spot_creation_reservation++;
-            const auto inserted = _state->pending_spot_creations_by_id.emplace (
-              id_value, detail::spot_node_builder_state_t::pending_spot_creation_t{
-                          spot_name, result.promise->get_future ().share (), result.reservation});
-            if (!inserted.second) {
-                throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                             "spot creation reservation was not acquired");
-            }
+            result.existing = std::make_shared<local_spot_create_result_t> (
+              local_spot_create_result_t{spot_id, spot_create_state_t::existing, std::nullopt,
+                                         spot_context_t (existing->second._state)});
             return result;
-        })
-        .get ();
+        }
+        if (const auto pending = state->pending_spot_creations_by_id.find (id_value);
+            pending != state->pending_spot_creations_by_id.end ()) {
+            if (!same_spot_type (pending->second.spot_name)) {
+                throw framework_exception_t (framework_error_kind_t::type_mismatch,
+                                             "spot id is already bound to a different spot type");
+            }
+            result.pending = pending->second.completion;
+            return result;
+        }
+        result.completion = std::make_shared<task_completion_source_t<void>> ();
+        if (state->next_pending_spot_creation_reservation == 0) {
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "spot creation reservation sequence is exhausted");
+        }
+        result.reservation = state->next_pending_spot_creation_reservation++;
+        const auto inserted = state->pending_spot_creations_by_id.emplace (
+          id_value, detail::spot_node_builder_state_t::pending_spot_creation_t{
+                      spot_name, result.completion, result.reservation});
+        if (!inserted.second) {
+            throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                         "spot creation reservation was not acquired");
+        }
+        return result;
+    });
 
     if (admission.existing)
-        return std::move (*admission.existing);
-    if (admission.pending.valid ()) {
-        admission.pending.get ();
-        return _state->lane
-          .run ([&] {
-              const auto created = _state->spot_contexts_by_id.find (id_value);
-              if (created == _state->spot_contexts_by_id.end ()) {
-                  throw framework_exception_t (
-                    framework_error_kind_t::internal_failure,
-                    "concurrent spot creation completed without a context");
-              }
-              return local_spot_create_result_t{spot_id_t (id_value), spot_create_state_t::existing,
-                                                std::nullopt,
-                                                spot_context_t (created->second._state)};
-          })
-          .get ();
+        co_return admission.existing;
+    if (admission.pending) {
+        co_await admission.pending->task ();
+        co_return co_await state->lane.run_task ([&] {
+            const auto created = state->spot_contexts_by_id.find (id_value);
+            if (created == state->spot_contexts_by_id.end ()) {
+                throw framework_exception_t (
+                  framework_error_kind_t::internal_failure,
+                  "concurrent spot creation completed without a context");
+            }
+            return std::make_shared<local_spot_create_result_t> (
+              local_spot_create_result_t{spot_id_t (id_value), spot_create_state_t::existing,
+                                         std::nullopt, spot_context_t (created->second._state)});
+        });
     }
 
+    std::exception_ptr failure;
+    std::shared_ptr<local_spot_create_result_t> creation;
     try {
-        auto creation =
-          create_spot_context (std::move (spot_name), std::move (spot_id), std::move (request),
-                               object_generation, std::move (mesh_name), {},
-                               authority_owner_generation, {}, preparation_terminal)
-            .result ()
-            .value ();
-        auto result = std::move (*creation);
-        const auto owned = _state->lane
-                             .run ([&] {
-                                 const auto found =
-                                   _state->pending_spot_creations_by_id.find (id_value);
-                                 if (found == _state->pending_spot_creations_by_id.end ()
-                                     || found->second.reservation != admission.reservation) {
-                                     return false;
-                                 }
-                                 _state->pending_spot_creations_by_id.erase (found);
-                                 return true;
-                             })
-                             .get ();
-        if (!owned) {
-            throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                         "spot creation reservation ownership was lost");
-        }
-        admission.promise->set_value ();
-        return std::move (result);
+        creation = co_await owner.create_spot_context (
+          std::move (spot_name), std::move (spot_id), std::move (request), object_generation,
+          std::move (mesh_name), {}, authority_owner_generation, {}, preparation_terminal);
     }
     catch (...) {
-        const auto error = std::current_exception ();
-        const auto owned = _state->lane
-                             .run ([&] {
-                                 const auto found =
-                                   _state->pending_spot_creations_by_id.find (id_value);
-                                 if (found == _state->pending_spot_creations_by_id.end ()
-                                     || found->second.reservation != admission.reservation) {
-                                     return false;
-                                 }
-                                 _state->pending_spot_creations_by_id.erase (found);
-                                 return true;
-                             })
-                             .get ();
-        if (owned)
-            admission.promise->set_exception (error);
-        throw;
+        failure = std::current_exception ();
     }
+    const auto owned = co_await state->lane.run_task ([&] {
+        const auto found = state->pending_spot_creations_by_id.find (id_value);
+        if (found == state->pending_spot_creations_by_id.end ()
+            || found->second.reservation != admission.reservation)
+            return false;
+        state->pending_spot_creations_by_id.erase (found);
+        return true;
+    });
+    if (failure) {
+        if (owned)
+            admission.completion->complete (detail::result_access_t::failure<void> (failure));
+        std::rethrow_exception (failure);
+    }
+    if (!owned)
+        throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                     "spot creation reservation ownership was lost");
+    admission.completion->complete (result_t<void>::success ());
+    co_return creation;
 }
 
 task_t<zlink::message_t> spot_node_runtime_t::dispatch_instance_activation (

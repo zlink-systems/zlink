@@ -695,11 +695,14 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     publish_target (*old_target, old_owner);
     publish_target (*new_target, new_owner);
 
-    source->configure_user_spot_operations (store, [] (const runtime::stateful::object_ref_t &,
-                                                       const std::string &,
-                                                       const std::vector<std::byte> &) {
-        return host::user_spot_materialize_result_t{true, std::nullopt};
-    });
+    source->configure_user_spot_operations (
+      store,
+      [] (const runtime::stateful::object_ref_t &, const std::string &,
+          const std::vector<std::byte> &)
+        -> zlink::framework::task_t<
+          zlink::framework::runtime::host::user_spot_materialize_result_t> {
+          co_return host::user_spot_materialize_result_t{true, std::nullopt};
+      });
     std::atomic<std::size_t> invalidated_route_count{0};
     std::mutex invalidated_route_mutex;
     std::optional<protocol::actor_route_fence_t> invalidated_route;
@@ -2428,8 +2431,10 @@ void verify_public_host_route_fence_reads_store_without_second_cache (bool relea
           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     source->configure_user_spot_operations (
       store,
-      [] (const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &) {
-          return host::user_spot_materialize_result_t{true, std::nullopt};
+      [] (const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &)
+        -> zlink::framework::task_t<
+          zlink::framework::runtime::host::user_spot_materialize_result_t> {
+          co_return host::user_spot_materialize_result_t{true, std::nullopt};
       });
     source->start ();
     target->start ();
@@ -5521,9 +5526,13 @@ void verify_memory_accepted_record_authority ()
     auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
       .mesh = {.descriptor = target,
                .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
-    native->configure_user_spot_operations (store, [] (const auto &, const auto &, const auto &) {
-        return host::user_spot_materialize_result_t{};
-    });
+    native->configure_user_spot_operations (
+      store,
+      [] (const auto &, const auto &, const auto &)
+        -> zlink::framework::task_t<
+          zlink::framework::runtime::host::user_spot_materialize_result_t> {
+          co_return host::user_spot_materialize_result_t{};
+      });
     assert (native->transport ().topology ().admit (source, {1})
             == mesh::peer_admission_result_t::admitted);
     const location_owner_token_t local_owner{"local-memory-owner", 11};
@@ -7332,7 +7341,9 @@ void verify_aggregate_saved_request_terminal_identity ()
         -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           co_return stateful::frozen_object_state_t{};
       },
-      [] (const auto &, const auto &, std::stop_token) { return true; });
+      [] (const auto &, const auto &, std::stop_token) -> zlink::framework::task_t<bool> {
+          co_return true;
+      });
     target->configure_stateful_dispatch (
       [] (stateful::accepted_record_authority_query_t)
         -> zlink::framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
@@ -7361,9 +7372,13 @@ void verify_aggregate_saved_request_terminal_identity ()
         .value ()
         .status
       == zlink::framework::location_write_status_t::stored);
-    target->configure_user_spot_operations (store, [] (const auto &, const auto &, const auto &) {
-        return host::user_spot_materialize_result_t{};
-    });
+    target->configure_user_spot_operations (
+      store,
+      [] (const auto &, const auto &, const auto &)
+        -> zlink::framework::task_t<
+          zlink::framework::runtime::host::user_spot_materialize_result_t> {
+          co_return host::user_spot_materialize_result_t{};
+      });
     protocol::relocation_prepare_t prepare;
     prepare.relocation = {0x1786, 3};
     prepare.target_attempt_generation = 1;
@@ -7450,7 +7465,9 @@ void verify_restored_request_completes_local_native_alias ()
       [] (const auto &, const auto &, std::stop_token) -> task_t<stateful::frozen_object_state_t> {
           co_return stateful::frozen_object_state_t{};
       },
-      [] (const auto &, const auto &, std::stop_token) { return true; });
+      [] (const auto &, const auto &, std::stop_token) -> zlink::framework::task_t<bool> {
+          co_return true;
+      });
     target->configure_stateful_dispatch (
       [] (stateful::accepted_record_authority_query_t)
         -> task_t<std::optional<stateful::accepted_record_authority_t>> {
@@ -7909,28 +7926,32 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
     target->configure_user_spot_operations (
       store,
       [&materialize_count] (const stateful::object_ref_t &object, const std::string &stable_type,
-                            const std::vector<std::byte> &creation) {
+                            const std::vector<std::byte> &creation)
+        -> zlink::framework::task_t<
+          zlink::framework::runtime::host::user_spot_materialize_result_t> {
           ++materialize_count;
           assert (object.object_generation != 0);
           assert (stable_type == "room");
           assert (creation == std::vector<std::byte> ({std::byte{0x41}, std::byte{0x42}}));
-          return host::user_spot_materialize_result_t{true, std::nullopt};
+          co_return host::user_spot_materialize_result_t{true, std::nullopt};
       });
     if (cleanup_only) {
         task_completion_source_t<void> cleanup_release;
         bool cleanup_started = false;
-        target->configure_user_spot_operations (store, [&] (const stateful::object_ref_t &,
-                                                            const std::string &,
-                                                            const std::vector<std::byte> &) {
-            // Revoke this reservation after materialization so publication fails.
-            (void) store->abort ({reserve.key, reservation->fence}).result ().value ();
-            return host::user_spot_materialize_result_t{true, std::nullopt,
-                                                        [&] (bool ready) -> task_t<void> {
-                                                            assert (!ready);
-                                                            cleanup_started = true;
-                                                            return cleanup_release.task ();
-                                                        }};
-        });
+        target->configure_user_spot_operations (
+          store,
+          [&] (const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &)
+            -> zlink::framework::task_t<
+              zlink::framework::runtime::host::user_spot_materialize_result_t> {
+              // Revoke this reservation after materialization so publication fails.
+              (void) store->abort ({reserve.key, reservation->fence}).result ().value ();
+              co_return host::user_spot_materialize_result_t{true, std::nullopt,
+                                                             [&] (bool ready) -> task_t<void> {
+                                                                 assert (!ready);
+                                                                 cleanup_started = true;
+                                                                 return cleanup_release.task ();
+                                                             }};
+          });
         target->start ();
         std::promise<
           std::pair<foundation::operation_terminal_t, protocol::user_spot_create_reply_t>>
@@ -8001,7 +8022,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
       host::instance_spot_activation_materializer_t{
         [&instance_prepare_count, &store, &recovery_barrier_finishes] (
           const protocol::instance_spot_activation_header_t &activation,
-          const authority_snapshot_t &, std::function<task_t<void> (bool)> &preparation_terminal) {
+          const authority_snapshot_t &, std::function<task_t<void> (bool)> &preparation_terminal)
+          -> zlink::framework::task_t<bool> {
             if (store->activation_recovery_write_observer)
                 preparation_terminal = [&recovery_barrier_finishes] (bool) {
                     ++recovery_barrier_finishes;
@@ -8009,7 +8031,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                 };
             ++instance_prepare_count;
             assert (!activation.target.spot_id.empty ());
-            return true;
+            co_return true;
         },
         [&instance_activation_count, &store, &fail_recovery_dispatch_once,
          &close_during_instance_turn, &recovery_accepted_finishes, &injected_activation_failure,

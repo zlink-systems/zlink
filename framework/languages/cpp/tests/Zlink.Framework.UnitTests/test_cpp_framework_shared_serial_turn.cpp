@@ -254,9 +254,9 @@ void verify_pending_creation_terminal_precedes_worker_stop ()
         std::_Exit (2);
     auto barrier = reserved.value ();
     barrier->run ([] { return task_t<void> (result_t<void>::success ()); }).result ().value ();
-    std::promise<void> creation;
+    auto creation = std::make_shared<task_completion_source_t<void>> ();
     detail::spot_node_builder_state_t::pending_spot_creation_t pending;
-    pending.future = creation.get_future ().share ();
+    pending.completion = creation;
     pending.context = context;
     node->pending_spot_creations_by_id.emplace ("creation", std::move (pending));
     auto stopped =
@@ -266,7 +266,7 @@ void verify_pending_creation_terminal_precedes_worker_stop ()
     while (!terminal.await_ready () && std::chrono::steady_clock::now () < deadline)
         std::this_thread::yield ();
     const bool kept_worker = terminal.await_ready () && worker->try_submit_internal ([] {});
-    creation.set_value ();
+    creation->complete (result_t<void>::success ());
     const bool drained = stopped.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool stopped_worker = drained && !worker->try_submit_internal ([] {});
     std::cerr << "creation_terminal_order kept_worker=" << kept_worker << " drained=" << drained
@@ -788,6 +788,16 @@ TEST (SpotPreparationDeathTest, CancelledCreationReleasesBlockingWorkerWhileDisc
           });
           const bool started =
             entered.get_future ().wait_for (std::chrono::seconds (5)) == std::future_status::ready;
+          std::promise<void> initializer_sentinel;
+          detail::submit_blocking_call ([&] { initializer_sentinel.set_value (); });
+          const bool initializer_worker_free =
+            initializer_sentinel.get_future ().wait_for (std::chrono::seconds (2))
+            == std::future_status::ready;
+          const bool initializer_pending = !creation.await_ready ();
+          std::cerr << "initializer_worker_free=" << initializer_worker_free
+                    << " initializer_pending=" << initializer_pending << std::endl;
+          if (!started || !initializer_worker_free || !initializer_pending)
+              std::_Exit (1);
           initializer.complete (result_t<spot_create_response_t>::failure (
             framework_error_kind_t::shutting_down, "creation cancelled"));
           const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);

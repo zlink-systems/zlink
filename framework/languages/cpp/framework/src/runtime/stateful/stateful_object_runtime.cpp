@@ -2037,7 +2037,7 @@ stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
                     || target.kind == object_kind_t::instance_spot)
                    && plan.restore) {
             try {
-                restored = plan.restore (frozen, target, cancellation);
+                restored = co_await plan.restore (frozen, target, cancellation);
             }
             catch (...) {
                 restored = false;
@@ -2499,7 +2499,7 @@ stateful_object_runtime_t::restore_relocation_aggregate (std::vector<frozen_obje
                     && targets[index].kind != object_kind_t::instance_spot)
                     continue;
                 try {
-                    restored = restore (frozen[index], targets[index], cancellation);
+                    restored = co_await restore (frozen[index], targets[index], cancellation);
                 }
                 catch (...) {
                     restored = false;

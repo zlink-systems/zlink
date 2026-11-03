@@ -135,7 +135,7 @@ class spot_node_builder_state_t
     struct pending_spot_creation_t
     {
         std::string spot_name;
-        std::shared_future<void> future;
+        std::shared_ptr<task_completion_source_t<void>> completion;
         std::uint64_t reservation = 0;
         // Queue resource only; the existing preparation operation owns application admission.
         std::weak_ptr<spot_context_state_t> context;
@@ -1868,6 +1868,14 @@ class spot_node_runtime_t
                         std::string mesh_name = {},
                         std::uint64_t authority_owner_generation = 1,
                         std::function<task_t<void> (bool)> *preparation_terminal = nullptr);
+    task_t<std::shared_ptr<local_spot_create_result_t>>
+    get_or_create_spot_async (std::string spot_name,
+                              spot_id_t spot_id,
+                              zlink::message_t request,
+                              std::uint64_t object_generation = 1,
+                              std::string mesh_name = {},
+                              std::uint64_t authority_owner_generation = 1,
+                              std::function<task_t<void> (bool)> *preparation_terminal = nullptr);
     task_t<zlink::message_t> dispatch_instance_activation (
       const spot_id_t &spot_id,
       std::string packet_name,
@@ -2259,9 +2267,9 @@ class spot_node_runtime_t
     task_t<std::shared_ptr<runtime::serial_application_target_t>>
     prepare_spot_dispatch (std::string spot_key,
                            std::optional<runtime::protocol::spot_route_fence_t> route) const;
-    bool restore_spot_relocation_state (const runtime::stateful::frozen_object_state_t &frozen,
-                                        const runtime::stateful::object_ref_t &target,
-                                        std::stop_token cancellation = {});
+    task_t<bool> restore_spot_relocation_state (runtime::stateful::frozen_object_state_t frozen,
+                                                runtime::stateful::object_ref_t target,
+                                                std::stop_token cancellation = {});
     // Completes when the application lifecycle steps of the materialization do.
     task_t<bool>
     materialize_relocation_state (const runtime::stateful::frozen_object_state_t &frozen,
@@ -2544,9 +2552,8 @@ class spot_node_runtime_t
         std::chrono::milliseconds message_follow_duration{0};
     };
 
-    actor_join_state_snapshot_t actor_join_state_snapshot (const actor_ref_t &actor_ref,
-                                                           spot_id_t spot_id,
-                                                           const zlink::message_t &request);
+    task_t<std::shared_ptr<actor_join_state_snapshot_t>> actor_join_state_snapshot (
+      const actor_ref_t &actor_ref, spot_id_t spot_id, const zlink::message_t &request);
     result_t<spot_actor_admission_callbacks_t> actor_admission (spot_context_t &context,
                                                                 std::type_index actor_type,
                                                                 spot_id_t spot_id,

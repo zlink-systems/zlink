@@ -918,7 +918,9 @@ TEST (FrameworkRelocationSealContract, restored_actor_owns_active_capacity_until
         -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           co_return stateful::frozen_object_state_t{};
       },
-      [] (const auto &, const auto &, std::stop_token) { return true; });
+      [] (const auto &, const auto &, std::stop_token) -> zlink::framework::task_t<bool> {
+          co_return true;
+      });
     const stateful::object_ref_t source{
       stateful::object_kind_t::actor, "restored", 1, 1, "mesh", "source"};
     auto target = source;
@@ -955,7 +957,9 @@ TEST (FrameworkRelocationSealContract, restored_aggregate_releases_each_active_o
         -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           co_return stateful::frozen_object_state_t{};
       },
-      [] (const auto &, const auto &, std::stop_token) { return true; });
+      [] (const auto &, const auto &, std::stop_token) -> zlink::framework::task_t<bool> {
+          co_return true;
+      });
     const std::vector<stateful::frozen_object_state_t> frozen{
       {{stateful::object_kind_t::user_spot, "room", 1, 1, "mesh", "source"}, "spot"},
       {{stateful::object_kind_t::actor, "member", 1, 1, "mesh", "source"}, "actor"}};
@@ -3013,7 +3017,9 @@ TEST (FrameworkRelocationSealContract, aggregate_participant_failure_aborts_ever
               throw std::runtime_error ("second participant capture failed");
           co_return stateful::frozen_object_state_t{.owner = owner, .stable_type = stable_type};
       },
-      [] (const auto &, const auto &, std::stop_token) { return true; });
+      [] (const auto &, const auto &, std::stop_token) -> zlink::framework::task_t<bool> {
+          co_return true;
+      });
     const auto sealed = objects.try_seal_relocation_aggregate (participants).result ().value ();
     EXPECT_EQ (sealed.error, stateful::stateful_error_t::conflict);
     EXPECT_EQ (captures, 2);

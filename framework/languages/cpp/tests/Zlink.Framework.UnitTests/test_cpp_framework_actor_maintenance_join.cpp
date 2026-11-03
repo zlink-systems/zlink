@@ -257,7 +257,8 @@ struct public_host_runtime_test_access_t
               zlink::framework::runtime::stateful::frozen_object_state_t> {
               co_return stateful::frozen_object_state_t{owner, type};
           },
-          [materialized, source] (const auto &frozen, const auto &, std::stop_token) {
+          [materialized, source] (const auto &frozen, const auto &,
+                                  std::stop_token) -> zlink::framework::task_t<bool> {
               ++*materialized;
               EXPECT_EQ (frozen.pending_application.size (), 1u);
               if (!frozen.pending_application.empty ()) {
@@ -266,7 +267,7 @@ struct public_host_runtime_test_access_t
                   if (turn.frozen_record)
                       EXPECT_EQ (turn.frozen_record->source, source);
               }
-              return true;
+              co_return true;
           });
         auto pending = std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
           public_host_runtime_t::pending_relocation_assembly_t{

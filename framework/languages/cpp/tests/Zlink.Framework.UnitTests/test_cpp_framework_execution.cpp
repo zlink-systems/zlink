@@ -7802,8 +7802,10 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
     target.configure_spot_route_fence_resolver (resolve_spot_route, 0ms);
     source.configure_user_spot_operations (
       locations,
-      [] (const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &) {
-          return runtime::host::user_spot_materialize_result_t{true, std::nullopt};
+      [] (const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &)
+        -> zlink::framework::task_t<
+          zlink::framework::runtime::host::user_spot_materialize_result_t> {
+          co_return runtime::host::user_spot_materialize_result_t{true, std::nullopt};
       });
     auto source_settlement = std::make_shared<source_settlement_probe_t> (*authority);
     source_settlement->keep_unknown = unknown_at_teardown;
@@ -9138,7 +9140,7 @@ bool verify_aggregate_capture_waits_for_participant_terminal ()
           }
           co_return state;
       },
-      [] (const auto &, const auto &, auto) { return true; });
+      [] (const auto &, const auto &, auto) -> zlink::framework::task_t<bool> { co_return true; });
     stateful::stateful_error_t error = stateful::stateful_error_t::conflict;
     std::atomic_bool membership_ran{false};
     detail::spot_node_runtime_t (node).dispatch_wire_actor_join_admission (
@@ -9239,7 +9241,7 @@ bool verify_source_suffix_native_order_and_rollback ()
           state.pending_application.back ().accepted_owner = original;
           co_return state;
       },
-      [] (const auto &, const auto &, auto) { return true; });
+      [] (const auto &, const auto &, auto) -> zlink::framework::task_t<bool> { co_return true; });
     const auto enqueued = objects.enqueue (actor, turn_domain_t::application, {3, {3, 3}});
     if (enqueued != stateful_error_t::none) {
         std::cout << "suffix-native enqueue_error=" << int (enqueued) << '\n';
@@ -9287,7 +9289,7 @@ bool verify_source_suffix_native_order_and_rollback ()
           state.pending_application.back ().accepted_owner = original;
           co_return state;
       },
-      [] (const auto &, const auto &, auto) { return true; });
+      [] (const auto &, const auto &, auto) -> zlink::framework::task_t<bool> { co_return true; });
     const auto failed = objects.try_seal_relocation_aggregate ({actor}).result ().value ();
     std::cout << "suffix-native failed_capture error=" << int (failed.error)
               << " error_expected=" << (failed.error == stateful_error_t::conflict)
@@ -11215,7 +11217,7 @@ bool verify_async_capture_releases_state_owner ()
           entered = true;
           co_return co_await capture.task ();
       },
-      [] (const auto &, const auto &, auto) { return true; });
+      [] (const auto &, const auto &, auto) -> zlink::framework::task_t<bool> { co_return true; });
     auto sealing = objects.try_seal_relocation_aggregate ({object});
     const bool suspended = entered && !sealing.await_ready ();
     const bool owner_available = objects.pending (object, turn_domain_t::application) == 0;
