@@ -6,6 +6,7 @@
 //  test_cpp_framework_execution.cpp.
 
 #include "../support/telemetry_observation.hpp"
+#include "../support/exception_payload.hpp"
 
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -420,11 +421,19 @@ TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWith
     namespace host = framework::runtime::host;
     namespace stateful = framework::runtime::stateful;
     auto failures = std::make_shared<framework::runtime::runtime_failure_collector_t> ();
-    const auto injected = std::make_exception_ptr (framework::framework_exception_t (
-      framework::framework_error_kind_t::unavailable, "retained owner notification failed"));
+    const auto marker = std::make_shared<const int> (369302);
+    using failure_t = framework::test::marked_exception_t<framework::framework_exception_t>;
+    const auto injected =
+      std::make_exception_ptr (failure_t (marker, framework::framework_error_kind_t::unavailable,
+                                          "retained owner notification failed"));
     unsigned reported = 0;
     failures->bind_runtime_reporter ([&] (auto error) {
-        EXPECT_EQ (error, injected);
+        EXPECT_TRUE (
+          framework::test::exception_payload_matches<failure_t> (error, [&] (const auto &cause) {
+              return cause.marker == marker
+                     && cause.kind () == framework::framework_error_kind_t::unavailable
+                     && std::string (cause.what ()) == "retained owner notification failed";
+          }));
         ++reported;
     });
     auto native = std::make_shared<host::public_host_runtime_t> (host::host_options_t{

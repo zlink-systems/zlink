@@ -48,14 +48,20 @@ namespace
 class empty_callback_failure_t final : public std::exception
 {
   public:
+    explicit empty_callback_failure_t (std::shared_ptr<const int> marker) :
+        marker (std::move (marker))
+    {
+    }
     const char *what () const noexcept override { return ""; }
+    std::shared_ptr<const int> marker;
 };
 
 TEST (LocalCallbackCause, UserSpotOnCreatePreservesEmptyApplicationException)
 {
     namespace fw = zlink::framework;
     using namespace fw::detail;
-    const auto original = std::make_exception_ptr (empty_callback_failure_t{});
+    const auto marker = std::make_shared<const int> (369305);
+    const auto original = std::make_exception_ptr (empty_callback_failure_t (marker));
     auto node = fw::test::runtime_failure_fixture<spot_node_builder_state_t> ("callback-cause");
     fw::serializer_registry_t serializers;
     node->channel_runtime = fw::test::runtime_failure_fixture<channel_runtime_state_t> ();
@@ -78,7 +84,7 @@ TEST (LocalCallbackCause, UserSpotOnCreatePreservesEmptyApplicationException)
         FAIL () << "onCreate must fail";
     }
     catch (const empty_callback_failure_t &error) {
-        EXPECT_EQ (original, std::current_exception ());
+        EXPECT_EQ (marker, error.marker);
         EXPECT_STREQ ("", error.what ());
     }
 }
@@ -3001,7 +3007,9 @@ TEST (ZLinkFrameworkSpotCloseConformance, TimerCloseSucceedsAfterReadyPublicatio
         {"created", true}}}});
 }
 
-const auto public_callback_original = std::make_exception_ptr (empty_callback_failure_t{});
+const auto public_callback_marker = std::make_shared<const int> (369306);
+const auto public_callback_original =
+  std::make_exception_ptr (empty_callback_failure_t (public_callback_marker));
 
 class callback_cause_spot_t final : public zf::spot_t<member_actor_t>
 {
@@ -3100,7 +3108,7 @@ class callback_cause_client_t final : public zf::hosted_service_t
             ADD_FAILURE () << "callback must fail";
         }
         catch (const empty_callback_failure_t &error) {
-            EXPECT_EQ (public_callback_original, std::current_exception ());
+            EXPECT_EQ (public_callback_marker, error.marker);
             EXPECT_STREQ ("", error.what ());
         }
         catch (const std::exception &error) {
