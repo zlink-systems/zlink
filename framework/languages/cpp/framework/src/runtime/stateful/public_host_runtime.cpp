@@ -2158,35 +2158,41 @@ public_host_runtime_t::admit_session_relocation_seal (
 
     flush_pending_session_relocation_seals ();
     const auto relocation_key = session_relocation_key (seal);
+    struct existing_session_seal_result_t
+    {
+        bool accepted;
+        std::optional<protocol::session_relocation_sealed_t> immediate;
+        bool late_consumed;
+    };
     const auto existing_result =
       _relocation_session_terminal_lane
-        .run ([&] () -> std::optional<
-                       std::pair<bool, std::optional<protocol::session_relocation_sealed_t>>> {
+        .run ([&] () -> std::optional<existing_session_seal_result_t> {
             const auto cached = _session_seal_terminals.find (relocation_key);
             if (cached != _session_seal_terminals.end ()) {
                 if (cached->second.seal != seal)
-                    return {{false, std::nullopt}};
-                if (cached->second.consumed) {
-                    const auto &logger =
-                      detail::dispatch_options_access_t::logger (_options.mesh.dispatch);
-                    if (logger)
-                        detail::diagnostic_event_sink_t::log_if_configured (
-                          logger, log_level_t::warn, "late_session_relocation_seal", {});
-                    return {{true, std::nullopt}};
-                }
+                    return existing_session_seal_result_t{false, std::nullopt, false};
+                if (cached->second.consumed)
+                    return existing_session_seal_result_t{true, std::nullopt, true};
                 if (!response_routing_id.empty ())
                     cached->second.response_routing_id = std::move (response_routing_id);
                 if (cached->second.ready)
-                    return {{true, cached->second.sealed}};
+                    return existing_session_seal_result_t{true, cached->second.sealed, false};
                 if (local_completion)
                     cached->second.local_completions.push_back (std::move (local_completion));
-                return {{true, std::nullopt}};
+                return existing_session_seal_result_t{true, std::nullopt, false};
             }
             return std::nullopt;
         })
         .get ();
-    if (existing_result)
-        return *existing_result;
+    if (existing_result) {
+        if (existing_result->late_consumed) {
+            const auto &logger = detail::dispatch_options_access_t::logger (_options.mesh.dispatch);
+            if (logger)
+                detail::diagnostic_event_sink_t::log_if_configured (
+                  logger, log_level_t::warn, "late_session_relocation_seal", {});
+        }
+        return {existing_result->accepted, std::move (existing_result->immediate)};
+    }
 
     const auto session_id = stateful::stream_session_registry_t::connection_key (
       zlink::routing_id_t::from (seal.session_routing_id));

@@ -110,6 +110,14 @@ struct public_host_runtime_test_access_t
     {
         host._options.mesh.dispatch = std::move (options);
     }
+    static bool post_terminal_turn (public_host_runtime_t &host, std::function<void ()> work)
+    {
+        return host._relocation_session_terminal_lane.try_post (std::move (work));
+    }
+    static bool on_terminal_lane (public_host_runtime_t &host)
+    {
+        return host._relocation_session_terminal_lane.is_on_lane ();
+    }
     static void enqueue_lifetime_probe (public_host_runtime_t &host)
     {
         host._local_dispatch_completion_lane
@@ -223,6 +231,39 @@ using namespace std::chrono_literals;
 
 namespace
 {
+
+struct blocking_log_sink_state_t
+{
+    std::promise<void> copy_entered;
+    std::promise<void> release_copy;
+    std::shared_future<void> released = release_copy.get_future ().share ();
+    std::atomic_bool block_next_copy{false};
+    std::function<bool ()> on_terminal_lane;
+    std::atomic_bool diagnostic_logged_inside_terminal{false};
+};
+
+struct blocking_log_sink_t
+{
+    explicit blocking_log_sink_t (std::shared_ptr<blocking_log_sink_state_t> state_) :
+        state (std::move (state_))
+    {
+    }
+    blocking_log_sink_t (const blocking_log_sink_t &other) : state (other.state)
+    {
+        if (state->block_next_copy.exchange (false, std::memory_order_acq_rel)) {
+            state->copy_entered.set_value ();
+            state->released.wait ();
+        }
+    }
+    void operator() (const zlink::framework::log_record_t &record) const
+    {
+        if (record.message == "late_session_relocation_seal" && state->on_terminal_lane
+            && state->on_terminal_lane ())
+            state->diagnostic_logged_inside_terminal.store (true, std::memory_order_release);
+    }
+
+    std::shared_ptr<blocking_log_sink_state_t> state;
+};
 
 bool ready_peer (const mesh::service_topology_registry_t &topology,
                  const std::vector<std::uint8_t> &routing_id)
@@ -5059,6 +5100,18 @@ void verify_absent_session_seal ()
     local->configure_session_route_owner ([] {
         return std::make_optional (zlink::framework::location_owner_token_t{"absent-owner", 19});
     });
+    zlink::framework::logging_builder_t logging;
+    logging.set_min_level (zlink::framework::log_level_t::warn);
+    auto log_state = std::make_shared<blocking_log_sink_state_t> ();
+    auto *local_host = local.get ();
+    log_state->on_terminal_lane = [local_host] {
+        return host::public_host_runtime_test_access_t::on_terminal_lane (*local_host);
+    };
+    logging.use_callback_sink (blocking_log_sink_t{log_state});
+    auto logger = logging.create_logger ("session-native");
+    auto dispatch = zlink::framework::dispatch_options_t{};
+    zlink::framework::detail::dispatch_options_access_t::set_logger (dispatch, logger);
+    host::public_host_runtime_test_access_t::set_dispatch (*local, std::move (dispatch));
     int late_routes = 0;
     local->configure_late_session_route_update ([&] (const auto &) { ++late_routes; });
     local->start ();
@@ -5171,9 +5224,38 @@ void verify_absent_session_seal ()
     assert (local->route_session_remote (status.routing_id (), committed).result ().value ());
     local->dispatch_ready ([] (const auto &, const auto &, auto, auto) {}).result ().value ();
     assert (!local->sessions ().remote_route_sealed (object.key));
+    log_state->block_next_copy.store (true, std::memory_order_release);
+    std::thread occupying_logger_lane ([&] { logger.warn ("occupy_session_log_lane"); });
+    assert (log_state->copy_entered.get_future ().wait_for (5s) == std::future_status::ready);
+    std::promise<void> terminal_turn_entered;
+    auto entered = terminal_turn_entered.get_future ();
+    std::promise<void> release_terminal_turn;
+    const auto terminal_released = release_terminal_turn.get_future ().share ();
+    assert (host::public_host_runtime_test_access_t::post_terminal_turn (*local, [&] {
+        terminal_turn_entered.set_value ();
+        terminal_released.wait ();
+    }));
+    assert (entered.wait_for (5s) == std::future_status::ready);
+    std::jthread unblock_workers ([&] {
+        std::this_thread::sleep_for (25ms);
+        release_terminal_turn.set_value ();
+        std::this_thread::sleep_for (100ms);
+        log_state->release_copy.set_value ();
+    });
+    const auto caller_thread = std::this_thread::get_id ();
     const auto closed_record =
       host::public_host_runtime_test_access_t::admit_seal (*local, next_seal);
+    unblock_workers.join ();
+    occupying_logger_lane.join ();
     assert (closed_record.first && !closed_record.second);
+    const auto &records = logging.captured_records ();
+    assert (records.size () == 2);
+    assert (records.back ().level == zlink::framework::log_level_t::warn);
+    assert (records.back ().category == "session-native");
+    assert (records.back ().message == "late_session_relocation_seal");
+    assert (records.back ().fields.empty ());
+    assert (records.back ().thread_id == caller_thread);
+    assert (!log_state->diagnostic_logged_inside_terminal.load (std::memory_order_acquire));
     const auto current = local->sessions ().current_binding (object.key);
     assert (current
             && local->sessions ().unbind (*current).first == stateful::stateful_error_t::none);
