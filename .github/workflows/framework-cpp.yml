@@ -227,6 +227,8 @@ jobs:
         run: |
           set -euo pipefail
           cmake --preset linux-ninja-release \
+            -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
+            -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \

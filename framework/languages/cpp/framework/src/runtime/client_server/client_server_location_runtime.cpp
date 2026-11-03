@@ -1415,7 +1415,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
         /* Ingress validates the envelope and captures flow fields.
          * The worker consumes its header and the native payload. */
         auto &request_envelope = record.envelope_header;
-        const auto &message = record.parts[1];
+        auto message = std::move (record.parts[1]);
         detail::inbound_message_context_t inbound{
           .message = {.received_at = record.received_at.value ()}};
         inbound.before_application_handler = record.before_application_handler;
@@ -1467,7 +1467,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
         if (record.reply_token) {
             auto reply = co_await _channel_runtime.dispatch_request_on_handler_executor (
               record.owner, {}, request_envelope.message_name, scope.provider (), *_serializers,
-              *_handlers, message, inbound);
+              *_handlers, std::move (message), inbound);
             if (reply) {
                 pending_reply.emplace (std::move (reply.value ()));
             } else {
@@ -1484,7 +1484,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
             try {
                 co_await _channel_runtime.dispatch_send_on_handler_executor (
                   record.owner, {}, request_envelope.message_name, scope.provider (), *_serializers,
-                  *_handlers, message, inbound);
+                  *_handlers, std::move (message), inbound);
                 if (flow.enabled_for (message_flow_outcome_t::completed)) {
                     flow.trace (message_flow_outcome_t::completed,
                                 request_envelope.flow_id

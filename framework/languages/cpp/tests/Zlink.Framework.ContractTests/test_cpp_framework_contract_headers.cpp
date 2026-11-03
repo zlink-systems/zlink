@@ -19,6 +19,7 @@
 #include <zlink/framework/contracts/configuration/mesh_node.hpp>
 #include <zlink/framework/contracts/configuration/route_mesh_runtime_options.hpp>
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/detail/test_creation_probe.hpp>
 #include <zlink/framework/contracts/dispatch/request_task.hpp>
 #include <zlink/framework/detail/runtime/dispatch/application_job_context.hpp>
 #include <zlink/framework/detail/deadline_scheduler.hpp>

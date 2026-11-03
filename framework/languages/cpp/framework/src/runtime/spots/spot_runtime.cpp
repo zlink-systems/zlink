@@ -5326,7 +5326,8 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory_erased (
   detail::actor_join_completion_callback_t on_join_completed,
   detail::factory_relocation_configuration_t relocation,
   std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture,
-  std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore)
+  std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore,
+  bool duplicate_bind_is_default)
 {
     if ((!create_instance && !create_context_instance) || !configure_instance || !serialize_instance
         || !deserialize_instance || !as_actor) {
@@ -5347,14 +5348,14 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory_erased (
              create_context_instance = std::move (create_context_instance),
              as_actor = std::move (as_actor), on_join_completed = std::move (on_join_completed),
              relocation = std::move (relocation), capture = std::move (capture),
-             restore = std::move (restore)] () mutable {
+             restore = std::move (restore), duplicate_bind_is_default] () mutable {
           const auto [_, inserted] = _state->actor_factories.emplace (
             actor_type, detail::spot_node_builder_state_t::actor_factory_registration_t{
                           actor_instance_type, relocation, std::move (create_instance),
                           std::move (configure_instance), std::move (serialize_instance),
                           std::move (deserialize_instance), std::move (create_context_instance),
                           std::move (as_actor), std::move (on_join_completed), std::move (capture),
-                          std::move (restore)});
+                          std::move (restore), duplicate_bind_is_default});
           if (!inserted) {
               throw framework_exception_t (framework_error_kind_t::already_exists,
                                            "duplicate actor factory registration");
@@ -11189,10 +11190,10 @@ result_t<void> spot_node_runtime_t::stage_remote_actor_commit_backlog (
     return result_t<void>::success ();
 }
 
-result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
-  const std::string &transfer_id,
-  const actor_ref_t &actor_ref,
-  const spot_id_t &target_spot_id,
+task_t<result_t<void>> spot_node_runtime_t::commit_remote_actor_authority (
+  std::string transfer_id,
+  actor_ref_t actor_ref,
+  spot_id_t target_spot_id,
   std::uint64_t target_spot_generation,
   std::uint64_t source_authority_owner_generation,
   std::string source_mesh_name,
@@ -11206,8 +11207,9 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
     const auto pending =
       _state->actor_transfer_coordinator->pending_commit (transfer_id, actor_ref, target_spot_id);
     if (!pending) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "remote Actor authority commit has no pending admission");
+        co_return result_t<void>::failure (
+          framework_error_kind_t::protocol_error,
+          "remote Actor authority commit has no pending admission");
     }
     struct authority_commit_plan_t
     {
@@ -11235,27 +11237,28 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
                         })
                         .get ();
     if (!plan.relocation_authority) {
-        return result_t<void>::failure (framework_error_kind_t::not_configured,
-                                        "remote Actor authority commit requires a Location Store");
+        co_return result_t<void>::failure (
+          framework_error_kind_t::not_configured,
+          "remote Actor authority commit requires a Location Store");
     }
     if (expected_source_store_version.empty () || source_authority_owner_generation == 0
         || source_authority_owner_generation == std::numeric_limits<std::uint64_t>::max ()
         || target_mesh_name.empty () || target_node_lifecycle_generation == 0
         || target_owner.owner_id.empty () || target_owner.lease_generation <= 0) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "remote Actor authority commit fence is invalid");
+        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                           "remote Actor authority commit fence is invalid");
     }
 
     const auto &native = plan.native;
     const auto &target_node_id = plan.target_node_id;
     if (!native || native->status ().routing_id ().to_string () != target_node_id
         || native->status ().lifecycle_generation () != target_node_lifecycle_generation) {
-        return result_t<void>::failure (framework_error_kind_t::unavailable,
-                                        "remote Actor authority target lifecycle is stale");
+        co_return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                           "remote Actor authority target lifecycle is stale");
     }
     if (target_spot_generation == 0 || source_mesh_name.empty () || target_mesh_name.empty ()) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "remote Actor authority route identity is incomplete");
+        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                           "remote Actor authority route identity is incomplete");
     }
     const runtime::stateful::object_ref_t source{runtime::stateful::object_kind_t::actor,
                                                  std::string (actor_ref.actor_id ().value ()),
@@ -11314,16 +11317,16 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
         }
     }
     catch (const std::exception &error) {
-        return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
+        co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
     }
     const auto &current = published.current;
     if (!current) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
     if (current->source != source) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
@@ -11333,23 +11336,23 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
       && current->target.mesh_name == target.mesh_name && current->target.node_id == target.node_id
       && current->target.authority_owner_generation > current->source.authority_owner_generation;
     if (!target_identity_matches) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
     if (current->target_owner.owner_id != target_owner.owner_id
         || current->target_owner.lease_generation != target_owner.lease_generation) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
     if (!current->relocation_reference.empty () || current->checksum_crc32c != 0) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
     if (current->inventory_digest != inventory_digest) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
@@ -11367,7 +11370,7 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
       current->target.authority_owner_generation,
       current->target.mesh_name,
       current->target.node_id};
-    (void) native->advance_local_actor_authority (committed_target);
+    (void) co_await native->advance_local_actor_authority (committed_target);
     const auto local_node_routing_id = native->status ().routing_id ().to_bytes ();
     _state->lane
       .run ([&] {
@@ -11405,8 +11408,8 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
             const actor_location_t &lost) { deactivate_actor_location (weak_state, lost); },
           true);
         if (adopted.status != location_write_status_t::stored) {
-            return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                            "committed remote Actor authority adoption failed");
+            co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                               "committed remote Actor authority adoption failed");
         }
     }
     if (committed_previous_authority_owner_generation != nullptr)
@@ -11417,7 +11420,7 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
         emit_actor_transfer_marker ("location_committed", target_actor, transfer_id,
                                     target_spot_id);
     }
-    return result_t<void>::success ();
+    co_return result_t<void>::success ();
 }
 
 std::optional<actor_join_reply_t>
@@ -15988,8 +15991,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                   actor, record.source_node_rid, *record.source_session_rid,
                   record.source_binding_generation, record.source_session_sequence, &route));
             }
-            const bool targets_current_bound_route =
-              session_relay_admission && *session_relay_admission;
+            // Binding admission owns its terminal error. Its result on the exact
+            // Actor route must reach the session terminal path below instead of
+            // being replaced with a generic route rejection.
+            const bool targets_current_bound_route = session_relay_admission.has_value ();
             if (!has_bound_session_source) {
                 targets_current_authority =
                   authority_fence && authority_fence->actor_id == route.actor_id
@@ -16083,11 +16088,41 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                   });
             }
             if (!*session_relay_admission) {
-                reply_error (
+                const auto error =
                   framework_exception_t (session_relay_admission->error_kind (),
                                          session_relay_admission->error ()
                                            ? session_relay_admission->error ()->what ()
-                                           : "Bound Session relay source fence was rejected"));
+                                           : "Bound Session relay source fence was rejected");
+                if (record.kind == service::record_kind_t::actor_request) {
+                    detail::dispatch_error_reporter_t (_state->dispatch).report_lazy ([&] {
+                        return message_dispatch_error_event_t{
+                          .surface = dispatch_error_surface_t::stream_session,
+                          .message_kind = dispatch_message_kind_t::request,
+                          .reason = dispatch_error_reason_t::stale_target,
+                          .action = dispatch_error_action_t::reply_error,
+                          .packet_name = header.message_name,
+                          .actor_id = std::string (actor.actor_id ().value ()),
+                          .source_rid = record.source_node_rid.to_hex (),
+                          .correlation_id = header.correlation_id,
+                          .exception = std::make_exception_ptr (error)};
+                    });
+                } else {
+                    detail::message_flow_tracer_t (_state->dispatch)
+                      .trace (message_flow_outcome_t::dropped, [&] {
+                          auto event = message_flow_event_t{
+                            message_flow_outcome_t::dropped,
+                            dispatch_error_surface_t::stream_session, dispatch_message_kind_t::send,
+                            header.message_name};
+                          event.actor_id = std::string (actor.actor_id ().value ());
+                          event.source_rid = record.source_node_rid.to_hex ();
+                          event.stream_session_id = record.source_session_rid->to_hex ();
+                          event.correlation_id = header.correlation_id;
+                          event.reason = message_flow_reason_t::stale_target;
+                          event.exception = std::make_exception_ptr (error);
+                          return event;
+                      });
+                }
+                reply_error (error);
                 return true;
             }
         } else {

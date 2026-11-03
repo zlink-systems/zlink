@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include "allocation_counter.hpp"
+#include "creation_counter.hpp"
 #include <zlink/framework.hpp>
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/client_server/raw_client_server_owner.hpp"
@@ -350,9 +352,11 @@ struct receive_handler_t
 
 TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount)
 {
+    fw::tests::verify_creation_counter_controls ();
     namespace cs = fw::runtime::client_server;
     auto app = fw::app_t::create ();
     app.add_zlink_framework ([] (fw::zlink_framework_options_t &options) {
+        options.add_location_store (std::make_shared<fw::runtime::in_memory_location_store_t> ());
         options.handlers ().group ("receive").add_send<receive_handler_t> ();
         options.add_client_server_channel ("receive").server ().listen ().add_handler_group (
           "receive");
@@ -401,20 +405,49 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
     // Enqueue, socket ingress and provider setup are excluded; the drain runs on this thread.
     ASSERT_TRUE (enqueue ());
     ASSERT_TRUE (dispatch ());
-    for (unsigned sample = 0; sample != 3; ++sample) {
-        ASSERT_TRUE (enqueue ());
-        bool succeeded = false;
-        const auto actual = fw::tests::measure_allocations ([&] { succeeded = dispatch (); });
-        ASSERT_TRUE (succeeded);
-        // The dto_traits path loses one shared ready result in add_void_member_handler
-        // (handler_registry.hpp); the former allocation budget was 24 (#2751).
-        EXPECT_EQ (actual.count, 23u);
-        EXPECT_EQ (receive_handler_t::calls, sample + 2);
-        EXPECT_EQ (
-          server->mailbox ().pending_messages (mesh::service_mailbox_domain_t::application), 0u);
-        std::printf ("automatic ClientServer send record: sample=%u allocations=%zu bytes=%zu "
-                     "largest=%zu\n",
-                     sample, actual.count, actual.bytes, actual.largest);
+    fw::tests::creation_counts_t single{};
+    unsigned expected_calls = 1;
+    for (const unsigned records : {1u, 4u, 7u}) {
+        fw::tests::creation_counts_t created{};
+        for (unsigned record = 0; record != records; ++record) {
+            ASSERT_TRUE (enqueue ());
+            bool succeeded = false;
+#if defined(ZLINK_TEST_COUNT_NATIVE_COPIES)
+            fw::tests::native_call_scope_t native;
+#endif
+            const auto before = fw::tests::creation_counts ();
+            const auto actual = fw::tests::measure_allocations ([&] { succeeded = dispatch (); });
+            const auto delta = fw::tests::creation_counts () - before;
+            created.shared_states += delta.shared_states;
+            created.coroutine_states += delta.coroutine_states;
+            created.payload_copies += delta.payload_copies;
+            ASSERT_TRUE (succeeded);
+#if defined(ZLINK_TEST_COUNT_NATIVE_COPIES)
+            EXPECT_EQ (native[6], 0u);
+#endif
+#if defined(__GLIBCXX__)
+            // Spec-independent regression budget measured with libstdc++, not a spec property.
+            // dto_traits removed one ready state from the former budget of 24 (#2751).
+            EXPECT_EQ (actual.count, 23u);
+#endif
+            EXPECT_EQ (receive_handler_t::calls, ++expected_calls);
+            EXPECT_EQ (
+              server->mailbox ().pending_messages (mesh::service_mailbox_domain_t::application),
+              0u);
+        }
+        if (records == 1) {
+            single = created;
+            // dispatch_server_record -> dispatch_send_on_handler_executor ->
+            // invoke_on_handler_executor: three coroutine states, no other task state.
+            EXPECT_EQ (single.shared_states, 3u);
+            EXPECT_EQ (single.coroutine_states, 3u);
+        }
+        EXPECT_EQ (created.payload_copies, 0u);
+        std::printf ("receive creations: records=%u shared=%zu coroutine=%zu copies=%zu\n", records,
+                     created.shared_states, created.coroutine_states, created.payload_copies);
+        // A repeated record follows the same claim/handler/terminal/release path.
+        EXPECT_EQ (created.shared_states, single.shared_states + 3u * (records - 1));
+        EXPECT_EQ (created.coroutine_states, single.coroutine_states + 3u * (records - 1));
     }
     server->close ();
 }

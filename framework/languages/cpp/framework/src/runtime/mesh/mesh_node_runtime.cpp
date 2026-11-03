@@ -1977,6 +1977,20 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
                                             std::move (security_identity), automatic);
 }
 
+task_t<void> mesh_node_runtime_t::connect_peer_async (zlink::routing_id_t expected_routing_id,
+                                                      std::string endpoint,
+                                                      std::uint64_t expected_lifecycle_generation,
+                                                      std::string security_identity,
+                                                      bool automatic)
+{
+    if (!_node || endpoint.empty ())
+        co_return;
+    const auto node = _node;
+    co_await node->transport ().connect_peer_intent_async (
+      endpoint, expected_routing_id, expected_lifecycle_generation, std::move (security_identity),
+      automatic);
+}
+
 void mesh_node_runtime_t::connect_peer (const std::string &endpoint, std::string security_identity)
 {
     if (!_node || endpoint.empty ())
@@ -2005,6 +2019,27 @@ void mesh_node_runtime_t::forget_peer (const zlink::routing_id_t &expected_routi
     _node->forget_peer (endpoint, expected_routing_id);
 }
 
+task_t<void> mesh_node_runtime_t::expect_peer_async (zlink::routing_id_t expected_routing_id,
+                                                     std::string endpoint,
+                                                     std::uint64_t expected_lifecycle_generation,
+                                                     std::string security_identity)
+{
+    if (!_node || endpoint.empty ())
+        co_return;
+    const auto node = _node;
+    co_await node->expect_peer_async (endpoint, expected_routing_id, expected_lifecycle_generation,
+                                      std::move (security_identity));
+}
+
+task_t<void> mesh_node_runtime_t::forget_peer_async (zlink::routing_id_t expected_routing_id,
+                                                     std::string endpoint)
+{
+    if (!_node || endpoint.empty ())
+        co_return;
+    const auto node = _node;
+    co_await node->forget_peer_async (endpoint, expected_routing_id);
+}
+
 void mesh_node_runtime_t::disconnect_peer (const std::string &endpoint) noexcept
 {
     if (!_node || endpoint.empty ())
@@ -2028,20 +2063,48 @@ void mesh_node_runtime_t::disconnect_peer (const zlink::routing_id_t &expected_r
         const bool manual =
           automatic
           && _state->lane
-               .run ([&] {
-                   return std::any_of (_state->peer_connections.begin (),
-                                       _state->peer_connections.end (), [&] (const auto &manual) {
-                                           return manual.endpoint == endpoint
-                                                  || (manual.expected_routing_id
-                                                      && *manual.expected_routing_id
-                                                           == expected_routing_id);
-                                       });
-               })
+               .run (
+                 [&] { return retains_manual_peer_owned (*_state, expected_routing_id, endpoint); })
                .get ();
-        if (manual)
-            return;
-        node->transport ().disconnect_peer_intent (expected_routing_id, endpoint, automatic);
+        if (!manual)
+            node->transport ().disconnect_peer_intent (expected_routing_id, endpoint, automatic);
     });
+}
+
+bool mesh_node_runtime_t::retains_manual_peer_owned (const mesh_node_builder_state_t &state,
+                                                     const zlink::routing_id_t &expected_routing_id,
+                                                     const std::string &endpoint)
+{
+    return std::any_of (state.peer_connections.begin (), state.peer_connections.end (),
+                        [&] (const auto &configured) {
+                            return configured.endpoint == endpoint
+                                   || (configured.expected_routing_id
+                                       && *configured.expected_routing_id == expected_routing_id);
+                        });
+}
+
+task_t<void> mesh_node_runtime_t::disconnect_peer_async (zlink::routing_id_t expected_routing_id,
+                                                         std::string endpoint,
+                                                         bool automatic)
+{
+    if (!_node || endpoint.empty ())
+        co_return;
+    const auto node = _node;
+    try {
+        bool manual = false;
+        if (automatic) {
+            manual =
+              co_await _state->lane.run_task ([state = _state, endpoint, expected_routing_id] {
+                  return retains_manual_peer_owned (*state, expected_routing_id, endpoint);
+              });
+        }
+        if (!manual)
+            co_await node->transport ().disconnect_peer_intent_async (expected_routing_id, endpoint,
+                                                                      automatic);
+    }
+    catch (...) {
+        (void) _state->spot_state->runtime_failures ()->capture ([] { throw; });
+    }
 }
 
 task_t<host::spot_handle_t> mesh_node_runtime_t::get_or_create_spot_async (std::string spot_id)

@@ -264,6 +264,16 @@ the [Actor model](../03-spot-actor/04-actor-model.en.md)'s execution mode
 (`PerActor` or `SpotWide`) — Actors belonging to a `SpotWide` User Spot share
 that Spot's common gate.
 
+- For each binding, the Actor owner accepts a relayed session sequence only
+  when it is greater than the last sequence accepted for that binding. A
+  duplicate or lower sequence does not reach the Actor handler. A `Request`
+  ends with an `Error(InvalidOperation)` on its original request sequence and
+  is recorded in `zlink.dispatch_error` (`surface=stream`,
+  `message_kind=request`, `outcome=failed`, `reason=stale_target`,
+  `action=reply_error`). A `Send` is dropped and recorded in message-flow as
+  `surface=stream`, `message_kind=send`, `outcome=dropped`,
+  `reason=stale_target`.
+
 - **A session's execution authority and an Actor's execution authority are
   different authorities.** The context that runs a session callback doesn't
   run the Actor handler. Not separating them means processing a packet sent
@@ -1125,6 +1135,11 @@ here.
   exchanges command 38, command 24 (including the bound-session tail), and
   command 36 records, respectively, each over the raw ROUTER path between
   nodes.
+- Relaying a duplicate or lower session sequence on the same binding doesn't
+  reach the Actor handler. A `Request` ends with `Error(InvalidOperation)` on
+  the same request sequence and `zlink.dispatch_error`
+  (`reason=stale_target`); a `Send` is recorded in message-flow with
+  `outcome=dropped`, `reason=stale_target`. A greater sequence is accepted.
 - The reply the Actor handler returns completes exactly once with the
   original STREAM request correlation.
 - Even after a timeout/cancellation following request submission, the same

@@ -7,6 +7,10 @@
 #include <zlink/framework/detail/infrastructure_wait_context.hpp>
 #endif
 
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+#include <zlink/framework/detail/test_creation_probe.hpp>
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -563,8 +567,20 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     };
 
   public:
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+    task_shared_state_t ()
+    {
+        test_creation_probe::shared_states.fetch_add (1, std::memory_order_relaxed);
+    }
+#else
     task_shared_state_t () = default;
-    explicit task_shared_state_t (result_t<T> result) : _result (std::move (result)) {}
+#endif
+    explicit task_shared_state_t (result_t<T> result) : _result (std::move (result))
+    {
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        test_creation_probe::shared_states.fetch_add (1, std::memory_order_relaxed);
+#endif
+    }
 
     virtual ~task_shared_state_t () = default;
 
@@ -803,6 +819,12 @@ template <typename T> class application_task_shared_state_t final : public task_
 template <typename T> class coroutine_task_shared_state_t final : public task_shared_state_t<T>
 {
   public:
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+    coroutine_task_shared_state_t ()
+    {
+        test_creation_probe::coroutine_states.fetch_add (1, std::memory_order_relaxed);
+    }
+#endif
     task_wait_registration_t continuation_registration;
 };
 

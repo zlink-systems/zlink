@@ -1288,6 +1288,8 @@ int app_bound_session_sender_keeps_arguments_alive_after_route_lookup_suspends (
     const auto framework_node_rid = node_rid_t::from_string (node_id);
     const auto node_rid = zlink::routing_id_t::from (node_id);
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.add_route_mesh ("bound-session-lifetime-mesh")
           .set_object_role (object_role_t::none)
           .set_routing_id (node_rid)
@@ -2222,6 +2224,8 @@ int authority_only_route_update_keeps_physical_session_current ()
     return 0;
 }
 
+int bound_session_actor_dispatch_uses_current_binding_without_location_reread ();
+
 int bound_session_relay_admission_is_exact_and_monotonic ()
 {
     using namespace zlink::framework;
@@ -2334,7 +2338,7 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
         || sessions.complete_inbound (*fifth) != stateful::stateful_error_t::none
         || sessions.complete_inbound (*fourth) == stateful::stateful_error_t::none)
         return 21;
-    return 0;
+    return bound_session_actor_dispatch_uses_current_binding_without_location_reread ();
 }
 
 int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
@@ -2348,6 +2352,16 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
     serializer_registry_t serializers;
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("bound-session-target");
+    auto errors =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
+    auto flows = std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
+    node->dispatch.message_flow (message_flow_log_mode_t::normal);
+    dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      node->dispatch, [errors] (const auto &event) { errors->record (event); });
+    dispatch_options_access_t::set_observer_for_tests (node->dispatch, [flows] (const auto &event) {
+        if (event.outcome == message_flow_outcome_t::dropped)
+            flows->record (event);
+    });
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "bound-session-target");
     node->channel_runtime =
@@ -2437,18 +2451,23 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
                                      .actor = actor};
     spot_node_runtime_t spots (node);
 
-    const auto dispatch = [&] (protocol::actor_route_fence_t target, std::uint64_t sequence) {
-        host::receive_record_t record{.kind = host::record_kind_t::actor_send,
+    const auto dispatch = [&] (protocol::actor_route_fence_t target, std::uint64_t sequence,
+                               bool request = false, bool fenced = true) {
+        host::receive_record_t record{.kind = request ? host::record_kind_t::actor_request
+                                                      : host::record_kind_t::actor_send,
                                       .domain = host::ready_domain_t::application};
         record.source_node_rid = session_owner;
         record.source_session_rid = session_rid;
         record.source_binding_generation = 19;
         record.source_session_sequence = sequence;
-        record.actor_route = std::move (target);
+        if (fenced)
+            record.actor_route = std::move (target);
         auto encoded = zlink::framework::detail::encode_actor_packet (
-          messaging::envelope_header_t{.kind = messaging::message_kind_t::command,
+          messaging::envelope_header_t{.kind = request ? messaging::message_kind_t::request
+                                                       : messaging::message_kind_t::command,
                                        .channel_name = "actor",
-                                       .message_name = "MoveMsg"},
+                                       .message_name = "MoveMsg",
+                                       .correlation_id = "relay-sequence"},
           zlink::message_t::from (std::string ("move")));
         auto parts = std::move (encoded).take_items ();
         return spots.dispatch_mesh_record (
@@ -2492,8 +2511,54 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
         return 7;
     }
     node->worker_executor->drain ();
+    // Duplicate and lower sequences share the existing Actor owner admission.
+    // Neither kind may reach the handler; each rejection must be observable.
+    for (const auto fenced : {true, false}) {
+        for (const auto sequence : {3U, 2U}) {
+            (void) dispatch (exact_target, sequence, false, fenced);
+            (void) dispatch (exact_target, sequence, true, fenced);
+        }
+    }
+    test::acknowledge_delivery ();
+    const auto rejected_requests = errors->snapshot ();
+    const auto rejected_sends = flows->snapshot ();
+    node->worker_executor->drain ();
     node->worker_executor.reset ();
     zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    if (handler_calls.load () != 3 || rejected_requests.size () != 4
+        || rejected_sends.size () != 4) {
+        std::cerr << "relay rejection records: requests=" << rejected_requests.size ()
+                  << " sends=" << rejected_sends.size () << " handlers=" << handler_calls.load ()
+                  << '\n';
+        return 8;
+    }
+    for (const auto &event : rejected_requests) {
+        if (event.surface != dispatch_error_surface_t::stream_session
+            || event.message_kind != dispatch_message_kind_t::request
+            || event.reason != dispatch_error_reason_t::stale_target
+            || event.action != dispatch_error_action_t::reply_error
+            || event.packet_name != "MoveMsg" || event.actor_id != "bound-player"
+            || event.source_rid != session_owner.to_hex ()
+            || event.correlation_id != "relay-sequence" || !event.exception)
+            return 9;
+        try {
+            std::rethrow_exception (event.exception);
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () != framework_error_kind_t::invalid_operation)
+                return 10;
+        }
+    }
+    for (const auto &event : rejected_sends) {
+        if (event.surface != dispatch_error_surface_t::stream_session
+            || event.message_kind != dispatch_message_kind_t::send
+            || event.outcome != message_flow_outcome_t::dropped
+            || event.reason != message_flow_reason_t::stale_target || event.packet_name != "MoveMsg"
+            || event.actor_id != "bound-player" || event.source_rid != session_owner.to_hex ()
+            || event.stream_session_id != session_rid.to_hex ()
+            || event.correlation_id != "relay-sequence")
+            return 11;
+    }
     return 0;
 }
 
@@ -6196,6 +6261,24 @@ class callback_duplicate_bind_test_actor_t final : public duplicate_bind_test_ac
     callback_t _callback;
 };
 
+template <typename TActor>
+class duplicate_bind_test_factory_t final : public zlink::framework::actor_factory_t<TActor>
+{
+  public:
+    explicit duplicate_bind_test_factory_t (std::shared_ptr<TActor> instance) :
+        _instance (std::move (instance))
+    {
+    }
+
+    task_t<std::shared_ptr<TActor>> create (actor_context_t, std::stop_token) override
+    {
+        co_return _instance;
+    }
+
+  private:
+    std::shared_ptr<TActor> _instance;
+};
+
 task_t<std::optional<std::string>>
 wait_for_duplicate_bind_decision (task_t<std::optional<std::string>> decision,
                                   std::stop_token cancellation,
@@ -6221,7 +6304,8 @@ int duplicate_bind_callback_policy ()
         accept_empty,
         reject,
         timeout,
-        no_callback
+        no_callback,
+        factory_subtype
     };
 
     const auto run_case = [] (case_t test_case) -> int {
@@ -6251,7 +6335,7 @@ int duplicate_bind_callback_policy ()
                           ? std::optional<std::string> (std::string{})
                           : std::nullopt));
                 };
-            } else if (test_case == case_t::reject) {
+            } else if (test_case == case_t::reject || test_case == case_t::factory_subtype) {
                 callback = [] (const auto &, const auto &, std::stop_token) {
                     return task_t<std::optional<std::string>> (
                       result_t<std::optional<std::string>>::success (
@@ -6281,17 +6365,33 @@ int duplicate_bind_callback_policy ()
           runtime::serial_execution_queue_t::error_handler_t{},
           runtime::serial_lane_policy_t::per_actor_spot ());
         observation->expected_serial_queue = spot_context->serial_queue.get ();
-        auto spot_state =
-          test::runtime_failure_fixture<spot_node_builder_state_t> ("duplicate-bind-owner");
-        spot_node_builder_state_t::actor_factory_registration_t factory;
-        factory.actor_type = std::type_index (typeid (duplicate_bind_test_actor_t));
-        factory.as_actor = [] (void *instance) {
-            return static_cast<actor_t *> (static_cast<duplicate_bind_test_actor_t *> (instance));
-        };
+        spot_node_builder_t actor_builder;
+        if (test_case == case_t::no_callback || test_case == case_t::factory_subtype) {
+            actor_builder
+              .add_actor_factory<duplicate_bind_test_actor_t,
+                                 duplicate_bind_test_factory_t<duplicate_bind_test_actor_t>> (
+                "player",
+                std::make_shared<duplicate_bind_test_factory_t<duplicate_bind_test_actor_t>> (
+                  actor_instance),
+                [] (auto &factory) { factory.recreate_on_relocation (); });
+        } else {
+            actor_builder.add_actor_factory<
+              callback_duplicate_bind_test_actor_t,
+              duplicate_bind_test_factory_t<callback_duplicate_bind_test_actor_t>> (
+              "player",
+              std::make_shared<
+                duplicate_bind_test_factory_t<callback_duplicate_bind_test_actor_t>> (
+                std::static_pointer_cast<callback_duplicate_bind_test_actor_t> (actor_instance)),
+              [] (auto &factory) { factory.recreate_on_relocation (); });
+        }
+        auto spot_runtime = spot_node_runtime_t::from (actor_builder);
+        auto spot_state = spot_runtime.weak_state ().lock ();
+        spot_state->monitoring = test::runtime_failure_monitoring ();
         const std::string actor_key = "player:duplicate-bind-actor";
-        spot_state->actor_factories.emplace ("player", std::move (factory));
+        auto &factory = spot_state->actor_factories.at ("player");
+        spot_state->actor_instances.emplace (
+          actor_key, factory.create_context_instance (gateway.actor_context (actor)));
         spot_state->actor_types_by_id.emplace ("duplicate-bind-actor", "player");
-        spot_state->actor_instances.emplace (actor_key, actor_instance);
         spot_state->actor_spot_ids.emplace (actor_key, spot_name);
         spot_state->spot_contexts_by_id.emplace (std::string (spot_name),
                                                  spot_context_access_t::create (spot_context));
@@ -6342,15 +6442,58 @@ int duplicate_bind_callback_policy ()
             terminal.emplace (result, failure_code, std::move (tail));
             return true;
         };
+        auto disconnect_entered = std::make_shared<task_completion_source_t<void>> ();
+        auto release_disconnect = std::make_shared<task_completion_source_t<void>> ();
+        std::optional<task_t<result_t<bool>>> disconnect;
+        const bool hold_disconnect = test_case == case_t::no_callback || test_case == case_t::reject
+                                     || test_case == case_t::factory_subtype;
+        if (hold_disconnect) {
+            // The previous Session disconnect owns the Actor turn until explicitly released.
+            disconnect.emplace (spot_runtime.run_actor_turn (
+              actor,
+              [disconnect_entered, release_disconnect] (actor_t &,
+                                                        std::stop_token) -> task_t<result_t<bool>> {
+                  disconnect_entered->complete (result_t<void>::success ());
+                  co_await release_disconnect->task ();
+                  co_return result_t<bool>::success (true);
+              }));
+            if (!finite_task_result (disconnect_entered->task ())) {
+                release_disconnect->complete (result_t<void>::success ());
+                (void) finite_task_result (std::move (*disconnect));
+                return 8;
+            }
+        }
         auto pending = apply_bound_session_bind_async (
           gateway.weak_state (), {}, spot_state, std::move (stream_runtime), wire_actor, bind,
           incoming_owner, 9, incoming_owner_token, std::move (submit_terminal_reply), delays,
           std::chrono::milliseconds (25));
+        if (hold_disconnect && test_case != case_t::no_callback) {
+            const bool waited_for_gate =
+              !pending.await_ready () && observation->callback_calls.load () == 0;
+            release_disconnect->complete (result_t<void>::success ());
+            (void) finite_task_result (std::move (*disconnect));
+            if (!waited_for_gate)
+                return 9;
+        }
         if (test_case == case_t::timeout
             && cancelled_result.wait_for (std::chrono::milliseconds (500))
                  != std::future_status::ready)
             return 2;
+        auto bind_finished = std::make_shared<std::promise<void>> ();
+        auto bind_finished_result = bind_finished->get_future ();
+        observe_task_completion (pending,
+                                 [bind_finished] (const auto &) { bind_finished->set_value (); });
         auto result = finite_task_result (std::move (pending), std::chrono::milliseconds (500));
+        if (test_case == case_t::no_callback) {
+            const bool disconnect_still_held = !disconnect->await_ready ();
+            release_disconnect->complete (result_t<void>::success ());
+            const auto disconnected = finite_task_result (std::move (*disconnect));
+            // Drain the bind on RED too, before destroying its reply captures and timer owner.
+            if (!result)
+                (void) bind_finished_result.wait_for (std::chrono::milliseconds (500));
+            if (!disconnect_still_held || !disconnected || !*disconnected)
+                return 10;
+        }
         if (!result || !*result)
             return 3;
         const auto &bind_result = result->value ();
@@ -6361,7 +6504,7 @@ int duplicate_bind_callback_policy ()
         const bool route_is_previous = current_route && current_route->session_rid
                                        && *current_route->session_rid == previous_session
                                        && current_route->binding_generation == 19;
-        if (test_case == case_t::reject) {
+        if (test_case == case_t::reject || test_case == case_t::factory_subtype) {
             return bind_result.terminal_result
                          == static_cast<std::uint32_t> (protocol::request_terminal_result::rejected)
                        && bind_result.reply_tail && bind_result.reply_tail->rejection_message
@@ -6425,9 +6568,12 @@ int duplicate_bind_callback_policy ()
     };
 
     for (const auto test_case : {case_t::accept, case_t::accept_empty, case_t::reject,
-                                 case_t::timeout, case_t::no_callback}) {
-        if (const auto result = run_case (test_case); result != 0)
+                                 case_t::timeout, case_t::no_callback, case_t::factory_subtype}) {
+        if (const auto result = run_case (test_case); result != 0) {
+            std::cerr << "duplicate bind case=" << static_cast<int> (test_case)
+                      << " failure=" << result << '\n';
             return result;
+        }
     }
     return 0;
 }
@@ -9119,6 +9265,10 @@ int actor_native_terminal_cause (std::string_view cause,
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--relay-sequence") {
+        zlink::framework::completion_owner_t completion_owner;
+        return bound_session_relay_admission_is_exact_and_monotonic ();
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--telemetry-consumers") {
         zlink::framework::completion_owner_t completion_owner;
         for (
@@ -9500,11 +9650,6 @@ int main (int argc, char **argv)
     if (const auto admission = bound_session_relay_admission_is_exact_and_monotonic ();
         admission != 0) {
         return 140 + admission;
-    }
-    if (const auto dispatch =
-          bound_session_actor_dispatch_uses_current_binding_without_location_reread ();
-        dispatch != 0) {
-        return 360 + dispatch;
     }
     if (const auto transition = bound_session_transition_is_atomic_and_idempotent ();
         transition != 0) {

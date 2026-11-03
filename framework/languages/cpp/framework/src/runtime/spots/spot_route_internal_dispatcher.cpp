@@ -606,7 +606,7 @@ task_t<void> spot_route_internal_dispatcher_t::dispatch_actor_commit_request_asy
                   backlog_staged, "remote Actor handoff backlog staging failed"));
                 co_return;
             }
-            const auto authority_committed = runtime.commit_remote_actor_authority (
+            const auto authority_committed = co_await runtime.commit_remote_actor_authority (
               request.transfer_id, actor_ref, spot_id_t (request.target_spot_id),
               request.target_spot_generation, request.actor_authority_owner_generation,
               request.source_mesh_name, request.target_mesh_name,

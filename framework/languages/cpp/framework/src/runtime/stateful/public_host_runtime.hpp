@@ -639,6 +639,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                       std::uint64_t expected_lifecycle_generation,
                       std::string security_identity);
     void forget_peer (const std::string &endpoint, const zlink::routing_id_t &expected);
+    task_t<void> expect_peer_async (std::string endpoint,
+                                    zlink::routing_id_t expected,
+                                    std::uint64_t expected_lifecycle_generation,
+                                    std::string security_identity);
+    task_t<void> forget_peer_async (std::string endpoint, zlink::routing_id_t expected);
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
                           const std::string &endpoint) noexcept;
@@ -903,6 +908,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                     mesh::service_mailbox_t::application_dispatch_t resume = {});
 
   private:
+    mesh::service_node_descriptor_t
+    expected_peer_descriptor (const std::string &endpoint,
+                              const zlink::routing_id_t &expected,
+                              std::uint64_t expected_lifecycle_generation,
+                              std::string security_identity) const;
+
     // Relocation flow §4.2 cut S of a source seal (stateful_object_runtime_t
     // relocation_source_cut_t), run in the first participant's execution queue.
     task_t<std::optional<std::vector<std::vector<stateful::turn_record_t>>>>
@@ -943,8 +954,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<spot_close_commit_t> begin_user_spot_close (protocol::user_spot_close_fence_t target);
 
     spot_handle_t bind_relocation_spot (stateful::object_ref_t object);
-    stateful::stateful_error_t
-    advance_local_actor_authority (const stateful::object_ref_t &committed);
+    task_t<stateful::stateful_error_t>
+    advance_local_actor_authority (stateful::object_ref_t committed);
 
     protocol::application_payload_t
     encode_application (const std::vector<zlink::message_t> &parts,

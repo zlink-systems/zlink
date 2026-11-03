@@ -32,7 +32,8 @@ public sealed partial class EntrySpotActorDispatchTests
             includeInstanceSpotRoute: true,
             instanceSpotType: typeof(RecoveryColdSpot),
             relocationStore: new InMemoryRelocationStore(),
-            locationTimeProvider: time
+            locationTimeProvider: time,
+            joinTimeProvider: new ControllableTimeProvider()
         );
         try
         {
@@ -71,6 +72,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         using var flow = CreateOwnerLeaseFlowListener();
         var time = new ManualTimeProvider();
+        var requestTime = new ControllableTimeProvider();
         var node = new CapturingSpotNode();
         var (runtime, _) = await CreateStartedRuntimeAsync(
             node,
@@ -84,13 +86,19 @@ public sealed partial class EntrySpotActorDispatchTests
                 ? inner => new AsynchronousLocationStore(inner)
                 : null,
             relocationStore: new InMemoryRelocationStore(),
-            locationTimeProvider: time
+            locationTimeProvider: time,
+            joinTimeProvider: requestTime
         );
         try
         {
             var store = RequireLocationStore(runtime);
 
+            var deadline = requestTime.WaitForNextTimerAsync(
+                runtime.Registration.DefaultRequestTimeout
+            );
             await RequestInstanceReadyAsync(runtime, "cold-live-owner");
+            await deadline.WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.Equal(0, requestTime.ActiveTimerCount);
 
             var authority = await ReadAuthorityAsync(
                 store,

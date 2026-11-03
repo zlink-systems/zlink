@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include "../support/telemetry_observation.hpp"
 
 #include "../support/runtime_failure_fixture.hpp"
@@ -125,6 +126,8 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
       .set_min_level (log_level_t::debug);
     app.set_message_flow_mode (message_flow_log_mode_t::normal);
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.add_route_mesh ("seal-relay-mesh")
           .set_object_role (object_role_t::none)
           .set_routing_id (owner_rid)

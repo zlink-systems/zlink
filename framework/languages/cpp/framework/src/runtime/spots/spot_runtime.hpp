@@ -322,6 +322,7 @@ class spot_node_builder_state_t
         actor_join_completion_callback_t on_join_completed;
         std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture;
         std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore;
+        bool duplicate_bind_is_default = false;
     };
     std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor_registry;
     std::function<result_t<void> (const actor_ref_t &)> update_actor_registry_ref;
@@ -2121,10 +2122,10 @@ class spot_node_runtime_t
                                                                zlink::message_t transfer_state,
                                                                actor_context_t actor_context = {},
                                                                bool defer_joined_callback = false);
-    result_t<void> commit_remote_actor_authority (
-      const std::string &transfer_id,
-      const actor_ref_t &actor_ref,
-      const spot_id_t &target_spot_id,
+    task_t<result_t<void>> commit_remote_actor_authority (
+      std::string transfer_id,
+      actor_ref_t actor_ref,
+      spot_id_t target_spot_id,
       std::uint64_t target_spot_generation,
       std::uint64_t source_authority_owner_generation,
       std::string source_mesh_name,

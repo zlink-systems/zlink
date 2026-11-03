@@ -2148,7 +2148,8 @@ class spot_node_builder_t
       detail::actor_join_completion_callback_t on_join_completed = {},
       detail::factory_relocation_configuration_t relocation = {},
       std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture = {},
-      std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore = {});
+      std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore = {},
+      bool duplicate_bind_is_default = false);
 
     template <typename TSpot, typename TContext>
     void register_context_lifecycle (

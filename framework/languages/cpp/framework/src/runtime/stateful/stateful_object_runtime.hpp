@@ -349,12 +349,12 @@ class stateful_object_runtime_t
       object_ref_t reserved, std::string stable_type, std::vector<std::uint8_t> creation_request);
     // Accepts the next authority fence for an actor that is retained as a
     // remote copy while ownership returns to this node.
-    stateful_error_t adopt_reserved_actor_owner (const object_ref_t &reserved,
-                                                 const std::string &stable_type);
+    task_t<stateful_error_t> adopt_reserved_actor_owner (object_ref_t reserved,
+                                                         std::string stable_type);
     // Applies the next Store-committed authority generation when a local
     // Actor keeps the same owner node while its membership authority advances.
-    stateful_error_t advance_local_actor_authority (const object_ref_t &committed,
-                                                    const std::string &stable_type);
+    task_t<stateful_error_t> advance_local_actor_authority (object_ref_t committed,
+                                                            std::string stable_type);
     stateful_error_t
     reconcile_relocation_restore_authority (const object_ref_t &staged,
                                             const object_ref_t &committed,

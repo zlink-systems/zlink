@@ -221,6 +221,12 @@ application queue에 직접 추가한다. Seal 중에는 §8.1에 따라 Session
 [Actor 모델](../03-spot-actor/04-actor-model.ko.md)의 실행 모드(`PerActor`·`SpotWide`)가
 정한다 — `SpotWide` User Spot에 속한 Actor들은 그 Spot의 공통 gate를 함께 사용한다.
 
+- Actor owner는 각 binding에서 이미 수락한 Session sequence보다 큰 sequence만 relay로 수락한다. 중복하거나
+  더 작은 sequence는 Actor handler에 전달하지 않는다. `Request`는 같은 request sequence의
+  `Error(InvalidOperation)`로 끝나고 `zlink.dispatch_error`에 `surface=stream`, `message_kind=request`,
+  `outcome=failed`, `reason=stale_target`, `action=reply_error`로 기록된다. `Send`는 버리고 message-flow에
+  `surface=stream`, `message_kind=send`, `outcome=dropped`, `reason=stale_target`으로 기록된다.
+
 - **session의 실행 권한과 Actor의 실행 권한은 서로 다른 권한이다.** Session callback을 실행하는 문맥은 Actor
   handler를 실행하지 않는다. 나누지 않으면 한 client가 보낸 packet 처리가 그 Actor가 속한
   Spot 전체를 잡거나, 반대로 Spot이 바쁠 때 그 연결의 keepalive 처리까지 밀린다. 연결
@@ -923,6 +929,9 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
   도달한다. Spot callback을 거치지 않는다.
 - 다른 MeshNode의 Actor에 bind·relay·push하면 node 사이에 command 38, bound-session tail을 포함한
   command 24, command 36 record가 각각 raw ROUTER 경로로 오간다.
+- 같은 binding에 중복하거나 더 작은 Session sequence를 relay하면 Actor handler에 도달하지 않는다. `Request`는
+  같은 request sequence의 `Error(InvalidOperation)`와 `zlink.dispatch_error`(`reason=stale_target`)로 끝나고,
+  `Send`는 message-flow에 `outcome=dropped`, `reason=stale_target`으로 남는다. 더 큰 sequence는 수락된다.
 - Actor handler가 반환한 reply는 원래 STREAM request correlation으로 정확히 한 번 완료된다.
 - Request 제출 뒤 timeout·cancellation이 나도 같은 request가 다른 Actor·owner·MeshNode로 다시
   보내지지 않는다.

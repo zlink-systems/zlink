@@ -987,15 +987,39 @@ void raw_mesh_node_owner_t::connect_peer_intent (const std::string &endpoint,
     _lane
       .run ([this, endpoint, expected = std::move (expected), expected_lifecycle_generation,
              security_identity = std::move (security_identity), automatic] () mutable {
-          if (connect_peer_endpoint_owned (endpoint, std::move (expected),
-                                           expected_lifecycle_generation,
-                                           std::move (security_identity), automatic)) {
-              const auto [intent, inserted] = _peer_connection_intents.try_emplace (endpoint);
-              if (inserted)
-                  intent->second = zlink::framework::detail::next_connection_intent_id ();
-          }
+          connect_peer_intent_owned (endpoint, std::move (expected), expected_lifecycle_generation,
+                                     std::move (security_identity), automatic);
       })
       .get ();
+}
+
+task_t<void>
+raw_mesh_node_owner_t::connect_peer_intent_async (std::string endpoint,
+                                                  std::optional<zlink::routing_id_t> expected,
+                                                  std::uint64_t expected_lifecycle_generation,
+                                                  std::string security_identity,
+                                                  bool automatic)
+{
+    return _lane.run_task (
+      [this, endpoint, expected = std::move (expected), expected_lifecycle_generation,
+       security_identity = std::move (security_identity), automatic] () mutable {
+          connect_peer_intent_owned (endpoint, std::move (expected), expected_lifecycle_generation,
+                                     std::move (security_identity), automatic);
+      });
+}
+
+void raw_mesh_node_owner_t::connect_peer_intent_owned (const std::string &endpoint,
+                                                       std::optional<zlink::routing_id_t> expected,
+                                                       std::uint64_t expected_lifecycle_generation,
+                                                       std::string security_identity,
+                                                       bool automatic)
+{
+    if (connect_peer_endpoint_owned (endpoint, std::move (expected), expected_lifecycle_generation,
+                                     std::move (security_identity), automatic)) {
+        const auto [intent, inserted] = _peer_connection_intents.try_emplace (endpoint);
+        if (inserted)
+            intent->second = zlink::framework::detail::next_connection_intent_id ();
+    }
 }
 
 void raw_mesh_node_owner_t::connect_peer_intent (const mesh_peer_connection_t &configured)
@@ -1038,13 +1062,8 @@ void raw_mesh_node_owner_t::disconnect_peer_intent (const zlink::routing_id_t &e
     try {
         _lane
           .run ([this, expected_routing_id, endpoint, automatic, &notifications] {
-              if (automatic && !_peer_connection_intents.contains (endpoint))
-                  return;
-              const auto endpoint_retained = disconnect_peer_endpoint_owned (
-                expected_routing_id.to_bytes (), endpoint, notifications);
-              // Core may retain the endpoint for a replacement admitted RID.
-              if (!endpoint_retained)
-                  _peer_connection_intents.erase (endpoint);
+              disconnect_peer_intent_owned (expected_routing_id, endpoint, automatic,
+                                            notifications);
           })
           .get ();
     }
@@ -1055,6 +1074,37 @@ void raw_mesh_node_owner_t::disconnect_peer_intent (const zlink::routing_id_t &e
     (void) deliver_topology_notifications (notifications);
 }
 
+task_t<void> raw_mesh_node_owner_t::disconnect_peer_intent_async (
+  zlink::routing_id_t expected_routing_id, std::string endpoint, bool automatic)
+{
+    std::vector<std::function<void ()>> notifications;
+    try {
+        co_await _lane.run_task ([this, expected_routing_id, endpoint, automatic, &notifications] {
+            disconnect_peer_intent_owned (expected_routing_id, endpoint, automatic, notifications);
+        });
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
+    (void) deliver_topology_notifications (notifications);
+}
+
+void raw_mesh_node_owner_t::disconnect_peer_intent_owned (
+  const zlink::routing_id_t &expected_routing_id,
+  const std::string &endpoint,
+  bool automatic,
+  std::vector<std::function<void ()>> &notifications)
+{
+    if (automatic && !_peer_connection_intents.contains (endpoint))
+        return;
+    const auto endpoint_retained =
+      disconnect_peer_endpoint_owned (expected_routing_id.to_bytes (), endpoint, notifications);
+    // Core may retain the endpoint for a replacement admitted RID.
+    if (!endpoint_retained)
+        _peer_connection_intents.erase (endpoint);
+}
+
 void raw_mesh_node_owner_t::clear_peer_connection_intents ()
 {
     _lane.run ([this] { _peer_connection_intents.clear (); }).get ();
@@ -1062,16 +1112,30 @@ void raw_mesh_node_owner_t::clear_peer_connection_intents ()
 
 void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_descriptor)
 {
-    if (expected_descriptor.node_routing_id.empty ()
-        || expected_descriptor.advertised_endpoint.empty ())
+    if (!valid_expected_peer (expected_descriptor))
         return;
-    _lane
-      .run ([this, &expected_descriptor] {
-          std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          _expected_peers.insert_or_assign (expected_descriptor.node_routing_id,
-                                            expected_descriptor);
-      })
-      .get ();
+    _lane.run ([this, &expected_descriptor] { expect_peer_owned (expected_descriptor); }).get ();
+}
+
+task_t<void>
+raw_mesh_node_owner_t::expect_peer_async (service_node_descriptor_t expected_descriptor)
+{
+    if (!valid_expected_peer (expected_descriptor))
+        return task_t<void> (result_t<void>::success ());
+    return _lane.run_task ([this, expected_descriptor = std::move (expected_descriptor)] {
+        expect_peer_owned (expected_descriptor);
+    });
+}
+
+bool raw_mesh_node_owner_t::valid_expected_peer (const service_node_descriptor_t &descriptor)
+{
+    return !descriptor.node_routing_id.empty () && !descriptor.advertised_endpoint.empty ();
+}
+
+void raw_mesh_node_owner_t::expect_peer_owned (const service_node_descriptor_t &expected_descriptor)
+{
+    std::lock_guard lifecycle_lock (_lifecycle_mutex);
+    _expected_peers.insert_or_assign (expected_descriptor.node_routing_id, expected_descriptor);
 }
 
 void raw_mesh_node_owner_t::configure_peer_reconcile (peer_reconcile_t request)
@@ -1114,16 +1178,29 @@ raw_mesh_node_owner_t::local_accepted_source (const std::vector<std::uint8_t> &r
 void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_routing_id,
                                          const std::string &endpoint)
 {
-    return _lane
-      .run ([this, &node_routing_id, &endpoint] {
-          std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          const auto found = _expected_peers.find (node_routing_id);
-          if (found != _expected_peers.end () && found->second.advertised_endpoint != endpoint)
-              return;
-          _expected_peers.erase (node_routing_id);
-          end_peer_operations_if_disconnected_locked (node_routing_id);
-      })
+    _lane
+      .run ([this, &node_routing_id, &endpoint] { forget_peer_owned (node_routing_id, endpoint); })
       .get ();
+}
+
+task_t<void> raw_mesh_node_owner_t::forget_peer_async (std::vector<std::uint8_t> node_routing_id,
+                                                       std::string endpoint)
+{
+    return _lane.run_task (
+      [this, node_routing_id = std::move (node_routing_id), endpoint = std::move (endpoint)] {
+          forget_peer_owned (node_routing_id, endpoint);
+      });
+}
+
+void raw_mesh_node_owner_t::forget_peer_owned (const std::vector<std::uint8_t> &node_routing_id,
+                                               const std::string &endpoint)
+{
+    std::lock_guard lifecycle_lock (_lifecycle_mutex);
+    const auto found = _expected_peers.find (node_routing_id);
+    if (found != _expected_peers.end () && found->second.advertised_endpoint != endpoint)
+        return;
+    _expected_peers.erase (node_routing_id);
+    end_peer_operations_if_disconnected_locked (node_routing_id);
 }
 
 void raw_mesh_node_owner_t::end_peer_operations_if_disconnected_locked (

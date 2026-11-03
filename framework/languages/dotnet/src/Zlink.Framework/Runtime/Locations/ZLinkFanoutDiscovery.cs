@@ -185,7 +185,8 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
             .WriteAsync(
                 token => _store.UpdateFanoutPublisherAsync(descriptor, intent, token),
                 _options.OwnerLeaseRenewTimeout,
-                cancellationToken
+                cancellationToken,
+                _locationRuntime.TimeProvider
             )
             .ConfigureAwait(false);
         if (
@@ -201,7 +202,8 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
                             token
                         ),
                     _options.OwnerLeaseRenewTimeout,
-                    cancellationToken
+                    cancellationToken,
+                    _locationRuntime.TimeProvider
                 )
                 .ConfigureAwait(false);
         if (result.Status != ZLinkLocationWriteStatus.Stored)
