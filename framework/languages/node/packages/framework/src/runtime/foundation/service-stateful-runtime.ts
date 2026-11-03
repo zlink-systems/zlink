@@ -2599,6 +2599,54 @@ export class ServiceStatefulRuntime {
           ) {
             throw new ServiceStaleGenerationError('binding', record.target.actor.actorId);
           }
+          if (
+            !this.registry.acceptBoundSessionSequence(
+              record.target.actor,
+              record.boundSession.bindingGeneration,
+              record.boundSession.sequence
+            )
+          ) {
+            const error = new ZLinkFrameworkException(
+              ZLinkFrameworkErrorKind.InvalidOperation,
+              'Bound Session relay sequence does not increase.'
+            );
+            const reporter = this.dispatchErrors;
+            if (record.kind === 'actorRequest') {
+              if (reporter?.captureEnabled() === true) {
+                reporter.report({
+                  surface: ZLinkDispatchErrorSurface.StreamSession,
+                  messageKind: ZLinkDispatchMessageKind.Request,
+                  reason: ZLinkDispatchErrorReason.StaleTarget,
+                  action: ZLinkDispatchErrorAction.ReplyError,
+                  meshName: this.dispatchErrorMeshName,
+                  sourceRid: ingress.sourceRoutingId,
+                  actorId: record.target.actor.actorId,
+                  correlationId: record.correlation?.toString(),
+                  error
+                });
+              }
+              const result = failure(error);
+              this.replyWire(
+                ingress,
+                record.correlation!,
+                result.terminalResult,
+                result.failureCode
+              );
+              return 'infrastructure';
+            }
+            flowIfEnabled(reporter?.flow, ZLinkMessageFlowOutcome.Dropped)?.trace({
+              outcome: ZLinkMessageFlowOutcome.Dropped,
+              surface: ZLinkDispatchErrorSurface.StreamSession,
+              messageKind: ZLinkDispatchMessageKind.Send,
+              ...(this.dispatchErrorMeshName === undefined
+                ? {}
+                : { meshName: this.dispatchErrorMeshName }),
+              sourceRid: ingress.sourceRoutingId,
+              actorId: record.target.actor.actorId,
+              errorReason: ZLinkDispatchErrorReason.StaleTarget
+            });
+            return 'application';
+          }
         }
         return this.enqueueApplicationFrame(
           ingress,

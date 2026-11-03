@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -21,11 +22,15 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
+import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
+import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
@@ -44,6 +49,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
@@ -71,6 +77,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ZLinkJavaRawSpotNodeM6BTest {
     private static final Duration MULTICAST_TIMEOUT = Duration.ofSeconds(5);
@@ -1049,124 +1059,254 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             RoutingId sourceRid = RoutingId.from("jvm-published-stage-source-" + System.nanoTime());
             RoutingId sessionRid =
                     RoutingId.from("jvm-published-stage-session-" + System.nanoTime());
-            node.setRoutingId(nodeRid);
-            node.setBind("inproc://jvm-published-stage-" + System.nanoTime());
-            node.start();
-
-            ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) node.spotNode();
-            ZLinkBackendActorRef actor;
-            try (Message create = Message.from("create")) {
-                actor = spots.createActor("published-actor", 4, create);
-            }
-            spots.rememberActorAuthority(actor, 8, 23);
-            var route =
-                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                            actor, node.lifecycleGeneration(), 8, 23);
-            assertTrue(
-                    acceptRemoteStreamBinding(
-                            spots,
-                            sourceRid,
-                            11,
-                            "source-owner",
-                            12,
-                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
-                                    1, route, sessionRid, true, 33)));
-
-            AtomicInteger stagingCalls = new AtomicInteger();
-            spots.setRelocationStagingIngressHandler(
-                    new ZLinkInternalSpotNode.RelocationStagingIngressHandler() {
-                        @Override
-                        public boolean handleSpot(
-                                ZLinkInternalMeshNode.PeerAuthorityFence source,
-                                ZLinkServiceM6BWireCodec.SpotMessage header,
-                                byte[] metadata,
-                                java.util.function.Supplier<byte[]> acceptedRecord,
-                                int acceptedRecordSizeHint,
-                                List<Message> parts,
-                                String contentType,
-                                java.util.function.Consumer<List<Message>> reply,
-                                java.util.function.Consumer<Throwable> failure) {
-                            return false;
+            var records = new CopyOnWriteArrayList<String>();
+            var logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+            var previousLevel = logger.getLevel();
+            var logHandler =
+                    new Handler() {
+                        public void publish(LogRecord record) {
+                            records.add(record.getMessage());
                         }
 
-                        @Override
-                        public boolean handleActor(
-                                ZLinkInternalMeshNode.PeerAuthorityFence source,
-                                ZLinkServiceM6BWireCodec.ActorMessage header,
-                                java.util.function.Supplier<byte[]> acceptedRecord,
-                                List<Message> parts,
-                                String contentType,
-                                java.util.function.Consumer<List<Message>> reply,
-                                java.util.function.Consumer<Throwable> failure) {
-                            assertEquals(sourceRid, source.sourceNodeRid());
-                            assertEquals(11, source.sourceNodeGeneration());
-                            assertEquals("source-owner", source.ownerId());
-                            assertEquals(12, source.ownerLeaseGeneration());
-                            assertEquals(route, header.target());
-                            assertEquals(24, header.boundSession().sourceSessionSequence());
-                            acceptedRecord.get();
-                            stagingCalls.incrementAndGet();
-                            return false;
-                        }
-                    });
-            AtomicInteger dispatches = new AtomicInteger();
-            CompletableFuture<Void> dispatched = new CompletableFuture<>();
-            spots.entrySpot()
-                    .onDispatchEvent(
-                            info -> {
-                                if (info.event() != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
-                                    return;
-                                }
-                                dispatches.incrementAndGet();
-                                info.actorMessages().forEach(ZLinkBackendActorReceived::close);
-                                dispatched.complete(null);
-                            });
-            int boundFlags =
-                    systems.zlink.framework.runtime.protocol.ServiceWireConstants
-                            .FLAG_BOUND_SESSION;
-            var header =
-                    new ZLinkServiceM6BWireCodec.ActorMessage(
-                            false,
-                            boundFlags,
-                            null,
-                            null,
-                            route,
-                            new ZLinkServiceM6BWireCodec.BoundSessionTail(sessionRid, 33, 24));
-            AtomicInteger replies = new AtomicInteger();
-            AtomicInteger failures = new AtomicInteger();
-            Message first = Message.from("first-post-move");
-            boolean accepted =
-                    spots.enqueueRemoteActor(
-                            new ZLinkInternalMeshNode.PeerAuthorityFence(
-                                    sourceRid, 11, "source-owner", 12),
-                            header,
-                            () -> new byte[] {1},
-                            List.of(first),
-                            null,
-                            ignored -> replies.incrementAndGet(),
-                            ignored -> failures.incrementAndGet());
-            if (!accepted) {
-                first.close();
-            }
-            assertTrue(accepted);
-            dispatched.get(1, TimeUnit.SECONDS);
+                        public void flush() {}
 
-            try (Message duplicate = Message.from("duplicate")) {
-                assertFalse(
+                        public void close() {}
+                    };
+            logger.addHandler(logHandler);
+            logger.setLevel(Level.ALL);
+            try {
+                node.setRoutingId(nodeRid);
+                node.setBind("inproc://jvm-published-stage-" + System.nanoTime());
+                var dispatchOptions = new ZLinkDispatchOptionsRegistration();
+                dispatchOptions.messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+                node.setDispatchErrorReporter(
+                        new ZLinkDispatchErrorReporter(
+                                dispatchOptions,
+                                ZLinkHandlerActivator.reflection(),
+                                Runnable::run));
+                node.start();
+
+                ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) node.spotNode();
+                ZLinkBackendActorRef actor;
+                try (Message create = Message.from("create")) {
+                    actor = spots.createActor("published-actor", 4, create);
+                }
+                spots.rememberActorAuthority(actor, 8, 23);
+                var route =
+                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                actor, node.lifecycleGeneration(), 8, 23);
+                assertTrue(
+                        acceptRemoteStreamBinding(
+                                spots,
+                                sourceRid,
+                                11,
+                                "source-owner",
+                                12,
+                                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                        1, route, sessionRid, true, 33)));
+
+                AtomicInteger stagingCalls = new AtomicInteger();
+                var stagedSequences = new CopyOnWriteArrayList<Long>();
+                spots.setRelocationStagingIngressHandler(
+                        new ZLinkInternalSpotNode.RelocationStagingIngressHandler() {
+                            @Override
+                            public boolean handleSpot(
+                                    ZLinkInternalMeshNode.PeerAuthorityFence source,
+                                    ZLinkServiceM6BWireCodec.SpotMessage header,
+                                    byte[] metadata,
+                                    java.util.function.Supplier<byte[]> acceptedRecord,
+                                    int acceptedRecordSizeHint,
+                                    List<Message> parts,
+                                    String contentType,
+                                    java.util.function.Consumer<List<Message>> reply,
+                                    java.util.function.Consumer<Throwable> failure) {
+                                return false;
+                            }
+
+                            @Override
+                            public boolean handleActor(
+                                    ZLinkInternalMeshNode.PeerAuthorityFence source,
+                                    ZLinkServiceM6BWireCodec.ActorMessage header,
+                                    java.util.function.Supplier<byte[]> acceptedRecord,
+                                    List<Message> parts,
+                                    String contentType,
+                                    java.util.function.Consumer<List<Message>> reply,
+                                    java.util.function.Consumer<Throwable> failure) {
+                                assertEquals(sourceRid, source.sourceNodeRid());
+                                assertEquals(11, source.sourceNodeGeneration());
+                                assertEquals("source-owner", source.ownerId());
+                                assertEquals(12, source.ownerLeaseGeneration());
+                                assertEquals(route, header.target());
+                                stagedSequences.add(header.boundSession().sourceSessionSequence());
+                                acceptedRecord.get();
+                                stagingCalls.incrementAndGet();
+                                return false;
+                            }
+                        });
+                AtomicInteger dispatches = new AtomicInteger();
+                CompletableFuture<Void> dispatched = new CompletableFuture<>();
+                CompletableFuture<Void> dispatchedTwice = new CompletableFuture<>();
+                spots.entrySpot()
+                        .onDispatchEvent(
+                                info -> {
+                                    if (info.event()
+                                            != ZLinkBackendSpotDispatchEvent.ACTOR_READABLE) {
+                                        return;
+                                    }
+                                    int count = dispatches.incrementAndGet();
+                                    info.actorMessages().forEach(ZLinkBackendActorReceived::close);
+                                    dispatched.complete(null);
+                                    if (count == 2) dispatchedTwice.complete(null);
+                                });
+                int boundFlags =
+                        systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                .FLAG_BOUND_SESSION;
+                var header =
+                        new ZLinkServiceM6BWireCodec.ActorMessage(
+                                false,
+                                boundFlags,
+                                null,
+                                null,
+                                route,
+                                new ZLinkServiceM6BWireCodec.BoundSessionTail(sessionRid, 33, 24));
+                AtomicInteger replies = new AtomicInteger();
+                AtomicInteger failures = new AtomicInteger();
+                Message first = Message.from("first-post-move");
+                boolean accepted =
                         spots.enqueueRemoteActor(
                                 new ZLinkInternalMeshNode.PeerAuthorityFence(
                                         sourceRid, 11, "source-owner", 12),
                                 header,
-                                () -> new byte[] {2},
-                                List.of(duplicate),
+                                () -> new byte[] {1},
+                                List.of(first),
                                 null,
                                 ignored -> replies.incrementAndGet(),
-                                ignored -> failures.incrementAndGet()));
+                                ignored -> failures.incrementAndGet());
+                if (!accepted) {
+                    first.close();
+                }
+                assertTrue(accepted);
+                dispatched.get(1, TimeUnit.SECONDS);
+
+                try (Message duplicate = Message.from("duplicate")) {
+                    assertTrue(
+                            spots.enqueueRemoteActor(
+                                    new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                            sourceRid, 11, "source-owner", 12),
+                                    header,
+                                    () -> new byte[] {2},
+                                    List.of(duplicate),
+                                    null,
+                                    "stale-send",
+                                    ignored -> replies.incrementAndGet(),
+                                    ignored -> failures.incrementAndGet(),
+                                    () -> {}));
+                }
+                AtomicReference<Throwable> requestFailure = new AtomicReference<>();
+                var staleRequest =
+                        new ZLinkServiceM6BWireCodec.ActorMessage(
+                                true,
+                                boundFlags,
+                                88L,
+                                null,
+                                route,
+                                new ZLinkServiceM6BWireCodec.BoundSessionTail(sessionRid, 33, 24));
+                try (Message duplicateRequest = Message.from("duplicate-request")) {
+                    assertTrue(
+                            spots.enqueueRemoteActor(
+                                    new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                            sourceRid, 11, "source-owner", 12),
+                                    staleRequest,
+                                    () -> new byte[] {3},
+                                    List.of(duplicateRequest),
+                                    null,
+                                    "stale-request",
+                                    ignored -> replies.incrementAndGet(),
+                                    requestFailure::set,
+                                    () -> {}));
+                }
+                assertInstanceOf(ZLinkFrameworkException.class, requestFailure.get());
+                assertEquals(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                        ((ZLinkFrameworkException) requestFailure.get()).kind());
+                try (Message reverse = Message.from("reverse")) {
+                    var reverseHeader =
+                            new ZLinkServiceM6BWireCodec.ActorMessage(
+                                    false,
+                                    boundFlags,
+                                    null,
+                                    null,
+                                    route,
+                                    new ZLinkServiceM6BWireCodec.BoundSessionTail(
+                                            sessionRid, 33, 23));
+                    assertTrue(
+                            spots.enqueueRemoteActor(
+                                    new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                            sourceRid, 11, "source-owner", 12),
+                                    reverseHeader,
+                                    () -> new byte[] {4},
+                                    List.of(reverse),
+                                    null,
+                                    "reverse-send",
+                                    ignored -> replies.incrementAndGet(),
+                                    ignored -> failures.incrementAndGet(),
+                                    () -> {}));
+                }
+                try (Message increasing = Message.from("increasing")) {
+                    var increasingHeader =
+                            new ZLinkServiceM6BWireCodec.ActorMessage(
+                                    false,
+                                    boundFlags,
+                                    null,
+                                    null,
+                                    route,
+                                    new ZLinkServiceM6BWireCodec.BoundSessionTail(
+                                            sessionRid, 33, 25));
+                    assertTrue(
+                            spots.enqueueRemoteActor(
+                                    new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                            sourceRid, 11, "source-owner", 12),
+                                    increasingHeader,
+                                    () -> new byte[] {5},
+                                    List.of(increasing),
+                                    null,
+                                    "increasing-send",
+                                    ignored -> replies.incrementAndGet(),
+                                    ignored -> failures.incrementAndGet(),
+                                    () -> {}));
+                }
+                dispatchedTwice.get(1, TimeUnit.SECONDS);
+                systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+                assertTrue(
+                        records.stream()
+                                .anyMatch(
+                                        record ->
+                                                record.contains("event_id=zlink.dispatch_error")
+                                                        && record.contains("reason=stale_target")
+                                                        && record.contains("action=reply_error")));
+                assertTrue(records.stream().anyMatch(record -> record.contains("phase=dropped")));
+                assertTrue(
+                        records.stream()
+                                .anyMatch(
+                                        record ->
+                                                record.contains("phase=dropped")
+                                                        && record.contains("packet=stale-send")));
+                assertTrue(
+                        records.stream()
+                                .anyMatch(
+                                        record ->
+                                                record.contains("event_id=zlink.dispatch_error")
+                                                        && record.contains(
+                                                                "packet=stale-request")));
+                assertEquals(5, stagingCalls.get());
+                assertEquals(List.of(24L, 24L, 24L, 23L, 25L), stagedSequences);
+                assertEquals(2, dispatches.get());
+                assertEquals(0, replies.get());
+                assertEquals(0, failures.get());
+            } finally {
+                logger.removeHandler(logHandler);
+                logger.setLevel(previousLevel);
             }
-            assertEquals(2, stagingCalls.get());
-            assertEquals(1, dispatches.get());
-            assertEquals(0, replies.get());
-            assertEquals(0, failures.get());
         }
     }
 
