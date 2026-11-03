@@ -347,7 +347,7 @@ options.useVirtualThreadHandlers();
 | `.configureStreamCompression()` | No compression | The STREAM default compression codec (`useDefault()`/`useLz4()`/`use(codec)`/`disable()`) |
 | `.setApplicationVersion(version)` / `.setMaintenanceWave(wave)` | `0` / `null` (no exclusion) | The deployment version and maintenance wave every local MeshNode publishes |
 | `.setDefaultRequestTimeout(timeout)` | Framework default | The host-wide default request timeout |
-| `.useVirtualThreadHandlers()` / `.useHandlerExecutor(executor)` | Implementation default executor | Selects the execution model for handler dispatch (virtual thread or a specified `Executor`). Mutually exclusive |
+| `.useVirtualThreadHandlers()` / `.useHandlerExecutor(executor)` | Implementation default executor | Selects the execution model for handler dispatch (virtual thread or a specified `Executor`). Mutually exclusive. A specified `Executor` must run every task it accepts or reject it with `RejectedExecutionException`; it must not discard tasks silently. A `ThreadPoolExecutor` with `DiscardPolicy` or `DiscardOldestPolicy` is a configuration error |
 | `.codecs()` | Only JSON registered | `options.codecs().use(extension)`. See the Codec registration entry in messaging-execution category |
 
 **Completion result.** Most execute synchronously with no return value; `.configureNetwork()`/
