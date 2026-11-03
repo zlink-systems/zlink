@@ -8830,12 +8830,14 @@ bool public_host_runtime_t::enqueue_completion (const pending_operation_t &opera
                                                 receive_record_t record,
                                                 std::vector<zlink::message_t> parts)
 {
-    const auto completed =
-      _transport->complete_local_operation (operation.id, [operation, record, parts] () mutable {
-          *operation.local_result = operation_completion_t{std::move (record), std::move (parts)};
-          operation.receive (result_t<operation_completion_t>::success (*operation.local_result),
-                             true);
-      });
+    const auto complete_local = [&] () noexcept {
+        *operation.local_result = operation_completion_t{std::move (record), std::move (parts)};
+    };
+    const auto completed = _transport->complete_local_operation (operation.id, [&] {
+        complete_local ();
+        operation.receive (result_t<operation_completion_t>::success (*operation.local_result),
+                           true);
+    });
     if (!completed)
         operation.receive (
           result_t<operation_completion_t>::success ({std::move (record), std::move (parts)}),

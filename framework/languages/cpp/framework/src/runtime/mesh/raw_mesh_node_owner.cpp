@@ -265,6 +265,31 @@ bool start_admitted_request (
     return true;
 }
 
+// The registry owns the terminal claim for delivered and never-submitted requests.
+void deliver_request_terminal (const std::shared_ptr<foundation::operation_registry_t> &operations,
+                               foundation::call_id_t operation,
+                               foundation::operation_terminal_t terminal,
+                               result_t<zlink::message_t> payload,
+                               const raw_mesh_node_owner_t::physical_receiver_t &receiver,
+                               std::optional<foundation::operation_terminal_t> metric = {})
+{
+    const auto receive = [&] {
+        if (receiver)
+            receiver (terminal, payload, true);
+    };
+    auto public_payload = receiver ? payload : std::move (payload);
+    const bool claimed =
+      terminal == foundation::operation_terminal_t::completed
+        ? operations->complete (operation, std::move (public_payload), receive,
+                                metric.value_or (terminal))
+        : operations->fail (operation, terminal,
+                            public_payload ? std::move (public_payload)
+                                           : result_t<zlink::message_t>::success ({}),
+                            receive, metric);
+    if (!claimed && receiver)
+        receiver (terminal, std::move (payload), false);
+}
+
 // Readiness waits observe the same final completion as the caller. The
 // registry owns timeout; a ready peer admits one binding submission.
 template <typename TTerminal>
@@ -280,7 +305,8 @@ task_t<void> run_request_admission (
   foundation::operation_registry_t::clock_t::time_point deadline,
   task_t<TTerminal> terminal,
   std::shared_ptr<task_completion_source_t<void>> admitted,
-  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {})
+  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {},
+  raw_mesh_node_owner_t::physical_receiver_t receiver = {})
 {
     struct wait_subscriptions_t
     {
@@ -300,8 +326,9 @@ task_t<void> run_request_admission (
                  && (!attempt || baseline->first != attempt->intent_id
                      || baseline->second != attempt->last_failure_id))
                 || (!baseline && attempt && attempt->last_failure_id != 0))) {
-            (void) operations->fail (operation,
-                                     foundation::operation_terminal_t::route_unavailable);
+            deliver_request_terminal (operations, operation,
+                                      foundation::operation_terminal_t::route_unavailable,
+                                      result_t<zlink::message_t>::success ({}), receiver);
             co_return;
         }
         auto finish =
@@ -316,13 +343,16 @@ task_t<void> run_request_admission (
                                     std::move (finish)))
             co_return;
         if (foundation::operation_registry_t::clock_t::now () >= deadline) {
-            (void) co_await terminal;
+            deliver_request_terminal (operations, operation,
+                                      foundation::operation_terminal_t::timed_out,
+                                      result_t<zlink::message_t>::success ({}), receiver);
             co_return;
         }
         if ((!observation.peer || observation.peer->connection_id.empty ()) && attempt
             && attempt->state == zlink::connection_attempt_state_t::attempt_failed) {
-            (void) operations->fail (operation,
-                                     foundation::operation_terminal_t::route_unavailable);
+            deliver_request_terminal (operations, operation,
+                                      foundation::operation_terminal_t::route_unavailable,
+                                      result_t<zlink::message_t>::success ({}), receiver);
             co_return;
         }
         if (!baseline && attempt)
@@ -343,6 +373,27 @@ task_t<void> run_request_admission (
         }
         co_await notified;
     }
+    if (receiver) {
+        // Only external registry terminals can end this wait without a binding
+        // request. Observe the existing admission failure before releasing its receiver.
+        auto ended = foundation::operation_terminal_t::route_unavailable;
+        try {
+            (void) co_await terminal;
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () == framework_error_kind_t::deadline_exceeded)
+                ended = foundation::operation_terminal_t::timed_out;
+            else if (error.kind () == framework_error_kind_t::shutting_down)
+                ended = foundation::operation_terminal_t::shutdown;
+        }
+        catch (const std::system_error &error) {
+            if (!detail::is_cancellation_exception (error))
+                throw;
+            ended = foundation::operation_terminal_t::cancelled;
+        }
+        deliver_request_terminal (operations, operation, ended,
+                                  result_t<zlink::message_t>::success ({}), receiver);
+    }
 }
 template <typename TTerminal>
 task_t<bool> submit_registered_request (
@@ -357,10 +408,13 @@ task_t<bool> submit_registered_request (
   foundation::operation_registry_t::clock_t::time_point deadline,
   task_t<TTerminal> terminal,
   std::shared_ptr<task_completion_source_t<void>> admitted = {},
-  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {})
+  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {},
+  raw_mesh_node_owner_t::physical_receiver_t receiver = {})
 {
     if (!port) {
-        (void) operations->fail (operation, foundation::operation_terminal_t::route_unavailable);
+        deliver_request_terminal (operations, operation,
+                                  foundation::operation_terminal_t::route_unavailable,
+                                  result_t<zlink::message_t>::success ({}), receiver);
         co_return false;
     }
     // Infrastructure progress releases the initiating handler's turn.
@@ -369,12 +423,14 @@ task_t<bool> submit_registered_request (
     auto running = std::make_shared<task_t<void>> (run_request_admission (
       std::move (port), std::move (observe_peer), operations, operation, correlation,
       std::move (target_routing_id), std::move (request_parts), std::move (decode_reply), deadline,
-      std::move (terminal), std::move (admitted), std::move (observe)));
-    detail::observe_task_terminal (*running, [operations, operation,
-                                              running] (const result_t<void> &settled) {
-        if (!settled)
-            (void) operations->fail (operation, foundation::operation_terminal_t::transport_failed);
-    });
+      std::move (terminal), std::move (admitted), std::move (observe), receiver));
+    detail::observe_task_terminal (
+      *running, [operations, operation, receiver, running] (const result_t<void> &settled) {
+          if (!settled)
+              deliver_request_terminal (operations, operation,
+                                        foundation::operation_terminal_t::transport_failed,
+                                        result_t<zlink::message_t>::success ({}), receiver);
+      });
     co_return true;
 }
 
@@ -1277,20 +1333,8 @@ void raw_mesh_node_owner_t::observe_request (
     const auto deliver = [&] (foundation::operation_terminal_t terminal,
                               result_t<zlink::message_t> payload,
                               std::optional<foundation::operation_terminal_t> metric = {}) {
-        // Reuse the registry's claim. Its winner processes the physical result before
-        // public dispatch; a late result follows the already selected public terminal.
-        const auto receive = [&] {
-            if (receiver)
-                receiver (terminal, payload, true);
-        };
-        const bool claimed =
-          terminal == foundation::operation_terminal_t::completed
-            ? operations->complete (operation, payload, receive, metric.value_or (terminal))
-            : operations->fail (operation, terminal,
-                                payload ? payload : result_t<zlink::message_t>::success ({}),
-                                receive, metric);
-        if (!claimed && receiver)
-            receiver (terminal, std::move (payload), false);
+        deliver_request_terminal (operations, operation, terminal, std::move (payload), receiver,
+                                  metric);
     };
     if (!settled) {
         deliver (foundation::operation_terminal_t::transport_failed,
@@ -1465,8 +1509,7 @@ try {
         if (value.registered) {
             try {
                 auto finish = [operations = _operations, operation = value.operation,
-                               correlation = value.correlation,
-                               receiver = std::move (receiver)] (auto result) {
+                               correlation = value.correlation, receiver] (auto result) {
                     observe_request (operations, operation, correlation, std::move (result),
                                      receiver);
                 };
@@ -1475,7 +1518,8 @@ try {
                     (void) submit_registered_request (
                       port, observe_request_peer_on_lane (target_routing_id), _operations,
                       value.operation, value.correlation, target_routing_id, std::move (wire), {},
-                      deadline, value.admitted->task (), value.admitted, std::move (finish));
+                      deadline, value.admitted->task (), value.admitted, std::move (finish),
+                      std::move (receiver));
                 }
             }
             catch (...) {

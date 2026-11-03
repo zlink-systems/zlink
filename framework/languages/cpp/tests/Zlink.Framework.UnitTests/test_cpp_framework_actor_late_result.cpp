@@ -16,6 +16,30 @@ namespace zlink::framework::runtime::mesh
 {
 struct raw_mesh_node_owner_test_access_t
 {
+    static task_t<bool>
+    submit_unadmitted (raw_mesh_node_owner_t &owner,
+                       std::shared_ptr<foundation::operation_registry_t> registry,
+                       foundation::operation_registry_t::callback_t callback,
+                       raw_mesh_node_owner_t::physical_receiver_t receiver,
+                       bool expired_deadline)
+    {
+        owner._operations = std::move (registry);
+        auto expected = owner._options.descriptor;
+        expected.node_routing_id = {'n'};
+        expected.advertised_endpoint = "tcp://127.0.0.1:1";
+        owner._expected_peers.emplace (expected.node_routing_id, std::move (expected));
+        return owner.request_with_header (
+          {'n'},
+          [] (std::uint64_t correlation) {
+              return protocol::encode_actor_message_header (protocol::command::actorRequest, {},
+                                                            {"actor", 3, {'n'}, 5, 7, 11},
+                                                            {1, correlation}, correlation);
+          },
+          {"request", "application/json", {123, 125}},
+          foundation::operation_registry_t::clock_t::now ()
+            + (expired_deadline ? -std::chrono::hours (1) : std::chrono::hours (1)),
+          std::move (callback), 17, true, {}, {}, {}, std::move (receiver));
+    }
     static void deliver (std::shared_ptr<foundation::operation_registry_t> registry,
                          foundation::call_id_t operation,
                          result_t<detail::backend::raw_request_completion_t> result,
@@ -105,6 +129,7 @@ class late_actor_fixture_t : public testing::Test
     std::atomic_int receiver_calls{0};
     std::atomic_int resource_releases{0};
     std::atomic_int payload_releases{0};
+    std::optional<std::pair<terminal_t, bool>> physical_terminal;
     std::promise<void> public_callback_entered;
     std::promise<void> received;
     std::future<void> received_future = received.get_future ();
@@ -116,19 +141,24 @@ class late_actor_fixture_t : public testing::Test
     };
 
     static fw::request_task_t<fw::message_t>
-    unwrap (fw::request_task_t<fw::result_t<fw::message_t>> selected)
+    unwrap (fw::request_task_t<fw::result_t<fw::message_t>> selected,
+            std::shared_ptr<void> lifetime = {})
     {
         auto reply = co_await fw::detail::request_submission (std::move (selected));
         co_return reply.value ();
     }
 
-    fw::request_task_t<fw::message_t> prepare (std::shared_future<void> released = {})
+    fw::request_task_t<fw::message_t>
+    prepare (std::shared_future<void> released = {},
+             rt::mesh::raw_mesh_node_owner_t *unadmitted = nullptr,
+             std::shared_ptr<void> lifetime = {},
+             bool expired_deadline = false)
     {
         access::cache (*client, fence);
         operation.id = {1, 17};
         auto selected =
           fw::detail::request_task_access_t::receive_public<fw::result_t<fw::message_t>> (
-            [this] (auto receiver) {
+            [this, unadmitted] (auto receiver) {
                 auto resource =
                   std::shared_ptr<receiver_resource_t> (new receiver_resource_t{resource_releases});
                 auto observed = receiver.template project<fw::result_t<fw::message_t>> (
@@ -139,29 +169,97 @@ class late_actor_fixture_t : public testing::Test
                   });
                 auto physical = access::prepare (*client, fence, std::move (observed));
                 runtime->prepare_actor_request_reply (operation, physical);
-                binding_receiver =
-                  [host = host, operation = operation] (auto terminal, auto payload, bool claimed) {
-                      rt::host::public_host_runtime_test_access_t::receive (
-                        *host, operation, terminal, std::move (payload), claimed);
-                  };
-                physical.admitted->complete (fw::result_t<void>::success ());
+                binding_receiver = [this, host = host, operation = operation] (
+                                     auto terminal, auto payload, bool claimed) {
+                    physical_terminal = std::pair{terminal, claimed};
+                    if (claimed)
+                        EXPECT_FALSE (operation.completion->task ().await_ready ());
+                    rt::host::public_host_runtime_test_access_t::receive (
+                      *host, operation, terminal, std::move (payload), claimed);
+                };
+                if (!unadmitted)
+                    physical.admitted->complete (fw::result_t<void>::success ());
             });
         auto public_operation = operation;
         public_operation.receiver = {};
-        EXPECT_TRUE (registry->register_operation (
-          operation.id, fd::operation_registry_t::clock_t::time_point{} + 1ms,
-          [this, host = host, operation = std::move (public_operation), released] (auto terminal,
-                                                                                   auto payload) {
-              if (released.valid ()) {
-                  public_callback_entered.set_value ();
-                  released.wait ();
-              }
-              rt::host::public_host_runtime_test_access_t::complete (*host, operation, terminal,
-                                                                     std::move (payload));
-          }));
+        auto complete = [this, host = host, operation = std::move (public_operation),
+                         released] (auto terminal, auto payload) {
+            if (released.valid ()) {
+                public_callback_entered.set_value ();
+                released.wait ();
+            }
+            rt::host::public_host_runtime_test_access_t::complete (*host, operation, terminal,
+                                                                   std::move (payload));
+        };
+        if (unadmitted) {
+            auto submitting = rt::mesh::raw_mesh_node_owner_test_access_t::submit_unadmitted (
+              *unadmitted, registry, std::move (complete), std::move (binding_receiver),
+              expired_deadline);
+            if (expired_deadline) {
+                // Admission failure is published by the completion dispatcher.
+                EXPECT_FALSE (submitting.result ());
+            } else if (submitting.await_ready ()) {
+                const auto result = submitting.result ();
+                if (!result) {
+                    try {
+                        std::rethrow_exception (result.exception ());
+                    }
+                    catch (const std::exception &error) {
+                        ADD_FAILURE () << error.what ();
+                    }
+                }
+                EXPECT_FALSE (submitting.await_ready ());
+            }
+        } else {
+            EXPECT_TRUE (registry->register_operation (
+              operation.id, fd::operation_registry_t::clock_t::time_point{} + 1ms,
+              std::move (complete)));
+        }
         // These copies are held by the binding and registry, as in production.
         operation.receiver = {};
-        return unwrap (std::move (selected));
+        return unwrap (std::move (selected), std::move (lifetime));
+    }
+
+    void expect_unadmitted_terminal (terminal_t terminal, bool expired_deadline = false)
+    {
+        rt::mesh::raw_mesh_node_owner_t owner (host_options ().mesh);
+        owner.start ();
+        auto frame_released = std::make_shared<std::promise<void>> ();
+        auto released = frame_released->get_future ();
+        auto lifetime =
+          std::shared_ptr<void> (client.get (), [client = client, frame_released] (void *) mutable {
+              client.reset ();
+              frame_released->set_value ();
+          });
+        auto pending = prepare ({}, &owner, std::move (lifetime), expired_deadline);
+        std::weak_ptr<fw::actor_client_t> retained = client;
+        client.reset ();
+        if (!expired_deadline)
+            EXPECT_FALSE (retained.expired ());
+        if (expired_deadline)
+            EXPECT_FALSE (registry->contains (operation.id));
+        else if (terminal == terminal_t::timed_out)
+            ASSERT_EQ (
+              registry->expire (fd::operation_registry_t::clock_t::now () + 2h).result ().value (),
+              1u);
+        else if (terminal == terminal_t::cancelled)
+            ASSERT_TRUE (registry->cancel (operation.id));
+        else if (terminal == terminal_t::shutdown)
+            ASSERT_EQ (registry->shutdown (), 1u);
+        else
+            ASSERT_EQ (registry->fail_target ({'n'}, terminal), 1u);
+        const auto failure = pending.result ();
+        ASSERT_FALSE (failure);
+        if (terminal == terminal_t::timed_out)
+            EXPECT_EQ (failure.error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+        registry->shutdown ();
+        // Task result publication precedes coroutine-frame destruction. This owned
+        // deleter proves the physical await finished and released its frame state.
+        ASSERT_EQ (released.wait_for (2s), std::future_status::ready);
+        EXPECT_EQ (receiver_calls, 1);
+        ASSERT_TRUE (physical_terminal);
+        EXPECT_EQ (physical_terminal->first, terminal);
+        EXPECT_EQ (physical_terminal->second, expired_deadline);
     }
 
     void expire ()
@@ -371,6 +469,31 @@ TEST_F (late_actor_fixture_t, PreparedReceiverRetainsClientUntilLateDeliveryFini
     expect_received ();
     EXPECT_TRUE (retained.expired ());
     EXPECT_EQ (pending.result ().exception (), before.exception ());
+}
+
+TEST_F (late_actor_fixture_t, UnadmittedRequestReleasesPhysicalReceiverAfterTimeout)
+{
+    expect_unadmitted_terminal (terminal_t::timed_out);
+}
+
+TEST_F (late_actor_fixture_t, UnadmittedRequestReleasesPhysicalReceiverAfterCancellation)
+{
+    expect_unadmitted_terminal (terminal_t::cancelled);
+}
+
+TEST_F (late_actor_fixture_t, UnadmittedRequestReleasesPhysicalReceiverAfterShutdown)
+{
+    expect_unadmitted_terminal (terminal_t::shutdown);
+}
+
+TEST_F (late_actor_fixture_t, UnadmittedRequestReleasesPhysicalReceiverAfterRouteFailure)
+{
+    expect_unadmitted_terminal (terminal_t::route_unavailable);
+}
+
+TEST_F (late_actor_fixture_t, ExpiredAdmissionClaimsPhysicalReceiverBeforePublicDispatch)
+{
+    expect_unadmitted_terminal (terminal_t::timed_out, true);
 }
 
 TEST_F (late_actor_fixture_t, ClaimedTimeoutWinsBeforeItsPublicCallbackPublishes)
