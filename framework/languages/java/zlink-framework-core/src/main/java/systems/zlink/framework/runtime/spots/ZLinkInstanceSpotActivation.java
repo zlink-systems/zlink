@@ -7,6 +7,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatch
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceRouteFence;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkSpotCloseReason;
 import systems.zlink.framework.spots.ZLinkSpotClosingContext;
@@ -14,6 +15,7 @@ import systems.zlink.framework.spots.ZLinkSpotClosingContext;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -27,20 +29,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     private ScheduledFuture<?> idleCheck;
     private long idleTimeoutNanos;
     private long lastActivityNanos = System.nanoTime();
-    private String expectedOwnerId;
-    private long expectedOwnerLeaseGeneration = -1;
-    private long expectedAuthorityOwnerGeneration = -1;
-    private long expectedNodeGeneration = -1;
-    // expectedNodeGeneration carries a node lifecycle-generation opaque
-    // equality token (.NET ulong, spec 01-glossary "Lifecycle generation"):
-    // full 64-bit range, only zero is unassigned, so a value with bit 63 set
-    // decodes to a negative Java long that is a LEGITIMATE token. Unlike
-    // expectedOwnerLeaseGeneration/expectedAuthorityOwnerGeneration (spec
-    // "OwnerLeaseGeneration"/"AuthorityOwnerGeneration": contractually
-    // bounded to 1..long.MaxValue, so a negative sentinel can never collide
-    // with a real value), -1 cannot safely double as "not yet set" for this
-    // field. authorityFenceEstablished is the non-sign-based presence flag.
-    private boolean authorityFenceEstablished;
+    private InstanceRouteFence authorityFence;
     private String sealedStoreVersion;
 
     ZLinkInstanceSpotActivation(
@@ -102,18 +91,10 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         return true;
     }
 
-    void setAuthorityFence(
-            String ownerId,
-            long ownerLeaseGeneration,
-            long authorityOwnerGeneration,
-            long nodeGeneration) {
+    void setAuthorityFence(InstanceRouteFence route) {
         inStateLane(
                 () -> {
-                    expectedOwnerId = ownerId;
-                    expectedOwnerLeaseGeneration = ownerLeaseGeneration;
-                    expectedAuthorityOwnerGeneration = authorityOwnerGeneration;
-                    expectedNodeGeneration = nodeGeneration;
-                    authorityFenceEstablished = true;
+                    authorityFence = Objects.requireNonNull(route, "route");
                     return null;
                 });
     }
@@ -122,12 +103,11 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             String ownerId, long ownerLeaseGeneration, long authorityOwnerGeneration) {
         return inStateLane(
                 () ->
-                        (expectedOwnerId == null || expectedOwnerId.equals(ownerId))
-                                && (expectedOwnerLeaseGeneration < 0
-                                        || expectedOwnerLeaseGeneration == ownerLeaseGeneration)
-                                && (expectedAuthorityOwnerGeneration < 0
-                                        || expectedAuthorityOwnerGeneration
-                                                == authorityOwnerGeneration));
+                        authorityFence == null
+                                || authorityFence.ownerId().equals(ownerId)
+                                        && authorityFence.leaseGeneration() == ownerLeaseGeneration
+                                        && authorityFence.authorityOwnerGeneration()
+                                                == authorityOwnerGeneration);
     }
 
     boolean authorityFenceMatches(
@@ -156,44 +136,28 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     long expectedNodeGeneration() {
-        return inStateLane(() -> expectedNodeGeneration);
+        return inStateLane(
+                () -> authorityFence == null ? -1 : authorityFence.targetNodeGeneration());
     }
 
     boolean hasExpectedNodeGeneration() {
-        return inStateLane(() -> authorityFenceEstablished);
+        return inStateLane(() -> authorityFence != null);
     }
 
     long expectedAuthorityOwnerGeneration() {
-        return inStateLane(() -> expectedAuthorityOwnerGeneration);
+        return inStateLane(
+                () -> authorityFence == null ? -1 : authorityFence.authorityOwnerGeneration());
     }
 
-    systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceRouteFence
-            authorityRouteFence() {
-        return inStateLane(this::authorityRouteFenceOnLane);
-    }
-
-    private systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                    .InstanceRouteFence
-            authorityRouteFenceOnLane() {
-        if (!authorityFenceEstablished) {
-            // Guards against ever shipping the unset -1 sentinel as a node
-            // lifecycle-generation opaque token: unlike a bounded field, -1
-            // is not distinguishable from a legitimate negative-as-long
-            // token here, so a fence built before setAuthorityFence() would
-            // be indistinguishable from a real (and wrong) value.
-            throw new IllegalStateException(
-                    "Instance Spot authority fence requested before it was established");
-        }
-        return new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                .InstanceRouteFence(
-                context.nodeRid(),
-                expectedNodeGeneration,
-                context.spotId(),
-                context.objectGeneration(),
-                expectedOwnerId,
-                expectedAuthorityOwnerGeneration,
-                expectedOwnerLeaseGeneration,
-                sealedStoreVersion == null ? "" : sealedStoreVersion);
+    InstanceRouteFence authorityRouteFence() {
+        return inStateLane(
+                () -> {
+                    if (authorityFence == null) {
+                        throw new IllegalStateException(
+                                "Instance Spot authority fence requested before it was established");
+                    }
+                    return authorityFence;
+                });
     }
 
     void startIdleEviction(Duration timeout) {
