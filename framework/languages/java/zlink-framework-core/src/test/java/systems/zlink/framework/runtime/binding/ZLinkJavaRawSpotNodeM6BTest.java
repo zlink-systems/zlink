@@ -1290,7 +1290,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 .anyMatch(
                                         record ->
                                                 record.contains("phase=dropped")
-                                                        && record.contains("packet=stale-send")));
+                                                        && record.contains("packet=stale-send")
+                                                        && record.contains(
+                                                                "source_rid=" + sourceRid)
+                                                        && record.contains(
+                                                                "session=" + sessionRid)));
                 assertTrue(
                         records.stream()
                                 .anyMatch(
@@ -1298,7 +1302,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                                 record.contains("event_id=zlink.dispatch_error")
                                                         && record.contains("packet=stale-request")
                                                         && record.contains(
-                                                                "source_rid=" + sessionRid)
+                                                                "source_rid=" + sourceRid)
                                                         && record.contains(
                                                                 "session=" + sessionRid)));
                 assertEquals(5, stagingCalls.get());
