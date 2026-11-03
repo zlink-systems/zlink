@@ -8470,9 +8470,7 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
         }
         held.reset ();
         mesh->application_jobs->stop ();
-        scheduler->run_all ();
-        node->worker_executor->request_stop ();
-        node->worker_executor->drain ();
+        scheduler->retire ();
         native->close ();
         node->native_node.reset ();
         detail::dispatch_options_access_t::set_observer_for_tests (node->dispatch, {});
@@ -8564,6 +8562,13 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
     if (finish_barrier) {
         auto complete = std::exchange (finish_barrier, {});
         complete (fw::result_t<void>::success ());
+    }
+    if (source_barrier) {
+        // The previous Spot's barrier settles on another lane. An empty manual
+        // queue does not establish that its final continuation has been published.
+        auto terminal = source_barrier->terminal ();
+        scheduler->run_until (terminal);
+        ASSERT_TRUE (terminal.result ());
     }
     scheduler->run_all ();
     scheduler->run_until (handler_finished);
