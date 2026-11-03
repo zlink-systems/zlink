@@ -78,6 +78,8 @@ test(
         .inMesh(mesh)
         .submit();
       assert.equal(existing.state, framework.ZLinkSpotCreateState.Existing);
+      // Telemetry bootstrap is asynchronous and message processing does not wait for it.
+      await telemetry.observed();
       const reply = await requester
         .get(n.ZLINK_SPOT_OUTBOUND)
         .requestToSpot('room', new FirstRequest())
