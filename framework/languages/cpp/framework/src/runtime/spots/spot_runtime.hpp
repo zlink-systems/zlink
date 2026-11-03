@@ -1901,9 +1901,9 @@ class spot_node_runtime_t
                                 std::chrono::system_clock::time_point deadline,
                                 service::spot_close_begin_t begin,
                                 service::spot_close_done_t done);
-    bool close_all_user_spots (std::chrono::steady_clock::time_point deadline_at,
-                               std::chrono::system_clock::time_point closing_deadline,
-                               std::stop_source &cleanup_cancellation);
+    bool close_all_spots (std::chrono::steady_clock::time_point deadline_at,
+                          std::chrono::system_clock::time_point closing_deadline,
+                          std::stop_source &cleanup_cancellation);
     node_rid_t node_rid () const;
     std::optional<std::string> spot_name_for (spot_id_t spot_id) const;
     std::optional<spot_route_t> resolve_spot (spot_id_t spot_id) const;

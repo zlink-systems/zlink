@@ -726,7 +726,7 @@ int main ()
     const auto accepted_barrier = app_runtime.find ("wait_for_accepted_callbacks_until");
     const auto relocation_dispatch = app_runtime.find ("join_application_actor_to_entry_spot");
     const auto stream_barrier = app_runtime.find ("drain_sessions_until", accepted_barrier);
-    const auto spot_close = app_runtime.find ("close_all_user_spots", stream_barrier);
+    const auto spot_close = app_runtime.find ("close_all_spots", stream_barrier);
     const auto owner_cleanup = app_runtime.find ("cleanup_owner", spot_close);
     gate.require (relocation_dispatch != std::string::npos && accepted_barrier != std::string::npos
                     && accepted_barrier < stream_barrier && stream_barrier < spot_close
