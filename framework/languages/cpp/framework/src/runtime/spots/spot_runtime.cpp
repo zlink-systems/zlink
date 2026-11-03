@@ -11155,10 +11155,10 @@ result_t<void> spot_node_runtime_t::stage_remote_actor_commit_backlog (
     return result_t<void>::success ();
 }
 
-result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
-  const std::string &transfer_id,
-  const actor_ref_t &actor_ref,
-  const spot_id_t &target_spot_id,
+task_t<result_t<void>> spot_node_runtime_t::commit_remote_actor_authority (
+  std::string transfer_id,
+  actor_ref_t actor_ref,
+  spot_id_t target_spot_id,
   std::uint64_t target_spot_generation,
   std::uint64_t source_authority_owner_generation,
   std::string source_mesh_name,
@@ -11172,8 +11172,9 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
     const auto pending =
       _state->actor_transfer_coordinator->pending_commit (transfer_id, actor_ref, target_spot_id);
     if (!pending) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "remote Actor authority commit has no pending admission");
+        co_return result_t<void>::failure (
+          framework_error_kind_t::protocol_error,
+          "remote Actor authority commit has no pending admission");
     }
     struct authority_commit_plan_t
     {
@@ -11201,27 +11202,28 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
                         })
                         .get ();
     if (!plan.relocation_authority) {
-        return result_t<void>::failure (framework_error_kind_t::not_configured,
-                                        "remote Actor authority commit requires a Location Store");
+        co_return result_t<void>::failure (
+          framework_error_kind_t::not_configured,
+          "remote Actor authority commit requires a Location Store");
     }
     if (expected_source_store_version.empty () || source_authority_owner_generation == 0
         || source_authority_owner_generation == std::numeric_limits<std::uint64_t>::max ()
         || target_mesh_name.empty () || target_node_lifecycle_generation == 0
         || target_owner.owner_id.empty () || target_owner.lease_generation <= 0) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "remote Actor authority commit fence is invalid");
+        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                           "remote Actor authority commit fence is invalid");
     }
 
     const auto &native = plan.native;
     const auto &target_node_id = plan.target_node_id;
     if (!native || native->status ().routing_id ().to_string () != target_node_id
         || native->status ().lifecycle_generation () != target_node_lifecycle_generation) {
-        return result_t<void>::failure (framework_error_kind_t::unavailable,
-                                        "remote Actor authority target lifecycle is stale");
+        co_return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                           "remote Actor authority target lifecycle is stale");
     }
     if (target_spot_generation == 0 || source_mesh_name.empty () || target_mesh_name.empty ()) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "remote Actor authority route identity is incomplete");
+        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                           "remote Actor authority route identity is incomplete");
     }
     const runtime::stateful::object_ref_t source{runtime::stateful::object_kind_t::actor,
                                                  std::string (actor_ref.actor_id ().value ()),
@@ -11280,16 +11282,16 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
         }
     }
     catch (const std::exception &error) {
-        return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
+        co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
     }
     const auto &current = published.current;
     if (!current) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
     if (current->source != source) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
@@ -11299,23 +11301,23 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
       && current->target.mesh_name == target.mesh_name && current->target.node_id == target.node_id
       && current->target.authority_owner_generation > current->source.authority_owner_generation;
     if (!target_identity_matches) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
     if (current->target_owner.owner_id != target_owner.owner_id
         || current->target_owner.lease_generation != target_owner.lease_generation) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
     if (!current->relocation_reference.empty () || current->checksum_crc32c != 0) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
     if (current->inventory_digest != inventory_digest) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "remote Actor authority commit conflicted with current authority");
     }
@@ -11333,7 +11335,7 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
       current->target.authority_owner_generation,
       current->target.mesh_name,
       current->target.node_id};
-    (void) native->advance_local_actor_authority (committed_target);
+    (void) co_await native->advance_local_actor_authority (committed_target);
     const auto local_node_routing_id = native->status ().routing_id ().to_bytes ();
     _state->lane
       .run ([&] {
@@ -11371,8 +11373,8 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
             const actor_location_t &lost) { deactivate_actor_location (weak_state, lost); },
           true);
         if (adopted.status != location_write_status_t::stored) {
-            return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                            "committed remote Actor authority adoption failed");
+            co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                               "committed remote Actor authority adoption failed");
         }
     }
     if (committed_previous_authority_owner_generation != nullptr)
@@ -11383,7 +11385,7 @@ result_t<void> spot_node_runtime_t::commit_remote_actor_authority (
         emit_actor_transfer_marker ("location_committed", target_actor, transfer_id,
                                     target_spot_id);
     }
-    return result_t<void>::success ();
+    co_return result_t<void>::success ();
 }
 
 std::optional<actor_join_reply_t>

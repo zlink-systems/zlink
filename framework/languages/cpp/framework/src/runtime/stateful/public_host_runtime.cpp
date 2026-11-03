@@ -2951,22 +2951,35 @@ spot_handle_t public_host_runtime_t::bind_relocation_spot (stateful::object_ref_
     return spot_handle_t (shared_from_this (), std::move (object));
 }
 
-stateful::stateful_error_t
-public_host_runtime_t::advance_local_actor_authority (const stateful::object_ref_t &committed)
+task_t<stateful::stateful_error_t>
+public_host_runtime_t::advance_local_actor_authority (stateful::object_ref_t committed)
 {
-    return _spot_actor_index_lane
-      .run ([&] {
+    const auto host = shared_from_this ();
+    const auto previous = co_await _spot_actor_index_lane.run_task (
+      [&] () -> std::optional<std::pair<std::string, stateful::object_ref_t>> {
           const auto found = _actors.find (committed.key);
-          if (found == _actors.end ()) {
-              return stateful::stateful_error_t::none;
-          }
-          const auto advanced =
-            _objects.advance_local_actor_authority (committed, found->second.first);
-          if (advanced == stateful::stateful_error_t::none)
-              found->second.second = committed;
-          return advanced;
-      })
-      .get ();
+          if (found == _actors.end ())
+              return std::nullopt;
+          return found->second;
+      });
+    if (!previous)
+        co_return stateful::stateful_error_t::none;
+    const auto advanced =
+      co_await host->_objects.advance_local_actor_authority (committed, previous->first);
+    if (advanced != stateful::stateful_error_t::none)
+        co_return advanced;
+    co_return co_await _spot_actor_index_lane.run_task ([&] {
+        const auto found = _actors.find (committed.key);
+        if (found == _actors.end ())
+            return stateful::stateful_error_t::not_found;
+        // A duplicate publication is idempotent. A superseding identity or
+        // retirement must not be overwritten by the earlier object result.
+        if (found->second.first != previous->first
+            || (found->second.second != previous->second && found->second.second != committed))
+            return stateful::stateful_error_t::generation_stale;
+        found->second.second = committed;
+        return stateful::stateful_error_t::none;
+    });
 }
 
 actor_handle_t public_host_runtime_t::create_actor (std::string actor_type, std::string actor_id)
@@ -3016,34 +3029,34 @@ public_host_runtime_t::create_reserved_actor_async (std::string actor_type,
 {
     if (reserved.kind != stateful::object_kind_t::actor)
         throw std::invalid_argument ("reserved Actor reference has an invalid object kind");
-    //  State lanes §blocking boundary (06:211-226): an internal caller has no public sync
-    //  signature to keep, so every lane result here is awaited.
-    const auto existing =
-      co_await _spot_actor_index_lane.run_task ([&] () -> std::optional<actor_handle_t> {
+    const auto host = shared_from_this ();
+    const auto previous = co_await _spot_actor_index_lane.run_task (
+      [&] () -> std::optional<std::pair<std::string, stateful::object_ref_t>> {
           const auto found = _actors.find (reserved.key);
-          if (found != _actors.end ()) {
-              if (found->second.second.object_generation != reserved.object_generation
-                  || found->second.second.authority_owner_generation
-                       != reserved.authority_owner_generation) {
-                  const auto adopted = _objects.adopt_reserved_actor_owner (reserved, actor_type);
-                  if (adopted == stateful::stateful_error_t::none) {
-                      found->second.second = reserved;
-                      return actor_handle_t (shared_from_this (),
-                                             framework_actor_ref (reserved, found->second.first),
-                                             reserved);
-                  }
-                  throw std::runtime_error (
-                    "reserved Actor generation does not match the local Actor");
-              }
-              return actor_handle_t (
-                shared_from_this (),
-                framework_actor_ref (found->second.second, found->second.first),
-                found->second.second);
-          }
-          return std::nullopt;
+          if (found == _actors.end ())
+              return std::nullopt;
+          return found->second;
       });
-    if (existing)
-        co_return std::move (*existing);
+    if (previous) {
+        if (previous->second.object_generation == reserved.object_generation
+            && previous->second.authority_owner_generation == reserved.authority_owner_generation)
+            co_return actor_handle_t (shared_from_this (),
+                                      framework_actor_ref (previous->second, previous->first),
+                                      previous->second);
+        const auto adopted =
+          co_await host->_objects.adopt_reserved_actor_owner (reserved, actor_type);
+        if (adopted != stateful::stateful_error_t::none)
+            throw std::runtime_error ("reserved Actor generation does not match the local Actor");
+        co_await _spot_actor_index_lane.run_task ([&] {
+            const auto found = _actors.find (reserved.key);
+            if (found == _actors.end () || found->second.first != previous->first
+                || (found->second.second != previous->second && found->second.second != reserved))
+                throw std::runtime_error (
+                  "reserved Actor generation does not match the local Actor");
+            found->second.second = reserved;
+        });
+        co_return actor_handle_t (host, framework_actor_ref (reserved, previous->first), reserved);
+    }
     auto created = co_await _objects.begin_reserved_object_async (reserved, actor_type, {});
     if (created.error != stateful::stateful_error_t::none)
         throw std::runtime_error ("reserved framework Actor authority creation failed");
@@ -4144,7 +4157,8 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
     for (const auto &target : attempt.targets) {
         if (target.kind != stateful::object_kind_t::actor)
             continue;
-        if (advance_local_actor_authority (target) != stateful::stateful_error_t::none
+        const auto advanced = co_await advance_local_actor_authority (target);
+        if (advanced != stateful::stateful_error_t::none
             || (canonical_user_spot_join
                 && (!_actor_join_committed_authority_adopter
                     || !_actor_join_committed_authority_adopter (

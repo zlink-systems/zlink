@@ -943,8 +943,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<spot_close_commit_t> begin_user_spot_close (protocol::user_spot_close_fence_t target);
 
     spot_handle_t bind_relocation_spot (stateful::object_ref_t object);
-    stateful::stateful_error_t
-    advance_local_actor_authority (const stateful::object_ref_t &committed);
+    task_t<stateful::stateful_error_t>
+    advance_local_actor_authority (stateful::object_ref_t committed);
 
     protocol::application_payload_t
     encode_application (const std::vector<zlink::message_t> &parts,

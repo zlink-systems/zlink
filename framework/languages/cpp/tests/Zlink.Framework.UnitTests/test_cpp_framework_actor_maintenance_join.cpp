@@ -70,10 +70,27 @@ struct spot_node_runtime_test_access_t
 };
 }
 
+namespace zlink::framework::runtime
+{
+struct state_lane_test_access_t
+{
+    static bool pending_work (state_lane_t &lane)
+    {
+        const std::lock_guard lock (lane._mailbox_mutex);
+        return !lane._mailbox.empty ();
+    }
+};
+}
+
 namespace zlink::framework::runtime::stateful
 {
 struct stateful_object_runtime_test_access_t
 {
+    static bool pending_work (stateful_object_runtime_t &objects)
+    {
+        return runtime::state_lane_test_access_t::pending_work (objects._lane);
+    }
+
     static std::promise<void> hold_lane (stateful_object_runtime_t &objects)
     {
         return hold_lane (objects._lane);
@@ -141,6 +158,39 @@ namespace zlink::framework::runtime::host
 // Reproduce a superseded assembly at the activation boundary without timing races.
 struct public_host_runtime_test_access_t
 {
+    static task_t<stateful::stateful_error_t> advance_authority (public_host_runtime_t &host,
+                                                                 stateful::object_ref_t committed)
+    {
+        return host.advance_local_actor_authority (std::move (committed));
+    }
+
+    enum class authority_interleaving_t
+    {
+        unchanged,
+        superseded,
+        erased,
+        duplicate
+    };
+
+    static auto probe_actor_index (public_host_runtime_t &host,
+                                   stateful::object_ref_t replacement,
+                                   authority_interleaving_t change)
+    {
+        return host._spot_actor_index_lane.run (
+          [&host, replacement, change] () -> std::optional<stateful::object_ref_t> {
+              if (change == authority_interleaving_t::erased) {
+                  host._actors.erase (replacement.key);
+                  return std::nullopt;
+              }
+              const auto found = host._actors.find (replacement.key);
+              if (found == host._actors.end ())
+                  return std::nullopt;
+              if (change != authority_interleaving_t::unchanged)
+                  found->second.second = replacement;
+              return found->second.second;
+          });
+    }
+
     static std::promise<void> hold_objects (public_host_runtime_t &host)
     {
         return stateful::stateful_object_runtime_test_access_t::hold_lane (host._objects);
@@ -6388,6 +6438,125 @@ TEST (ActorMaintenanceJoin, CreateEntryJoinWaitsOutsideConfigurationTurn)
     release.set_value ();
     ASSERT_TRUE (creating.result ());
     node->close ();
+}
+
+// Occupy the object owner, then observe its mailbox before probing the index.
+// The mailbox observation establishes ordering without a sleep or scheduler assumption.
+using authority_interleaving_t =
+  fw::runtime::host::public_host_runtime_test_access_t::authority_interleaving_t;
+
+void verify_actor_authority_turns (bool adopt, authority_interleaving_t change)
+{
+    namespace host = fw::runtime::host;
+    namespace sf = fw::runtime::stateful;
+    using access_t = host::public_host_runtime_test_access_t;
+    const auto rid = zlink::routing_id_t::from (first_rid);
+    auto node = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      fw::test::runtime_failure_options (fw::runtime::mesh::raw_mesh_node_options_t{
+        .descriptor = {mesh_name,
+                       rid.to_bytes (),
+                       1,
+                       1,
+                       "tcp://127.0.0.1:0",
+                       {},
+                       fw::runtime::mesh::service_node_state_t::preparing}})});
+    node->start ();
+    const sf::object_ref_t original{sf::object_kind_t::actor, actor_id, 1, 1, mesh_name,
+                                    rid.to_string ()};
+    ASSERT_TRUE (node->create_reserved_actor_async (actor_type, original).result ());
+    auto committed = original;
+    ++committed.authority_owner_generation;
+    if (adopt)
+        committed.node_id = second_rid;
+    const bool erased = change == authority_interleaving_t::erased;
+    const bool stale = change == authority_interleaving_t::superseded;
+    const bool conflict = erased || stale;
+    auto replacement = committed;
+    if (stale)
+        ++replacement.authority_owner_generation;
+
+    auto release = access_t::hold_objects (*node);
+    auto operation = std::async (std::launch::async, [&] {
+        if (adopt) {
+            const auto result = node->create_reserved_actor_async (actor_type, committed).result ();
+            EXPECT_EQ (static_cast<bool> (result), !conflict);
+            if (conflict && !result) {
+                EXPECT_EQ (result.error ()->kind (), fw::framework_error_kind_t::internal_failure);
+                EXPECT_STREQ (result.error ()->what (),
+                              "reserved Actor generation does not match the local Actor");
+            }
+        } else {
+            const auto result = access_t::advance_authority (*node, committed).result ();
+            EXPECT_TRUE (result);
+            if (result)
+                EXPECT_EQ (result.value (), erased  ? sf::stateful_error_t::not_found
+                                            : stale ? sf::stateful_error_t::generation_stale
+                                                    : sf::stateful_error_t::none);
+        }
+    });
+    const auto deadline = std::chrono::steady_clock::now () + wait_budget;
+    while (!sf::stateful_object_runtime_test_access_t::pending_work (node->objects ())
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    EXPECT_TRUE (sf::stateful_object_runtime_test_access_t::pending_work (node->objects ()));
+    auto probe = access_t::probe_actor_index (*node, replacement, change);
+    EXPECT_EQ (probe.wait_for (wait_budget), std::future_status::ready)
+      << "Actor-index turn must end before waiting for the object owner";
+    release.set_value ();
+    const auto observed = probe.get ();
+    if (erased)
+        EXPECT_FALSE (observed);
+    else
+        EXPECT_EQ (observed,
+                   change == authority_interleaving_t::unchanged ? original : replacement);
+    operation.get ();
+    const auto published =
+      access_t::probe_actor_index (*node, replacement, authority_interleaving_t::unchanged).get ();
+    if (erased)
+        EXPECT_FALSE (published);
+    else
+        EXPECT_EQ (published, stale ? replacement : committed);
+    node->close ();
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdoptionReleasesIndexWhileObjectLaneIsBusy)
+{
+    verify_actor_authority_turns (true, authority_interleaving_t::unchanged);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdvancementReleasesIndexWhileObjectLaneIsBusy)
+{
+    verify_actor_authority_turns (false, authority_interleaving_t::unchanged);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdoptionRejectsSupersededIndexGeneration)
+{
+    verify_actor_authority_turns (true, authority_interleaving_t::superseded);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdvancementRejectsSupersededIndexGeneration)
+{
+    verify_actor_authority_turns (false, authority_interleaving_t::superseded);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdoptionDoesNotReinsertErasedIdentity)
+{
+    verify_actor_authority_turns (true, authority_interleaving_t::erased);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdvancementDoesNotReinsertErasedIdentity)
+{
+    verify_actor_authority_turns (false, authority_interleaving_t::erased);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdoptionAcceptsDuplicatePublication)
+{
+    verify_actor_authority_turns (true, authority_interleaving_t::duplicate);
+}
+
+TEST (ActorMaintenanceJoin, AuthorityAdvancementAcceptsDuplicatePublication)
+{
+    verify_actor_authority_turns (false, authority_interleaving_t::duplicate);
 }
 
 TEST (ActorMaintenanceJoin, DestroyStatefulActorYieldsWhileObjectsLaneIsBusy)
