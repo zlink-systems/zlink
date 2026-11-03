@@ -33,6 +33,8 @@
 
 namespace zlink::framework::runtime
 {
+constexpr auto auto_connect_wait = std::chrono::seconds (5);
+
 struct state_lane_test_access_t
 {
     static std::size_t pending_work (state_lane_t &lane)
@@ -262,15 +264,99 @@ struct location_auto_connect_test_access_t
         ASSERT_FALSE (pending.await_ready ());
         ASSERT_EQ (1u, calls);
         service._stop_requested.request_stop ();
-        // Model stop's cleanup while the target task is suspended. The loop
-        // must leave without using its earlier active iterator or adding a target.
-        loop.active.clear ();
+        // Stop waits for the loop before cleaning active targets. Finish the
+        // owner operation first, then model that cleanup after its effect is recorded.
         completion->complete (result_t<void>::success ());
         const auto result = pending.result_for (std::chrono::seconds (5));
         ASSERT_TRUE (result);
         EXPECT_TRUE (*result);
         EXPECT_EQ (1u, calls);
+        EXPECT_EQ (1u, loop.active.size ());
+        loop.active.clear ();
         EXPECT_TRUE (loop.active.empty ());
+    }
+
+    static void check_stop_after_pending_connect (location_auto_connect_host_service_t &service,
+                                                  location_runtime_t &runtime,
+                                                  detail::route_channel_runtime_t &route)
+    {
+        service._runtime = &runtime;
+        service._loop_finished = std::make_shared<task_completion_source_t<void>> ();
+        unsigned disconnects = 0;
+        service.add_loop (
+          "l4-mesh", std::nullopt, {}, std::nullopt, false,
+          [&service, &route] (auto target) {
+              return service.update_route_target (&service, &route, {}, std::move (target), false);
+          },
+          [&service, &route] (auto target) {
+              return service.update_route_target (&service, &route, {}, std::move (target), true);
+          },
+          [&service, &route, &disconnects] (const auto &target) {
+              ++disconnects;
+              service.disconnect_route_target (&service, route, {}, target);
+          });
+
+        auto &loop = service._loops.front ();
+        auto target = peer_target ();
+        auto descriptor = std::make_shared<mesh_node_descriptor_t> ();
+        descriptor->mesh_name = "l4-mesh";
+        descriptor->rid = target.node_rid;
+        descriptor->endpoint = target.endpoint;
+        descriptor->owner_id = "remote-owner";
+        descriptor->lease_generation = 1;
+        descriptor->lifecycle_generation = 1;
+        descriptor->state = framework_runtime_state_t::serving;
+        target.key = descriptor->rid.to_string ();
+        target.original = descriptor;
+        loop.last_desired.emplace (target.key, target);
+        auto sources = std::make_shared<live_location_reader_t::mesh_sources_t> ();
+        sources->push_back (
+          {*descriptor, std::chrono::steady_clock::now () + std::chrono::hours (1)});
+
+        std::promise<void> owner_entered, release_owner;
+        auto released = release_owner.get_future ().share ();
+        auto &owner = auto_connect_owner_lane (route);
+        auto held_owner = std::async (std::launch::async, [&] {
+            owner.run_sync ([&] {
+                owner_entered.set_value ();
+                released.wait ();
+            });
+        });
+        owner_entered.get_future ().wait ();
+
+        auto pending = service.reconcile (&loop, sources, true);
+        const auto owner_deadline = std::chrono::steady_clock::now () + auto_connect_wait;
+        while (state_lane_test_access_t::pending_work (owner) == 0
+               && std::chrono::steady_clock::now () < owner_deadline)
+            std::this_thread::yield ();
+        EXPECT_GT (state_lane_test_access_t::pending_work (owner), 0u);
+        EXPECT_FALSE (pending.await_ready ());
+
+        auto finished = service._loop_finished;
+        auto loop_runner =
+          std::async (std::launch::async, [pending = std::move (pending), finished] () mutable {
+              const auto result = pending.result_for (auto_connect_wait);
+              if (result)
+                  finished->complete (result_t<void>::success ());
+              else
+                  finished->complete (result_t<void>::failure (
+                    framework_error_kind_t::deadline_exceeded, "test reconcile did not finish"));
+          });
+        auto stopping = std::async (std::launch::async, [&] { service.stop (); });
+        const auto stop_deadline = std::chrono::steady_clock::now () + auto_connect_wait;
+        while (!service._stop_requested.stop_requested ()
+               && std::chrono::steady_clock::now () < stop_deadline)
+            std::this_thread::yield ();
+        EXPECT_TRUE (service._stop_requested.stop_requested ());
+
+        release_owner.set_value ();
+        held_owner.get ();
+        EXPECT_EQ (std::future_status::ready, loop_runner.wait_for (auto_connect_wait));
+        loop_runner.get ();
+        EXPECT_EQ (std::future_status::ready, stopping.wait_for (auto_connect_wait));
+        stopping.get ();
+        EXPECT_EQ (1u, disconnects);
+        EXPECT_TRUE (route.list_connections ().empty ());
     }
 
     static void configure_probe (location_auto_connect_host_service_t &service,
@@ -2149,7 +2235,6 @@ namespace
 {
 using namespace zlink::framework;
 using namespace zlink::framework::runtime;
-constexpr auto auto_connect_wait = std::chrono::seconds (5);
 
 template <typename Cache> task_t<void> recover_auto_cache (Cache *cache)
 {
@@ -2865,18 +2950,23 @@ void check_synchronous_auto_wrappers ()
 }
 } // namespace
 
-TEST (AutoConnectSyncDeathTest, ReconcileStopsBeforeTouchingActiveAfterTargetCompletion)
+TEST (AutoConnectSyncTest, ReconcileStopsBeforeTouchingActiveAfterTargetCompletion)
 {
-    ASSERT_EXIT (
-      {
-          for (int operation : {0, 1, 2}) {
-              production_auto_fixture_t fixture;
-              location_auto_connect_test_access_t::check_stop_between_targets (fixture.service,
-                                                                               operation);
-          }
-          std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
-      },
-      ::testing::ExitedWithCode (0), "");
+    for (int operation : {0, 1, 2}) {
+        production_auto_fixture_t fixture;
+        location_auto_connect_test_access_t::check_stop_between_targets (fixture.service,
+                                                                         operation);
+    }
+}
+
+TEST (AutoConnectSyncTest, StopDisconnectsConnectCompletedWhileStopIsPending)
+{
+    in_memory_location_repository_t store;
+    location_runtime_t runtime (store, {}, "auto-connect-stop");
+    production_auto_fixture_t fixture;
+    detail::route_channel_runtime_t route ("l4-mesh");
+    location_auto_connect_test_access_t::check_stop_after_pending_connect (fixture.service, runtime,
+                                                                           route);
 }
 
 TEST (AutoConnectSyncDeathTest, StopCompletesWithoutCompletionDispatcher)
