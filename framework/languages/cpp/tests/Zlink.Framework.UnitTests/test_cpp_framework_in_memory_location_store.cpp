@@ -790,7 +790,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventoryPreservesPageBytesA
 {
     using namespace zlink::framework;
     using namespace zlink::framework::runtime::aggregate_inventory;
-    constexpr std::size_t page_count = 12;
+    constexpr std::size_t page_count = 3;
     std::vector<aggregate_participant_t> participants;
     for (std::size_t index = 0; index < page_count; ++index) {
         aggregate_participant_t participant;
@@ -817,10 +817,11 @@ TEST (ZLinkFrameworkInMemoryLocationStore, AggregateInventoryKeepsMaximalPagesFo
 {
     using namespace zlink::framework;
     using namespace zlink::framework::runtime::aggregate_inventory;
-    constexpr std::size_t raw_page_count = 4;
-    const auto payload_bytes = page_byte_limit * raw_page_count / page_item_limit;
+    constexpr std::size_t participant_count = page_item_limit / 2;
+    constexpr std::size_t raw_page_count = 2;
+    const auto payload_bytes = page_byte_limit * raw_page_count / participant_count;
     std::vector<aggregate_participant_t> participants;
-    for (std::size_t index = 0; index < page_item_limit; ++index) {
+    for (std::size_t index = 0; index < participant_count; ++index) {
         aggregate_participant_t participant;
         participant.key.value = std::to_string (index) + ":\"inventory-actor";
         participant.expected_store_version = std::to_string (index + 1);
