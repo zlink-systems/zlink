@@ -243,9 +243,9 @@
           "tests": ["formal Actor Join runtime port preserves fixture order through target Ready before Session route"]
         },
         {
-          "path": "framework/languages/node/test/contract/actor-manager.test.js",
+          "path": "framework/languages/node/test/contract/canonical-actor-join-completion.test.js",
           "behaviorGroups": ["commonLifecycle", "actorJoin"],
-          "tests": ["Core source leave submission releases the target fence before its callback result"]
+          "tests": ["canonical source leave submission failure is reported without blocking Accepted completion"]
         },
         {
           "path": "framework/languages/node/test/contract/stream-runtime.test.js",
@@ -260,7 +260,7 @@
       ],
       "focusedCommands": [
         ["node", "--test", "--test-name-pattern=formal Actor Join runtime port preserves fixture order through target Ready before Session route", "test/contract/spot-manager.test.js"],
-        ["node", "--test", "--test-name-pattern=Core source leave submission releases the target fence before its callback result", "test/contract/actor-manager.test.js"],
+        ["node", "--test", "--test-name-pattern=canonical source leave submission failure is reported without blocking Accepted completion", "test/contract/canonical-actor-join-completion.test.js"],
         ["node", "--test", "--test-name-pattern=relocation target binding republish delivers the post-Join bound-session push exactly once|M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact terminal|concurrent identical ownership terminals commit once while push submits during seal|concurrent identical abort terminals reopen once after push submits during seal", "test/contract/stream-runtime.test.js"]
       ]
     }
