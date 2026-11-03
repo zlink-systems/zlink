@@ -12,11 +12,31 @@ namespace zlink::framework::tests
 {
 // A source gate, not a C++ lifetime proof: inspect closure reads following an
 // explicit suspension. Await operands are evaluated before that suspension.
-inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
+struct coroutine_scan_counts_t
 {
+    std::size_t files = 0;
+    std::size_t parsed_files = 0;
+    std::size_t lambdas = 0;
+    std::size_t binding_regex_passes = 0;
+    std::size_t regex_passes = 0;
+    std::size_t declaration_visits = 0;
+};
+inline std::vector<std::size_t>
+capturing_coroutine_reads (std::string source, coroutine_scan_counts_t *counts = nullptr)
+{
+    if (counts)
+        ++counts->files;
+    if (source.find ('[') == std::string::npos
+        || (source.find ("co_await") == std::string::npos
+            && source.find ("co_yield") == std::string::npos))
+        return {};
+    if (counts) {
+        ++counts->parsed_files;
+        counts->regex_passes += 4;
+    }
     // Preserve offsets and line breaks while masking comments and literals,
     // including raw strings containing braces, captures or coroutine keywords.
-    const std::regex trivia (
+    static const std::regex trivia (
       R"scan(\b[0-9][a-zA-Z_0-9'.]*|//[^\n]*|/\*[\s\S]*?\*/|(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\([\s\S]*?\)\1"|(?:u8|u|U|L)?"(?:\\[\s\S]|[^"\\])*"|(?:u8|u|U|L)?'(?:\\[\s\S]|[^'\\])*')scan");
     for (auto it = std::sregex_iterator (source.begin (), source.end (), trivia);
          it != std::sregex_iterator (); ++it) {
@@ -31,7 +51,7 @@ inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
         std::size_t offset;
     };
     std::vector<token_t> tokens;
-    const std::regex token (R"([a-zA-Z_]\w*|::|->|[^\s])");
+    static const std::regex token (R"([a-zA-Z_]\w*|::|->|[^\s])");
     for (auto it = std::sregex_iterator (source.begin (), source.end (), token);
          it != std::sregex_iterator (); ++it)
         tokens.push_back ({it->str (), static_cast<std::size_t> (it->position ())});
@@ -63,7 +83,7 @@ inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
     // Resolve default captures against lexical declarations. Type names,
     // qualified members and coroutine-local variables are not captures.
     std::vector<token_t> declarations;
-    const std::regex declaration (
+    static const std::regex declaration (
       R"((?:\b(?:const\s+)?[a-zA-Z_]\w*(?:::\w+)*(?:\s*<[^;{}=]*>)?[\s*&]+)([a-zA-Z_]\w*)\s*(?=[=;,:){\[]))");
     for (auto it = std::sregex_iterator (source.begin (), source.end (), declaration);
          it != std::sregex_iterator (); ++it) {
@@ -74,16 +94,42 @@ inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
         const auto position = static_cast<std::size_t> (it->position (1));
         declarations.push_back ({(*it)[1].str (), position});
     }
-    const std::regex binding (R"(\bauto\s*[&]*\s*\[([^\]]+)\])");
+    static const std::regex binding (R"(\bauto\s*[&]*\s*\[([^\]]+)\])");
     for (auto it = std::sregex_iterator (source.begin (), source.end (), binding);
          it != std::sregex_iterator (); ++it) {
         const auto position = static_cast<std::size_t> (it->position ());
         const auto names = (*it)[1].str ();
-        const std::regex name (R"([a-zA-Z_]\w*)");
+        if (counts)
+            ++counts->binding_regex_passes;
+        static const std::regex name (R"([a-zA-Z_]\w*)");
         for (auto n = std::sregex_iterator (names.begin (), names.end (), name);
              n != std::sregex_iterator (); ++n)
             declarations.push_back ({n->str (), position});
     }
+    // Index coroutine parameters once per file. A reference argument remains
+    // borrowed by the child coroutine even though the call precedes suspension.
+    std::set<std::string> borrowing_coroutines;
+    for (std::size_t i = 1; i + 1 < count; ++i) {
+        if (tokens[i].text != "(" || !identifier (tokens[i - 1].text) || close[i] == count)
+            continue;
+        auto body = close[i] + 1;
+        if (body >= count || tokens[body].text != "{" || close[body] == count)
+            continue;
+        bool reference = false;
+        for (auto j = i + 1; j < close[i]; ++j)
+            reference = reference || tokens[j].text == "&";
+        if (!reference)
+            continue;
+        for (auto j = body + 1; j < close[body]; ++j)
+            if (tokens[j].text == "co_await" || tokens[j].text == "co_yield") {
+                borrowing_coroutines.insert (tokens[i - 1].text);
+                break;
+            }
+    }
+    std::sort (declarations.begin (), declarations.end (),
+               [] (const auto &a, const auto &b) { return a.offset < b.offset; });
+    std::size_t declaration_cursor = 0;
+    std::set<std::string> outer_names;
     std::vector<std::size_t> found;
     for (std::size_t lambda = 0; lambda < count; ++lambda) {
         if (tokens[lambda].text != "[" || close[lambda] == count || close[lambda] == lambda + 1)
@@ -108,7 +154,10 @@ inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
         if (body == count || tokens[body].text != "{" || close[body] == count)
             continue;
         const auto end = close[body];
+        if (counts)
+            ++counts->lambdas;
         std::set<std::string> captures;
+        std::set<std::string> references;
         bool default_capture = false;
         for (auto i = lambda + 1; i < capture_end;) {
             if (tokens[i].text == "=" || tokens[i].text == "&") {
@@ -118,8 +167,11 @@ inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
             }
             if (i < capture_end && tokens[i].text == "*")
                 ++i;
-            if (i < capture_end && identifier (tokens[i].text))
+            if (i < capture_end && identifier (tokens[i].text)) {
                 captures.insert (tokens[i].text);
+                if (tokens[i - 1].text == "&")
+                    references.insert (tokens[i].text);
+            }
             // Initializer identifiers belong to the initializer, not the capture.
             while (i < capture_end && tokens[i].text != ",") {
                 if (close[i] != count)
@@ -130,12 +182,66 @@ inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
                 ++i;
         }
         std::set<std::string> locals;
-        std::set<std::string> outer_names;
-        for (const auto &decl : declarations) {
-            if (decl.offset < tokens[lambda].offset)
-                outer_names.insert (decl.text);
-            else if (decl.offset > tokens[capture_end].offset && decl.offset < tokens[end].offset)
-                locals.insert (decl.text);
+        while (declaration_cursor < declarations.size ()
+               && declarations[declaration_cursor].offset < tokens[lambda].offset) {
+            outer_names.insert (declarations[declaration_cursor++].text);
+            if (counts)
+                ++counts->declaration_visits;
+        }
+        for (auto d = declaration_cursor;
+             d < declarations.size () && declarations[d].offset < tokens[end].offset; ++d) {
+            if (counts)
+                ++counts->declaration_visits;
+            if (declarations[d].offset > tokens[capture_end].offset)
+                locals.insert (declarations[d].text);
+        }
+        const auto capture_read = [&] (std::size_t i) {
+            const auto &t = tokens[i].text;
+            if (!identifier (t) || (keywords.count (t) && t != "this"))
+                return false;
+            const auto &previous = tokens[i - 1].text;
+            const auto &next = tokens[i + 1].text;
+            if (previous == "." || previous == "->" || previous == "::" || next == "::")
+                return false;
+            return captures.count (t)
+                   || (captures.count ("this")
+                       && (t == "this" || t[0] == '_' || (next == "(" && !locals.count (t))))
+                   || (default_capture && !locals.count (t)
+                       && (t == "this" || t[0] == '_' || outer_names.count (t)));
+        };
+        // A loop's next iteration executes after its previous suspension. Seed
+        // that path only when the body can reach its back edge.
+        std::set<std::size_t> back_edges;
+        for (auto i = body + 1; i < end; ++i) {
+            if (tokens[i].text != "for" && tokens[i].text != "while")
+                continue;
+            auto loop = i + 1;
+            if (loop >= end || tokens[loop].text != "(" || close[loop] == count)
+                continue;
+            loop = close[loop] + 1;
+            if (loop >= end)
+                continue;
+            const bool braced = tokens[loop].text == "{" && close[loop] != count;
+            auto loop_end = braced ? close[loop] : loop;
+            if (!braced)
+                while (loop_end < end && tokens[loop_end].text != ";")
+                    ++loop_end;
+            bool awaits = false;
+            bool terminal = false;
+            unsigned depth = 0;
+            for (auto j = loop + (braced ? 1 : 0); j < loop_end; ++j) {
+                const auto &part = tokens[j].text;
+                awaits = awaits || part == "co_await" || part == "co_yield";
+                if (part == "{")
+                    ++depth;
+                if (part == "}" && depth)
+                    --depth;
+                if (!depth && (part == "co_return" || part == "break")
+                    && (j == loop || tokens[j - 1].text == "{" || tokens[j - 1].text == ";"))
+                    terminal = true;
+            }
+            if (awaits && !terminal)
+                back_edges.insert (i);
         }
         struct block_t
         {
@@ -150,6 +256,8 @@ inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
         bool alternate_suspended = false;
         for (auto i = body + 1; i < end; ++i) {
             const auto &t = tokens[i].text;
+            if (back_edges.count (i))
+                suspended = true;
             if (t == "{") {
                 blocks.push_back ({i, suspended, false, alternate_suspended});
                 alternate_suspended = false;
@@ -173,8 +281,19 @@ inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
                 return_expression = false;
                 if (blocks.empty ())
                     break;
-                blocks.back ().terminal = true;
-                i = close[blocks.back ().opening] - 1;
+                const auto block_end = close[blocks.back ().opening];
+                auto alternative = i + 1;
+                while (alternative < block_end && tokens[alternative].text != "case"
+                       && tokens[alternative].text != "default")
+                    ++alternative;
+                if (alternative < block_end) {
+                    suspended = blocks.back ().entry_suspended;
+                    i = alternative - 1;
+                    continue;
+                }
+                const bool catches = block_end + 1 < end && tokens[block_end + 1].text == "catch";
+                blocks.back ().terminal = !catches;
+                i = block_end - 1;
                 continue;
             }
             if (t == "co_await" || t == "co_yield") {
@@ -208,6 +327,18 @@ inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
                         } else
                             break;
                     }
+                    bool borrows = false;
+                    for (auto j = i + 1; j < operand; ++j)
+                        borrows = borrows || borrowing_coroutines.count (tokens[j].text);
+                    if (borrows)
+                        for (auto j = i + 1; j < operand; ++j)
+                            if (capture_read (j) && tokens[j - 1].text != "*"
+                                && tokens[j + 1].text != "->" && !references.count (tokens[j].text)
+                                && (captures.count (tokens[j].text)
+                                    || tokens[lambda + 1].text != "&")) {
+                                found.push_back (tokens[j].offset);
+                                break;
+                            }
                     i = operand - 1;
                     suspended = true;
                 }
@@ -233,21 +364,22 @@ inline std::vector<std::size_t> capturing_coroutine_reads (std::string source)
                                 found.push_back (tokens[c].offset);
                                 break;
                             }
+                    if (suspended) {
+                        bool borrows = false;
+                        for (auto c = i + 1; c < close[i]; ++c)
+                            borrows = borrows || tokens[c].text == "&" || tokens[c].text == "=";
+                        if (borrows)
+                            for (auto c = nested + 1; c < close[nested]; ++c)
+                                if (capture_read (c)) {
+                                    found.push_back (tokens[c].offset);
+                                    break;
+                                }
+                    }
                     i = close[nested];
                     continue;
                 }
             }
-            if (!suspended || !identifier (t) || (keywords.count (t) && t != "this"))
-                continue;
-            const auto &previous = tokens[i - 1].text;
-            const auto &next = tokens[i + 1].text;
-            if (previous == "." || previous == "->" || previous == "::" || next == "::")
-                continue;
-            const bool explicit_read = captures.count (t) != 0;
-            const bool member_read = captures.count ("this") && (t == "this" || t[0] == '_');
-            const bool implicit_read = default_capture && !locals.count (t)
-                                       && (t == "this" || t[0] == '_' || outer_names.count (t));
-            if (explicit_read || member_read || implicit_read) {
+            if (suspended && capture_read (i)) {
                 found.push_back (tokens[i].offset);
                 break;
             }

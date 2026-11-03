@@ -9015,9 +9015,10 @@ bool public_host_runtime_t::complete_local_actor_join (
     const bool completed = _transport->complete_local_operation_async (
       operation.id,
       [host = shared_from_this (), operation, actor_type = std::move (actor_type), membership,
-       result, parts] () mutable -> task_t<void> {
-          return complete_actor_join_t::run (host, operation, std::move (actor_type), membership,
-                                             result, parts);
+       result = result, parts = parts] () mutable -> task_t<void> {
+          return complete_actor_join_t::run (std::move (host), std::move (operation),
+                                             std::move (actor_type), std::move (membership),
+                                             std::move (result), std::move (parts));
       });
     return completed;
 }
@@ -9095,17 +9096,29 @@ public_host_runtime_t::cut_relocation_source (
     if (locate && principal != participants.end ())
         gate = co_await locate (*principal);
     if (gate) {
+        struct finish_relocation_t
+        {
+            static task_t<void> run (public_host_runtime_t *self,
+                                     std::weak_ptr<runtime::serial_execution_queue_t> weak_gate,
+                                     std::weak_ptr<stateful::relocation_seal_binding_t> weak,
+                                     stateful::object_ref_t owner,
+                                     std::decay_t<decltype (resume)> resume,
+                                     bool restored)
+            {
+                const auto binding = weak.lock ();
+                const auto gate = weak_gate.lock ();
+                if (!binding || !gate)
+                    co_return;
+                if (restored && resume) {
+                    (void) co_await self->dispatch_stateful_owner (owner, resume, gate, binding);
+                } else if (!restored) {
+                    (void) co_await gate->release_relocation_seal (binding);
+                }
+            }
+        };
         binding->finish = [this, weak_gate = std::weak_ptr (gate), weak = std::weak_ptr (binding),
                            owner = *principal, resume] (bool restored) -> task_t<void> {
-            const auto binding = weak.lock ();
-            const auto gate = weak_gate.lock ();
-            if (!binding || !gate)
-                co_return;
-            if (restored && resume) {
-                (void) co_await dispatch_stateful_owner (owner, resume, gate, binding);
-            } else if (!restored) {
-                (void) co_await gate->release_relocation_seal (binding);
-            }
+            return finish_relocation_t::run (this, weak_gate, weak, owner, resume, restored);
         };
     }
     std::vector<std::string> owners;

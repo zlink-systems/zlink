@@ -12,6 +12,37 @@ int main ()
         bool violation;
     };
     const case_t cases[]{
+      {"conditional loop return",
+       "[v](bool b) { for (;;) { if(b) { co_return; } use(v); co_await wait(); } }", true},
+      {"unbraced while", "[v] { while (ready(v)) co_await work(); }", true},
+      {"loop break", "[v] { for (;;) { use(v); co_await wait(); break; } }", false},
+      {"reference capture operand",
+       "task_t<void> callee(const T& v) { co_await wait(); use(v); } auto f = [&v] { co_return "
+       "co_await callee(v); };",
+       false},
+      {"default reference operand",
+       "task_t<void> callee(const T& v) { co_await wait(); use(v); } T v; auto f = [&] { co_return "
+       "co_await callee(v); };",
+       false},
+      {"for back edge", "[v] { for (;;) { use(v); co_await wait(); } }", true},
+      {"while back edge", "[v] { while (ready(v)) { co_await wait(); } }", true},
+      {"terminal loop", "[v] { for (;;) { co_return co_await work(v); } }", false},
+      {"catch after return", "[v] { try { co_return co_await work(); } catch (...) { use(v); } }",
+       true},
+      {"switch alternative",
+       "[v](int n) { switch(n) { case 0: co_return co_await work(); default: co_await work(); "
+       "use(v); } }",
+       true},
+      {"nested reference read", "[v] { co_await work(); auto f = [&] { return v; }; }", true},
+      {"member function", "[this] { co_await work(); finish(); }", true},
+      {"reference coroutine operand",
+       "task_t<void> callee(const T& v) { co_await wait(); use(v); } auto f = [v] { co_return "
+       "co_await callee(v); };",
+       true},
+      {"value coroutine operand",
+       "task_t<void> callee(T v) { co_await wait(); use(v); } auto f = [v] { co_return co_await "
+       "callee(v); };",
+       false},
       {"capture after await", "[value]() -> task_t<void> { co_await wait(); use(value); }", true},
       {"reference capture", "[&value] { co_await wait(); co_return value; }", true},
       {"init capture",

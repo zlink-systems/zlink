@@ -2439,7 +2439,7 @@ void app_t::_apply_zlink_framework ()
                  std::optional<runtime::spot_address_t> cached_route,
                  std::string packet_name,
                  std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
-                 const std::map<std::string, std::string> &metadata,
+                 std::map<std::string, std::string> metadata,
                  std::chrono::system_clock::time_point started_at)
             {
                 auto flow_scope = runtime::flow_context_t::enter_current_or_create (
@@ -2802,7 +2802,7 @@ void app_t::_apply_zlink_framework ()
                 const auto deadline = std::chrono::steady_clock::now () + budget;
                 if (!source)
                     co_return co_await detail::request_submission (
-                      deliver_relay (actor, header, payload, source, {}, budget, {}));
+                      deliver_relay (actor, header, std::move (payload), source, {}, budget, {}));
                 std::shared_ptr<task_completion_source_t<reply_t>> completion;
                 std::optional<runtime::foundation::call_id_t> operation;
                 auto session_owner_runtime = application_mesh->native_node ().shared_from_this ();
@@ -2948,7 +2948,7 @@ void app_t::_apply_zlink_framework ()
                     co_return std::nullopt;
                 }
                 co_return co_await detail::request_submission (
-                  deliver_relay (actor, header, payload, source, dispatch,
+                  deliver_relay (actor, header, std::move (payload), source, dispatch,
                                  std::chrono::duration_cast<std::chrono::milliseconds> (
                                    deadline - std::chrono::steady_clock::now ()),
                                  session_owner_runtime));

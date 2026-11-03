@@ -1162,30 +1162,44 @@ class spot_context_t
             auto serializers = _serializers;
             auto submit = _submit;
             auto preflight = _preflight;
+            struct request_spot_t
+            {
+                static request_task_t<TReply>
+                run (serializer_registry_t *serializers,
+                     std::decay_t<decltype (submit)> submit,
+                     const std::string &packet_name,
+                     std::chrono::milliseconds timeout,
+                     const typename request_call_t<TReply>::metadata_map_t &metadata)
+                {
+                    if (!submit) {
+                        co_return result_t<TReply>::failure (
+                          framework_error_kind_t::protocol_error,
+                          "spot request is not bound to a route channel");
+                    }
+                    if (serializers == nullptr) {
+                        co_return result_t<TReply>::failure (
+                          framework_error_kind_t::protocol_error,
+                          "spot request has no serializer registry");
+                    }
+                    try {
+                        auto reply = co_await detail::request_submission (
+                          submit (packet_name, timeout, metadata));
+                        co_return serializers->get<TReply> ().deserialize (
+                          detail::encoded_payload_from_raw (reply));
+                    }
+                    catch (const framework_exception_t &error) {
+                        co_return detail::result_access_t::failure<TReply> (error);
+                    }
+                }
+            };
             return request_call_t<TReply> (
               _packet_name,
-              [serializers, submit] (
-                const std::string &packet_name, std::chrono::milliseconds timeout,
-                const request_call_t<TReply>::metadata_map_t &metadata) -> request_task_t<TReply> {
-                  if (!submit) {
-                      co_return result_t<TReply>::failure (
-                        framework_error_kind_t::protocol_error,
-                        "spot request is not bound to a route channel");
-                  }
-                  if (serializers == nullptr) {
-                      co_return result_t<TReply>::failure (
-                        framework_error_kind_t::protocol_error,
-                        "spot request has no serializer registry");
-                  }
-                  try {
-                      auto reply = co_await detail::request_submission (
-                        submit (packet_name, timeout, metadata));
-                      co_return serializers->get<TReply> ().deserialize (
-                        detail::encoded_payload_from_raw (reply));
-                  }
-                  catch (const framework_exception_t &error) {
-                      co_return detail::result_access_t::failure<TReply> (error);
-                  }
+              [serializers, submit] (const std::string &packet_name,
+                                     std::chrono::milliseconds timeout,
+                                     const request_call_t<TReply>::metadata_map_t &metadata) mutable
+              -> request_task_t<TReply> {
+                  return request_spot_t::run (serializers, std::move (submit), packet_name, timeout,
+                                              metadata);
               },
               std::move (preflight));
         }

@@ -6507,7 +6507,7 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
     auto terminal_failure = [node = _state, actor_ref,
                              transfer_id] (handoff_packet_t &packet, framework_error_kind_t kind,
                                            std::string message) -> task_t<void> {
-        return fail_handoff_packet_t::run (node, actor_ref, transfer_id, packet, kind,
+        return fail_handoff_packet_t::run (node, actor_ref, transfer_id, std::move (packet), kind,
                                            std::move (message));
     };
     if (!context_state || !location || !context_state->channel_runtime

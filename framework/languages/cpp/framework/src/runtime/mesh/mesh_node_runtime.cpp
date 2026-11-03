@@ -47,6 +47,21 @@ namespace mesh_endpoint_notation = zlink::framework::runtime::transport;
 
 namespace zlink::framework::detail
 {
+namespace
+{
+task_t<bool>
+send_relocation_data_task (std::shared_ptr<runtime::host::public_host_runtime_t> node,
+                           std::vector<std::uint8_t> target,
+                           const std::vector<runtime::protocol::relocation_data_t> &records)
+{
+    for (const auto &record : records) {
+        if (!co_await node->transport ().send_relocation_control (target, record))
+            co_return false;
+    }
+    co_return true;
+}
+}
+
 struct mesh_node_runtime_t::message_follow_subscription_state_t
 {
     struct dispatch_frame_t
@@ -1393,12 +1408,7 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
       .send_relocation_data =
         [this, target] (const std::vector<runtime::protocol::relocation_data_t> &records,
                         const runtime::stateful::relocation_ingress_batch_t &) -> task_t<bool> {
-          for (const auto &record : records) {
-              if (!co_await _node->transport ().send_relocation_control (target.rid.to_bytes (),
-                                                                         record))
-                  co_return false;
-          }
-          co_return true;
+          return send_relocation_data_task (_node, target.rid.to_bytes (), records);
       },
       .send_application =
         [this, target] (const runtime::stateful::object_ref_t &owner,
@@ -1643,12 +1653,7 @@ mesh_node_runtime_t::relocate_application_unit (
       .send_relocation_data =
         [this, target] (const std::vector<runtime::protocol::relocation_data_t> &records,
                         const relocation_ingress_batch_t &) -> task_t<bool> {
-          for (const auto &record : records) {
-              if (!co_await _node->transport ().send_relocation_control (target.rid.to_bytes (),
-                                                                         record))
-                  co_return false;
-          }
-          co_return true;
+          return send_relocation_data_task (_node, target.rid.to_bytes (), records);
       },
       .send_application =
         [this, target] (const runtime::stateful::object_ref_t &owner,
@@ -3265,12 +3270,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .send_relocation_data =
         [this, s] (const std::vector<runtime::protocol::relocation_data_t> &records,
                    const runtime::stateful::relocation_ingress_batch_t &) -> task_t<bool> {
-          for (const auto &record : records) {
-              if (!co_await _node->transport ().send_relocation_control (
-                    s->target.node_rid.to_bytes (), record))
-                  co_return false;
-          }
-          co_return true;
+          return send_relocation_data_task (_node, s->target.node_rid.to_bytes (), records);
       },
       .send_application =
         [this, target = s->target] (const runtime::stateful::object_ref_t &owner,
