@@ -7,6 +7,11 @@ internal sealed class ZLinkFrameworkRegistration
 {
     private ZLinkScannedHandlerCatalog? _scannedHandlerCatalog;
 
+    internal ZLinkFrameworkRegistration()
+    {
+        Locations = new ZLinkLocationRegistration(() => TimeProvider);
+    }
+
     internal TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     public TimeSpan DefaultRequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
@@ -35,7 +40,7 @@ internal sealed class ZLinkFrameworkRegistration
 
     public List<Type> Filters { get; } = [];
 
-    public ZLinkLocationRegistration Locations { get; } = new();
+    public ZLinkLocationRegistration Locations { get; }
 
     public HashSet<Assembly> HandlerAssemblies { get; } = [];
 

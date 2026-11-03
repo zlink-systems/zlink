@@ -113,27 +113,34 @@ public sealed class RelocationRuntimeTests
         await runtime.StartAsync(CancellationToken.None);
         try
         {
-            var registration = new ZLinkFrameworkRegistration();
+            var time = new ControllableTimeProvider();
+            var registration = new ZLinkFrameworkRegistration { TimeProvider = time };
             registration.Locations.UseInMemoryStores = true;
             registration.Locations.Options.PollingInterval = TimeSpan.FromMinutes(5);
             var target = new ZLinkSpotRetireTargetRuntime(services, runtime, registration);
 
-            // The first pass removes the first expired stage and then waits
-            // for the polling interval.
+            // The initial schedule also wakes the first polling wait. Observe
+            // the next wait so that both initial passes finish before tracking
+            // the stage whose removal must require a new schedule.
+            var idle = time.WaitForNextTimerAsync(
+                registration.Locations.Options.PollingInterval,
+                occurrences: 2
+            );
             Assert.True(TrackExpiredPublishedStage(target));
             target.ScheduleReconciliation();
-            Assert.True(
-                SpinWait.SpinUntil(() => target.ActiveStageCount == 0, TimeSpan.FromSeconds(5))
-            );
+            await idle.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, target.ActiveStageCount);
 
             // A stage tracked after that pass is removed only by a later pass,
             // so only the schedule wake can run it before the interval elapses.
             Assert.True(TrackExpiredPublishedStage(target));
             Assert.Equal(1, target.ActiveStageCount);
-            target.ScheduleReconciliation();
-            Assert.True(
-                SpinWait.SpinUntil(() => target.ActiveStageCount == 0, TimeSpan.FromSeconds(5))
+            var reconciled = time.WaitForNextTimerAsync(
+                registration.Locations.Options.PollingInterval
             );
+            target.ScheduleReconciliation();
+            await reconciled.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, target.ActiveStageCount);
         }
         finally
         {

@@ -2681,6 +2681,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 await Task.WhenAny(
                         Task.Delay(
                             registration.Locations.Options.PollingInterval,
+                            registration.TimeProvider,
                             cancellationToken
                         ),
                         Volatile.Read(ref _reconciliationWake).Task
