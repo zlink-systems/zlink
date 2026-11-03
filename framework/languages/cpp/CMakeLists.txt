@@ -25,6 +25,11 @@ find_package(Threads REQUIRED)
 
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
+# Compile every translation unit with the same task definitions (including libraries).
+# Configuring BUILD_TESTS=OFF removes all creation probes from the product build.
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+  add_compile_definitions(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+endif()
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES "Build C++ framework samples (opt-in; samples/sample-build-common.sh enables it for each samples/<Sample>/run_sample.sh)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE "Build the C++ cross-language e2e host" ON)
@@ -2983,6 +2988,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_request_call_allocations PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  foreach(_allocation_test IN ITEMS test_cpp_framework_receive_allocations test_cpp_framework_request_call_allocations)
+    target_sources(${_allocation_test} PRIVATE tests/support/native_call_counter.cpp)
+    target_compile_definitions(${_allocation_test} PRIVATE ZLINK_TEST_COUNT_NATIVE_COPIES)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
+      foreach(_native_call IN ITEMS zlink_msg_init zlink_msg_init_size zlink_msg_init_data zlink_msg_copy zlink_msg_close zlink_poller_wait)
+        target_link_options(${_allocation_test} PRIVATE "-Wl,--wrap=${_native_call}")
+      endforeach()
+    endif()
+  endforeach()
   add_zlink_framework_test(
     test_cpp_framework_request_snapshots
     tests/Zlink.Framework.UnitTests/test_cpp_framework_request_snapshots.cpp
