@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
-#include <zlink/framework/contracts/actors/actor.hpp>
+#include "runtime/actors/actor_client.hpp"
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/dispatch/owned_task.hpp"
 #include "runtime/actors/actor_manager_access.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
@@ -375,8 +376,11 @@ namespace
 
 } // namespace
 
-class actor_client_impl_t final : public actor_client_t
+class actor_client_impl_t final : public actor_client_t,
+                                  public std::enable_shared_from_this<actor_client_impl_t>
 {
+    friend struct actor_client_test_access_t;
+
   public:
     actor_client_impl_t (live_location_reader_t &store,
                          serializer_registry_t &serializers,
@@ -385,7 +389,7 @@ class actor_client_impl_t final : public actor_client_t
                          location_options_t options,
                          detail::delay_owner_t &delays) :
         _store (&store),
-        _serializers (&serializers),
+        _serializers (detail::serializer_registry_access_t::retain (serializers)),
         _mesh_nodes (std::move (mesh_nodes)),
         _actor_locations (std::move (actor_locations)),
         _location_options (std::move (options)),
@@ -441,7 +445,7 @@ class actor_client_impl_t final : public actor_client_t
             co_return result_t<message_t>::failure (framework_error_kind_t::internal_failure,
                                                     "explicit Actor route reply body is missing");
         }
-        co_return result_t<message_t>::success (message_t::from_raw (*relayed, _serializers));
+        co_return result_t<message_t>::success (message_t::from_raw (*relayed, &_serializers));
     }
 
   protected:
@@ -488,6 +492,7 @@ class actor_client_impl_t final : public actor_client_t
          * can unwind while this coroutine is suspended: keep a frame-owned copy
          * before the first await so no resume reads through the dead reference
          * (session-reconnect-and-coroutine-lifetime doc). */
+        const auto lifetime = shared_from_this ();
         const actor_request_call_t::metadata_map_t metadata_frame = metadata;
         const auto release_turn = detail::actor_request_releases_current_turn ();
         if (!release_turn && detail::current_serial_turn_allows_yield ()
@@ -548,8 +553,14 @@ class actor_client_impl_t final : public actor_client_t
                 }
                 const auto remaining =
                   std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
-                last = co_await detail::request_submission (submit_request (
-                  actor.value (), packet_name, request, remaining, request_id, metadata_frame));
+                auto submitted = submit_request (actor.value (), packet_name, request, remaining,
+                                                 request_id, metadata_frame);
+                auto public_reply = detail::request_task_access_t::public_reply (submitted);
+                last = co_await detail::request_submission (std::move (submitted));
+                // Public-only failure has already propagated to the caller. The physical
+                // receiver has finished; no authority lookup or retry remains for that call.
+                if (public_reply.await_ready () && !public_reply.result ())
+                    co_return last;
                 if (!is_moving_stale (last)) {
                     /* A destructive lifecycle operation can remove the
                      * authority while this client still has a positive route
@@ -562,7 +573,6 @@ class actor_client_impl_t final : public actor_client_t
                     if (!last
                         && (last.error_kind () == framework_error_kind_t::unavailable
                             || last.error_kind () == framework_error_kind_t::not_found)) {
-                        invalidate_cached_route_on_stale (actor.value (), last.error_kind ());
                         const auto current =
                           co_await resolve_actor (actor_id_value, stale_policy_t::route_not_found);
                         if (!current
@@ -590,7 +600,7 @@ class actor_client_impl_t final : public actor_client_t
         }
     }
 
-    serializer_registry_t &actor_client_serializers () override { return *_serializers; }
+    serializer_registry_t &actor_client_serializers () override { return _serializers; }
 
   private:
     void release_message_follow_subscriptions () noexcept
@@ -611,7 +621,7 @@ class actor_client_impl_t final : public actor_client_t
     {
         actor_ref_t framework_ref;
         actor_ref_t native_ref;
-        node_rid_t node_rid;
+        std::uint64_t node_generation = 0;
         spot_id_t spot_id;
         std::string mesh_name;
         std::uint64_t authority_owner_generation = 0;
@@ -665,7 +675,7 @@ class actor_client_impl_t final : public actor_client_t
         auto resolved =
           resolved_actor_t{projection->actor,
                            projection->actor,
-                           snapshot->allocation.target.node_rid,
+                           snapshot->allocation.target.node_lifecycle_generation,
                            projection->spot_id,
                            snapshot->allocation.target.mesh_name,
                            snapshot->authority_owner_generation,
@@ -716,15 +726,16 @@ class actor_client_impl_t final : public actor_client_t
         const auto mesh_name = actor.mesh_name ().empty () ? snapshot->allocation.target.mesh_name
                                                            : std::string (actor.mesh_name ());
         co_return result_t<resolved_actor_t>::success (resolved_actor_t{
-          projection->actor, projection->actor, actor.node_rid (), projection->spot_id, mesh_name,
+          projection->actor, projection->actor,
+          snapshot->allocation.target.node_lifecycle_generation, projection->spot_id, mesh_name,
           snapshot->authority_owner_generation,
           static_cast<std::uint64_t> (snapshot->owner.lease_generation), snapshot->owner});
     }
 
-    task_t<result_t<void>> submit_send (const resolved_actor_t &actor,
+    task_t<result_t<void>> submit_send (resolved_actor_t actor,
                                         std::string packet_name,
                                         message_t message,
-                                        const actor_send_call_t::metadata_map_t &metadata)
+                                        actor_send_call_t::metadata_map_t metadata)
     {
         /* A one-way remote send has no owner terminal to repair a route-cache
          * hit after an exact Actor destroy.  Re-read only the existence bit:
@@ -742,9 +753,8 @@ class actor_client_impl_t final : public actor_client_t
             co_return result_t<void>::failure (framework_error_kind_t::unavailable,
                                                "actor send requires a running MeshNode");
         }
-        auto relayed = co_await relay_actor_packet (
-          *runtime, actor, runtime::messaging::message_kind_t::command, std::move (packet_name),
-          std::move (message), _default_timeout, {}, metadata);
+        auto relayed = co_await relay_actor_command (
+          runtime, actor, std::move (packet_name), std::move (message), _default_timeout, metadata);
         if (!relayed) {
             invalidate_cached_route_on_stale (actor, relayed.error_kind ());
             co_return detail::propagate_failure<void> (relayed, "actor send failed");
@@ -787,119 +797,152 @@ class actor_client_impl_t final : public actor_client_t
         runtime::messaging::client_call_codec_t codec;
         auto header = codec.create_envelope (kind, detail::actor_message_channel_name,
                                              std::move (packet_name), timeout);
-        header.content_type = _serializers->content_type (message._type);
+        header.content_type = _serializers.content_type (message._type);
         header.correlation_id = _request_id_prefix + std::to_string (_request_id_seq.fetch_add (1));
         co_return co_await route->relay_application_actor (
-          actor.native_ref, header, detail::message_to_raw (message, *_serializers), timeout,
+          actor.native_ref, header, detail::message_to_raw (message, _serializers), timeout,
           zlink::routing_id_t::from (std::uint32_t{0}), runtime::protocol::actor_route_fence_t{}, 0,
           runtime::protocol::wire_operation_id_t{}, 0, true);
     }
 
+    detail::request_receiver_t<result_t<runtime::messaging::message_parts_t>>
+    prepare_request_receiver (resolved_actor_t actor,
+                              detail::request_receiver_t<result_t<message_t>> receiver)
+    {
+        return receiver.project<result_t<runtime::messaging::message_parts_t>> (
+          [self = shared_from_this (), actor = std::move (actor)] (const auto &terminal) {
+              using reply_t = result_t<message_t>;
+              auto relayed =
+                terminal ? terminal.value ()
+                         : detail::result_access_t::failure<runtime::messaging::message_parts_t> (
+                             terminal.exception ());
+              auto decoded = relayed ? detail::decode_actor_reply (relayed.value ())
+                                     : detail::propagate_failure<std::optional<zlink::message_t>> (
+                                         relayed, "actor request failed");
+              if (!decoded) {
+                  self->invalidate_cached_route_on_stale (actor, decoded.error_kind ());
+                  return result_t<reply_t>::success (
+                    detail::propagate_failure<message_t> (decoded, "actor request failed"));
+              }
+              if (!decoded.value ())
+                  return result_t<reply_t>::success (
+                    reply_t::failure (framework_error_kind_t::internal_failure,
+                                      "actor request reply body is missing"));
+              return result_t<reply_t>::success (
+                reply_t::success (message_t::from_raw (*decoded.value (), &self->_serializers)));
+          });
+    }
+
+    static task_t<void> submit_prepared_request (
+      std::shared_ptr<detail::mesh_node_runtime_t> runtime,
+      resolved_actor_t actor,
+      runtime::messaging::message_parts_t parts,
+      std::chrono::milliseconds timeout,
+      detail::host::pending_operation_t operation,
+      detail::request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver)
+    {
+        auto copied = parts.items ();
+        const auto submit = co_await runtime->request_to_actor (
+          actor.native_ref, copied, operation, timeout, {}, actor.authority_owner_generation,
+          actor.owner_lease_generation);
+        if (submit != zlink::submit_result_t::ok) {
+            const auto failure = std::make_exception_ptr (
+              runtime::messaging::map_submit_result_exception (submit, "Actor submission"));
+            // No registry/binding receiver owns a rejected submission. Process its
+            // physical failure before admission publication can finish the public call.
+            receiver.complete (
+              detail::result_access_t::failure<result_t<runtime::messaging::message_parts_t>> (
+                failure));
+            receiver.admitted->complete (detail::result_access_t::failure<void> (failure));
+            co_return;
+        }
+        receiver.admitted->complete (result_t<void>::success ());
+    }
+
     request_task_t<result_t<message_t>>
-    submit_request (const resolved_actor_t &actor,
+    submit_request (resolved_actor_t actor,
                     std::string packet_name,
                     message_t request,
                     std::chrono::milliseconds timeout,
-                    const std::string &request_id,
-                    const actor_request_call_t::metadata_map_t &metadata)
+                    std::string request_id,
+                    actor_request_call_t::metadata_map_t metadata)
     {
-        auto runtime = mesh_node (actor.mesh_name);
-        if (!runtime) {
-            co_return result_t<message_t>::failure (framework_error_kind_t::unavailable,
-                                                    "actor request requires a running MeshNode");
-        }
-        auto relayed = co_await detail::request_submission (relay_actor_packet (
-          *runtime, actor, runtime::messaging::message_kind_t::request, std::move (packet_name),
-          std::move (request), timeout, request_id, metadata));
-        if (!relayed) {
-            invalidate_cached_route_on_stale (actor, relayed.error_kind ());
-            co_return detail::propagate_failure<message_t> (relayed, "actor request failed");
-        }
-        if (!relayed.value ()) {
-            co_return result_t<message_t>::failure (framework_error_kind_t::internal_failure,
-                                                    "actor request reply body is missing");
-        }
-        co_return result_t<message_t>::success (
-          message_t::from_raw (*relayed.value (), _serializers));
+        return detail::request_task_access_t::receive_public<result_t<message_t>> (
+          [this, actor = std::move (actor), packet_name = std::move (packet_name),
+           request = std::move (request), timeout, request_id = std::move (request_id),
+           metadata = std::move (metadata)] (auto receiver) mutable {
+              auto runtime = mesh_node (actor.mesh_name);
+              if (!runtime)
+                  throw framework_exception_t (framework_error_kind_t::unavailable,
+                                               "actor request requires a running MeshNode");
+              runtime::messaging::client_call_codec_t codec;
+              auto header =
+                codec.create_envelope (runtime::messaging::message_kind_t::request,
+                                       detail::actor_message_channel_name, packet_name, timeout);
+              header.content_type = _serializers.content_type (request._type);
+              header.correlation_id = std::move (request_id);
+              header.metadata = std::move (metadata);
+              auto parts = detail::encode_actor_packet (
+                header, detail::message_to_raw (request, _serializers));
+              auto physical = prepare_request_receiver (actor, receiver);
+              detail::host::pending_operation_t operation;
+              runtime->prepare_actor_request_reply (operation, physical);
+              auto work = std::make_shared<std::function<task_t<void> ()>> (
+                [runtime, actor = std::move (actor), parts = std::move (parts), timeout, operation,
+                 physical] () mutable {
+                    return submit_prepared_request (runtime, std::move (actor), std::move (parts),
+                                                    timeout, operation, physical);
+                });
+              runtime::start_owned_task<void> (
+                std::move (work), [receiver] (const auto &result) mutable {
+                    if (!result) {
+                        receiver.admitted->complete (result);
+                        receiver.complete (detail::result_access_t::failure<result_t<message_t>> (
+                          result.exception ()));
+                    }
+                });
+          });
     }
 
-    request_task_t<result_t<std::optional<zlink::message_t>>>
-    relay_actor_packet (detail::mesh_node_runtime_t &runtime,
-                        const resolved_actor_t &actor,
-                        runtime::messaging::message_kind_t kind,
-                        std::string packet_name,
-                        message_t message,
-                        std::chrono::milliseconds timeout,
-                        const std::string &request_id = {},
-                        const actor_send_call_t::metadata_map_t &metadata = {})
+    task_t<result_t<void>>
+    relay_actor_command (std::shared_ptr<detail::mesh_node_runtime_t> runtime,
+                         resolved_actor_t actor,
+                         std::string packet_name,
+                         message_t message,
+                         std::chrono::milliseconds timeout,
+                         actor_send_call_t::metadata_map_t metadata = {})
     {
         runtime::messaging::client_call_codec_t codec;
         auto header =
-          codec.create_envelope (kind, detail::actor_message_channel_name, packet_name, timeout);
-        header.content_type = _serializers->content_type (message._type);
-        if (!request_id.empty ()) {
-            // A request keeps one correlation id across route re-resolution and
-            // transfer replay. The native operation id is local to one runtime;
-            // this wire id is the idempotency boundary across retries.
-            header.correlation_id = request_id;
-        }
+          codec.create_envelope (runtime::messaging::message_kind_t::command,
+                                 detail::actor_message_channel_name, packet_name, timeout);
+        header.content_type = _serializers.content_type (message._type);
         header.metadata = metadata;
         auto parts =
-          detail::encode_actor_packet (header, detail::message_to_raw (message, *_serializers));
+          detail::encode_actor_packet (header, detail::message_to_raw (message, _serializers));
         try {
             auto copied = parts.items ();
-            if (kind == runtime::messaging::message_kind_t::command) {
-                const auto submit = co_await runtime.send_to_actor (
-                  actor.native_ref, copied, {}, actor.authority_owner_generation,
-                  actor.owner_lease_generation);
-                if (submit != zlink::submit_result_t::ok) {
-                    if (submit == zlink::submit_result_t::terminated) {
-                        co_return detail::boundary_failure<std::optional<zlink::message_t>> (
-                          detail::boundary_error_t::shutdown, "actor send runtime is stopped");
-                    }
-                    co_return result_t<std::optional<zlink::message_t>>::failure (
-                      runtime::messaging::map_submit_result_exception (submit, "Actor submission")
-                        .kind (),
-                      "actor send was not accepted (result "
-                        + std::to_string (static_cast<int> (submit)) + ")");
-                }
-                co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
-            }
-            detail::host::pending_operation_t operation_id;
-            auto submission = runtime.request_to_actor (
-              actor.native_ref, copied, operation_id, timeout, {}, actor.authority_owner_generation,
-              actor.owner_lease_generation);
-            auto admitted = co_await detail::request_admission_source_t{};
-            runtime.observe_request_failure (operation_id, admitted, "Actor request");
-            const auto submit = co_await submission;
+            const auto submit = co_await runtime->send_to_actor (actor.native_ref, copied, {},
+                                                                 actor.authority_owner_generation,
+                                                                 actor.owner_lease_generation);
             if (submit != zlink::submit_result_t::ok) {
                 if (submit == zlink::submit_result_t::terminated) {
-                    co_return detail::boundary_failure<std::optional<zlink::message_t>> (
-                      detail::boundary_error_t::shutdown, "actor request runtime is stopped");
+                    co_return detail::boundary_failure<void> (detail::boundary_error_t::shutdown,
+                                                              "actor send runtime is stopped");
                 }
-                co_return result_t<std::optional<zlink::message_t>>::failure (
+                co_return result_t<void>::failure (
                   runtime::messaging::map_submit_result_exception (submit, "Actor submission")
                     .kind (),
-                  "actor request was not accepted");
+                  "actor send was not accepted (result "
+                    + std::to_string (static_cast<int> (submit)) + ")");
             }
-            co_await detail::request_admitted_t{};
-            auto reply = co_await runtime.await_request_reply (operation_id, "Actor request");
-            if (!reply) {
-                co_return detail::propagate_failure<std::optional<zlink::message_t>> (
-                  reply, std::string ("actor request completion failed for node/generation '")
-                           + std::string (actor.native_ref.node_rid ().value ()) + "/"
-                           + std::to_string (actor.native_ref.object_generation ()) + "'");
-            }
-            co_return detail::decode_actor_reply (reply.value ());
+            co_return result_t<void>::success ();
         }
         catch (const framework_exception_t &) {
-            co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
-              std::current_exception ());
+            co_return detail::result_access_t::failure<void> (std::current_exception ());
         }
         catch (const std::exception &error) {
-            co_return map_native_exception<std::optional<zlink::message_t>> (
-              error, kind == runtime::messaging::message_kind_t::request ? "actor request failed"
-                                                                         : "actor send failed");
+            co_return map_native_exception<void> (error, "actor send failed");
         }
     }
 
@@ -911,7 +954,17 @@ class actor_client_impl_t final : public actor_client_t
             return;
         }
         std::lock_guard lock (_route_cache_gate);
-        _route_cache.erase (std::string (actor.framework_ref.actor_id ().value ()));
+        const auto found =
+          _route_cache.find (std::string (actor.framework_ref.actor_id ().value ()));
+        if (found == _route_cache.end ())
+            return;
+        const auto &cached = found->second.actor;
+        if (cached.framework_ref.object_generation () == actor.framework_ref.object_generation ()
+            && cached.native_ref.node_rid ().value () == actor.native_ref.node_rid ().value ()
+            && cached.node_generation == actor.node_generation
+            && cached.authority_owner_generation == actor.authority_owner_generation
+            && cached.owner_lease_generation == actor.owner_lease_generation)
+            _route_cache.erase (found);
     }
 
     void invalidate_cached_route_on_message_follow (
@@ -985,7 +1038,7 @@ class actor_client_impl_t final : public actor_client_t
     }
 
     live_location_reader_t *_store;
-    serializer_registry_t *_serializers;
+    serializer_registry_t _serializers;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> _mesh_nodes;
     std::shared_ptr<actor_location_observer_t> _actor_locations;
     location_options_t _location_options;
@@ -1005,6 +1058,61 @@ class actor_client_impl_t final : public actor_client_t
       std::to_string (reinterpret_cast<std::uintptr_t> (this)) + "-";
     std::atomic<std::uint64_t> _request_id_seq{1};
 };
+
+namespace
+{
+auto test_actor_route (const protocol::actor_route_fence_t &fence)
+{
+    return detail::actor_ref_access_t::make (
+      node_rid_t::from_string (
+        zlink::routing_id_t::from (fence.target_node_routing_id).to_string ()),
+      "late-result", fence.actor_id, fence.object_generation);
+}
+}
+
+void actor_client_test_access_t::cache (actor_client_t &base,
+                                        const protocol::actor_route_fence_t &fence)
+{
+    auto &client = dynamic_cast<actor_client_impl_t &> (base);
+    auto actor = test_actor_route (fence);
+    std::lock_guard lock (client._route_cache_gate);
+    client._route_cache.insert_or_assign (
+      fence.actor_id, actor_client_impl_t::cached_actor_t{{actor,
+                                                           actor,
+                                                           fence.target_node_generation,
+                                                           "spot",
+                                                           "mesh",
+                                                           fence.authority_owner_generation,
+                                                           fence.owner_lease_generation,
+                                                           {}},
+                                                          std::chrono::steady_clock::now ()
+                                                            + std::chrono::hours (1)});
+}
+
+bool actor_client_test_access_t::cached (actor_client_t &base, const std::string &actor_id)
+{
+    auto &client = dynamic_cast<actor_client_impl_t &> (base);
+    std::lock_guard lock (client._route_cache_gate);
+    return client._route_cache.contains (actor_id);
+}
+
+detail::request_receiver_t<result_t<messaging::message_parts_t>>
+actor_client_test_access_t::prepare (actor_client_t &base,
+                                     const protocol::actor_route_fence_t &fence,
+                                     detail::request_receiver_t<result_t<message_t>> receiver)
+{
+    auto &client = dynamic_cast<actor_client_impl_t &> (base);
+    auto actor = test_actor_route (fence);
+    return client.prepare_request_receiver ({actor,
+                                             actor,
+                                             fence.target_node_generation,
+                                             "spot",
+                                             "mesh",
+                                             fence.authority_owner_generation,
+                                             fence.owner_lease_generation,
+                                             {}},
+                                            std::move (receiver));
+}
 
 std::shared_ptr<actor_client_t>
 make_actor_client (live_location_reader_t &store,

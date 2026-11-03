@@ -59,7 +59,8 @@ function createResolver(resolve = ({ actorId }) => actorLocation(actorId)) {
         ? { kind: 'missing' }
         : { kind: 'ready', route };
     },
-    invalidateActorRoute() {}
+    invalidateActorRoute() {},
+    invalidateActorRouteIfMatches() { return false; }
   };
 }
 
@@ -597,7 +598,7 @@ test('actor client invalidates a stale resolved route without retrying the opera
   };
   let invalidations = 0;
   const resolver = createResolver(() => actorLocation('actor-1', 1n));
-  resolver.invalidateActorRoute = () => { invalidations += 1; };
+  resolver.invalidateActorRouteIfMatches = () => { invalidations += 1; return true; };
   const client = createActorClient({
     nodeProvider: () => node,
     locationResolver: () => resolver
@@ -611,6 +612,72 @@ test('actor client invalidates a stale resolved route without retrying the opera
   assert.deepEqual(sends.map((actor) => actor.generation), [1n]);
   assert.equal(invalidations, 1);
 });
+
+for (const phase of ['late send failure', 'known stale authority']) {
+  for (const replacement of [false, true]) {
+    test(`Actor send stale failure respects its route fence/${phase}/${replacement ? 'newer route' : 'matching route'}`, async () => {
+      const route = actorLocation();
+      const newerRoute = { ...route, ownerNodeGeneration: 8n, authorityOwnerGeneration: 5n };
+      let cachedRoute = route;
+      let invalidations = 0;
+      let fenceChecks = 0;
+      let attempts = 0;
+      let rejectSend;
+      let markSubmitted;
+      const submitted = new Promise(resolve => { markSubmitted = resolve; });
+      const resolver = createResolver(() => route);
+      resolver.invalidateActorRoute = () => { cachedRoute = undefined; invalidations++; };
+      resolver.invalidateActorRouteIfMatches = fence => {
+        fenceChecks++;
+        assert.deepEqual(fence, {
+          actorId: route.actorRef.actorId,
+          objectGeneration: route.actorRef.objectGeneration,
+          targetNodeRid: route.actorRef.nodeRid,
+          targetNodeGeneration: route.ownerNodeGeneration,
+          authorityOwnerGeneration: route.authorityOwnerGeneration,
+          ownerLeaseGeneration: route.ownerLeaseGeneration
+        });
+        if (cachedRoute !== route) return false;
+        cachedRoute = undefined;
+        invalidations++;
+        return true;
+      };
+      const client = createActorClient({
+        locationResolver: () => resolver,
+        nodeProvider: () => ({
+          sendToActor() {
+            attempts++;
+            const result = new Promise((_resolve, reject) => { rejectSend = reject; });
+            markSubmitted();
+            return result;
+          }
+        }),
+        staleActorRefPredicate: () => {
+          if (phase !== 'known stale authority') return false;
+          if (replacement) cachedRoute = newerRoute;
+          return true;
+        }
+      });
+      const outcome = assert.rejects(
+        client.sendToActor('actor-1', new ActorNotify('ping')).submit(),
+        error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      );
+      if (phase === 'late send failure') {
+        await submitted;
+        if (replacement) cachedRoute = newerRoute;
+        rejectSend(framework.createInternalFrameworkException(
+          framework.ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+          'stale send route'
+        ));
+      }
+      await outcome;
+      assert.equal(fenceChecks, 1);
+      assert.equal(invalidations, replacement ? 0 : 1);
+      assert.equal(cachedRoute, replacement ? newerRoute : undefined);
+      assert.equal(attempts, phase === 'late send failure' ? 1 : 0);
+    });
+  }
+}
 
 test('actor client submit maps native terminal outcomes to operation-specific errors', async () => {
   const results = [
@@ -1378,6 +1445,87 @@ test('Actor direct physical receiver decodes late reply after original cancellat
     assert.equal(table.pendingCount, 0);
   } finally { runtime.close(); table.dispose(); raw.close(); }
 });
+
+for (const scenario of ['late matching fence', 'late newer route fence', 'ordinary stale failure']) {
+  test(`Actor stale failure invalidates only its request route fence/${scenario}`, async (t) => {
+    const { RequestRuntime } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+    const runtime = new RequestRuntime();
+    const originalRoute = actorLocation();
+    const newerRoute = {
+      ...originalRoute,
+      actorRef: { ...originalRoute.actorRef, nodeRid: 'node-b' },
+      ownerNodeRid: 'node-b',
+      ownerNodeGeneration: 8n,
+      authorityOwnerGeneration: 5n,
+      ownerLeaseGeneration: 4n
+    };
+    let cachedRoute = originalRoute;
+    let invalidations = 0;
+    let fenceChecks = 0;
+    let complete;
+    let payloadCloses = 0;
+    const payload = Message.from(Buffer.from('late-stale-payload'));
+    const closePayload = payload.close.bind(payload);
+    t.mock.method(payload, 'close', () => { payloadCloses++; closePayload(); });
+    const resolver = {
+      async resolveDirectActorRoute() { return { kind: 'ready', route: originalRoute }; },
+      invalidateActorRoute() { cachedRoute = undefined; invalidations++; },
+      invalidateActorRouteIfMatches(fence) {
+        fenceChecks++;
+        const route = cachedRoute;
+        if (route === undefined ||
+            route.actorRef.actorId !== fence.actorId ||
+            route.actorRef.objectGeneration !== fence.objectGeneration ||
+            route.actorRef.nodeRid !== fence.targetNodeRid ||
+            route.ownerNodeGeneration !== fence.targetNodeGeneration ||
+            route.authorityOwnerGeneration !== fence.authorityOwnerGeneration ||
+            route.ownerLeaseGeneration !== fence.ownerLeaseGeneration) return false;
+        cachedRoute = undefined;
+        invalidations++;
+        return true;
+      }
+    };
+    const client = createActorClient({
+      requests: runtime,
+      nodeProvider: () => ({ status: () => ({ routingId: 'node-a' }), requestToActor() { return operationId; } }),
+      completionTableProvider: () => ({
+        submit(start, _signal, requestOperation, receiver) {
+          start();
+          complete = () => receiver.operationCompleted(requestOperation.id, {
+            terminalResult: RequestResult.Conflict,
+            failureErrno: 0,
+            operationKind: 0,
+            kindData: null,
+            parts: [payload]
+          }, undefined);
+        }
+      }),
+      locationResolver: () => resolver
+    });
+    const reply = client.requestToActor('actor-1', new ActorAsk('ping')).timeout(1000).submit();
+    const timeoutOutcome = scenario === 'ordinary stale failure'
+      ? undefined
+      : assert.rejects(reply, error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
+    const staleOutcome = scenario === 'ordinary stale failure'
+      ? assert.rejects(reply, error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable)
+      : undefined;
+    await new Promise(setImmediate);
+    if (scenario !== 'ordinary stale failure') {
+      runtime.registry.expire(Infinity, Infinity);
+      await timeoutOutcome;
+    }
+    if (scenario === 'late newer route fence') cachedRoute = newerRoute;
+    complete();
+    await new Promise(setImmediate);
+    if (scenario === 'ordinary stale failure') await staleOutcome;
+    else await timeoutOutcome;
+    assert.equal(fenceChecks, 1);
+    assert.equal(invalidations, scenario === 'late newer route fence' ? 0 : 1);
+    assert.equal(cachedRoute, scenario === 'late newer route fence' ? newerRoute : undefined);
+    assert.equal(payloadCloses, 1);
+    runtime.close();
+  });
+}
 
 function deliverFixtureCompletion(work, operation, receiver) {
   if (receiver === undefined) return work;

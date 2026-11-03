@@ -760,6 +760,10 @@ Store 정리는 Shutdown의 단일 절대 deadline 안에서 수행한다. 만�
 [Location runtime §11](01-location-runtime.ko.md#11-host가-종료될-때-store-record를-정리한다)의
 기존 조건부 해제 규칙을 따른다.
 
+[Submit과 completion §9](../01-execution/01-submit-and-completion.ko.md#9-request-completion--완료-경쟁과-timeout-budget)의
+준비된 최종 수신자가 사용하는 자원은 수신자의 처리가 끝난 뒤 해제한다. 강제 종료에서도
+수신자의 처리를 완료하거나 취소·정리하여 이후 자원 접근이 없음을 확인한 뒤 해제한다.
+
 Listener와 transport를 정리할 때는 이미 수락한 transport callback과 진행 중인 read·write
 operation을 먼저 완료하거나 취소한다. 특히 TLS·WebSocket resource와 per-connection write
 queue를 파괴하기 전에 소유한 transport 실행 문맥에서 cancellation completion을 관찰해야
