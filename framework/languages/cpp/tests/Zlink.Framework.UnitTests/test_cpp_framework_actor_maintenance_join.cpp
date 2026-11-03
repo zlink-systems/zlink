@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/telemetry_observation.hpp"
 #include <zlink/json.hpp>
+#include <zlink/Contracts/Core/context.hpp>
 #include "metric_test_reader.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "../support/manual_internal_scheduler.hpp"
@@ -43,12 +44,6 @@
 #include <cstdio>
 #include <future>
 #include <functional>
-#if defined(__linux__)
-#include <filesystem>
-#include <set>
-#include <sys/syscall.h>
-#include <unistd.h>
-#endif
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -3438,12 +3433,14 @@ struct native_intake_fixture_t
     fw::runtime::in_memory_location_repository_t source_store;
     fw::runtime::live_location_reader_t source_reader{source_store};
     fw::runtime::stateful::accepted_record_authority_resolver_t resolver;
+    std::shared_ptr<zlink::context_t> core_context = std::make_shared<zlink::context_t> ();
     std::shared_ptr<fw::runtime::host::public_host_runtime_t> host;
     explicit native_intake_fixture_t (
       fw::dispatch_options_t dispatch = {},
       fw::runtime::stateful::accepted_record_authority_resolver_t authority = {})
     {
         fw::runtime::host::host_options_t options;
+        options.core_context = core_context;
         options.mesh.descriptor = {mesh_name,
                                    rid,
                                    1,
@@ -3490,6 +3487,13 @@ struct native_intake_fixture_t
                                                          fw::runtime::protocol::command::admit),
                    fw::runtime::mesh::peer_admission_result_t::admitted);
         host->start ();
+    }
+    ~native_intake_fixture_t ()
+    {
+        host->close ();
+        // Result publication can precede release of the dispatch coroutine's
+        // Host reference. The fixture owns Core teardown through that release.
+        core_context->term ();
     }
     fw::runtime::mesh::service_mailbox_record_t
     actor_record (std::uint64_t sequence, std::uint64_t authority_generation = 1) const
@@ -7793,9 +7797,6 @@ TEST (ActorEntryPlacementRegression, EntrylessNodeTakesJoinAndRelocation)
 
 TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
 {
-#if !defined(__linux__)
-    GTEST_SKIP () << "Requires the public Linux thread inventory to identify the relocation caller";
-#else
     constexpr auto remaining_actor = "remaining-member";
     auto evidence_owner = std::make_shared<observations_t> ();
     auto &evidence = *evidence_owner;
@@ -7840,19 +7841,11 @@ TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
     evidence.hold_join_admission = true;
     ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), move_t{local_spot}).async ().result ());
     ASSERT_TRUE (evidence.join_admission_entered.task ().result_for (wait_budget));
-    auto &runtime = services.get_required<fw::framework_runtime_t> ();
-    // The topology scanner threads are already running. This fixture submits
-    // no new application work before Relocate creates its operation worker.
-    // Identify that caller at the public Store boundary, so a background scan
-    // cannot release the Join before the Host acquires its units.
-    std::set<long> existing_threads;
-    for (const auto &thread : std::filesystem::directory_iterator ("/proc/self/task"))
-        existing_threads.insert (std::stol (thread.path ().filename ().string ()));
+    // Relocation continuations can run on an existing worker. Release the
+    // earlier Join at the first Store scan after Host admission closes. The
+    // one-shot hook lets the Join's own Store calls make progress while it waits.
     store->before_scan_when (
-      [&] {
-          return !existing_threads.contains (::syscall (SYS_gettid))
-                 && runtime.status ().state == fw::framework_runtime_state_t::relocating;
-      },
+      [&] { return source.app.runtime_state () == fw::framework_runtime_state_t::relocating; },
       [&] () -> fw::task_t<void> {
           evidence.release_join_admission.complete (fw::result_t<void>::success ());
           co_await evidence.join_completed.task ();
@@ -7862,6 +7855,8 @@ TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
         .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
         .result ();
     store->before_scan_when ({}, {});
+    EXPECT_TRUE (evidence.release_join_admission.task ().await_ready ());
+    EXPECT_TRUE (evidence.join_completed.task ().await_ready ());
     ASSERT_TRUE (relocated);
     ASSERT_EQ (relocated.value ().outcome, fw::relocation_outcome_t::relocated)
       << "reason=" << static_cast<int> (relocated.value ().reason);
@@ -7884,7 +7879,6 @@ TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
         ASSERT_TRUE (reply);
         EXPECT_EQ (reply.value ().value, 7);
     }
-#endif
 }
 
 TEST (ActorMaintenanceJoin, RemoteJoinDoesNotLeaveLocalRelocationWork)
@@ -8617,9 +8611,7 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
         }
         held.reset ();
         mesh->application_jobs->stop ();
-        scheduler->run_all ();
-        node->worker_executor->request_stop ();
-        node->worker_executor->drain ();
+        scheduler->retire ();
         native->close ();
         node->native_node.reset ();
         detail::dispatch_options_access_t::set_observer_for_tests (node->dispatch, {});
@@ -8711,6 +8703,13 @@ void restore_probe (replay_case_t test_case, bool multiple_packets = false)
     if (finish_barrier) {
         auto complete = std::exchange (finish_barrier, {});
         complete (fw::result_t<void>::success ());
+    }
+    if (source_barrier) {
+        // The previous Spot's barrier settles on another lane. An empty manual
+        // queue does not establish that its final continuation has been published.
+        auto terminal = source_barrier->terminal ();
+        scheduler->run_until (terminal);
+        ASSERT_TRUE (terminal.result ());
     }
     scheduler->run_all ();
     scheduler->run_until (handler_finished);
