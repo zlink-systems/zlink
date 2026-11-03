@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/telemetry_observation.hpp"
 #include <zlink/json.hpp>
+#include <zlink/Contracts/Core/context.hpp>
 #include "metric_test_reader.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "../support/manual_internal_scheduler.hpp"
@@ -3431,12 +3432,14 @@ struct native_intake_fixture_t
     fw::runtime::in_memory_location_repository_t source_store;
     fw::runtime::live_location_reader_t source_reader{source_store};
     fw::runtime::stateful::accepted_record_authority_resolver_t resolver;
+    std::shared_ptr<zlink::context_t> core_context = std::make_shared<zlink::context_t> ();
     std::shared_ptr<fw::runtime::host::public_host_runtime_t> host;
     explicit native_intake_fixture_t (
       fw::dispatch_options_t dispatch = {},
       fw::runtime::stateful::accepted_record_authority_resolver_t authority = {})
     {
         fw::runtime::host::host_options_t options;
+        options.core_context = core_context;
         options.mesh.descriptor = {mesh_name,
                                    rid,
                                    1,
@@ -3483,6 +3486,13 @@ struct native_intake_fixture_t
                                                          fw::runtime::protocol::command::admit),
                    fw::runtime::mesh::peer_admission_result_t::admitted);
         host->start ();
+    }
+    ~native_intake_fixture_t ()
+    {
+        host->close ();
+        // Result publication can precede release of the dispatch coroutine's
+        // Host reference. The fixture owns Core teardown through that release.
+        core_context->term ();
     }
     fw::runtime::mesh::service_mailbox_record_t
     actor_record (std::uint64_t sequence, std::uint64_t authority_generation = 1) const
