@@ -627,6 +627,34 @@ public sealed class AutoConnectReconcilerTests
     }
 
     [Fact]
+    public async Task Tick_does_not_connect_when_local_descriptor_write_is_not_stored()
+    {
+        await AssertTickDoesNotConnectAsync(rejectRenew: false);
+        await AssertTickDoesNotConnectAsync(rejectRenew: true);
+    }
+
+    private static async Task AssertTickDoesNotConnectAsync(bool rejectRenew)
+    {
+        var fixture = await FixtureAsync();
+        await using var runtime = fixture.Runtime;
+        if (rejectRenew)
+        {
+            await fixture.Reconciler.TickAsync();
+            fixture.Reconciler.SetLocalWeight(99);
+        }
+
+        fixture.PublicationStore.RejectWrites = true;
+        await fixture.PublishPeerAsync("r1", "tcp://r:1");
+        await fixture.Reconciler.TickAsync();
+
+        Assert.Empty(fixture.Executor.Connected);
+        Assert.Equal(
+            rejectRenew ? ZLinkLocationWriteIntent.Renew : ZLinkLocationWriteIntent.NewClaim,
+            fixture.PublicationStore.Intents[^1]
+        );
+    }
+
+    [Fact]
     public async Task Store_Failure_Retries_The_Last_Desired_Target_Only_Within_Grace()
     {
         var fixture = await FixtureAsync(options =>
@@ -1272,9 +1300,10 @@ public sealed class AutoConnectReconcilerTests
     {
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryLocationStore(time);
+        var publicationStore = new RejectingMeshNodePublicationStore(store);
         var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
         configure?.Invoke(options);
-        var runtime = new ZLinkLocationRuntime(options, store, time);
+        var runtime = new ZLinkLocationRuntime(options, publicationStore, time);
         await runtime.RenewOwnerLeaseOnceAsync();
         await store.ClaimLiveOwnerAsync("peer-owner", TimeSpan.FromMinutes(10));
 
@@ -1306,11 +1335,20 @@ public sealed class AutoConnectReconcilerTests
             time,
             retainRemovedMembers: retainRemovedMembers
         );
-        return new ReconcilerFixture(store, runtime, failable, executor, reconciler, time);
+        return new ReconcilerFixture(
+            store,
+            publicationStore,
+            runtime,
+            failable,
+            executor,
+            reconciler,
+            time
+        );
     }
 
     private sealed record ReconcilerFixture(
         ZLinkInMemoryLocationStore Store,
+        RejectingMeshNodePublicationStore PublicationStore,
         ZLinkLocationRuntime Runtime,
         FailablePeerResolver PeerResolver,
         RecordingAutoConnectExecutor Executor,
@@ -1351,6 +1389,68 @@ public sealed class AutoConnectReconcilerTests
                 )
             );
         }
+    }
+
+    private sealed class RejectingMeshNodePublicationStore(IZLinkLocationRepository inner)
+        : ZLinkLocationStoreTestDouble
+    {
+        public bool RejectWrites { get; set; }
+
+        public List<ZLinkLocationWriteIntent> Intents { get; } = [];
+
+        public override ValueTask<ZLinkLocationWriteResult> UpdateMeshNodeAsync(
+            ZLinkMeshNodeDescriptor descriptor,
+            ZLinkLocationWriteIntent intent,
+            CancellationToken cancellationToken = default
+        )
+        {
+            Intents.Add(intent);
+            if (
+                RejectWrites
+                && intent is ZLinkLocationWriteIntent.NewClaim or ZLinkLocationWriteIntent.Renew
+            )
+                return ValueTask.FromResult(ZLinkLocationWriteResult.IgnoredStale);
+            return inner.UpdateMeshNodeAsync(descriptor, intent, cancellationToken);
+        }
+
+        public override ValueTask<ZLinkLocationWriteStatus> RemoveMeshNodeAsync(
+            ZLinkMeshNodeDescriptorKey key,
+            ZLinkLocationOwnerToken owner,
+            CancellationToken cancellationToken = default
+        ) => inner.RemoveMeshNodeAsync(key, owner, cancellationToken);
+
+        public override ValueTask<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> ListMeshNodesAsync(
+            string meshName,
+            ZLinkPageRequest page,
+            CancellationToken cancellationToken = default
+        ) => inner.ListMeshNodesAsync(meshName, page, cancellationToken);
+
+        public override ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
+            string ownerId,
+            TimeSpan leaseTtl,
+            CancellationToken cancellationToken = default
+        ) => inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl, cancellationToken);
+
+        public override ValueTask<ZLinkOwnerLeaseRenewResult> RenewOwnerLeaseAsync(
+            ZLinkLocationOwnerToken token,
+            TimeSpan leaseTtl,
+            CancellationToken cancellationToken = default
+        ) => inner.RenewOwnerLeaseAsync(token, leaseTtl, cancellationToken);
+
+        public override ValueTask<ZLinkOwnerLeaseReleaseResult> ReleaseOwnerLeaseAsync(
+            ZLinkLocationOwnerToken token,
+            CancellationToken cancellationToken = default
+        ) => inner.ReleaseOwnerLeaseAsync(token, cancellationToken);
+
+        public override ValueTask<long> RemoveAllByOwnerAsync(
+            ZLinkLocationOwnerToken owner,
+            CancellationToken cancellationToken = default
+        ) => inner.RemoveAllByOwnerAsync(owner, cancellationToken);
+
+        public override ValueTask<ulong?> GetMeshNodeChangeStampAsync(
+            string meshName,
+            CancellationToken cancellationToken = default
+        ) => inner.GetMeshNodeChangeStampAsync(meshName, cancellationToken);
     }
 
     private sealed class FailablePeerResolver(IZLinkMeshNodeLocationResolver inner)
