@@ -101,13 +101,7 @@ export class ZLinkAutoConnectReconciler {
   }
 
   async tick(signal?: AbortSignal): Promise<void> {
-    try {
-      await this.publishLocal(signal);
-      signal?.throwIfAborted();
-    } catch {
-      await this.recordStoreFailure(signal);
-      return;
-    }
+    if (!(await this.publishLocalForTick(signal))) return;
 
     if (!this.reconcilePeers) {
       await this.lane.run(() => {
@@ -146,16 +140,7 @@ export class ZLinkAutoConnectReconciler {
       await this.lane.run(() => {
         this.localPublished = false;
       });
-      try {
-        const republished = await this.publishLocal(signal);
-        if (!republished) {
-          await this.recordStoreFailure(signal);
-          return;
-        }
-      } catch {
-        await this.recordStoreFailure(signal);
-        return;
-      }
+      if (!(await this.publishLocalForTick(signal))) return;
     }
 
     if (await this.lane.run(() => this.storeFailedValue)) {
@@ -325,10 +310,28 @@ export class ZLinkAutoConnectReconciler {
     this.executor.disconnect(target);
   }
 
+  private async publishLocalForTick(signal?: AbortSignal): Promise<boolean> {
+    let published: boolean;
+    try {
+      published = await this.publishLocal(signal);
+      signal?.throwIfAborted();
+    } catch {
+      await this.recordStoreFailure(signal);
+      return false;
+    }
+    if (!published) {
+      await this.recordStoreFailure(signal);
+      return false;
+    }
+    return true;
+  }
+
   private async publishLocal(signal?: AbortSignal): Promise<boolean> {
     signal?.throwIfAborted();
     const prepared = await this.lane.run(() => this.preparePublishLocalCore());
-    if (prepared === undefined) return await this.lane.run(() => this.localPublished);
+    if (prepared === undefined) {
+      return this.localRow === undefined || (await this.lane.run(() => this.localPublished));
+    }
     const claimed = await this.runtime.writePeer(
       prepared.row,
       ZLinkLocationWriteIntent.NewClaim,

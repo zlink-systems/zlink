@@ -36,9 +36,9 @@ function fixture() {
     value: 0n,
     metadata: {}
   };
-  const requests = [], snapshots = [], events = [], scheduled = [], order = [];
+  const requests = [], snapshots = [], events = [], scheduled = [], order = [], connectAttempts = [];
   const entered = deferred();
-  const state = { hold: true, rows: [row] };
+  const state = { hold: true, rows: [row], writeResults: [] };
   const store = new internal.ZLinkInMemoryLocationStore();
   const runtime = new internal.ZLinkLocationRuntime({
     ownerId: 'owner',
@@ -49,10 +49,11 @@ function fixture() {
       peerStore: {
         updatePeer(_row, intent, signal) {
           const completion = deferred();
-          requests.push({ ...completion, intent, signal });
+          const result = state.writeResults.shift() ?? stored;
+          requests.push({ ...completion, intent, signal, result });
           order.push(`write:${requests.length}`);
           entered.resolve();
-          if (!state.hold) completion.resolve(stored);
+          if (!state.hold) completion.resolve(result);
           // Deliberately ignore signal, including its timeout/cancellation.
           return completion.promise;
         },
@@ -71,7 +72,7 @@ function fixture() {
       }
     },
     executor: {
-      async connect() { assert.fail('local snapshots have no remote targets'); },
+      async connect(target) { connectAttempts.push(target); return true; },
       disconnect() {},
       expectPeers() { order.push('reconciled'); }
     },
@@ -83,7 +84,7 @@ function fixture() {
     setTimer(callback) { scheduled.push(callback); return callback; },
     clearTimer(handle) { scheduled.splice(scheduled.indexOf(handle), 1); }
   });
-  return { ...state, state, entered, requests, snapshots, events, scheduled, order, reconciler, loop };
+  return { ...state, state, entered, requests, snapshots, events, scheduled, order, connectAttempts, reconciler, loop };
 }
 
 test('publication yields the event loop and queued snapshots keep their order', async () => {
@@ -136,6 +137,44 @@ test('unconfirmed publication times out and the next round republishes', async t
     for (const request of f.requests) request.resolve(stored);
     await tick;
   }
+});
+
+test('tick does not reconcile peers when local claim and renewal are both rejected', async () => {
+  const f = fixture();
+  const initial = f.reconciler.tick();
+  await f.entered.promise;
+  f.requests[0].resolve(stored);
+  await initial;
+
+  const peer = {
+    ...f.state.rows[0],
+    nodeRid: RoutingId.from('peer'),
+    endpoint: 'tcp://127.0.0.1:3570',
+    ownerId: 'peer',
+    generation: 1n
+  };
+  f.state.rows = [peer];
+  f.state.hold = false;
+  f.state.writeResults = [
+    { ...stored, status: internal.ZLinkLocationWriteStatus.RejectedConflict },
+    { ...stored, status: internal.ZLinkLocationWriteStatus.IgnoredStale },
+    { ...stored, status: internal.ZLinkLocationWriteStatus.RejectedConflict },
+    { ...stored, status: internal.ZLinkLocationWriteStatus.IgnoredStale }
+  ];
+
+  await f.reconciler.tick();
+  await f.reconciler.tick();
+
+  assert.deepEqual(
+    f.requests.slice(1).map(({ intent, result }) => [intent, result.status]),
+    [
+      [internal.ZLinkLocationWriteIntent.NewClaim, internal.ZLinkLocationWriteStatus.RejectedConflict],
+      [internal.ZLinkLocationWriteIntent.Renew, internal.ZLinkLocationWriteStatus.IgnoredStale],
+      [internal.ZLinkLocationWriteIntent.NewClaim, internal.ZLinkLocationWriteStatus.RejectedConflict],
+      [internal.ZLinkLocationWriteIntent.Renew, internal.ZLinkLocationWriteStatus.IgnoredStale]
+    ]
+  );
+  assert.deepEqual(f.connectAttempts, [], 'failed local publication must prevent peer connection attempts');
 });
 
 test('stop cancels startup publication without waiting for an unresponsive Store', async t => {
