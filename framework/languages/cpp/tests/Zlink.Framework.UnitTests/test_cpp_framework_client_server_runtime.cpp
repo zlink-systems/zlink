@@ -119,6 +119,8 @@ void verify_client_server_send_does_not_wait_on_infrastructure_worker ()
     slow_send_handler_t::completed.store (false, std::memory_order_release);
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.handlers ().group ("slow-send").add_send<slow_send_handler_t> ();
         auto channel = options.add_client_server_channel ("slow-send");
         channel.server ().listen ().add_handler_group ("slow-send");
@@ -539,6 +541,9 @@ void verify_client_server_terminal_overlap_matrix (int selected = -1)
                         assert (overlap_scope_t::live == 0);
                         auto app = zlink::framework::app_t::create ();
                         app.add_zlink_framework ([] (auto &options) {
+                            options.add_location_store (
+                              std::make_shared<
+                                zlink::framework::runtime::in_memory_location_store_t> ());
                             options.services ().template add_scoped<overlap_scope_t> ();
                             options.template use_filter<overlap_filter_t> ();
                             options.handlers ()
@@ -716,6 +721,8 @@ void verify_client_server_owner_gate_and_budget ()
       zlink::framework::test::telemetry_observations_t<zlink::framework::message_flow_event_t>> ();
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([flows] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.configure_dispatch ().message_flow (
           zlink::framework::message_flow_log_mode_t::normal);
         zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
@@ -839,6 +846,8 @@ void verify_client_server_stop_waits_for_record_terminal ()
       std::make_shared<zlink::framework::task_completion_source_t<std::string>> ();
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.handlers ()
           .group ("owner-gate-a")
           .add<owner_gate_request_handler_t> ()
@@ -1548,6 +1557,8 @@ void verify_client_server_metadata_snapshot ()
     if (const auto *log = std::getenv ("ZLINK_CPP_METADATA_FLOW_LOG"))
         app.logging ().use_file (log);
     app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         if (std::getenv ("ZLINK_CPP_METADATA_FLOW_LOG"))
             options.configure_dispatch ().message_flow (
               zlink::framework::message_flow_log_mode_t::normal);
@@ -1644,6 +1655,8 @@ void verify_client_server_readiness_counts_local_ready_servers ()
 {
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.handlers ().group ("readiness").add_send<network_probe_handler_t> ();
         options.add_client_server_channel ("ready-server")
           .server ()
@@ -1778,6 +1791,8 @@ void verify_client_server_runtime_projection_and_observation ()
 
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([endpoint] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.add_client_server_channel ("client-server-runtime-unit")
           .client ()
           .connect (endpoint);
@@ -1881,6 +1896,8 @@ void verify_public_listener_status_reports_bound_endpoint ()
 {
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.handlers ().group ("listener-status").add_send<network_probe_handler_t> ();
         options.add_client_server_channel ("listener-status")
           .server ()
@@ -1945,6 +1962,8 @@ void verify_listener_status_during_stop_reads_record_or_not_configured ()
     for (int round = 0; round < 5; ++round) {
         auto app = zlink::framework::app_t::create ();
         app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+            options.add_location_store (
+              std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
             options.handlers ().group ("listener-status-stop").add_send<network_probe_handler_t> ();
             options.add_client_server_channel ("listener-status-stop")
               .server ()
@@ -2160,6 +2179,8 @@ void with_observation_runtime (TAction action,
     using namespace zlink::framework;
     auto app = app_t::create ();
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.handlers ().group ("1295-observation").add_send<network_probe_handler_t> ();
         options.add_client_server_channel ("1295-zero-weight")
           .server ()
@@ -2310,6 +2331,8 @@ void verify_unregistered_and_other_topology_channels_are_rejected ()
     using namespace zlink::framework;
     auto app = app_t::create ();
     app.add_zlink_framework ([] (zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.add_client_server_channel ("1295-known").client ().connect ("tcp://127.0.0.1:1");
         options.add_fanout_channel ("1295-fanout").enable_publisher ();
     });
