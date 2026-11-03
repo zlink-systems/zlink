@@ -738,7 +738,7 @@ bool concurrent_actor_handle_lookup (const nlohmann::json &lease)
         registration->core_context = std::make_shared<zlink::context_t> ();
     auto mesh = fw::detail::mesh_node_runtime_t::from (builder, "handle-lookup");
     // from() constructs a runtime; start this instance instead of the application host.
-    mesh->start ();
+    mesh->start ().result ().value ();
     const fw::node_rid_t node ("2036-handle-lookup-handle-lookup");
     const fw::actor_ref_t missing (fw::actor_id_t ("missing-actor"), 1, "handle-lookup", node);
     std::barrier start (2);
@@ -799,7 +799,7 @@ bool actor_creation_releases_completion_workers (const nlohmann::json &lease)
     for (const auto &registration : fw::detail::mesh_node_runtime_t::registrations (builder))
         registration->core_context = std::make_shared<zlink::context_t> ();
     auto mesh = fw::detail::mesh_node_runtime_t::from (builder, "completion-progress");
-    mesh->start ();
+    mesh->start ().result ().value ();
     auto *native = &mesh->native_node ();
     auto &lane =
       fw::runtime::stateful::stateful_object_runtime_test_access_t::lane (native->objects ());

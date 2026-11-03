@@ -2505,7 +2505,7 @@ void check_mesh_and_host_async_wrappers ()
     state->routing_id = zlink::routing_id_t::from ("local");
     state->core_context = std::make_shared<zlink::context_t> ();
     auto node = std::make_shared<detail::mesh_node_runtime_t> (state);
-    node->start ();
+    node->start ().result ().value ();
     auto &host = node->native_node ();
     auto &raw_lane = auto_connect_owner_lane (host.transport ());
     const auto rid = zlink::routing_id_t::from ("remote");
@@ -2997,7 +2997,7 @@ void check_synchronous_stop (bool mesh, bool raw_owner)
     state->routing_id = zlink::routing_id_t::from ("local");
     state->core_context = std::make_shared<zlink::context_t> ();
     auto node = std::make_shared<detail::mesh_node_runtime_t> (state);
-    node->start ();
+    node->start ().result ().value ();
     production_auto_fixture_t fixture ({node});
     detail::route_channel_runtime_t route ("l4-mesh");
     const auto rid = zlink::routing_id_t::from ("remote");
@@ -3034,7 +3034,7 @@ void check_mesh_stop_without_infrastructure (int operation)
     state->routing_id = zlink::routing_id_t::from ("local");
     state->core_context = std::make_shared<zlink::context_t> ();
     auto node = std::make_shared<detail::mesh_node_runtime_t> (state);
-    node->start ();
+    node->start ().result ().value ();
     auto &raw = node->native_node ().transport ();
     const auto rid = zlink::routing_id_t::from ("remote");
     const std::string endpoint = "inproc://l4-peer";
@@ -3378,7 +3378,7 @@ TEST (ZLinkFrameworkLocationRuntime, DrainingPublicationDoesNotHoldRecoveryMutex
                                       serializers);
     mesh_node_host_service_test_access_t::configure (service, store, runtime, true);
     auto node = service.nodes ().front ();
-    node->start ();
+    node->start ().result ().value ();
     std::promise<void> entered, release;
     auto released = release.get_future ().share ();
     auto &topology = node->native_node ().transport ().topology ();

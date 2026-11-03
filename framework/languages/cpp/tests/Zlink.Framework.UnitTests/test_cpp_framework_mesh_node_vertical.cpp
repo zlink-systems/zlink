@@ -3394,7 +3394,7 @@ void verify_peer_intent_ids_and_callback_lifetime ()
     state->core_context = std::make_shared<zlink::context_t> ();
     state->spot_state->monitoring = monitoring;
     auto runtime = std::make_unique<zlink::framework::detail::mesh_node_runtime_t> (state);
-    runtime->start ();
+    runtime->start ().result ().value ();
     assert (connections.list_connections ()[0].intent_id == configured[0].intent_id);
     assert (connections.list_connections ()[1].intent_id == configured[1].intent_id);
 
