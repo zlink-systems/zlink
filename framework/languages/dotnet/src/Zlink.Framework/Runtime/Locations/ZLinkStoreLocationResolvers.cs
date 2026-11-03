@@ -310,22 +310,32 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         ulong ownerLeaseGeneration
     )
     {
-        var invalidation = _lane.RunAsync(() =>
+        ValueTask invalidation;
+        try
         {
-            if (!_actorRoutes.TryGetValue(key, out var cached))
+            invalidation = _lane.RunAsync(() =>
+            {
+                if (!_actorRoutes.TryGetValue(key, out var cached))
+                    return ValueTask.CompletedTask;
+                var row = cached.Row;
+                if (
+                    row.ActorRef != actorRef
+                    || row.OwnerNodeGeneration != ownerNodeGeneration
+                    || row.AuthorityOwnerGeneration != authorityOwnerGeneration
+                    || row.LeaseGeneration <= 0
+                    || (ulong)row.LeaseGeneration != ownerLeaseGeneration
+                )
+                    return ValueTask.CompletedTask;
+                _actorRoutes.Remove(key);
                 return ValueTask.CompletedTask;
-            var row = cached.Row;
-            if (
-                row.ActorRef != actorRef
-                || row.OwnerNodeGeneration != ownerNodeGeneration
-                || row.AuthorityOwnerGeneration != authorityOwnerGeneration
-                || row.LeaseGeneration <= 0
-                || (ulong)row.LeaseGeneration != ownerLeaseGeneration
-            )
-                return ValueTask.CompletedTask;
-            _actorRoutes.Remove(key);
-            return ValueTask.CompletedTask;
-        });
+            });
+        }
+        catch (Exception failure)
+            when (failure is ObjectDisposedException or InvalidOperationException)
+        {
+            ZLinkFrameworkDebugLog.TaskFailure("actor-route-invalidation", failure);
+            return;
+        }
         _ = ObserveActorRouteInvalidationAsync(invalidation);
     }
 

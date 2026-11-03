@@ -9356,6 +9356,35 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task Actor_Send_TargetNotFound_Returns_When_ResolverLane_Is_Closed()
+    {
+        var node = new CapturingSpotNode { ActorSendResult = SubmitResult.NotFound };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node, includeActorFactory: false);
+        try
+        {
+            var rows = runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+            var key = new ZLinkActorLocationKey(actor.ActorId);
+            Assert.NotNull(await rows.ResolveActorRowAsync(key));
+            node.BeforeActorSendAsync = () => rows.Lane.DisposeAsync().AsTask();
+
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                new ZLinkActorClient(runtime)
+                    .SendToActor(actor.ActorId, new ProbeRouteMessage("stale"))
+                    .Async()
+                    .AsTask()
+            );
+
+            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+            Assert.Single(node.ActorSends);
+            Assert.Throws<ObjectDisposedException>(() => rows.Lane.RunAsync(() => { }));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Actor_Send_TargetNotFound_Preserves_Replaced_Route()
     {
         IZLinkLocationRepository? locationStore = null;
