@@ -2476,6 +2476,21 @@ class spot_node_runtime_t
 
     result_t<std::shared_ptr<spot_context_state_t>>
     find_active_remote_actor_join_target (const spot_id_t &target_spot_id) const;
+    template <typename TJoinResult>
+    static task_t<void>
+    run_actor_join_admission_task (spot_node_runtime_t runtime,
+                                   std::shared_ptr<TJoinResult> join_result,
+                                   actor_ref_t actor,
+                                   service::actor_control_t control,
+                                   std::string join_spot_id,
+                                   std::vector<zlink::message_t> parts,
+                                   bool remote_transfer,
+                                   zlink::message_t request,
+                                   bool targets_entry_spot,
+                                   std::string local_node_rid,
+                                   service_provider_t *services,
+                                   serializer_registry_t *serializers,
+                                   std::optional<std::chrono::steady_clock::time_point> deadline);
     task_t<actor_join_reply_t> run_actor_join_control (
       const actor_ref_t &actor,
       const service::actor_control_t &control,

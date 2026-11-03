@@ -967,6 +967,61 @@ zlink::framework::result_t<void> one_way_native_submit_result (zlink::submit_res
     }
 }
 
+// Value parameters keep request state in the coroutine frame after the caller destroys its closure.
+zlink::framework::request_task_t<
+  zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>>
+request_mesh_spot_from_app_task (
+  std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t> mesh,
+  std::string source_spot_id,
+  zlink::routing_id_t target_node,
+  std::string target_spot,
+  std::uint64_t target_spot_generation,
+  zlink::framework::runtime::messaging::message_parts_t parts,
+  std::chrono::milliseconds timeout)
+{
+    using namespace zlink::framework;
+    detail::host::pending_operation_t operation;
+    auto submission =
+      mesh->request_to_spot (source_spot_id, target_node, target_spot, target_spot_generation,
+                             parts.items (), operation, timeout);
+    auto admitted = co_await detail::request_admission_source_t{};
+    mesh->observe_request_failure (operation, admitted, "MeshNode Spot request");
+    const auto submitted = co_await submission;
+    if (submitted != zlink::submit_result_t::ok) {
+        co_return result_t<runtime::messaging::message_parts_t>::failure (
+          framework_error_kind_t::unavailable, "MeshNode Spot request was not submitted");
+    }
+    co_await detail::request_admitted_t{};
+    co_return co_await mesh->await_request_reply (operation, "MeshNode Spot request");
+}
+
+zlink::framework::request_task_t<
+  zlink::framework::result_t<zlink::framework::runtime::messaging::message_parts_t>>
+request_mesh_channel_from_app_task (
+  std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t> mesh,
+  std::string channel_name,
+  zlink::framework::runtime::messaging::message_parts_t parts,
+  std::chrono::milliseconds timeout)
+{
+    using namespace zlink::framework;
+    detail::host::pending_operation_t operation;
+    auto submission = mesh->request_to_channel (channel_name, parts.items (), operation, timeout);
+    auto admitted = co_await detail::request_admission_source_t{};
+    mesh->observe_request_failure (operation, admitted, "RouteMesh channel request");
+    const auto submitted = co_await submission;
+    if (submitted != zlink::submit_result_t::ok) {
+        if (submitted == zlink::submit_result_t::terminated) {
+            co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
+              detail::boundary_error_t::shutdown, "RouteMesh channel request runtime is stopped");
+        }
+        co_return result_t<runtime::messaging::message_parts_t>::failure (
+          runtime::messaging::map_submit_result_error_kind (submitted),
+          "RouteMesh channel request was not submitted");
+    }
+    co_await detail::request_admitted_t{};
+    co_return co_await mesh->await_request_reply (operation, "RouteMesh channel request");
+}
+
 zlink::framework::task_t<zlink::framework::result_t<void>> send_bound_session_from_app_task (
   std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t> application_mesh,
   zlink::framework::detail::actor_gateway_runtime_t actor_gateway_runtime,
@@ -2397,19 +2452,9 @@ void app_t::_apply_zlink_framework ()
                                                        runtime::messaging::message_parts_t parts,
                                                        std::chrono::milliseconds timeout)
           -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
-            detail::host::pending_operation_t operation;
-            auto submission =
-              mesh->request_to_spot (source_spot_id, target_node, target_spot,
-                                     target_spot_generation, parts.items (), operation, timeout);
-            auto admitted = co_await detail::request_admission_source_t{};
-            mesh->observe_request_failure (operation, admitted, "MeshNode Spot request");
-            const auto submitted = co_await submission;
-            if (submitted != zlink::submit_result_t::ok) {
-                co_return result_t<runtime::messaging::message_parts_t>::failure (
-                  framework_error_kind_t::unavailable, "MeshNode Spot request was not submitted");
-            }
-            co_await detail::request_admitted_t{};
-            co_return co_await mesh->await_request_reply (operation, "MeshNode Spot request");
+            return request_mesh_spot_from_app_task (mesh, source_spot_id, target_node, target_spot,
+                                                    target_spot_generation, std::move (parts),
+                                                    timeout);
         };
         const auto mesh_name = mesh->mesh_name ();
         const auto claimed_as_route_alias =
@@ -2464,25 +2509,8 @@ void app_t::_apply_zlink_framework ()
               [mesh, channel_name] (runtime::messaging::message_parts_t parts,
                                     std::chrono::milliseconds timeout)
                 -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
-                  detail::host::pending_operation_t operation;
-                  auto submission =
-                    mesh->request_to_channel (channel_name, parts.items (), operation, timeout);
-                  auto admitted = co_await detail::request_admission_source_t{};
-                  mesh->observe_request_failure (operation, admitted, "RouteMesh channel request");
-                  const auto submitted = co_await submission;
-                  if (submitted != zlink::submit_result_t::ok) {
-                      if (submitted == zlink::submit_result_t::terminated) {
-                          co_return detail::boundary_failure<runtime::messaging::message_parts_t> (
-                            detail::boundary_error_t::shutdown,
-                            "RouteMesh channel request runtime is stopped");
-                      }
-                      co_return result_t<runtime::messaging::message_parts_t>::failure (
-                        runtime::messaging::map_submit_result_error_kind (submitted),
-                        "RouteMesh channel request was not submitted");
-                  }
-                  co_await detail::request_admitted_t{};
-                  co_return co_await mesh->await_request_reply (operation,
-                                                                "RouteMesh channel request");
+                  return request_mesh_channel_from_app_task (mesh, channel_name, std::move (parts),
+                                                             timeout);
               });
         }
     }
