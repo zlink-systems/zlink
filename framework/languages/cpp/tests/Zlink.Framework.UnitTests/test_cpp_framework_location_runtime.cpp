@@ -8,6 +8,9 @@
 
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/provider_location_repository.hpp"
+#include "runtime/utils/available_processor_count.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/location_auto_connect_host_service.hpp"
@@ -64,8 +67,112 @@ struct auto_connect_cache_test_access_t
     }
 };
 
+// Forward all Store operations to the real provider; inject one scan failure only.
+class auto_connect_probe_store_t final : public location_store_t
+{
+  public:
+    in_memory_location_store_t provider;
+    bool fail_next_scan = false;
+    unsigned reads = 0, writes = 0, scans = 0, failures = 0;
+
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        ++reads;
+        return provider.read (std::move (key));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        ++writes;
+        return provider.write (std::move (request));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        ++scans;
+        if (std::exchange (fail_next_scan, false)) {
+            ++failures;
+            return task_t<store_scan_result_t> (result_t<store_scan_result_t>::failure (
+              framework_error_kind_t::internal_failure, "injected one-worker Store scan failure"));
+        }
+        return provider.scan (std::move (request));
+    }
+};
+
 struct location_auto_connect_test_access_t
 {
+    struct provider_probe_t
+    {
+        auto_connect_probe_store_t &provider;
+        provider_location_repository_t &store;
+        location_runtime_t &runtime;
+        detail::route_channel_runtime_t &route;
+        mesh_node_descriptor_t peer;
+        unsigned connects = 0, disconnects = 0, ticks = 0;
+        bool later_wait_ready = false, saw_failure = false;
+    };
+
+    static task_t<void>
+    provider_probe_update (location_auto_connect_host_service_t *service,
+                           provider_probe_t *probe,
+                           location_auto_connect_host_service_t::target_t target,
+                           bool remove)
+    {
+        co_await service->update_route_target (service, &probe->route, {}, target, remove);
+        if (remove) {
+            ++probe->disconnects;
+            EXPECT_EQ (location_write_status_t::stored,
+                       (co_await probe->store.update_mesh_node (probe->peer,
+                                                                location_write_intent_t::new_claim))
+                         .status);
+            probe->provider.fail_next_scan = true;
+        } else if (++probe->connects == 1) {
+            EXPECT_EQ (location_write_status_t::stored,
+                       co_await probe->store.remove_mesh_node (
+                         {probe->peer.mesh_name, probe->peer.rid},
+                         {probe->peer.owner_id, probe->peer.lease_generation}));
+        }
+        // Request reconciliation before run_loop reaches its wait. This exercises
+        // the ready lease-change path without a periodic timer or a sleep.
+        probe->runtime.peer_reconcile_requester () ({});
+        if (probe->ticks == 1) {
+            probe->later_wait_ready =
+              probe->runtime.wait_for_owner_lease_change (probe->runtime.owner_lease_observation ())
+                .await_ready ();
+            probe->runtime.peer_reconcile_requester () ({});
+        }
+    }
+
+    static void configure_provider_probe (location_auto_connect_host_service_t &service,
+                                          provider_probe_t &probe,
+                                          live_location_reader_t &reader,
+                                          store_location_resolvers_t &cache)
+    {
+        service._runtime = &probe.runtime;
+        service._store = &probe.store;
+        service._live_store = &reader;
+        service._route_cache = &cache;
+        service._republish_after_store_recovery = [&service, &probe] (auto, auto, auto) {
+            ++probe.ticks;
+            if (probe.ticks == 5)
+                service._stop_requested.request_stop ();
+            if (probe.ticks == 3) {
+                probe.saw_failure = has_tick_failure (service);
+                probe.runtime.peer_reconcile_requester () ({});
+            }
+            return task_t<bool> (result_t<bool>::success (true));
+        };
+        service.add_loop (
+          "l4-mesh", std::nullopt, {}, std::nullopt, false,
+          [&service, &probe] (auto target) {
+              return provider_probe_update (&service, &probe, std::move (target), false);
+          },
+          [&service, &probe] (auto target) {
+              return provider_probe_update (&service, &probe, std::move (target), true);
+          },
+          [&service, &probe] (const auto &target) {
+              service.disconnect_route_target (&service, probe.route, {}, target);
+          });
+    }
+
     static location_auto_connect_host_service_t::target_t peer_target ()
     {
         location_auto_connect_host_service_t::target_t target;
@@ -2291,6 +2398,80 @@ void check_auto_loop_ready (bool later, bool recovery)
     failures->rethrow_if_failed ();
 }
 
+void check_provider_auto_loop (bool hold_route)
+{
+    auto executor = infrastructure_executor ();
+    ASSERT_EQ (1u, executor->live_worker_count ());
+    auto_connect_probe_store_t provider;
+    provider_location_repository_t store (provider);
+    location_options_t options;
+    options.owner_lease_renew_interval = std::chrono::hours (1);
+    options.owner_lease_ttl = std::chrono::hours (3);
+    options.polling_interval = std::chrono::hours (1);
+    const auto claim =
+      store.claim_owner_lease ("remote-owner", options.owner_lease_ttl).result ().value ();
+    const auto token = std::get<owner_lease_claimed_t> (claim).token;
+    mesh_node_descriptor_t peer;
+    peer.mesh_name = "l4-mesh";
+    peer.rid = zlink::routing_id_t::from ("remote");
+    peer.endpoint = "inproc://l4-peer";
+    peer.owner_id = token.owner_id;
+    peer.lease_generation = token.lease_generation;
+    peer.lifecycle_generation = 1;
+    peer.descriptor_revision = 1;
+    peer.state = framework_runtime_state_t::serving;
+    ASSERT_EQ (
+      location_write_status_t::stored,
+      store.update_mesh_node (peer, location_write_intent_t::new_claim).result ().value ().status);
+    location_runtime_t runtime (store, options, "local-owner");
+    runtime.start (zlink::routing_id_t::from ("local"));
+    live_location_reader_t reader (store, options);
+    store_location_resolvers_t cache (store);
+    auto_connect_cache_test_access_t::seed (cache);
+    detail::route_channel_runtime_t route ("l4-mesh");
+    auto builder = test::runtime_failure_builder ();
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    auto failures = std::make_shared<runtime_failure_collector_t> ();
+    location_auto_connect_host_service_t service (
+      failures, builder.message_bus (), {}, handlers, serializers,
+      [] { return framework_runtime_state_t::serving; });
+    location_auto_connect_test_access_t::provider_probe_t probe{provider, store, runtime, route,
+                                                                peer};
+    location_auto_connect_test_access_t::configure_provider_probe (service, probe, reader, cache);
+    if (hold_route) {
+        check_auto_owner_wait (auto_connect_owner_lane (route), [&] {
+            return location_auto_connect_test_access_t::run_probe (service);
+        });
+    } else {
+        auto terminal = std::make_shared<task_completion_source_t<void>> ();
+        executor->submit ([&service, terminal] {
+            auto pending = location_auto_connect_test_access_t::run_probe (service);
+            detail::observe_task_terminal (
+              pending, [terminal] (const result_t<void> &result) { terminal->complete (result); });
+        });
+        const auto result = terminal->task ().result_for (auto_connect_wait);
+        ASSERT_TRUE (result);
+        EXPECT_TRUE (*result);
+    }
+    EXPECT_EQ (2u, probe.connects);
+    EXPECT_EQ (1u, probe.disconnects);
+    EXPECT_EQ (5u, probe.ticks);
+    EXPECT_TRUE (probe.later_wait_ready);
+    EXPECT_TRUE (probe.saw_failure);
+    EXPECT_FALSE (location_auto_connect_test_access_t::has_tick_failure (service));
+    EXPECT_EQ (1u, provider.failures);
+    EXPECT_GE (provider.scans, 4u);
+    EXPECT_GT (provider.reads, 0u);
+    EXPECT_GT (provider.writes, 0u);
+    EXPECT_EQ (1u, route.list_connections ().size ());
+    auto_connect_cache_test_access_t::expect_recovered (cache);
+    service.stop ();
+    EXPECT_TRUE (route.list_connections ().empty ());
+    runtime.stop ();
+    failures->rethrow_if_failed ();
+}
+
 template <typename Node> task_t<void> auto_manual_disconnect (Node *node, zlink::routing_id_t rid)
 {
     if constexpr (requires { node->disconnect_peer_async (rid, std::string{}, true); })
@@ -2372,6 +2553,36 @@ void check_auto_stale_peer ()
     EXPECT_EQ (replacement, targets.front ().peer_rid);
 }
 
+}
+
+TEST (AutoConnectLaneDeathTest, OneWorkerProviderBackedStoreLoop)
+{
+#if defined(__linux__)
+    ::testing::FLAGS_gtest_death_test_style = "threadsafe";
+    ASSERT_EXIT (
+      {
+          // The process affinity is the existing shared-pool size input. A fresh
+          // death-test child has no pool yet, so this creates exactly one worker.
+          cpu_set_t available;
+          CPU_ZERO (&available);
+          if (sched_getaffinity (getpid (), sizeof (available), &available) != 0)
+              std::_Exit (2);
+          int cpu = 0;
+          while (cpu < CPU_SETSIZE && !CPU_ISSET (cpu, &available))
+              ++cpu;
+          cpu_set_t single;
+          CPU_ZERO (&single);
+          CPU_SET (cpu, &single);
+          if (sched_setaffinity (getpid (), sizeof (single), &single) != 0)
+              std::_Exit (2);
+          check_provider_auto_loop (false);
+          check_provider_auto_loop (true);
+          std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
+      },
+      ::testing::ExitedWithCode (0), "");
+#else
+    GTEST_SKIP () << "One-worker probe uses the Linux process-affinity pool-size input";
+#endif
 }
 
 TEST (AutoConnectLaneDeathTest, ProductionRouteCallbackReleasesIdentityWorker)
