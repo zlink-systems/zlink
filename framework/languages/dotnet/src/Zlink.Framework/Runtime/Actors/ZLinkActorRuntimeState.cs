@@ -560,7 +560,13 @@ internal sealed class ZLinkActorRuntimeState(
             {
                 if (SameBindingToken(current, replacement))
                 {
-                    _boundSession = replacement;
+                    _boundSession = replacement with
+                    {
+                        AcceptedHighWater = Math.Max(
+                            current.AcceptedHighWater,
+                            replacement.AcceptedHighWater
+                        ),
+                    };
                     return current;
                 }
                 RememberRetiredSessionBinding(current);
@@ -829,12 +835,12 @@ internal sealed class ZLinkActorRuntimeState(
     // A relayed frame carries the sequence assigned by the Session owner.
     // That value is authoritative across relay hops; incrementing it at
     // every hop counts one accepted frame more than once.
-    public void RecordRelocatedSessionAccepted(RoutingId sessionRid, ulong acceptedHighWater)
+    public bool RecordRelocatedSessionAccepted(RoutingId sessionRid, ulong acceptedHighWater)
     {
         if (acceptedHighWater == 0)
-            return;
+            return false;
 
-        RunState(() =>
+        return RunState(() =>
         {
             if (
                 _pendingSessionRoute is { } pending
@@ -843,12 +849,12 @@ internal sealed class ZLinkActorRuntimeState(
             )
             {
                 if (acceptedHighWater <= pending.Route.AcceptedHighWater)
-                    return;
+                    return false;
                 _pendingSessionRoute = pending with
                 {
                     Route = pending.Route with { AcceptedHighWater = acceptedHighWater },
                 };
-                return;
+                return true;
             }
 
             if (
@@ -856,8 +862,9 @@ internal sealed class ZLinkActorRuntimeState(
                 || current.SessionRid != sessionRid
                 || acceptedHighWater <= current.AcceptedHighWater
             )
-                return;
+                return false;
             _boundSession = current with { AcceptedHighWater = acceptedHighWater };
+            return true;
         });
     }
 

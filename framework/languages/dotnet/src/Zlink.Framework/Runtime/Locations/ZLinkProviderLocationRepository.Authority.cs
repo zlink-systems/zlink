@@ -4305,7 +4305,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         for (; ; )
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (operationDeadline is { } deadline && DateTimeOffset.UtcNow >= deadline)
+            if (operationDeadline is { } deadline && _time.GetUtcNow() >= deadline)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.DeadlineExceeded,
                     "Authority Ready commit exceeded the operation deadline."

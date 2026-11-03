@@ -102,7 +102,7 @@ internal sealed class ZLinkAutoConnectReconciler
         _executor = executor;
         _errorSink = errorSink ?? new ZLinkRuntimeErrorSink();
         _options = options;
-        _time = timeProvider ?? TimeProvider.System;
+        _time = timeProvider ?? runtime.TimeProvider;
         _retainRemovedMembers = retainRemovedMembers;
         _localWriteStatus = initiallyPublished ? ZLinkLocationWriteStatus.Stored : null;
         _localGeneration = initialStoreGeneration;
@@ -420,8 +420,11 @@ internal sealed class ZLinkAutoConnectReconciler
         IReadOnlyList<ZLinkMeshNodeDescriptor> rows;
         try
         {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            deadline.CancelAfter(_options.OwnerLeaseRenewTimeout);
+            using var timeout = new CancellationTokenSource(_options.OwnerLeaseRenewTimeout, _time);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeout.Token
+            );
             var published = await PublishLocalAsync(deadline.Token).ConfigureAwait(false);
             if (Volatile.Read(ref _ownerCleanupStarted) != 0)
                 return;

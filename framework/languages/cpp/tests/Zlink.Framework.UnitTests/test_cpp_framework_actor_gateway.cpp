@@ -2224,6 +2224,8 @@ int authority_only_route_update_keeps_physical_session_current ()
     return 0;
 }
 
+int bound_session_actor_dispatch_uses_current_binding_without_location_reread ();
+
 int bound_session_relay_admission_is_exact_and_monotonic ()
 {
     using namespace zlink::framework;
@@ -2336,7 +2338,7 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
         || sessions.complete_inbound (*fifth) != stateful::stateful_error_t::none
         || sessions.complete_inbound (*fourth) == stateful::stateful_error_t::none)
         return 21;
-    return 0;
+    return bound_session_actor_dispatch_uses_current_binding_without_location_reread ();
 }
 
 int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
@@ -2350,6 +2352,16 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
     serializer_registry_t serializers;
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("bound-session-target");
+    auto errors =
+      std::make_shared<test::telemetry_observations_t<message_dispatch_error_event_t>> ();
+    auto flows = std::make_shared<test::telemetry_observations_t<message_flow_event_t>> ();
+    node->dispatch.message_flow (message_flow_log_mode_t::normal);
+    dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      node->dispatch, [errors] (const auto &event) { errors->record (event); });
+    dispatch_options_access_t::set_observer_for_tests (node->dispatch, [flows] (const auto &event) {
+        if (event.outcome == message_flow_outcome_t::dropped)
+            flows->record (event);
+    });
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, "bound-session-target");
     node->channel_runtime =
@@ -2439,18 +2451,23 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
                                      .actor = actor};
     spot_node_runtime_t spots (node);
 
-    const auto dispatch = [&] (protocol::actor_route_fence_t target, std::uint64_t sequence) {
-        host::receive_record_t record{.kind = host::record_kind_t::actor_send,
+    const auto dispatch = [&] (protocol::actor_route_fence_t target, std::uint64_t sequence,
+                               bool request = false, bool fenced = true) {
+        host::receive_record_t record{.kind = request ? host::record_kind_t::actor_request
+                                                      : host::record_kind_t::actor_send,
                                       .domain = host::ready_domain_t::application};
         record.source_node_rid = session_owner;
         record.source_session_rid = session_rid;
         record.source_binding_generation = 19;
         record.source_session_sequence = sequence;
-        record.actor_route = std::move (target);
+        if (fenced)
+            record.actor_route = std::move (target);
         auto encoded = zlink::framework::detail::encode_actor_packet (
-          messaging::envelope_header_t{.kind = messaging::message_kind_t::command,
+          messaging::envelope_header_t{.kind = request ? messaging::message_kind_t::request
+                                                       : messaging::message_kind_t::command,
                                        .channel_name = "actor",
-                                       .message_name = "MoveMsg"},
+                                       .message_name = "MoveMsg",
+                                       .correlation_id = "relay-sequence"},
           zlink::message_t::from (std::string ("move")));
         auto parts = std::move (encoded).take_items ();
         return spots.dispatch_mesh_record (
@@ -2494,8 +2511,54 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
         return 7;
     }
     node->worker_executor->drain ();
+    // Duplicate and lower sequences share the existing Actor owner admission.
+    // Neither kind may reach the handler; each rejection must be observable.
+    for (const auto fenced : {true, false}) {
+        for (const auto sequence : {3U, 2U}) {
+            (void) dispatch (exact_target, sequence, false, fenced);
+            (void) dispatch (exact_target, sequence, true, fenced);
+        }
+    }
+    test::acknowledge_delivery ();
+    const auto rejected_requests = errors->snapshot ();
+    const auto rejected_sends = flows->snapshot ();
+    node->worker_executor->drain ();
     node->worker_executor.reset ();
     zlink::framework::detail::spot_node_runtime_t (node).release_native_handles ();
+    if (handler_calls.load () != 3 || rejected_requests.size () != 4
+        || rejected_sends.size () != 4) {
+        std::cerr << "relay rejection records: requests=" << rejected_requests.size ()
+                  << " sends=" << rejected_sends.size () << " handlers=" << handler_calls.load ()
+                  << '\n';
+        return 8;
+    }
+    for (const auto &event : rejected_requests) {
+        if (event.surface != dispatch_error_surface_t::stream_session
+            || event.message_kind != dispatch_message_kind_t::request
+            || event.reason != dispatch_error_reason_t::stale_target
+            || event.action != dispatch_error_action_t::reply_error
+            || event.packet_name != "MoveMsg" || event.actor_id != "bound-player"
+            || event.source_rid != session_owner.to_hex ()
+            || event.correlation_id != "relay-sequence" || !event.exception)
+            return 9;
+        try {
+            std::rethrow_exception (event.exception);
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () != framework_error_kind_t::invalid_operation)
+                return 10;
+        }
+    }
+    for (const auto &event : rejected_sends) {
+        if (event.surface != dispatch_error_surface_t::stream_session
+            || event.message_kind != dispatch_message_kind_t::send
+            || event.outcome != message_flow_outcome_t::dropped
+            || event.reason != message_flow_reason_t::stale_target || event.packet_name != "MoveMsg"
+            || event.actor_id != "bound-player" || event.source_rid != session_owner.to_hex ()
+            || event.stream_session_id != session_rid.to_hex ()
+            || event.correlation_id != "relay-sequence")
+            return 11;
+    }
     return 0;
 }
 
@@ -9202,6 +9265,10 @@ int actor_native_terminal_cause (std::string_view cause,
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--relay-sequence") {
+        zlink::framework::completion_owner_t completion_owner;
+        return bound_session_relay_admission_is_exact_and_monotonic ();
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--telemetry-consumers") {
         zlink::framework::completion_owner_t completion_owner;
         for (
@@ -9583,11 +9650,6 @@ int main (int argc, char **argv)
     if (const auto admission = bound_session_relay_admission_is_exact_and_monotonic ();
         admission != 0) {
         return 140 + admission;
-    }
-    if (const auto dispatch =
-          bound_session_actor_dispatch_uses_current_binding_without_location_reread ();
-        dispatch != 0) {
-        return 360 + dispatch;
     }
     if (const auto transition = bound_session_transition_is_atomic_and_idempotent ();
         transition != 0) {

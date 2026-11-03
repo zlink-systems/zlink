@@ -1072,6 +1072,9 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         await using var fixture = new CanonicalPhysicalRequest();
         fixture.Node.SetFlowTracer(new ZLinkMessageFlowTracer(options));
         await fixture.MakeReadyAsync();
+        // VSTest's socket reader can occupy the sole CLR worker on one CPU.
+        // Enter the pool before starting the independent native request deadlines.
+        await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         var expectedReady = new ZLinkServiceWireCodec.RelocationReadyRecord(
             fixture.Prepare.RelocationId,
             fixture.Prepare.TargetAttemptGeneration,
@@ -1091,11 +1094,15 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.Equal(expectedReady, roundtrip);
         using var cancellation = new CancellationTokenSource();
         var first = fixture.Request(cancellation.Token);
-        using var firstReceived = fixture.ReceivePrepareAndChunks();
+        using var firstReceived = await fixture
+            .ReceivePrepareAndChunksAsync()
+            .WaitAsync(TimeSpan.FromSeconds(5));
         if (expireOwner)
             fixture.AdvanceClock(TimeSpan.FromMilliseconds(125));
         var second = fixture.Request();
-        using var secondReceived = fixture.ReceivePrepareAndChunks();
+        using var secondReceived = await fixture
+            .ReceivePrepareAndChunksAsync()
+            .WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(2, fixture.Node.PendingOperationCount);
         Assert.Equal(1, fixture.Node.PendingCanonicalRelocationPrepareCount);
         var submissions = fixture.Context.Submissions.ToArray();
@@ -1146,7 +1153,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.Equal(0, fixture.Node.PendingOperationCount);
         Assert.Equal(0, fixture.Node.PendingCanonicalRelocationPrepareCount);
         Assert.Equal(2, fixture.Context.NativeRequests);
-        await WaitForFlowDeliveryAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitForReadyActivityAsync().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Single(
             stages.Where(stage => Equals(stage.GetTagItem("detail"), "relay_ready_received"))
         );
@@ -1162,9 +1169,11 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             Assert.Equal(cancellation.Token, unchanged.CancellationToken);
         }
 
-        static async Task WaitForFlowDeliveryAsync()
+        async Task WaitForReadyActivityAsync()
         {
-            while (ZLinkMessageFlowDelivery.Shared.State is not { Pending: 0, Executing: false })
+            // READY completes before its trace is submitted. An idle delivery queue
+            // therefore does not establish that this Activity has been delivered.
+            while (!stages.Any(stage => Equals(stage.GetTagItem("detail"), "relay_ready_received")))
                 await Task.Yield();
         }
     }
@@ -1497,12 +1506,27 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 )
                 .AsTask();
 
-        internal Received ReceivePrepareAndChunks()
-        {
-            var request = ReceivePrepare();
-            ReceiveChunks();
-            return request;
-        }
+        internal Task<Received> ReceivePrepareAndChunksAsync() =>
+            // The peer's blocking reads must not occupy the mesh continuation pool.
+            Task.Factory.StartNew(
+                () =>
+                {
+                    var request = ReceivePrepare();
+                    try
+                    {
+                        ReceiveChunks();
+                        return request;
+                    }
+                    catch
+                    {
+                        request.Dispose();
+                        throw;
+                    }
+                },
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default
+            );
 
         internal Received ReceivePrepare()
         {

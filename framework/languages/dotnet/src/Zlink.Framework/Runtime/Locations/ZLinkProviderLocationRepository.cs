@@ -11,10 +11,13 @@ namespace Zlink.Framework.Runtime.Locations;
 /// Translates framework-owned location records to the provider's opaque
 /// conditional key/value operations.
 /// </summary>
-internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStore provider)
-    : IZLinkLocationRepository
+internal sealed partial class ZLinkProviderLocationRepository(
+    IZLinkLocationStore provider,
+    TimeProvider? timeProvider = null
+) : IZLinkLocationRepository
 {
     private readonly ProviderBoundary _provider = new(provider);
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private const string Prefix = "zlink:v11:";
     private const long MaximumGeneration = long.MaxValue;
     private const int MaximumDescriptorWriteRetries = 3;
