@@ -15957,8 +15957,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                   actor, record.source_node_rid, *record.source_session_rid,
                   record.source_binding_generation, record.source_session_sequence, &route));
             }
-            const bool targets_current_bound_route =
-              session_relay_admission && *session_relay_admission;
+            // Binding admission owns its terminal error. Its result on the exact
+            // Actor route must reach the session terminal path below instead of
+            // being replaced with a generic route rejection.
+            const bool targets_current_bound_route = session_relay_admission.has_value ();
             if (!has_bound_session_source) {
                 targets_current_authority =
                   authority_fence && authority_fence->actor_id == route.actor_id
@@ -16052,11 +16054,41 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                   });
             }
             if (!*session_relay_admission) {
-                reply_error (
+                const auto error =
                   framework_exception_t (session_relay_admission->error_kind (),
                                          session_relay_admission->error ()
                                            ? session_relay_admission->error ()->what ()
-                                           : "Bound Session relay source fence was rejected"));
+                                           : "Bound Session relay source fence was rejected");
+                if (record.kind == service::record_kind_t::actor_request) {
+                    detail::dispatch_error_reporter_t (_state->dispatch).report_lazy ([&] {
+                        return message_dispatch_error_event_t{
+                          .surface = dispatch_error_surface_t::stream_session,
+                          .message_kind = dispatch_message_kind_t::request,
+                          .reason = dispatch_error_reason_t::stale_target,
+                          .action = dispatch_error_action_t::reply_error,
+                          .packet_name = header.message_name,
+                          .actor_id = std::string (actor.actor_id ().value ()),
+                          .source_rid = record.source_node_rid.to_hex (),
+                          .correlation_id = header.correlation_id,
+                          .exception = std::make_exception_ptr (error)};
+                    });
+                } else {
+                    detail::message_flow_tracer_t (_state->dispatch)
+                      .trace (message_flow_outcome_t::dropped, [&] {
+                          auto event = message_flow_event_t{
+                            message_flow_outcome_t::dropped,
+                            dispatch_error_surface_t::stream_session, dispatch_message_kind_t::send,
+                            header.message_name};
+                          event.actor_id = std::string (actor.actor_id ().value ());
+                          event.source_rid = record.source_node_rid.to_hex ();
+                          event.stream_session_id = record.source_session_rid->to_hex ();
+                          event.correlation_id = header.correlation_id;
+                          event.reason = message_flow_reason_t::stale_target;
+                          event.exception = std::make_exception_ptr (error);
+                          return event;
+                      });
+                }
+                reply_error (error);
                 return true;
             }
         } else {
