@@ -8,7 +8,8 @@
 #include <cstddef>
 namespace zlink::framework::tests
 {
-inline std::array<std::atomic_size_t, 6> native_calls{};
+// Indices 0..5 retain the native API counts; 6 counts copies of nonempty payloads.
+inline std::array<std::atomic_size_t, 7> native_calls{};
 inline std::atomic_bool count_native_calls{false};
 inline std::atomic_size_t native_completion_events{0};
 inline std::mutex native_close_mutex;

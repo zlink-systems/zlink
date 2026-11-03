@@ -30,6 +30,8 @@ foreach(required
     "\"CMAKE_CXX_STANDARD\": \"20\""
     "\"CMAKE_EXPORT_COMPILE_COMMANDS\": \"ON\""
     "\"ZLINK_FRAMEWORK_CPP_BUILD_TESTS\": \"ON\""
+    "\"ZLINK_FRAMEWORK_CPP_TEST_PROBES\": \"ON\""
+    "\"ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK\": \"OFF\""
     "\"ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES\": \"ON\"")
   if(NOT presets_text MATCHES "${required}")
     message(FATAL_ERROR "CMakePresets.json is missing ${required}")
@@ -142,6 +144,8 @@ execute_process(
     -D CMAKE_CXX_EXTENSIONS=OFF
     -D CMAKE_EXPORT_COMPILE_COMMANDS=ON
     -D ZLINK_FRAMEWORK_CPP_BUILD_TESTS=ON
+    -D ZLINK_FRAMEWORK_CPP_TEST_PROBES=ON
+    -D ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF
     -D ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=ON
     ${tooling_configure_args}
   RESULT_VARIABLE configure_result
@@ -164,6 +168,8 @@ endif()
 file(READ "${smoke_build_dir}/CMakeCache.txt" smoke_cache)
 foreach(required
     "ZLINK_FRAMEWORK_CPP_BUILD_TESTS:BOOL=ON"
+    "ZLINK_FRAMEWORK_CPP_TEST_PROBES:BOOL=ON"
+    "ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK:BOOL=OFF"
     "ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES:BOOL=ON")
   if(NOT smoke_cache MATCHES "${required}")
     message(FATAL_ERROR "tooling configure cache is missing ${required}")
@@ -172,4 +178,21 @@ endforeach()
 if(NOT smoke_cache MATCHES "CMAKE_EXPORT_COMPILE_COMMANDS:[^=]*=ON")
   message(FATAL_ERROR
     "CLion-style configure cache is missing CMAKE_EXPORT_COMPILE_COMMANDS=ON")
+endif()
+
+# Installation must reject instrumented inline definitions before finding packages.
+execute_process(
+  COMMAND "${CMAKE_COMMAND}"
+    -S "${ZLINK_FRAMEWORK_CPP_SOURCE_DIR}"
+    -B "${smoke_run_dir}/probe-install"
+    ${smoke_generator_args}
+    -D ZLINK_FRAMEWORK_CPP_TEST_PROBES=ON
+    -D ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON
+  RESULT_VARIABLE probe_install_result
+  OUTPUT_VARIABLE probe_install_output
+  ERROR_VARIABLE probe_install_error)
+if(probe_install_result EQUAL 0 OR NOT probe_install_error MATCHES
+    "ZLINK_FRAMEWORK_CPP_TEST_PROBES requires[ \r\n]+ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF")
+  message(FATAL_ERROR
+    "Instrumented installation was not rejected: ${probe_install_output} ${probe_install_error}")
 endif()

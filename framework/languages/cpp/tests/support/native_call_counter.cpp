@@ -1,6 +1,76 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "native_call_counter.hpp"
 #include <zlink.h>
+#if defined(_WIN32) || defined(__APPLE__)
+#include <cstdlib>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+// These platforms link Core dynamically. Count the imported copy entry point;
+// binding message_t copy/assignment/copy() all call that same Core function.
+namespace
+{
+using copy_function_t = zlink_config_result_t (*) (zlink_msg_t *, zlink_msg_t *);
+std::atomic<zlink::framework::tests::native_message_filter_t> copy_filter{nullptr};
+
+copy_function_t real_message_copy ()
+{
+    static const auto function = [] {
+#if defined(_WIN32)
+        HMODULE module = nullptr;
+        if (!GetModuleHandleExW (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                   | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                 reinterpret_cast<LPCWSTR> (&zlink_msg_init), &module))
+            std::abort ();
+        const auto address = GetProcAddress (module, "zlink_msg_copy");
+#else
+        const auto address = dlsym (RTLD_NEXT, "zlink_msg_copy");
+#endif
+        if (!address)
+            std::abort ();
+        return reinterpret_cast<copy_function_t> (address);
+    }();
+    return function;
+}
+
+zlink_config_result_t counted_message_copy (zlink_msg_t *destination, zlink_msg_t *source)
+{
+    using namespace zlink::framework::tests;
+    const auto filter = copy_filter.load ();
+    if (count_native_calls.load ()
+        && (!filter || !filter (zlink_msg_data (source), zlink_msg_size (source)))) {
+        native_calls[3].fetch_add (1);
+        if (zlink_msg_size (source) != 0)
+            native_calls[6].fetch_add (1);
+    }
+    return real_message_copy () (destination, source);
+}
+} // namespace
+
+namespace zlink::framework::tests
+{
+void set_native_message_filter (native_message_filter_t filter)
+{
+    copy_filter.store (filter);
+}
+} // namespace zlink::framework::tests
+
+#if defined(_WIN32)
+// Resolve binding/Core dllimport references to the test's import pointer. The
+// other Core imports load the module; GetProcAddress above reaches its real copy.
+extern "C" {
+copy_function_t __imp_zlink_msg_copy = &counted_message_copy;
+}
+#else
+extern "C" zlink_config_result_t zlink_msg_copy (zlink_msg_t *destination, zlink_msg_t *source)
+{
+    return counted_message_copy (destination, source);
+}
+#endif
+#else
 #include <unordered_map>
 namespace
 {
@@ -87,8 +157,11 @@ zlink_config_result_t __wrap_zlink_msg_copy (zlink_msg_t *a, zlink_msg_t *b)
             if (initialization == native_initialization_t::measured)
                 native_calls[0].fetch_sub (1);
             initialization = native_initialization_t::excluded;
-        } else
+        } else {
             count (3);
+            if (zlink_msg_size (b) != 0)
+                count (6);
+        }
     }
     return __real_zlink_msg_copy (a, b);
 }
@@ -120,3 +193,5 @@ int __wrap_zlink_poller_wait (
     return result;
 }
 }
+
+#endif
