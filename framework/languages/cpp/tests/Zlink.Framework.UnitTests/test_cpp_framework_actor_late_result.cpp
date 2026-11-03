@@ -386,6 +386,18 @@ TEST (ActorSendFence, MissingAuthorityInvalidatesOnlyTheUsedFence)
     }
 }
 
+class counting_actor_authority_store_t final : public rt::in_memory_location_repository_t
+{
+  public:
+    std::atomic_int reads{0};
+    fw::task_t<fw::authority_read_result_t> read_authority (fw::authority_key_t key,
+                                                            std::stop_token cancellation) override
+    {
+        ++reads;
+        return rt::in_memory_location_repository_t::read_authority (std::move (key), cancellation);
+    }
+};
+
 // These requests use the production client, local host registration and dispatcher.
 // Only the registry clock/cancellation is controlled by the fixture.
 class local_actor_receiver_t : public testing::Test
@@ -393,12 +405,13 @@ class local_actor_receiver_t : public testing::Test
   protected:
     std::mutex delay_mutex;
     fw::detail::delay_owner_t delays{delay_mutex};
-    rt::in_memory_location_repository_t store;
+    counting_actor_authority_store_t store;
     rt::live_location_reader_t locations{store};
     fw::serializer_registry_t serializers;
     std::shared_ptr<fw::detail::mesh_node_runtime_t> runtime;
     std::shared_ptr<fw::actor_client_t> client;
     std::optional<rt::host::receive_record_t> request;
+    std::function<void ()> before_submit;
     wire::actor_route_fence_t fence;
 
     void SetUp () override
@@ -425,7 +438,11 @@ class local_actor_receiver_t : public testing::Test
                  1,
                  1};
         serializers.add<std::string> (
-          [] (const std::string &value) { return fw::encoded_payload_t::from_string (value); },
+          [this] (const std::string &value) {
+              if (before_submit)
+                  before_submit ();
+              return fw::encoded_payload_t::from_string (value);
+          },
           [] (const fw::encoded_payload_t &value) { return value.to_string (); },
           "application/json");
         client = rt::make_actor_client (locations, serializers, {runtime}, {}, {}, delays);
@@ -468,6 +485,98 @@ class local_actor_receiver_t : public testing::Test
         EXPECT_TRUE (retained.expired ());
     }
 };
+
+// Each request selects the old cache entry before the serializer runs. Replacing
+// that entry in the serializer gives a deterministic selection/submission boundary.
+TEST_F (local_actor_receiver_t, SubmitNotConnectedInvalidatesOnlyTheUsedFenceAndReresolves)
+{
+    for (int changed = -1; changed != 5; ++changed) {
+        SCOPED_TRACE (changed);
+        auto used = fence;
+        used.target_node_routing_id = {'m', 'i', 's', 's', 'i', 'n', 'g'};
+        access::cache (*client, used);
+        auto newer = used;
+        switch (changed) {
+            case 0:
+                ++newer.object_generation;
+                break;
+            case 1:
+                newer.target_node_routing_id.push_back ('2');
+                break;
+            case 2:
+                ++newer.target_node_generation;
+                break;
+            case 3:
+                ++newer.authority_owner_generation;
+                break;
+            case 4:
+                ++newer.owner_lease_generation;
+                break;
+        }
+        before_submit = [&, newer] { access::cache (*client, newer); };
+        store.reads = 0;
+        auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                         .timeout (1h)
+                         .async<std::string> ();
+        ASSERT_FALSE (pending.result ());
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (changed == -1 && store.reads == 0 && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        EXPECT_EQ (store.reads, changed == -1 ? 1 : 0);
+        EXPECT_EQ (access::cached (*client, "actor"), changed != -1);
+        before_submit = {};
+    }
+}
+
+TEST_F (local_actor_receiver_t, SubmitFenceMismatchInvalidatesOnlyTheUsedFenceAndReresolves)
+{
+    auto &transport = runtime->native_node ().transport ();
+    auto peer = transport.topology ().local_descriptor ();
+    peer.node_routing_id = {'p', 'e', 'e', 'r'};
+    peer.advertised_endpoint = "tcp://127.0.0.1:1";
+    ASSERT_EQ (transport.topology ().admit (peer, {'c'}),
+               rt::mesh::peer_admission_result_t::admitted);
+    for (int changed = -1; changed != 5; ++changed) {
+        SCOPED_TRACE (changed);
+        auto used = fence;
+        used.target_node_routing_id = peer.node_routing_id;
+        // An authority fence without its lease is rejected before binding submit.
+        used.owner_lease_generation = 0;
+        access::cache (*client, used);
+        auto newer = used;
+        switch (changed) {
+            case 0:
+                ++newer.object_generation;
+                break;
+            case 1:
+                newer.target_node_routing_id.push_back ('2');
+                break;
+            case 2:
+                ++newer.target_node_generation;
+                break;
+            case 3:
+                ++newer.authority_owner_generation;
+                break;
+            case 4:
+                ++newer.owner_lease_generation;
+                break;
+        }
+        before_submit = [&, newer] { access::cache (*client, newer); };
+        store.reads = 0;
+        auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                         .timeout (1h)
+                         .async<std::string> ();
+        const auto result = pending.result ();
+        ASSERT_FALSE (result);
+        EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::not_found);
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (changed == -1 && store.reads == 0 && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        EXPECT_EQ (store.reads, changed == -1 ? 1 : 0);
+        EXPECT_EQ (access::cached (*client, "actor"), changed != -1);
+        before_submit = {};
+    }
+}
 
 TEST_F (local_actor_receiver_t, LocalStaleReplyInvalidatesOnlyTheUsedFence)
 {

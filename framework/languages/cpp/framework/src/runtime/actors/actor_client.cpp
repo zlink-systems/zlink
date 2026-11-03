@@ -845,8 +845,17 @@ class actor_client_impl_t final : public actor_client_t,
         const auto submit = co_await runtime->request_to_actor (
           actor.native_ref, copied, operation, timeout, {}, actor.authority_owner_generation,
           actor.owner_lease_generation);
-        if (submit != zlink::submit_result_t::ok)
-            throw runtime::messaging::map_submit_result_exception (submit, "Actor submission");
+        if (submit != zlink::submit_result_t::ok) {
+            const auto failure = std::make_exception_ptr (
+              runtime::messaging::map_submit_result_exception (submit, "Actor submission"));
+            // No registry/binding receiver owns a rejected submission. Process its
+            // physical failure before admission publication can finish the public call.
+            receiver.complete (
+              detail::result_access_t::failure<result_t<runtime::messaging::message_parts_t>> (
+                failure));
+            receiver.admitted->complete (detail::result_access_t::failure<void> (failure));
+            co_return;
+        }
         receiver.admitted->complete (result_t<void>::success ());
     }
 
