@@ -4088,11 +4088,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 backendSpot)
                                         .thenCompose(
                                                 activation -> {
-                                                    activation.setAuthorityFence(
-                                                            route.ownerId(),
-                                                            route.leaseGeneration(),
-                                                            route.authorityOwnerGeneration(),
-                                                            route.targetNodeGeneration());
+                                                    activation.setAuthorityFence(route);
                                                     return publishInstanceActivation(
                                                                     activation,
                                                                     restoreFirst,
@@ -4211,12 +4207,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                         + " its reservation"));
                                                                     }
                                                                     activation.setAuthorityFence(
-                                                                            route.ownerId(),
-                                                                            route.leaseGeneration(),
-                                                                            route
-                                                                                    .authorityOwnerGeneration(),
-                                                                            route
-                                                                                    .targetNodeGeneration());
+                                                                            route);
                                                                     return publishInstanceActivation(
                                                                             activation,
                                                                             restoreFirst,
@@ -6470,25 +6461,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                         + " fence"
                                                                                                                         + " changed");
                                                                                                     }
-                                                                                                    fresh
-                                                                                                            .setAuthorityFence(
-                                                                                                                    stored
-                                                                                                                            .ownerId(),
-                                                                                                                    stored
-                                                                                                                            .ownerLeaseGeneration(),
-                                                                                                                    stored
-                                                                                                                            .authorityOwnerGeneration(),
-                                                                                                                    authority
-                                                                                                                            .nodeGeneration());
-                                                                                                    instanceSpotActivations
-                                                                                                            .put(
-                                                                                                                    authority
-                                                                                                                            .spotId(),
-                                                                                                                    fresh);
-                                                                                                    mesh
-                                                                                                            .registerInstanceIntent(
-                                                                                                                    authority
-                                                                                                                            .stableType(),
+                                                                                                    var
+                                                                                                            publishedRoute =
                                                                                                                     new systems
                                                                                                                             .zlink
                                                                                                                             .framework
@@ -6512,7 +6486,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                                             stored
                                                                                                                                     .ownerLeaseGeneration(),
                                                                                                                             stored
-                                                                                                                                    .storeVersion()));
+                                                                                                                                    .storeVersion());
+                                                                                                    fresh
+                                                                                                            .setAuthorityFence(
+                                                                                                                    publishedRoute);
+                                                                                                    instanceSpotActivations
+                                                                                                            .put(
+                                                                                                                    authority
+                                                                                                                            .spotId(),
+                                                                                                                    fresh);
+                                                                                                    mesh
+                                                                                                            .registerInstanceIntent(
+                                                                                                                    authority
+                                                                                                                            .stableType(),
+                                                                                                                    publishedRoute);
                                                                                                     fresh
                                                                                                             .startIdleEviction(
                                                                                                                     instanceSpotIdleTimeouts
