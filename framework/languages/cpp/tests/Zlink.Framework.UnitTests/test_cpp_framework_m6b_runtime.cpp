@@ -3142,17 +3142,17 @@ void verify_global_identity_remote_create_and_generation_fence ()
     auto remote_owner = returning_actor;
     remote_owner.authority_owner_generation++;
     remote_owner.node_id = "node-b";
-    assert (runtime.adopt_reserved_actor_owner (remote_owner, "player")
+    assert (runtime.adopt_reserved_actor_owner (remote_owner, "player").result ().value ()
             == stateful::stateful_error_t::none);
     auto returned_owner = remote_owner;
     returned_owner.authority_owner_generation += 3;
     returned_owner.node_id = "node-a";
-    assert (runtime.adopt_reserved_actor_owner (returned_owner, "player")
+    assert (runtime.adopt_reserved_actor_owner (returned_owner, "player").result ().value ()
             == stateful::stateful_error_t::none);
     auto stale_owner = returned_owner;
     stale_owner.authority_owner_generation--;
     stale_owner.node_id = "node-b";
-    assert (runtime.adopt_reserved_actor_owner (stale_owner, "player")
+    assert (runtime.adopt_reserved_actor_owner (stale_owner, "player").result ().value ()
             == stateful::stateful_error_t::generation_stale);
 
     // A User-Spot membership authority commit can advance the generation
@@ -3160,17 +3160,22 @@ void verify_global_identity_remote_create_and_generation_fence ()
     // return-to-node adoption above and accepts exactly the next generation.
     auto local_membership_owner = returned_owner;
     ++local_membership_owner.authority_owner_generation;
-    assert (runtime.advance_local_actor_authority (local_membership_owner, "player")
-            == stateful::stateful_error_t::none);
+    assert (
+      runtime.advance_local_actor_authority (local_membership_owner, "player").result ().value ()
+      == stateful::stateful_error_t::none);
     assert (runtime.find (stateful::object_kind_t::actor, local_membership_owner.key)
             == local_membership_owner);
     auto skipped_local_membership_owner = local_membership_owner;
     skipped_local_membership_owner.authority_owner_generation += 2;
     assert (runtime.advance_local_actor_authority (skipped_local_membership_owner, "player")
+              .result ()
+              .value ()
             == stateful::stateful_error_t::none);
     auto stale_local_membership_owner = skipped_local_membership_owner;
     --stale_local_membership_owner.authority_owner_generation;
     assert (runtime.advance_local_actor_authority (stale_local_membership_owner, "player")
+              .result ()
+              .value ()
             == stateful::stateful_error_t::generation_stale);
 
     // Application actors created from a globally reserved reference use the
