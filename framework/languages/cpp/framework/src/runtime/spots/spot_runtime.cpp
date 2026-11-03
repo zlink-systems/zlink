@@ -14240,6 +14240,50 @@ std::optional<spot_id_t> spot_node_runtime_t::actor_spot (const actor_ref_t &act
     });
 }
 
+template <typename TJoinResult>
+task_t<void> spot_node_runtime_t::run_actor_join_admission_task (
+  spot_node_runtime_t runtime,
+  std::shared_ptr<TJoinResult> join_result,
+  actor_ref_t actor,
+  service::actor_control_t control,
+  std::string join_spot_id,
+  std::vector<zlink::message_t> parts,
+  bool remote_transfer,
+  zlink::message_t request,
+  bool targets_entry_spot,
+  std::string local_node_rid,
+  service_provider_t *services,
+  serializer_registry_t *serializers,
+  std::optional<std::chrono::steady_clock::time_point> deadline)
+{
+    join_result->joined.emplace (co_await runtime::await_result (runtime.run_actor_join_control (
+      actor, control, join_spot_id, parts, request, remote_transfer, targets_entry_spot,
+      local_node_rid, *services, *serializers, &join_result->source_leave, deadline)));
+}
+
+namespace
+{
+
+template <typename TTarget>
+task_t<void> run_actor_handler_turn_task (
+  TTarget target,
+  std::function<task_t<result_t<bool>> (actor_t &, std::stop_token)> work,
+  std::stop_token cancellation,
+  std::shared_ptr<std::optional<result_t<bool>>> outcome,
+  std::string actor_key)
+{
+    runtime::actor_execution_scope_t actor_scope (std::move (actor_key), target.context->spot_id);
+    try {
+        outcome->emplace (co_await work (*target.actor, cancellation));
+    }
+    catch (...) {
+        outcome->emplace (detail::current_exception_result<bool> ());
+    }
+    co_return;
+}
+
+} // namespace
+
 task_t<result_t<bool>> spot_node_runtime_t::run_actor_turn (
   actor_ref_t actor_ref,
   std::function<task_t<result_t<bool>> (actor_t &, std::stop_token)> work,
@@ -14295,15 +14339,9 @@ task_t<result_t<bool>> spot_node_runtime_t::run_actor_turn (
           "actor-handler-turn",
           [target = std::move (*target), work = std::move (work), cancellation,
            outcome] () mutable -> task_t<void> {
-              runtime::actor_execution_scope_t actor_scope (actor_key (target.actor_ref),
-                                                            target.context->spot_id);
-              try {
-                  outcome->emplace (co_await work (*target.actor, cancellation));
-              }
-              catch (...) {
-                  outcome->emplace (detail::current_exception_result<bool> ());
-              }
-              co_return;
+              auto key = actor_key (target.actor_ref);
+              return run_actor_handler_turn_task (std::move (target), std::move (work),
+                                                  cancellation, outcome, std::move (key));
           });
     }
     catch (...) {
@@ -16376,10 +16414,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (
        local_node_rid = join_dispatch_snapshot.local_node_rid, services = &services,
        serializers = &serializers,
        deadline = record.operation_deadline] () mutable -> task_t<void> {
-          join_result->joined.emplace (
-            co_await runtime::await_result (runtime.run_actor_join_control (
-              actor, control, join_spot_id, parts, request, remote_transfer, targets_entry_spot,
-              local_node_rid, *services, *serializers, &join_result->source_leave, deadline)));
+          return run_actor_join_admission_task (
+            std::move (runtime), std::move (join_result), std::move (actor), std::move (control),
+            std::move (join_spot_id), std::move (parts), remote_transfer, std::move (request),
+            targets_entry_spot, std::move (local_node_rid), services, serializers, deadline);
       },
       [join_result, settle_once] (result_t<void> rejected) {
           if (!join_result->joined)

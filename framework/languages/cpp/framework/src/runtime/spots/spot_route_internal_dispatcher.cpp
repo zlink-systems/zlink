@@ -40,6 +40,34 @@ stream_message_kind_t actor_relay_kind_from_metadata (spot_inbound_message_t &me
     return kind;
 }
 
+task_t<void> admit_remote_actor_task (spot_node_runtime_t runtime,
+                                      spot_actor_admission_route_request_t request,
+                                      serializer_registry_t *serializers,
+                                      std::function<void (result_t<zlink::message_t>)> completion)
+{
+    const auto result =
+      co_await ::zlink::framework::runtime::await_result (runtime.admit_remote_actor_to_spot (
+        request.transfer_id, actor_ref_from_spot_route (request),
+        spot_id_t (request.source_spot_id), spot_id_t (request.target_spot_id),
+        zlink::message_t::from (request.payload), request.completion_operation_id_high,
+        request.completion_operation_id_low, request.actor_authority_owner_generation,
+        request.actor_node_generation, request.expected_owner_lease_generation));
+    if (!result) {
+        completion (
+          detail::propagate_failure<zlink::message_t> (result, "remote actor admission failed"));
+        co_return;
+    }
+    const auto reply = spot_actor_admission_route_reply_t{
+      .accepted = result.value ().accepted,
+      .payload = result.value ().reply
+                   ? detail::message_to_raw (*result.value ().reply, *serializers).to_bytes ()
+                   : std::vector<std::uint8_t>{},
+      .completion_root_reference = {},
+      .completion_root_checksum = 0};
+    completion (result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
+      serializers->get<spot_actor_admission_route_reply_t> ().serialize (reply))));
+}
+
 task_t<void>
 submit_source_actor_leave_async (spot_node_runtime_t runtime,
                                  zlink::routing_id_t source_node_rid,
@@ -322,29 +350,8 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
               spot_id_t (request.target_spot_id), request.actor_id,
               [runtime, request, serializers = _serializers,
                completion] () mutable -> task_t<void> {
-                  const auto result = co_await ::zlink::framework::runtime::await_result (
-                    runtime.admit_remote_actor_to_spot (
-                      request.transfer_id, actor_ref_from_spot_route (request),
-                      spot_id_t (request.source_spot_id), spot_id_t (request.target_spot_id),
-                      zlink::message_t::from (request.payload),
-                      request.completion_operation_id_high, request.completion_operation_id_low,
-                      request.actor_authority_owner_generation, request.actor_node_generation,
-                      request.expected_owner_lease_generation));
-                  if (!result) {
-                      completion (detail::propagate_failure<zlink::message_t> (
-                        result, "remote actor admission failed"));
-                      co_return;
-                  }
-                  const auto reply = spot_actor_admission_route_reply_t{
-                    .accepted = result.value ().accepted,
-                    .payload =
-                      result.value ().reply
-                        ? detail::message_to_raw (*result.value ().reply, *serializers).to_bytes ()
-                        : std::vector<std::uint8_t>{},
-                    .completion_root_reference = {},
-                    .completion_root_checksum = 0};
-                  completion (result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
-                    serializers->get<spot_actor_admission_route_reply_t> ().serialize (reply))));
+                  return admit_remote_actor_task (std::move (runtime), std::move (request),
+                                                  serializers, std::move (completion));
               },
               [completion] (result_t<void> rejected) {
                   completion (detail::propagate_failure<zlink::message_t> (
