@@ -3132,6 +3132,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     auto_connect_request_client_t *client = nullptr;
 
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.handlers ().group ("orders").add<automatic_scoped_request_handler_t> ();
         options.services ().add_scoped<automatic_handler_scope_dependency_t> ();
         options.use_filter<automatic_handler_scope_filter_t> ();
@@ -3170,6 +3172,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     rejected_auto_connect_request_client_t *client = nullptr;
 
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.handlers ().group ("orders").add<automatic_scoped_request_handler_t> ();
         options.services ().add_scoped<automatic_handler_scope_dependency_t> ();
         options.use_filter<automatic_handler_scope_filter_t> ();

@@ -127,17 +127,22 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
     task_t<void> start (service_provider_t &services) override
     {
-        _runtime = &services.get_required<location_runtime_t> ();
-        _store = &services.get_required<location_repository_t> ();
-        _live_store = &services.get_required<live_location_reader_t> ();
-        if (auto route_cache = services.get<store_location_resolvers_t> ())
-            _route_cache = &route_cache->get ();
-
         detail::channel_runtime_manager_t manager = detail::channel_runtime_manager_t::from (_bus);
         manager.initialize_publisher_channels ();
         manager.initialize_client_channels ();
         manager.initialize_inbound_channels ();
         detail::channel_runtime_t::from (_bus).initialize_manual_channel_publishers ();
+
+        const auto locations = services.get<location_runtime_t> ();
+        _runtime = locations ? &locations->get () : nullptr;
+        if (!_runtime) {
+            _startup_publication.complete (result_t<bool>::success (true));
+            co_return;
+        }
+        _store = &services.get_required<location_repository_t> ();
+        _live_store = &services.get_required<live_location_reader_t> ();
+        if (auto route_cache = services.get<store_location_resolvers_t> ())
+            _route_cache = &route_cache->get ();
 
         const auto needs_client_server =
           std::any_of (_channels.begin (), _channels.end (), [] (const auto &channel) {

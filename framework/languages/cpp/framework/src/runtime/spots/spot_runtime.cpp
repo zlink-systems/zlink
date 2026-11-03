@@ -5306,7 +5306,8 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory_erased (
   detail::actor_join_completion_callback_t on_join_completed,
   detail::factory_relocation_configuration_t relocation,
   std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture,
-  std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore)
+  std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore,
+  bool duplicate_bind_is_default)
 {
     if ((!create_instance && !create_context_instance) || !configure_instance || !serialize_instance
         || !deserialize_instance || !as_actor) {
@@ -5327,14 +5328,14 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory_erased (
              create_context_instance = std::move (create_context_instance),
              as_actor = std::move (as_actor), on_join_completed = std::move (on_join_completed),
              relocation = std::move (relocation), capture = std::move (capture),
-             restore = std::move (restore)] () mutable {
+             restore = std::move (restore), duplicate_bind_is_default] () mutable {
           const auto [_, inserted] = _state->actor_factories.emplace (
             actor_type, detail::spot_node_builder_state_t::actor_factory_registration_t{
                           actor_instance_type, relocation, std::move (create_instance),
                           std::move (configure_instance), std::move (serialize_instance),
                           std::move (deserialize_instance), std::move (create_context_instance),
                           std::move (as_actor), std::move (on_join_completed), std::move (capture),
-                          std::move (restore)});
+                          std::move (restore), duplicate_bind_is_default});
           if (!inserted) {
               throw framework_exception_t (framework_error_kind_t::already_exists,
                                            "duplicate actor factory registration");

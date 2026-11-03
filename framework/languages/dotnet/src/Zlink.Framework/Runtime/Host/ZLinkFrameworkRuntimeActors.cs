@@ -3188,6 +3188,49 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Actor '{actorId}' authority is unavailable."
             );
+        ZLinkActorSessionBindingTransition ReplaceBinding() =>
+            _actorBoundSessionCoordinator.ReplaceActorSessionBinding(
+                actorId,
+                sourceNodeRid,
+                sessionRid,
+                token,
+                bindingGeneration,
+                actorRef.Generation,
+                request.Actor.ExpectedAuthorityOwnerGeneration.Value,
+                meshName,
+                request.Actor.TargetNodeGeneration.Value,
+                ownerLease,
+                sourceNodeGeneration,
+                0,
+                sessionOwner.OwnerId,
+                sessionOwner.LeaseGeneration,
+                ValidateAuthority,
+                () => reply(RequestResult.Ok, 0, null)
+            );
+
+        var actorForCallbackCheck =
+            state.Actor
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{actorId}' is unavailable for duplicate bind."
+            );
+        var actorInterfaceMap = actorForCallbackCheck
+            .GetType()
+            .GetInterfaceMap(typeof(IZLinkActor));
+        var duplicateBindMethodIndex = Array.FindIndex(
+            actorInterfaceMap.InterfaceMethods,
+            static method => method.Name == nameof(IZLinkActor.OnDuplicateBindAsync)
+        );
+        var hasDuplicateBindCallback =
+            duplicateBindMethodIndex >= 0
+            && actorInterfaceMap.TargetMethods[duplicateBindMethodIndex].DeclaringType
+                != typeof(IZLinkActor);
+        if (!hasDuplicateBindCallback)
+        {
+            ScheduleReplacementNotification(ReplaceBinding());
+            return;
+        }
+
         using var callbackCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken
         );
@@ -3199,26 +3242,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ExecuteDispatchAsync(
                 async _ =>
                 {
-                    ZLinkActorSessionBindingTransition ReplaceBinding() =>
-                        _actorBoundSessionCoordinator.ReplaceActorSessionBinding(
-                            actorId,
-                            sourceNodeRid,
-                            sessionRid,
-                            token,
-                            bindingGeneration,
-                            actorRef.Generation,
-                            request.Actor.ExpectedAuthorityOwnerGeneration.Value,
-                            meshName,
-                            request.Actor.TargetNodeGeneration.Value,
-                            ownerLease,
-                            sourceNodeGeneration,
-                            0,
-                            sessionOwner.OwnerId,
-                            sessionOwner.LeaseGeneration,
-                            ValidateAuthority,
-                            () => reply(RequestResult.Ok, 0, null)
-                        );
-
                     if (
                         !state.TryGetBoundSession(out var currentBinding)
                         || currentBinding.IsSamePhysicalSessionOwner(
@@ -3340,32 +3363,46 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 $"Actor '{actorId}' duplicate bind callback timed out."
             );
-        if (
-            replacement.Changed
-            && replacement.Previous is { } previous
-            && previous.SessionNodeRid is { } previousSessionNodeRid
-            && !previous.IsSamePhysicalSessionOwner(sourceNodeRid, sourceNodeGeneration, sessionRid)
-        )
+
+        ScheduleReplacementNotification(replacement);
+
+        void ScheduleReplacementNotification(ZLinkActorSessionBindingTransition replacement)
         {
-            var notification = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
-                new(
-                    actorId,
-                    actorRef.Generation,
-                    targetNodeRid,
-                    request.Actor.TargetNodeGeneration.Value,
-                    request.Actor.ExpectedAuthorityOwnerGeneration.Value,
-                    ownerLease
-                ),
-                new(
-                    previousSessionNodeRid,
-                    previous.SessionOwnerNodeGeneration,
-                    previous.SessionOwnerId,
-                    previous.SessionOwnerLeaseGeneration,
-                    previous.SessionRid,
-                    previous.BindingGeneration
+            if (
+                replacement.Changed
+                && replacement.Previous is { } previous
+                && previous.SessionNodeRid is { } previousSessionNodeRid
+                && !previous.IsSamePhysicalSessionOwner(
+                    sourceNodeRid,
+                    sourceNodeGeneration,
+                    sessionRid
                 )
-            );
-            ScheduleBoundSessionReplacedNotification(node, previousSessionNodeRid, notification);
+            )
+            {
+                var notification = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
+                    new(
+                        actorId,
+                        actorRef.Generation,
+                        targetNodeRid,
+                        request.Actor.TargetNodeGeneration.Value,
+                        request.Actor.ExpectedAuthorityOwnerGeneration.Value,
+                        ownerLease
+                    ),
+                    new(
+                        previousSessionNodeRid,
+                        previous.SessionOwnerNodeGeneration,
+                        previous.SessionOwnerId,
+                        previous.SessionOwnerLeaseGeneration,
+                        previous.SessionRid,
+                        previous.BindingGeneration
+                    )
+                );
+                ScheduleBoundSessionReplacedNotification(
+                    node,
+                    previousSessionNodeRid,
+                    notification
+                );
+            }
         }
 
         void ValidateAuthority(ZLinkActorRuntimeState current)
