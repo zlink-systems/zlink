@@ -559,7 +559,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 null,
                                 null,
                                 actorId,
-                                sourceSessionRid.toString(),
+                                sourceNodeRid.toString(),
                                 correlationId,
                                 null,
                                 null,

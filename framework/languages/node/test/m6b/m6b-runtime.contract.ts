@@ -1771,6 +1771,7 @@ test('Actor owner admits only increasing relayed session sequences and reports s
     messageKind: string;
     reason: string;
     action: string;
+    sourceRid: string;
   }> = [];
   const dropped: Array<{
     outcome: string;
@@ -1779,6 +1780,7 @@ test('Actor owner admits only increasing relayed session sequences and reports s
     errorReason: string;
     packetName?: string;
     correlationId?: string;
+    sourceRid: string;
     streamSessionId?: string;
   }> = [];
   const raw = {
@@ -1860,18 +1862,20 @@ test('Actor owner admits only increasing relayed session sequences and reports s
     failureCode: ServiceWireFrameworkErrorCode.none
   });
   assert.deepEqual(
-    dispatchErrors.map(({ surface, messageKind, reason, action }) => ({
+    dispatchErrors.map(({ surface, messageKind, reason, action, sourceRid }) => ({
       surface,
       messageKind,
       reason,
-      action
+      action,
+      sourceRid
     })),
     [
       {
         surface: 'streamSession',
         messageKind: 'request',
         reason: 'stale_target',
-        action: 'reply_error'
+        action: 'reply_error',
+        sourceRid: 'session-owner'
       }
     ]
   );
@@ -1884,6 +1888,7 @@ test('Actor owner admits only increasing relayed session sequences and reports s
         errorReason,
         packetName,
         correlationId,
+        sourceRid,
         streamSessionId
       }) => ({
         outcome,
@@ -1892,6 +1897,7 @@ test('Actor owner admits only increasing relayed session sequences and reports s
         errorReason,
         ...(packetName === undefined ? {} : { packetName }),
         ...(correlationId === undefined ? {} : { correlationId }),
+        sourceRid,
         ...(streamSessionId === undefined ? {} : { streamSessionId })
       })
     ),
@@ -1902,6 +1908,7 @@ test('Actor owner admits only increasing relayed session sequences and reports s
         messageKind: 'send',
         errorReason: 'stale_target',
         packetName: 'StaleRelaySend',
+        sourceRid: 'session-owner',
         streamSessionId: 'session-rid'
       }
     ]
