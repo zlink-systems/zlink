@@ -2502,6 +2502,52 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
+    void ownerCleanupRetainsReservationAfterOwnerLeaseReplacement() {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(store);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                repository
+                                        .claimOwnerLease("sweep-owner", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        var descriptor = capacityDescriptor(owner, "game", RoutingId.from("sweep-node"));
+        repository
+                .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .join();
+        String key = ZLinkAuthorityKeyCodec.spot("sweep-reservation");
+        var reservation =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                repository
+                                        .reserve(
+                                                capacityRequest(key, descriptor, owner),
+                                                () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .reservation();
+        assertEquals(
+                ZLinkOwnerLeaseReleaseResult.RELEASED,
+                repository.releaseOwnerLease(owner).toCompletableFuture().join());
+        assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository
+                        .claimOwnerLease(owner.ownerId(), Duration.ofHours(1))
+                        .toCompletableFuture()
+                        .join());
+        assertEquals(0L, repository.removeAllByOwner(owner).toCompletableFuture().join());
+        assertEquals(
+                reservation.storeVersion(),
+                assertInstanceOf(
+                                ZLinkAuthoritySnapshot.class,
+                                repository.read(key, () -> false).toCompletableFuture().join())
+                        .storeVersion());
+    }
+
+    @Test
     void ownerCleanupContinuesAfterTheFirstProviderScanPage() {
         var store = new ZLinkInMemoryProviderLocationStore();
         var repository = new ZLinkProviderLocationRepository(store);
