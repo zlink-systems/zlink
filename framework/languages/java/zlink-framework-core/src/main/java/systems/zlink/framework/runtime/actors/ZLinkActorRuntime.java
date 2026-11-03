@@ -72,6 +72,7 @@ import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
+import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
@@ -2973,14 +2974,34 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     "Actor is not registered: " + actorRef.actorId()));
                 }
                 try {
-                    if (actor.getClass()
+                    Method callback =
+                            actor.getClass()
                                     .getMethod(
                                             "onDuplicateBind",
                                             ZLinkSessionBindingIdentity.class,
                                             ZLinkSessionBindingIdentity.class,
-                                            ZLinkActorCallbackCancellation.class)
-                                    .getDeclaringClass()
-                            == ZLinkActor.class) {
+                                            ZLinkActorCallbackCancellation.class);
+                    Class<?> callbackOwner = callback.getDeclaringClass();
+                    boolean callbackAbsent = callbackOwner == ZLinkActor.class;
+                    if (!callbackAbsent) {
+                        // Kotlin's final Java bridge masks whether the suspend method is
+                        // overridden.
+                        for (Method method : actor.getClass().getMethods()) {
+                            Class<?>[] parameterTypes = method.getParameterTypes();
+                            if (method.getName().equals("onDuplicateBindSuspending")
+                                    && parameterTypes.length == 4
+                                    && parameterTypes[0] == ZLinkSessionBindingIdentity.class
+                                    && parameterTypes[1] == ZLinkSessionBindingIdentity.class
+                                    && parameterTypes[2] == ZLinkActorCallbackCancellation.class
+                                    && parameterTypes[3]
+                                            .getName()
+                                            .equals("kotlin.coroutines.Continuation")) {
+                                callbackAbsent = method.getDeclaringClass() == callbackOwner;
+                                break;
+                            }
+                        }
+                    }
+                    if (callbackAbsent) {
                         return CompletableFuture.completedFuture(Optional.empty());
                     }
                 } catch (NoSuchMethodException failure) {
