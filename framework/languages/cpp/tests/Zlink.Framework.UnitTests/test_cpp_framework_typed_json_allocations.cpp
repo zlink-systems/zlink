@@ -90,8 +90,29 @@ int main (int argc, char **argv)
     assert (decoded && encoded == wire && decoded->name == input.name && decoded->id == input.id);
     std::cout << "encode_new=" << enc << " decode_new=" << dec << " encode_dom=" << enc_dom
               << " decode_dom=" << dec_dom << " positive_control_new=" << control << std::endl;
-    assert (enc <= 2);
-    assert (dec <= 15);
+    // Measure the required writer/parser work on this STL. The public helpers
+    // must add neither a buffer copy nor a DOM to those primitives.
+    std::string reference_encoded;
+    const auto reference_enc = zlink::framework::tests::count_allocations ([&] {
+        reference_encoded.reserve (initial_output_capacity);
+        assert (write_value (input, reference_encoded, nullptr));
+    });
+    std::optional<allocation_dto_t> reference_decoded;
+    const auto parse_reference = [&] () -> std::optional<allocation_dto_t> {
+        allocation_dto_t value;
+        typed_sax handler (value, nullptr);
+        if (!nlohmann::json::sax_parse (wire.begin (), wire.end (), &handler)
+            || !handler.complete ())
+            return std::nullopt;
+        return value;
+    };
+    const auto reference_dec =
+      zlink::framework::tests::count_allocations ([&] { reference_decoded = parse_reference (); });
+    std::cout << "reference_encode_new=" << reference_enc
+              << " reference_decode_new=" << reference_dec << std::endl;
+    assert (reference_encoded == encoded && reference_decoded);
+    assert (enc == reference_enc);
+    assert (dec == reference_dec);
     std::vector<std::uint8_t> payload;
     const auto payload_allocations = zlink::framework::tests::count_allocations ([&] {
         byte_output out (payload);
@@ -99,7 +120,12 @@ int main (int argc, char **argv)
         assert (write_value (input, out, nullptr));
     });
     assert (std::string (payload.begin (), payload.end ()) == wire);
-    assert (payload_allocations <= 2);
+    std::vector<std::uint8_t> reference_payload;
+    const auto reference_payload_allocations = zlink::framework::tests::count_allocations ([&] {
+        reference_payload.reserve (initial_output_capacity);
+        reference_payload.insert (reference_payload.end (), wire.begin (), wire.end ());
+    });
+    assert (payload_allocations == reference_payload_allocations);
     assert (decoded->description == input.description && decoded->count == input.count
             && decoded->rank == input.rank && decoded->flags == input.flags
             && decoded->status == input.status && decoded->optional == input.optional);
