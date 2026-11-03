@@ -96,70 +96,63 @@ stream_session_registry_t::open (std::string connection_id,
     if (connection_id.empty ()) {
         throw std::invalid_argument ("stream connection id is empty");
     }
-    auto [connection, displaced] =
-      _lane
-        .run ([this, connection_id = std::move (connection_id),
-               close_connection = std::move (close_connection),
-               physical_close = std::move (physical_close),
-               owner_node_rid = std::move (owner_node_rid), owner_node_generation] () mutable {
-            std::vector<stream_held_relay_t> displaced;
-            const auto generation = ++_last_connection_generation[connection_id];
-            stream_connection_t connection{std::move (connection_id), generation,
-                                           std::move (owner_node_rid), owner_node_generation};
-            const auto previous = _connections.find (connection.connection_id);
-            if (previous != _connections.end ()) {
-                for (auto &[actor_id, aggregate] : previous->second.bindings) {
-                    aggregate.ingress_drain->accepts_completion = false;
-                    const auto indexed = _actor_bindings.find (actor_id);
-                    if (indexed != _actor_bindings.end ()
-                        && indexed->second.connection == aggregate.binding.connection
-                        && indexed->second.binding_generation
-                             == aggregate.binding.binding_generation)
-                        _actor_bindings.erase (indexed);
-                    for (auto &settle : take_held_relays_unlocked (aggregate))
-                        displaced.push_back (std::move (settle));
-                }
-            }
-            _connections[connection.connection_id] = connection_state_t{
-              connection, {}, std::move (close_connection), std::move (physical_close)};
-            notify_changed ();
-            return std::make_pair (std::move (connection), std::move (displaced));
-        })
-        .get ();
+    auto [connection, displaced] = _lane.run_sync (
+      [this, connection_id = std::move (connection_id),
+       close_connection = std::move (close_connection), physical_close = std::move (physical_close),
+       owner_node_rid = std::move (owner_node_rid), owner_node_generation] () mutable {
+          std::vector<stream_held_relay_t> displaced;
+          const auto generation = ++_last_connection_generation[connection_id];
+          stream_connection_t connection{std::move (connection_id), generation,
+                                         std::move (owner_node_rid), owner_node_generation};
+          const auto previous = _connections.find (connection.connection_id);
+          if (previous != _connections.end ()) {
+              for (auto &[actor_id, aggregate] : previous->second.bindings) {
+                  aggregate.ingress_drain->accepts_completion = false;
+                  const auto indexed = _actor_bindings.find (actor_id);
+                  if (indexed != _actor_bindings.end ()
+                      && indexed->second.connection == aggregate.binding.connection
+                      && indexed->second.binding_generation == aggregate.binding.binding_generation)
+                      _actor_bindings.erase (indexed);
+                  for (auto &settle : take_held_relays_unlocked (aggregate))
+                      displaced.push_back (std::move (settle));
+              }
+          }
+          _connections[connection.connection_id] = connection_state_t{
+            connection, {}, std::move (close_connection), std::move (physical_close)};
+          notify_changed ();
+          return std::make_pair (std::move (connection), std::move (displaced));
+      });
     settle_held_relays (std::move (displaced), message_flow_reason_t::stale_target);
     return connection;
 }
 
 stream_close_result_t stream_session_registry_t::close (const stream_connection_t &connection)
 {
-    auto [result, discarded] =
-      _lane
-        .run ([this, &connection] {
-            std::vector<stream_held_relay_t> discarded;
-            stream_close_result_t result;
-            const auto current = _connections.find (connection.connection_id);
-            if (current == _connections.end () || current->second.connection != connection) {
-                return std::make_pair (std::move (result), std::move (discarded));
-            }
-            result.bindings.reserve (current->second.bindings.size ());
-            for (const auto &[_, aggregate] : current->second.bindings)
-                result.bindings.push_back (aggregate.binding);
-            for (auto &[actor_id, aggregate] : current->second.bindings) {
-                aggregate.ingress_drain->accepts_completion = false;
-                const auto indexed = _actor_bindings.find (actor_id);
-                if (indexed != _actor_bindings.end ()
-                    && indexed->second.connection == aggregate.binding.connection
-                    && indexed->second.binding_generation == aggregate.binding.binding_generation)
-                    _actor_bindings.erase (indexed);
-                for (auto &settle : take_held_relays_unlocked (aggregate))
-                    discarded.push_back (std::move (settle));
-            }
-            _connections.erase (current);
-            notify_changed ();
-            result.closed = true;
+    auto [result, discarded] = _lane.run_sync ([this, &connection] {
+        std::vector<stream_held_relay_t> discarded;
+        stream_close_result_t result;
+        const auto current = _connections.find (connection.connection_id);
+        if (current == _connections.end () || current->second.connection != connection) {
             return std::make_pair (std::move (result), std::move (discarded));
-        })
-        .get ();
+        }
+        result.bindings.reserve (current->second.bindings.size ());
+        for (const auto &[_, aggregate] : current->second.bindings)
+            result.bindings.push_back (aggregate.binding);
+        for (auto &[actor_id, aggregate] : current->second.bindings) {
+            aggregate.ingress_drain->accepts_completion = false;
+            const auto indexed = _actor_bindings.find (actor_id);
+            if (indexed != _actor_bindings.end ()
+                && indexed->second.connection == aggregate.binding.connection
+                && indexed->second.binding_generation == aggregate.binding.binding_generation)
+                _actor_bindings.erase (indexed);
+            for (auto &settle : take_held_relays_unlocked (aggregate))
+                discarded.push_back (std::move (settle));
+        }
+        _connections.erase (current);
+        notify_changed ();
+        result.closed = true;
+        return std::make_pair (std::move (result), std::move (discarded));
+    });
     settle_held_relays (std::move (discarded), message_flow_reason_t::target_closed);
     return result;
 }
@@ -167,19 +160,17 @@ stream_close_result_t stream_session_registry_t::close (const stream_connection_
 std::vector<stream_binding_t>
 stream_session_registry_t::bindings (const stream_connection_t &connection) const
 {
-    return _lane
-      .run ([this, &connection] {
-          const auto current = _connections.find (connection.connection_id);
-          if (current == _connections.end () || current->second.connection != connection) {
-              return std::vector<stream_binding_t>{};
-          }
-          std::vector<stream_binding_t> result;
-          result.reserve (current->second.bindings.size ());
-          for (const auto &[_, aggregate] : current->second.bindings)
-              result.push_back (aggregate.binding);
-          return result;
-      })
-      .get ();
+    return _lane.run_sync ([this, &connection] {
+        const auto current = _connections.find (connection.connection_id);
+        if (current == _connections.end () || current->second.connection != connection) {
+            return std::vector<stream_binding_t>{};
+        }
+        std::vector<stream_binding_t> result;
+        result.reserve (current->second.bindings.size ());
+        for (const auto &[_, aggregate] : current->second.bindings)
+            result.push_back (aggregate.binding);
+        return result;
+    });
 }
 
 std::pair<stateful_error_t, stream_binding_t>
@@ -223,119 +214,114 @@ stream_session_registry_t::bind_verified (const stream_connection_t &connection,
                                           std::uint64_t binding_generation)
 {
     auto [result, displaced] =
-      _lane
-        .run ([this, &connection, &actor, target_node_generation, owner_lease_generation,
-               publish = std::move (publish), binding_generation] {
-            std::vector<stream_held_relay_t> displaced;
-            if (_all_sealed)
-                return std::make_pair (std::pair{stateful_error_t::moving, stream_binding_t{}},
-                                       std::move (displaced));
-            const auto current = _connections.find (connection.connection_id);
-            if (current == _connections.end () || current->second.connection != connection) {
-                return std::make_pair (std::pair{stateful_error_t::conflict, stream_binding_t{}},
-                                       std::move (displaced));
-            }
-            auto &state = current->second;
-            const auto actor_id = actor.key;
-            if (const auto existing = state.bindings.find (actor_id);
-                existing != state.bindings.end () && existing->second.barrier_token)
-                return std::make_pair (std::pair{stateful_error_t::moving, stream_binding_t{}},
-                                       std::move (displaced));
-            if (binding_generation != 0) {
-                const auto *current_binding = current_aggregate_unlocked (actor_id);
-                if (current_binding != nullptr
-                    && binding_generation < current_binding->binding.binding_generation) {
-                    return std::make_pair (
-                      std::pair{stateful_error_t::conflict, stream_binding_t{}},
-                      std::move (displaced));
-                }
-            }
-            if (binding_generation == std::numeric_limits<std::uint64_t>::max ()
-                || (binding_generation == 0
-                    && (_next_binding_generation == 0
-                        || _next_binding_generation
-                             == std::numeric_limits<std::uint64_t>::max ()))) {
-                return std::make_pair (std::pair{stateful_error_t::conflict, stream_binding_t{}},
-                                       std::move (displaced));
-            }
-            // Binding generation is owner-lifecycle local, not connection local.
-            // A reconnect therefore cannot alias the previous physical Session just
-            // because both connections would otherwise start at generation one.
-            const auto issued_generation =
-              binding_generation != 0 ? binding_generation : _next_binding_generation++;
-            if (_next_binding_generation <= issued_generation)
-                _next_binding_generation = issued_generation + 1;
-            stream_binding_t binding{connection, issued_generation, actor, target_node_generation,
-                                     owner_lease_generation};
-            // Spec 20 section 7 makes route replacement, held submission, and release
-            // one serial span. The drain therefore belongs to that span, not to one
-            // binding generation: an admitted frame retains its exact completion fence
-            // while a reconnect installs the successor binding.
-            std::shared_ptr<stream_ingress_drain_t> inherited_ingress_drain;
-            std::optional<std::pair<stream_connection_t, session_binding_aggregate_t>>
-              previous_aggregate;
-            const auto discard_binding = [&] (connection_state_t &owner) {
-                const auto found = owner.bindings.find (actor_id);
-                if (found == owner.bindings.end ())
-                    return;
-                if (!inherited_ingress_drain) {
-                    inherited_ingress_drain = found->second.ingress_drain;
-                    previous_aggregate.emplace (owner.connection, found->second);
-                }
-                for (auto &settle : take_held_relays_unlocked (found->second))
-                    displaced.push_back (std::move (settle));
-                owner.bindings.erase (found);
-            };
-            const auto previous = _actor_bindings.find (actor_id);
-            if (previous != _actor_bindings.end ()) {
-                const auto previous_connection =
-                  _connections.find (previous->second.connection.connection_id);
-                if (previous_connection != _connections.end ()
-                    && previous_connection->second.connection == previous->second.connection) {
-                    discard_binding (previous_connection->second);
-                }
-            }
-            discard_binding (state);
-            session_binding_aggregate_t aggregate;
-            aggregate.binding = binding;
-            if (inherited_ingress_drain)
-                aggregate.ingress_drain = std::move (inherited_ingress_drain);
-            state.bindings[actor_id] = std::move (aggregate);
-            _actor_bindings[actor_id] =
-              actor_binding_locator_t{binding.connection, binding.binding_generation};
-            const auto rollback = [&] {
-                state.bindings.erase (actor_id);
-                _actor_bindings.erase (actor_id);
-                if (previous_aggregate) {
-                    auto &previous_owner =
-                      _connections.at (previous_aggregate->first.connection_id);
-                    const auto previous_binding = previous_aggregate->second.binding;
-                    previous_owner.bindings[actor_id] = std::move (previous_aggregate->second);
-                    _actor_bindings[actor_id] = actor_binding_locator_t{
-                      previous_binding.connection, previous_binding.binding_generation};
-                }
-                displaced.clear ();
-            };
-            if (publish) {
-                stateful_error_t published;
-                try {
-                    published = publish (binding);
-                }
-                catch (...) {
-                    rollback ();
-                    throw;
-                }
-                if (published != stateful_error_t::none) {
-                    rollback ();
-                    return std::make_pair (std::pair{published, stream_binding_t{}},
-                                           std::move (displaced));
-                }
-            }
-            notify_changed ();
-            return std::make_pair (std::pair{stateful_error_t::none, std::move (binding)},
-                                   std::move (displaced));
-        })
-        .get ();
+      _lane.run_sync ([this, &connection, &actor, target_node_generation, owner_lease_generation,
+                       publish = std::move (publish), binding_generation] {
+          std::vector<stream_held_relay_t> displaced;
+          if (_all_sealed)
+              return std::make_pair (std::pair{stateful_error_t::moving, stream_binding_t{}},
+                                     std::move (displaced));
+          const auto current = _connections.find (connection.connection_id);
+          if (current == _connections.end () || current->second.connection != connection) {
+              return std::make_pair (std::pair{stateful_error_t::conflict, stream_binding_t{}},
+                                     std::move (displaced));
+          }
+          auto &state = current->second;
+          const auto actor_id = actor.key;
+          if (const auto existing = state.bindings.find (actor_id);
+              existing != state.bindings.end () && existing->second.barrier_token)
+              return std::make_pair (std::pair{stateful_error_t::moving, stream_binding_t{}},
+                                     std::move (displaced));
+          if (binding_generation != 0) {
+              const auto *current_binding = current_aggregate_unlocked (actor_id);
+              if (current_binding != nullptr
+                  && binding_generation < current_binding->binding.binding_generation) {
+                  return std::make_pair (std::pair{stateful_error_t::conflict, stream_binding_t{}},
+                                         std::move (displaced));
+              }
+          }
+          if (binding_generation == std::numeric_limits<std::uint64_t>::max ()
+              || (binding_generation == 0
+                  && (_next_binding_generation == 0
+                      || _next_binding_generation == std::numeric_limits<std::uint64_t>::max ()))) {
+              return std::make_pair (std::pair{stateful_error_t::conflict, stream_binding_t{}},
+                                     std::move (displaced));
+          }
+          // Binding generation is owner-lifecycle local, not connection local.
+          // A reconnect therefore cannot alias the previous physical Session just
+          // because both connections would otherwise start at generation one.
+          const auto issued_generation =
+            binding_generation != 0 ? binding_generation : _next_binding_generation++;
+          if (_next_binding_generation <= issued_generation)
+              _next_binding_generation = issued_generation + 1;
+          stream_binding_t binding{connection, issued_generation, actor, target_node_generation,
+                                   owner_lease_generation};
+          // Spec 20 section 7 makes route replacement, held submission, and release
+          // one serial span. The drain therefore belongs to that span, not to one
+          // binding generation: an admitted frame retains its exact completion fence
+          // while a reconnect installs the successor binding.
+          std::shared_ptr<stream_ingress_drain_t> inherited_ingress_drain;
+          std::optional<std::pair<stream_connection_t, session_binding_aggregate_t>>
+            previous_aggregate;
+          const auto discard_binding = [&] (connection_state_t &owner) {
+              const auto found = owner.bindings.find (actor_id);
+              if (found == owner.bindings.end ())
+                  return;
+              if (!inherited_ingress_drain) {
+                  inherited_ingress_drain = found->second.ingress_drain;
+                  previous_aggregate.emplace (owner.connection, found->second);
+              }
+              for (auto &settle : take_held_relays_unlocked (found->second))
+                  displaced.push_back (std::move (settle));
+              owner.bindings.erase (found);
+          };
+          const auto previous = _actor_bindings.find (actor_id);
+          if (previous != _actor_bindings.end ()) {
+              const auto previous_connection =
+                _connections.find (previous->second.connection.connection_id);
+              if (previous_connection != _connections.end ()
+                  && previous_connection->second.connection == previous->second.connection) {
+                  discard_binding (previous_connection->second);
+              }
+          }
+          discard_binding (state);
+          session_binding_aggregate_t aggregate;
+          aggregate.binding = binding;
+          if (inherited_ingress_drain)
+              aggregate.ingress_drain = std::move (inherited_ingress_drain);
+          state.bindings[actor_id] = std::move (aggregate);
+          _actor_bindings[actor_id] =
+            actor_binding_locator_t{binding.connection, binding.binding_generation};
+          const auto rollback = [&] {
+              state.bindings.erase (actor_id);
+              _actor_bindings.erase (actor_id);
+              if (previous_aggregate) {
+                  auto &previous_owner = _connections.at (previous_aggregate->first.connection_id);
+                  const auto previous_binding = previous_aggregate->second.binding;
+                  previous_owner.bindings[actor_id] = std::move (previous_aggregate->second);
+                  _actor_bindings[actor_id] = actor_binding_locator_t{
+                    previous_binding.connection, previous_binding.binding_generation};
+              }
+              displaced.clear ();
+          };
+          if (publish) {
+              stateful_error_t published;
+              try {
+                  published = publish (binding);
+              }
+              catch (...) {
+                  rollback ();
+                  throw;
+              }
+              if (published != stateful_error_t::none) {
+                  rollback ();
+                  return std::make_pair (std::pair{published, stream_binding_t{}},
+                                         std::move (displaced));
+              }
+          }
+          notify_changed ();
+          return std::make_pair (std::pair{stateful_error_t::none, std::move (binding)},
+                                 std::move (displaced));
+      });
     settle_held_relays (std::move (displaced), message_flow_reason_t::stale_target);
     return result;
 }
@@ -343,85 +329,79 @@ stream_session_registry_t::bind_verified (const stream_connection_t &connection,
 std::pair<stateful_error_t, std::optional<stream_binding_t>>
 stream_session_registry_t::unbind (const stream_binding_t &binding)
 {
-    auto [result, discarded] =
-      _lane
-        .run ([this, &binding] {
-            std::vector<stream_held_relay_t> discarded;
-            const auto current = _connections.find (binding.connection.connection_id);
-            if (current == _connections.end () || current->second.connection != binding.connection
-                || !current->second.bindings.contains (binding.actor.key)
-                || current->second.bindings.at (binding.actor.key).binding.binding_generation
-                     != binding.binding_generation
-                || current->second.bindings.at (binding.actor.key).binding.actor.object_generation
-                     != binding.actor.object_generation) {
-                return std::make_pair (
-                  std::make_pair (stateful_error_t::conflict, std::optional<stream_binding_t>{}),
-                  std::move (discarded));
-            }
-            auto &aggregate = current->second.bindings.at (binding.actor.key);
-            auto removed = aggregate.binding;
-            aggregate.ingress_drain->accepts_completion = false;
-            for (auto &settle : take_held_relays_unlocked (aggregate))
-                discarded.push_back (std::move (settle));
-            current->second.bindings.erase (binding.actor.key);
-            const auto indexed = _actor_bindings.find (binding.actor.key);
-            if (indexed != _actor_bindings.end ()
-                && indexed->second.connection == binding.connection
-                && indexed->second.binding_generation == binding.binding_generation)
-                _actor_bindings.erase (indexed);
-            notify_changed ();
+    auto [result, discarded] = _lane.run_sync ([this, &binding] {
+        std::vector<stream_held_relay_t> discarded;
+        const auto current = _connections.find (binding.connection.connection_id);
+        if (current == _connections.end () || current->second.connection != binding.connection
+            || !current->second.bindings.contains (binding.actor.key)
+            || current->second.bindings.at (binding.actor.key).binding.binding_generation
+                 != binding.binding_generation
+            || current->second.bindings.at (binding.actor.key).binding.actor.object_generation
+                 != binding.actor.object_generation) {
             return std::make_pair (
-              std::make_pair (stateful_error_t::none, std::make_optional (std::move (removed))),
+              std::make_pair (stateful_error_t::conflict, std::optional<stream_binding_t>{}),
               std::move (discarded));
-        })
-        .get ();
+        }
+        auto &aggregate = current->second.bindings.at (binding.actor.key);
+        auto removed = aggregate.binding;
+        aggregate.ingress_drain->accepts_completion = false;
+        for (auto &settle : take_held_relays_unlocked (aggregate))
+            discarded.push_back (std::move (settle));
+        current->second.bindings.erase (binding.actor.key);
+        const auto indexed = _actor_bindings.find (binding.actor.key);
+        if (indexed != _actor_bindings.end () && indexed->second.connection == binding.connection
+            && indexed->second.binding_generation == binding.binding_generation)
+            _actor_bindings.erase (indexed);
+        notify_changed ();
+        return std::make_pair (
+          std::make_pair (stateful_error_t::none, std::make_optional (std::move (removed))),
+          std::move (discarded));
+    });
     settle_held_relays (std::move (discarded), message_flow_reason_t::target_closed);
     return result;
 }
 
 stateful_error_t stream_session_registry_t::restore (const stream_binding_t &binding)
 {
-    return _lane
-      .run ([this, &binding] {
-          if (_all_sealed) {
-              return stateful_error_t::moving;
-          }
-          const auto current = _connections.find (binding.connection.connection_id);
-          if (current == _connections.end () || current->second.connection != binding.connection) {
-              return stateful_error_t::conflict;
-          }
+    return _lane.run_sync ([this, &binding] {
+        if (_all_sealed) {
+            return stateful_error_t::moving;
+        }
+        const auto current = _connections.find (binding.connection.connection_id);
+        if (current == _connections.end () || current->second.connection != binding.connection) {
+            return stateful_error_t::conflict;
+        }
 
-          const auto indexed = _actor_bindings.find (binding.actor.key);
-          if (indexed != _actor_bindings.end ()
-              && (indexed->second.connection != binding.connection
-                  || indexed->second.binding_generation != binding.binding_generation)) {
-              return stateful_error_t::conflict;
-          }
-          const auto local = current->second.bindings.find (binding.actor.key);
-          if (local != current->second.bindings.end ()
-              && (local->second.binding != binding || local->second.barrier_token)) {
-              return stateful_error_t::conflict;
-          }
+        const auto indexed = _actor_bindings.find (binding.actor.key);
+        if (indexed != _actor_bindings.end ()
+            && (indexed->second.connection != binding.connection
+                || indexed->second.binding_generation != binding.binding_generation)) {
+            return stateful_error_t::conflict;
+        }
+        const auto local = current->second.bindings.find (binding.actor.key);
+        if (local != current->second.bindings.end ()
+            && (local->second.binding != binding || local->second.barrier_token)) {
+            return stateful_error_t::conflict;
+        }
 
-          session_binding_aggregate_t aggregate;
-          aggregate.binding = binding;
-          current->second.bindings[binding.actor.key] = std::move (aggregate);
-          _actor_bindings[binding.actor.key] =
-            actor_binding_locator_t{binding.connection, binding.binding_generation};
-          if (_next_binding_generation <= binding.binding_generation
-              && binding.binding_generation != std::numeric_limits<std::uint64_t>::max ()) {
-              _next_binding_generation = binding.binding_generation + 1;
-          }
-          return stateful_error_t::none;
-      })
-      .get ();
+        session_binding_aggregate_t aggregate;
+        aggregate.binding = binding;
+        current->second.bindings[binding.actor.key] = std::move (aggregate);
+        _actor_bindings[binding.actor.key] =
+          actor_binding_locator_t{binding.connection, binding.binding_generation};
+        if (_next_binding_generation <= binding.binding_generation
+            && binding.binding_generation != std::numeric_limits<std::uint64_t>::max ()) {
+            _next_binding_generation = binding.binding_generation + 1;
+        }
+        return stateful_error_t::none;
+    });
 }
 
 std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
 stream_session_registry_t::admit_inbound (const stream_binding_t &binding)
 {
-    return _lane
-      .run ([this, &binding] () -> std::pair<stateful_error_t, std::optional<stream_dispatch_t>> {
+    return _lane.run_sync (
+      [this, &binding] () -> std::pair<stateful_error_t, std::optional<stream_dispatch_t>> {
           if (_all_sealed)
               return {stateful_error_t::moving, std::nullopt};
           const auto current = _connections.find (binding.connection.connection_id);
@@ -440,8 +420,7 @@ stream_session_registry_t::admit_inbound (const stream_binding_t &binding)
           aggregate.ingress_drain->active.emplace (binding.binding_generation, sequence);
           return {stateful_error_t::none,
                   stream_dispatch_t{binding, sequence, aggregate.ingress_drain}};
-      })
-      .get ();
+      });
 }
 
 std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
@@ -459,8 +438,8 @@ stream_session_registry_t::admit_inbound (const std::string &connection_id,
     using result_t = std::pair<stateful_error_t, std::optional<stream_dispatch_t>>;
     const auto attempt = [this, &connection_id, binding_generation, &actor_id, expected_sequence,
                           &retain] {
-        return _lane
-          .run ([this, &connection_id, binding_generation, &actor_id, expected_sequence, &retain] {
+        return _lane.run_sync (
+          [this, &connection_id, binding_generation, &actor_id, expected_sequence, &retain] {
               std::optional<result_t> result;
               const auto connection = _connections.find (connection_id);
               const auto aggregate = current_aggregate_unlocked (actor_id);
@@ -495,8 +474,7 @@ stream_session_registry_t::admit_inbound (const std::string &connection_id,
               }
               return std::make_pair (std::move (result),
                                      _changed_generation.load (std::memory_order_acquire));
-          })
-          .get ();
+          });
     };
 
     auto [result, observed_generation] = attempt ();
@@ -521,19 +499,17 @@ stream_session_registry_t::admit_inbound (const std::string &connection_id,
 
 stateful_error_t stream_session_registry_t::complete_inbound (const stream_dispatch_t &dispatch)
 {
-    return _lane
-      .run ([this, &dispatch] {
-          if (!dispatch.drain || !dispatch.drain->accepts_completion)
-              return stateful_error_t::conflict;
-          const auto active = dispatch.drain->active.find (
-            {dispatch.binding.binding_generation, dispatch.inbound_sequence});
-          if (active == dispatch.drain->active.end ())
-              return stateful_error_t::not_found;
-          dispatch.drain->active.erase (active);
-          notify_changed ();
-          return stateful_error_t::none;
-      })
-      .get ();
+    return _lane.run_sync ([this, &dispatch] {
+        if (!dispatch.drain || !dispatch.drain->accepts_completion)
+            return stateful_error_t::conflict;
+        const auto active = dispatch.drain->active.find (
+          {dispatch.binding.binding_generation, dispatch.inbound_sequence});
+        if (active == dispatch.drain->active.end ())
+            return stateful_error_t::not_found;
+        dispatch.drain->active.erase (active);
+        notify_changed ();
+        return stateful_error_t::none;
+    });
 }
 
 std::pair<stateful_error_t, stream_barrier_t>
@@ -541,40 +517,35 @@ stream_session_registry_t::try_seal_actor (const object_ref_t &actor)
 {
     if (actor.kind != object_kind_t::actor)
         return {stateful_error_t::invalid, {}};
-    return _lane
-      .run ([this, &actor] () -> std::pair<stateful_error_t, stream_barrier_t> {
-          auto *affected = current_aggregate_unlocked (actor.key);
-          if (affected != nullptr && exact_actor (affected->binding.actor, actor)) {
-              if (affected->barrier_token)
-                  return {stateful_error_t::moving, {}};
-              if (!affected->ingress_drain->active.empty ())
-                  return {stateful_error_t::backpressured, {}};
-          } else {
-              affected = nullptr;
-          }
-          if (_next_barrier_token == 0)
-              return {stateful_error_t::conflict, {}};
-          const auto token = _next_barrier_token++;
-          if (affected != nullptr)
-              affected->barrier_token = token;
-          _barriers.emplace (token, actor);
-          return {stateful_error_t::none, stream_barrier_t{token, actor}};
-      })
-      .get ();
+    return _lane.run_sync ([this, &actor] () -> std::pair<stateful_error_t, stream_barrier_t> {
+        auto *affected = current_aggregate_unlocked (actor.key);
+        if (affected != nullptr && exact_actor (affected->binding.actor, actor)) {
+            if (affected->barrier_token)
+                return {stateful_error_t::moving, {}};
+            if (!affected->ingress_drain->active.empty ())
+                return {stateful_error_t::backpressured, {}};
+        } else {
+            affected = nullptr;
+        }
+        if (_next_barrier_token == 0)
+            return {stateful_error_t::conflict, {}};
+        const auto token = _next_barrier_token++;
+        if (affected != nullptr)
+            affected->barrier_token = token;
+        _barriers.emplace (token, actor);
+        return {stateful_error_t::none, stream_barrier_t{token, actor}};
+    });
 }
 
 stateful_error_t stream_session_registry_t::abort_barrier (const stream_barrier_t &barrier)
 {
-    const auto result =
-      _lane
-        .run ([this, &barrier] {
-            const auto found = _barriers.find (barrier.token);
-            if (found == _barriers.end () || !exact_actor (found->second, barrier.actor))
-                return stateful_error_t::not_found;
-            _barriers.erase (found);
-            return stateful_error_t::none;
-        })
-        .get ();
+    const auto result = _lane.run_sync ([this, &barrier] {
+        const auto found = _barriers.find (barrier.token);
+        if (found == _barriers.end () || !exact_actor (found->second, barrier.actor))
+            return stateful_error_t::not_found;
+        _barriers.erase (found);
+        return stateful_error_t::none;
+    });
     if (result == stateful_error_t::none)
         start_held_relay_drain (barrier.actor.key);
     return result;
@@ -583,25 +554,22 @@ stateful_error_t stream_session_registry_t::abort_barrier (const stream_barrier_
 stateful_error_t stream_session_registry_t::commit_barrier (const stream_barrier_t &barrier,
                                                             const object_ref_t &target)
 {
-    const auto result =
-      _lane
-        .run ([this, &barrier, &target] {
-            const auto found = _barriers.find (barrier.token);
-            if (found == _barriers.end () || !exact_actor (found->second, barrier.actor)
-                || target.kind != object_kind_t::actor || target.key != barrier.actor.key
-                || target.object_generation != barrier.actor.object_generation
-                || target.authority_owner_generation <= barrier.actor.authority_owner_generation)
+    const auto result = _lane.run_sync ([this, &barrier, &target] {
+        const auto found = _barriers.find (barrier.token);
+        if (found == _barriers.end () || !exact_actor (found->second, barrier.actor)
+            || target.kind != object_kind_t::actor || target.key != barrier.actor.key
+            || target.object_generation != barrier.actor.object_generation
+            || target.authority_owner_generation <= barrier.actor.authority_owner_generation)
+            return stateful_error_t::conflict;
+        if (auto *aggregate = current_aggregate_unlocked (barrier.actor.key)) {
+            if (!aggregate->barrier_token || *aggregate->barrier_token != barrier.token
+                || !exact_actor (aggregate->binding.actor, barrier.actor))
                 return stateful_error_t::conflict;
-            if (auto *aggregate = current_aggregate_unlocked (barrier.actor.key)) {
-                if (!aggregate->barrier_token || *aggregate->barrier_token != barrier.token
-                    || !exact_actor (aggregate->binding.actor, barrier.actor))
-                    return stateful_error_t::conflict;
-                aggregate->binding.actor = target;
-            }
-            _barriers.erase (found);
-            return stateful_error_t::none;
-        })
-        .get ();
+            aggregate->binding.actor = target;
+        }
+        _barriers.erase (found);
+        return stateful_error_t::none;
+    });
     if (result == stateful_error_t::none)
         start_held_relay_drain (barrier.actor.key);
     return result;
@@ -614,96 +582,90 @@ stream_session_registry_t::seal_remote_route (const std::string &connection_id,
                                               std::uint64_t object_generation,
                                               std::uint64_t expected_owner_lease_generation)
 {
-    return _lane
-      .run ([this, &connection_id, binding_generation, &actor_id, object_generation,
-             expected_owner_lease_generation] () -> stream_route_seal_admission_t {
-          auto *aggregate = current_aggregate_unlocked (actor_id);
-          if (aggregate == nullptr)
-              return {stateful_error_t::none,
-                      std::nullopt,
-                      {},
-                      0,
-                      protocol::session_relocation_seal_result_t::binding_absent};
-          const auto connection = _connections.find (connection_id);
-          if (connection == _connections.end ()
-              || aggregate->binding.connection != connection->second.connection
-              || aggregate->binding.binding_generation != binding_generation) {
-              return {stateful_error_t::not_found, std::nullopt, {}, 0};
-          }
-          const auto last_sequence = aggregate->next_inbound_sequence - 1;
-          const auto active = !aggregate->ingress_drain->active.empty ();
-          /* Session-Actor binding §8.1: the Session owner checks only its own
+    return _lane.run_sync ([this, &connection_id, binding_generation, &actor_id, object_generation,
+                            expected_owner_lease_generation] () -> stream_route_seal_admission_t {
+        auto *aggregate = current_aggregate_unlocked (actor_id);
+        if (aggregate == nullptr)
+            return {stateful_error_t::none,
+                    std::nullopt,
+                    {},
+                    0,
+                    protocol::session_relocation_seal_result_t::binding_absent};
+        const auto connection = _connections.find (connection_id);
+        if (connection == _connections.end ()
+            || aggregate->binding.connection != connection->second.connection
+            || aggregate->binding.binding_generation != binding_generation) {
+            return {stateful_error_t::not_found, std::nullopt, {}, 0};
+        }
+        const auto last_sequence = aggregate->next_inbound_sequence - 1;
+        const auto active = !aggregate->ingress_drain->active.empty ();
+        /* Session-Actor binding §8.1: the Session owner checks only its own
            * binding values. Authority, node and lease fences belong to the
            * transport and the target owner CAS. */
-          if (aggregate->binding.actor.kind != object_kind_t::actor
-              || aggregate->binding.actor.key != actor_id
-              || aggregate->binding.actor.object_generation != object_generation
-              || expected_owner_lease_generation < aggregate->binding.owner_lease_generation
-              || aggregate->barrier_token || _next_barrier_token == 0) {
-              return {stateful_error_t::conflict, aggregate->binding, {}, last_sequence};
-          }
-          const auto token = _next_barrier_token++;
-          const stream_barrier_t barrier{token, aggregate->binding.actor};
-          aggregate->barrier_token = token;
-          _barriers.emplace (token, aggregate->binding.actor);
-          return {active ? stateful_error_t::backpressured : stateful_error_t::none,
-                  aggregate->binding, barrier, last_sequence};
-      })
-      .get ();
+        if (aggregate->binding.actor.kind != object_kind_t::actor
+            || aggregate->binding.actor.key != actor_id
+            || aggregate->binding.actor.object_generation != object_generation
+            || expected_owner_lease_generation < aggregate->binding.owner_lease_generation
+            || aggregate->barrier_token || _next_barrier_token == 0) {
+            return {stateful_error_t::conflict, aggregate->binding, {}, last_sequence};
+        }
+        const auto token = _next_barrier_token++;
+        const stream_barrier_t barrier{token, aggregate->binding.actor};
+        aggregate->barrier_token = token;
+        _barriers.emplace (token, aggregate->binding.actor);
+        return {active ? stateful_error_t::backpressured : stateful_error_t::none,
+                aggregate->binding, barrier, last_sequence};
+    });
 }
 
 bool stream_session_registry_t::remote_route_seal_ready (const stream_barrier_t &barrier) const
 {
-    return _lane
-      .run ([this, &barrier] {
-          const auto found = _barriers.find (barrier.token);
-          if (found == _barriers.end () || !exact_actor (found->second, barrier.actor))
-              return false;
-          const auto *aggregate = current_aggregate_unlocked (barrier.actor.key);
-          if (aggregate == nullptr)
-              return true;
-          return aggregate->ingress_drain->active.empty ();
-      })
-      .get ();
+    return _lane.run_sync ([this, &barrier] {
+        const auto found = _barriers.find (barrier.token);
+        if (found == _barriers.end () || !exact_actor (found->second, barrier.actor))
+            return false;
+        const auto *aggregate = current_aggregate_unlocked (barrier.actor.key);
+        if (aggregate == nullptr)
+            return true;
+        return aggregate->ingress_drain->active.empty ();
+    });
 }
 
 bool stream_session_registry_t::close_remote_route_seal (const stream_barrier_t &barrier)
 {
-    auto [closed, discarded, close_connection] =
-      _lane
-        .run ([this, &barrier] ()
-                -> std::tuple<bool, std::vector<stream_held_relay_t>, std::function<void ()>> {
-            const auto found = _barriers.find (barrier.token);
-            if (found == _barriers.end () || !exact_actor (found->second, barrier.actor))
-                return {false, {}, {}};
-            auto *aggregate = current_aggregate_unlocked (barrier.actor.key);
-            if (aggregate == nullptr || !aggregate->barrier_token
-                || *aggregate->barrier_token != barrier.token)
-                return {false, {}, {}};
-            const auto connection = aggregate->binding.connection;
-            const auto connection_found = _connections.find (connection.connection_id);
-            if (connection_found == _connections.end ()
-                || connection_found->second.connection != connection)
-                return {false, {}, {}};
-            auto close_connection = std::move (connection_found->second.close_connection);
-            std::vector<stream_held_relay_t> discarded;
-            for (auto &[actor_id, binding] : connection_found->second.bindings) {
-                binding.ingress_drain->accepts_completion = false;
-                _actor_bindings.erase (actor_id);
-                for (auto &settle : take_held_relays_unlocked (binding))
-                    discarded.push_back (std::move (settle));
-            }
-            for (auto current = _barriers.begin (); current != _barriers.end ();) {
-                if (connection_found->second.bindings.contains (current->second.key))
-                    current = _barriers.erase (current);
-                else
-                    ++current;
-            }
-            _connections.erase (connection_found);
-            notify_changed ();
-            return {true, std::move (discarded), std::move (close_connection)};
-        })
-        .get ();
+    auto [closed, discarded, close_connection] = _lane.run_sync (
+      [this,
+       &barrier] () -> std::tuple<bool, std::vector<stream_held_relay_t>, std::function<void ()>> {
+          const auto found = _barriers.find (barrier.token);
+          if (found == _barriers.end () || !exact_actor (found->second, barrier.actor))
+              return {false, {}, {}};
+          auto *aggregate = current_aggregate_unlocked (barrier.actor.key);
+          if (aggregate == nullptr || !aggregate->barrier_token
+              || *aggregate->barrier_token != barrier.token)
+              return {false, {}, {}};
+          const auto connection = aggregate->binding.connection;
+          const auto connection_found = _connections.find (connection.connection_id);
+          if (connection_found == _connections.end ()
+              || connection_found->second.connection != connection)
+              return {false, {}, {}};
+          auto close_connection = std::move (connection_found->second.close_connection);
+          std::vector<stream_held_relay_t> discarded;
+          for (auto &[actor_id, binding] : connection_found->second.bindings) {
+              binding.ingress_drain->accepts_completion = false;
+              _actor_bindings.erase (actor_id);
+              for (auto &settle : take_held_relays_unlocked (binding))
+                  discarded.push_back (std::move (settle));
+          }
+          for (auto current = _barriers.begin (); current != _barriers.end ();) {
+              if (connection_found->second.bindings.contains (current->second.key))
+                  current = _barriers.erase (current);
+              else
+                  ++current;
+          }
+          _connections.erase (connection_found);
+          notify_changed ();
+          return {true, std::move (discarded), std::move (close_connection)};
+      });
     if (!closed)
         return false;
     settle_held_relays (std::move (discarded), message_flow_reason_t::target_closed);
@@ -714,12 +676,10 @@ bool stream_session_registry_t::close_remote_route_seal (const stream_barrier_t 
 
 bool stream_session_registry_t::remote_route_sealed (const std::string &actor_id) const
 {
-    return _lane
-      .run ([this, &actor_id] {
-          const auto *aggregate = current_aggregate_unlocked (actor_id);
-          return aggregate != nullptr && aggregate->barrier_token.has_value ();
-      })
-      .get ();
+    return _lane.run_sync ([this, &actor_id] {
+        const auto *aggregate = current_aggregate_unlocked (actor_id);
+        return aggregate != nullptr && aggregate->barrier_token.has_value ();
+    });
 }
 
 stateful_error_t stream_session_registry_t::capture_outbound (const std::string &actor_id,
@@ -727,49 +687,43 @@ stateful_error_t stream_session_registry_t::capture_outbound (const std::string 
                                                               std::uint64_t binding_generation,
                                                               std::function<bool ()> capture)
 {
-    return _lane
-      .run ([this, &actor_id, object_generation, binding_generation, &capture] {
-          const auto *aggregate = current_aggregate_unlocked (actor_id);
-          if (aggregate == nullptr || aggregate->binding.actor.kind != object_kind_t::actor
-              || aggregate->binding.binding_generation != binding_generation
-              || aggregate->binding.actor.object_generation != object_generation)
-              return stateful_error_t::conflict;
-          return capture () ? stateful_error_t::none : stateful_error_t::conflict;
-      })
-      .get ();
+    return _lane.run_sync ([this, &actor_id, object_generation, binding_generation, &capture] {
+        const auto *aggregate = current_aggregate_unlocked (actor_id);
+        if (aggregate == nullptr || aggregate->binding.actor.kind != object_kind_t::actor
+            || aggregate->binding.binding_generation != binding_generation
+            || aggregate->binding.actor.object_generation != object_generation)
+            return stateful_error_t::conflict;
+        return capture () ? stateful_error_t::none : stateful_error_t::conflict;
+    });
 }
 
 void stream_session_registry_t::drop_held_relays (message_flow_reason_t reason)
 {
-    auto held = _lane
-                  .run ([this] {
-                      std::vector<stream_held_relay_t> held;
-                      for (auto &[_, connection] : _connections)
-                          for (auto &[__, aggregate] : connection.bindings)
-                              for (auto &record : take_held_relays_unlocked (aggregate))
-                                  held.push_back (std::move (record));
-                      return held;
-                  })
-                  .get ();
+    auto held = _lane.run_sync ([this] {
+        std::vector<stream_held_relay_t> held;
+        for (auto &[_, connection] : _connections)
+            for (auto &[__, aggregate] : connection.bindings)
+                for (auto &record : take_held_relays_unlocked (aggregate))
+                    held.push_back (std::move (record));
+        return held;
+    });
     settle_held_relays (std::move (held), reason);
 }
 
 void stream_session_registry_t::start_held_relay_drain (std::string actor_id)
 {
     auto [lifetime, barrier_token] =
-      _lane
-        .run ([this, &actor_id] () -> std::pair<stream_relay_delivery_t, std::uint64_t> {
-            auto *aggregate = current_aggregate_unlocked (actor_id);
-            if (!aggregate || !aggregate->barrier_token)
-                return {};
-            if (aggregate->held_relays.empty ()) {
-                aggregate->barrier_token.reset ();
-                notify_changed ();
-                return {};
-            }
-            return {aggregate->held_relays.front ().deliver, *aggregate->barrier_token};
-        })
-        .get ();
+      _lane.run_sync ([this, &actor_id] () -> std::pair<stream_relay_delivery_t, std::uint64_t> {
+          auto *aggregate = current_aggregate_unlocked (actor_id);
+          if (!aggregate || !aggregate->barrier_token)
+              return {};
+          if (aggregate->held_relays.empty ()) {
+              aggregate->barrier_token.reset ();
+              notify_changed ();
+              return {};
+          }
+          return {aggregate->held_relays.front ().deliver, *aggregate->barrier_token};
+      });
     if (!lifetime)
         return;
     auto pending =
@@ -781,17 +735,15 @@ void stream_session_registry_t::start_held_relay_drain (std::string actor_id)
     detail::observe_task_completion (
       *pending, [this, pending, lifetime, actor_id, barrier_token] (const result_t<void> &result) {
           if (!result) {
-              auto discarded = _lane
-                                 .run ([this, &actor_id, barrier_token] {
-                                     auto *aggregate = current_aggregate_unlocked (actor_id);
-                                     if (!aggregate || aggregate->barrier_token != barrier_token)
-                                         return std::vector<stream_held_relay_t>{};
-                                     auto held = take_held_relays_unlocked (*aggregate);
-                                     aggregate->barrier_token.reset ();
-                                     notify_changed ();
-                                     return held;
-                                 })
-                                 .get ();
+              auto discarded = _lane.run_sync ([this, &actor_id, barrier_token] {
+                  auto *aggregate = current_aggregate_unlocked (actor_id);
+                  if (!aggregate || aggregate->barrier_token != barrier_token)
+                      return std::vector<stream_held_relay_t>{};
+                  auto held = take_held_relays_unlocked (*aggregate);
+                  aggregate->barrier_token.reset ();
+                  notify_changed ();
+                  return held;
+              });
               settle_held_relays (std::move (discarded),
                                   detail::message_flow_reason_from_error (result.error ()));
           }
@@ -804,25 +756,23 @@ task_t<void> stream_session_registry_t::drain_held_relays (std::string actor_id,
     // The last callback retains the owner until the final lane turn releases the seal.
     std::shared_ptr<stream_held_relay_t> held;
     for (;;) {
-        auto next =
-          _lane
-            .run ([this, &actor_id, barrier_token] () -> std::optional<stream_held_relay_t> {
-                auto *aggregate = current_aggregate_unlocked (actor_id);
-                if (!aggregate || aggregate->barrier_token != barrier_token)
-                    return std::nullopt;
-                if (aggregate->held_relays.empty ()) {
-                    aggregate->barrier_token.reset ();
-                    notify_changed ();
-                    return std::nullopt;
-                }
-                auto next = std::move (aggregate->held_relays.front ());
-                aggregate->held_relays.pop_front ();
-                next.dispatch.binding = aggregate->binding;
-                aggregate->ingress_drain->active.emplace (aggregate->binding.binding_generation,
-                                                          next.dispatch.inbound_sequence);
-                return next;
-            })
-            .get ();
+        auto next = co_await _lane.run_task (
+          [this, &actor_id, barrier_token] () -> std::optional<stream_held_relay_t> {
+              auto *aggregate = current_aggregate_unlocked (actor_id);
+              if (!aggregate || aggregate->barrier_token != barrier_token)
+                  return std::nullopt;
+              if (aggregate->held_relays.empty ()) {
+                  aggregate->barrier_token.reset ();
+                  notify_changed ();
+                  return std::nullopt;
+              }
+              auto next = std::move (aggregate->held_relays.front ());
+              aggregate->held_relays.pop_front ();
+              next.dispatch.binding = aggregate->binding;
+              aggregate->ingress_drain->active.emplace (aggregate->binding.binding_generation,
+                                                        next.dispatch.inbound_sequence);
+              return next;
+          });
         if (!next)
             co_return;
         held = std::make_shared<stream_held_relay_t> (std::move (*next));
@@ -847,38 +797,36 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
                                                 route_terminal_commit_t commit_terminal)
 {
     std::exception_ptr hook_error;
-    auto admission =
-      _lane
-        .run ([this, &connection_id, binding_generation, &actor_id, object_generation,
-               target = std::move (target), target_node_generation, target_owner_lease_generation,
-               &commit_terminal, &hook_error] () mutable -> stream_route_admission_t {
-            const auto connection = _connections.find (connection_id);
-            auto *aggregate = current_aggregate_unlocked (actor_id);
-            if (connection == _connections.end () || aggregate == nullptr
-                || aggregate->binding.connection != connection->second.connection
-                || aggregate->binding.binding_generation != binding_generation) {
-                return {stateful_error_t::not_found, std::nullopt, 0};
-            }
-            const auto last_sequence = aggregate->next_inbound_sequence - 1;
-            if (aggregate->binding.actor.kind != object_kind_t::actor
-                || aggregate->binding.actor.object_generation != object_generation
-                || !aggregate->barrier_token || !_barriers.contains (*aggregate->barrier_token)
-                || !exact_actor (_barriers.at (*aggregate->barrier_token), aggregate->binding.actor)
-                || target.kind != object_kind_t::actor || target.key != actor_id
-                || target.object_generation != object_generation || target_node_generation == 0
-                || target_owner_lease_generation == 0
-                || !aggregate->ingress_drain->active.empty ()) {
-                return {stateful_error_t::conflict, aggregate->binding, last_sequence};
-            }
-            auto next = aggregate->binding;
-            next.actor = std::move (target);
-            next.target_node_generation = target_node_generation;
-            next.owner_lease_generation = target_owner_lease_generation;
-            aggregate->binding = next;
-            _barriers.erase (*aggregate->barrier_token);
-            stream_route_admission_t admission{stateful_error_t::none, next, last_sequence};
-            notify_changed ();
-            /* The registry binding and its Actor-gateway projection are one
+    auto admission = _lane.run_sync (
+      [this, &connection_id, binding_generation, &actor_id, object_generation,
+       target = std::move (target), target_node_generation, target_owner_lease_generation,
+       &commit_terminal, &hook_error] () mutable -> stream_route_admission_t {
+          const auto connection = _connections.find (connection_id);
+          auto *aggregate = current_aggregate_unlocked (actor_id);
+          if (connection == _connections.end () || aggregate == nullptr
+              || aggregate->binding.connection != connection->second.connection
+              || aggregate->binding.binding_generation != binding_generation) {
+              return {stateful_error_t::not_found, std::nullopt, 0};
+          }
+          const auto last_sequence = aggregate->next_inbound_sequence - 1;
+          if (aggregate->binding.actor.kind != object_kind_t::actor
+              || aggregate->binding.actor.object_generation != object_generation
+              || !aggregate->barrier_token || !_barriers.contains (*aggregate->barrier_token)
+              || !exact_actor (_barriers.at (*aggregate->barrier_token), aggregate->binding.actor)
+              || target.kind != object_kind_t::actor || target.key != actor_id
+              || target.object_generation != object_generation || target_node_generation == 0
+              || target_owner_lease_generation == 0 || !aggregate->ingress_drain->active.empty ()) {
+              return {stateful_error_t::conflict, aggregate->binding, last_sequence};
+          }
+          auto next = aggregate->binding;
+          next.actor = std::move (target);
+          next.target_node_generation = target_node_generation;
+          next.owner_lease_generation = target_owner_lease_generation;
+          aggregate->binding = next;
+          _barriers.erase (*aggregate->barrier_token);
+          stream_route_admission_t admission{stateful_error_t::none, next, last_sequence};
+          notify_changed ();
+          /* The registry binding and its Actor-gateway projection are one
              * publication boundary. In particular, a boundSessionSend(36)
              * must not observe the target route committed above before the
              * gateway has advanced to that same route.
@@ -886,10 +834,9 @@ stream_session_registry_t::commit_remote_route (const std::string &connection_id
              * This internal callback must not re-enter this registry. It is
              * non-veto: projection failure neither rolls back nor hides the
              * committed binding once this lane turn completes. */
-            hook_error = invoke_route_terminal (commit_terminal, admission);
-            return admission;
-        })
-        .get ();
+          hook_error = invoke_route_terminal (commit_terminal, admission);
+          return admission;
+      });
     return finish_remote_route (actor_id, std::move (admission), hook_error);
 }
 
@@ -901,33 +848,30 @@ stream_session_registry_t::acknowledge_remote_abort (const std::string &connecti
                                                      route_terminal_commit_t commit_terminal)
 {
     std::exception_ptr hook_error;
-    auto admission =
-      _lane
-        .run ([this, &connection_id, binding_generation, &actor_id, object_generation,
-               &commit_terminal, &hook_error] () -> stream_route_admission_t {
-            const auto connection = _connections.find (connection_id);
-            auto *aggregate = current_aggregate_unlocked (actor_id);
-            if (connection == _connections.end () || aggregate == nullptr
-                || aggregate->binding.connection != connection->second.connection
-                || aggregate->binding.binding_generation != binding_generation) {
-                return {stateful_error_t::not_found, std::nullopt, 0};
-            }
-            const auto last_sequence = aggregate->next_inbound_sequence - 1;
-            if (aggregate->binding.actor.kind != object_kind_t::actor
-                || aggregate->binding.actor.object_generation != object_generation
-                || !aggregate->barrier_token || !_barriers.contains (*aggregate->barrier_token)
-                || !exact_actor (_barriers.at (*aggregate->barrier_token),
-                                 aggregate->binding.actor)) {
-                return {stateful_error_t::conflict, aggregate->binding, last_sequence};
-            }
-            _barriers.erase (*aggregate->barrier_token);
-            stream_route_admission_t admission{stateful_error_t::none, aggregate->binding,
-                                               last_sequence};
-            notify_changed ();
-            hook_error = invoke_route_terminal (commit_terminal, admission);
-            return admission;
-        })
-        .get ();
+    auto admission = _lane.run_sync ([this, &connection_id, binding_generation, &actor_id,
+                                      object_generation, &commit_terminal,
+                                      &hook_error] () -> stream_route_admission_t {
+        const auto connection = _connections.find (connection_id);
+        auto *aggregate = current_aggregate_unlocked (actor_id);
+        if (connection == _connections.end () || aggregate == nullptr
+            || aggregate->binding.connection != connection->second.connection
+            || aggregate->binding.binding_generation != binding_generation) {
+            return {stateful_error_t::not_found, std::nullopt, 0};
+        }
+        const auto last_sequence = aggregate->next_inbound_sequence - 1;
+        if (aggregate->binding.actor.kind != object_kind_t::actor
+            || aggregate->binding.actor.object_generation != object_generation
+            || !aggregate->barrier_token || !_barriers.contains (*aggregate->barrier_token)
+            || !exact_actor (_barriers.at (*aggregate->barrier_token), aggregate->binding.actor)) {
+            return {stateful_error_t::conflict, aggregate->binding, last_sequence};
+        }
+        _barriers.erase (*aggregate->barrier_token);
+        stream_route_admission_t admission{stateful_error_t::none, aggregate->binding,
+                                           last_sequence};
+        notify_changed ();
+        hook_error = invoke_route_terminal (commit_terminal, admission);
+        return admission;
+    });
     return finish_remote_route (actor_id, std::move (admission), hook_error);
 }
 
@@ -944,58 +888,50 @@ stream_route_admission_t stream_session_registry_t::finish_remote_route (
 std::optional<stream_binding_t>
 stream_session_registry_t::current_binding (const std::string &actor_id) const
 {
-    return _lane
-      .run ([this, &actor_id] {
-          const auto *aggregate = current_aggregate_unlocked (actor_id);
-          return aggregate == nullptr ? std::nullopt : std::make_optional (aggregate->binding);
-      })
-      .get ();
+    return _lane.run_sync ([this, &actor_id] {
+        const auto *aggregate = current_aggregate_unlocked (actor_id);
+        return aggregate == nullptr ? std::nullopt : std::make_optional (aggregate->binding);
+    });
 }
 
 bool stream_session_registry_t::try_seal_all ()
 {
-    return _lane
-      .run ([this] {
-          if (_all_sealed)
-              return true;
-          for (const auto &[_, state] : _connections) {
-              for (const auto &[__, aggregate] : state.bindings)
-                  if (!aggregate.ingress_drain->active.empty ())
-                      return false;
-          }
-          _all_sealed = true;
-          return true;
-      })
-      .get ();
+    return _lane.run_sync ([this] {
+        if (_all_sealed)
+            return true;
+        for (const auto &[_, state] : _connections) {
+            for (const auto &[__, aggregate] : state.bindings)
+                if (!aggregate.ingress_drain->active.empty ())
+                    return false;
+        }
+        _all_sealed = true;
+        return true;
+    });
 }
 
 void stream_session_registry_t::release_all () noexcept
 {
-    _lane
-      .run ([this] {
-          _all_sealed = false;
-          notify_changed ();
-      })
-      .get ();
+    _lane.run_sync ([this] {
+        _all_sealed = false;
+        notify_changed ();
+    });
 }
 
 void stream_session_registry_t::force_close_all () noexcept
 {
-    auto closed = _lane
-                    .run ([this] {
-                        decltype (_connections) closed;
-                        _all_sealed = true;
-                        _barriers.clear ();
-                        _actor_bindings.clear ();
-                        for (auto &[_, connection] : _connections) {
-                            for (auto &[__, aggregate] : connection.bindings)
-                                aggregate.ingress_drain->accepts_completion = false;
-                        }
-                        closed.swap (_connections);
-                        notify_changed ();
-                        return closed;
-                    })
-                    .get ();
+    auto closed = _lane.run_sync ([this] {
+        decltype (_connections) closed;
+        _all_sealed = true;
+        _barriers.clear ();
+        _actor_bindings.clear ();
+        for (auto &[_, connection] : _connections) {
+            for (auto &[__, aggregate] : connection.bindings)
+                aggregate.ingress_drain->accepts_completion = false;
+        }
+        closed.swap (_connections);
+        notify_changed ();
+        return closed;
+    });
     for (auto &[_, connection] : closed)
         for (auto &[__, aggregate] : connection.bindings)
             settle_held_relays (take_held_relays_unlocked (aggregate),
@@ -1004,14 +940,12 @@ void stream_session_registry_t::force_close_all () noexcept
 
 bool stream_session_registry_t::is_current (const stream_binding_t &binding) const
 {
-    return _lane
-      .run ([this, &binding] {
-          const auto current = _connections.find (binding.connection.connection_id);
-          return current != _connections.end () && current->second.connection == binding.connection
-                 && current->second.bindings.contains (binding.actor.key)
-                 && current->second.bindings.at (binding.actor.key).binding == binding;
-      })
-      .get ();
+    return _lane.run_sync ([this, &binding] {
+        const auto current = _connections.find (binding.connection.connection_id);
+        return current != _connections.end () && current->second.connection == binding.connection
+               && current->second.bindings.contains (binding.actor.key)
+               && current->second.bindings.at (binding.actor.key).binding == binding;
+    });
 }
 
 stream_session_registry_t::session_binding_aggregate_t *

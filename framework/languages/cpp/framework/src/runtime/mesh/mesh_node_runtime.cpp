@@ -654,29 +654,28 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
     }
 }
 
-void mesh_node_runtime_t::start (
+task_t<void> mesh_node_runtime_t::start (
   host::public_host_runtime_t::relocation_gate_t relocation_gate,
   host::public_host_runtime_t::native_spot_target_t native_spot_target,
   runtime::mesh::service_mailbox_t::application_dispatch_t relocation_resume)
 {
     if (_node) {
-        return;
+        co_return;
     }
 
     std::shared_ptr<handler_group_options_state_t> handler_groups;
     std::vector<std::pair<std::string, std::string>> mesh_handler_groups;
-    _state->lane
-      .run ([&] {
-          handler_groups = _state->handler_groups;
-          if (handler_groups) {
-              for (const auto &[channel_name, channel] : _state->channels) {
-                  if (channel.server && !channel.handler_group.empty ()) {
-                      mesh_handler_groups.emplace_back (channel_name, channel.handler_group);
-                  }
-              }
-          }
-      })
-      .get ();
+    const auto [spot_state, instance_idle_timeout] = co_await _state->lane.run_task ([&] {
+        handler_groups = _state->handler_groups;
+        if (handler_groups) {
+            for (const auto &[channel_name, channel] : _state->channels) {
+                if (channel.server && !channel.handler_group.empty ()) {
+                    mesh_handler_groups.emplace_back (channel_name, channel.handler_group);
+                }
+            }
+        }
+        return std::pair{_state->spot_state, _state->instance_spot_idle_timeout};
+    });
     if (handler_groups) {
         for (const auto &[channel_name, group_name] : mesh_handler_groups) {
             mesh_channel_server_builder_t channel (_state, channel_name);
@@ -684,113 +683,102 @@ void mesh_node_runtime_t::start (
         }
     }
 
-    auto [node_options, spot_state, spot_snapshot, mesh_name, routing_id] =
-      _state->lane
-        .run ([&] {
-            if (const auto options = _state->framework_options.lock ()) {
-                if (!_state->bind_host_override) {
-                    _state->bind_host = options->bind_host;
-                }
-                if (!_state->advertise_host_override) {
-                    _state->advertise_host = options->advertise_host;
-                }
+    const auto spot_snapshot = co_await spot_state->lane.run_task ([&] {
+        spot_state->instance_spot_idle_timeout = instance_idle_timeout;
+        return spot_state->snapshot;
+    });
+    auto [node_options, mesh_name, routing_id] = co_await _state->lane.run_task ([&] {
+        if (const auto options = _state->framework_options.lock ()) {
+            if (!_state->bind_host_override) {
+                _state->bind_host = options->bind_host;
             }
-            if (_state->listen_port) {
-                _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
-                  "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
-                  + std::to_string (*_state->listen_port));
+            if (!_state->advertise_host_override) {
+                _state->advertise_host = options->advertise_host;
             }
-            const auto spot_snapshot = _state->spot_state->lane
-                                         .run ([&] {
-                                             _state->spot_state->instance_spot_idle_timeout =
-                                               _state->instance_spot_idle_timeout;
-                                             return _state->spot_state->snapshot;
-                                         })
-                                         .get ();
-            if (_state->mesh_name.empty ()) {
-                throw configuration_error ("MeshName is required");
-            }
-            if (_state->listen_endpoint.empty ()) {
-                throw configuration_error ("MeshNode listen endpoint is required");
-            }
-            if (!_state->routing_id) {
-                throw configuration_error ("MeshNode routing id is required");
-            }
-            if (!_state->core_context) {
-                throw configuration_error ("MeshNode shared Core Context is required");
-            }
-            for (const auto &[channel_name, channel] : _state->channels) {
-                if (!channel.role_selected)
-                    throw configuration_error (
-                      "RouteMesh channel requires a Client or Server role: " + channel_name);
-            }
-            if (_state->object_role == object_role_t::client && _state->has_node_direct_handler) {
-                throw configuration_error (
-                  "Object Client cannot register application Node direct handlers");
-            }
-            if (_state->socket.receive_timeout
-                && (_state->socket.receive_timeout->count () <= 0
-                    || _state->socket.receive_timeout->count ()
-                         > std::numeric_limits<int>::max ())) {
-                throw configuration_error (
-                  "MeshNode receive timeout must be between 1 and INT_MAX milliseconds");
-            }
+        }
+        if (_state->listen_port) {
+            _state->listen_endpoint = mesh_endpoint_notation::normalize_endpoint (
+              "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (_state->bind_host) + ":"
+              + std::to_string (*_state->listen_port));
+        }
+        if (_state->mesh_name.empty ()) {
+            throw configuration_error ("MeshName is required");
+        }
+        if (_state->listen_endpoint.empty ()) {
+            throw configuration_error ("MeshNode listen endpoint is required");
+        }
+        if (!_state->routing_id) {
+            throw configuration_error ("MeshNode routing id is required");
+        }
+        if (!_state->core_context) {
+            throw configuration_error ("MeshNode shared Core Context is required");
+        }
+        for (const auto &[channel_name, channel] : _state->channels) {
+            if (!channel.role_selected)
+                throw configuration_error ("RouteMesh channel requires a Client or Server role: "
+                                           + channel_name);
+        }
+        if (_state->object_role == object_role_t::client && _state->has_node_direct_handler) {
+            throw configuration_error (
+              "Object Client cannot register application Node direct handlers");
+        }
+        if (_state->socket.receive_timeout
+            && (_state->socket.receive_timeout->count () <= 0
+                || _state->socket.receive_timeout->count () > std::numeric_limits<int>::max ())) {
+            throw configuration_error (
+              "MeshNode receive timeout must be between 1 and INT_MAX milliseconds");
+        }
 
-            std::vector<runtime::mesh::service_channel_descriptor_t> channels;
-            channels.reserve (_state->channels.size ());
-            for (const auto &[channel_name, channel] : _state->channels) {
-                if (channel.server)
-                    channels.push_back (
-                      runtime::mesh::service_channel_descriptor_t{channel_name, channel.weight});
-            }
-            std::sort (channels.begin (), channels.end (),
-                       [] (const auto &left, const auto &right) { return left.name < right.name; });
-            std::set<std::string> stable_types (spot_snapshot.actor_types.begin (),
-                                                spot_snapshot.actor_types.end ());
-            stable_types.insert ("framework.spot");
-            auto native_options = runtime::mesh::raw_mesh_node_options_t{
-              runtime::mesh::service_node_descriptor_t{
-                .mesh_name = _state->mesh_name,
-                .node_routing_id = _state->routing_id->to_bytes (),
-                .lifecycle_generation = make_lifecycle_generation (),
-                .descriptor_revision = 1,
-                .advertised_endpoint = _state->listen_endpoint,
-                .channels = std::move (channels),
-                .state = runtime::mesh::service_node_state_t::preparing,
-                .object_role = _state->object_role == object_role_t::client
-                                 ? runtime::mesh::service_object_role_t::client
-                               : _state->object_role == object_role_t::server
-                                 ? runtime::mesh::service_object_role_t::server
-                                 : runtime::mesh::service_object_role_t::none,
-                .placement_weight = _state->placement_weight},
-              _state->advertise_host, _state->socket.receive_timeout, _state->auto_hwm_profile,
-              _state->application_jobs};
-            native_options.runtime_failures = _state->spot_state->runtime_failures ();
-            if (const auto &monitoring = _state->spot_state->monitoring)
-                native_options.metric_provider = monitoring->metric_provider;
-            auto options = host::host_options_t{
-              std::move (native_options), spot_snapshot.entry_spot_name.value_or ("entry"),
-              std::move (stable_types),   _owner_lease_fencing_margin,
-              _state->core_context,       _session_relocation_seal_timeout};
-            return std::make_tuple (std::move (options), _state->spot_state,
-                                    std::move (spot_snapshot), _state->mesh_name,
-                                    *_state->routing_id);
-        })
-        .get ();
+        std::vector<runtime::mesh::service_channel_descriptor_t> channels;
+        channels.reserve (_state->channels.size ());
+        for (const auto &[channel_name, channel] : _state->channels) {
+            if (channel.server)
+                channels.push_back (
+                  runtime::mesh::service_channel_descriptor_t{channel_name, channel.weight});
+        }
+        std::sort (channels.begin (), channels.end (),
+                   [] (const auto &left, const auto &right) { return left.name < right.name; });
+        std::set<std::string> stable_types (spot_snapshot.actor_types.begin (),
+                                            spot_snapshot.actor_types.end ());
+        stable_types.insert ("framework.spot");
+        auto native_options = runtime::mesh::raw_mesh_node_options_t{
+          runtime::mesh::service_node_descriptor_t{
+            .mesh_name = _state->mesh_name,
+            .node_routing_id = _state->routing_id->to_bytes (),
+            .lifecycle_generation = make_lifecycle_generation (),
+            .descriptor_revision = 1,
+            .advertised_endpoint = _state->listen_endpoint,
+            .channels = std::move (channels),
+            .state = runtime::mesh::service_node_state_t::preparing,
+            .object_role = _state->object_role == object_role_t::client
+                             ? runtime::mesh::service_object_role_t::client
+                           : _state->object_role == object_role_t::server
+                             ? runtime::mesh::service_object_role_t::server
+                             : runtime::mesh::service_object_role_t::none,
+            .placement_weight = _state->placement_weight},
+          _state->advertise_host, _state->socket.receive_timeout, _state->auto_hwm_profile,
+          _state->application_jobs};
+        native_options.runtime_failures = _state->spot_state->runtime_failures ();
+        if (const auto &monitoring = _state->spot_state->monitoring)
+            native_options.metric_provider = monitoring->metric_provider;
+        auto options = host::host_options_t{
+          std::move (native_options), spot_snapshot.entry_spot_name.value_or ("entry"),
+          std::move (stable_types),   _owner_lease_fencing_margin,
+          _state->core_context,       _session_relocation_seal_timeout};
+        return std::make_tuple (std::move (options), _state->mesh_name, *_state->routing_id);
+    });
     node_options.mesh.shutdown_admission_seal =
-      spot_state->lane.run ([&] { return spot_state->drain_flag; }).get ();
+      co_await spot_state->lane.run_task ([&] { return spot_state->drain_flag; });
     node_options.mesh.dispatch = spot_state->dispatch;
-    _state->lane
-      .run ([&] {
-          for (const auto &[name, _] : _state->channels)
-              node_options.mesh.metric_channel_names.push_back (name);
-          const bool manual = !_state->peer_connections.empty ()
-                              || !spot_snapshot.router_manual_connections.empty ()
-                              || !spot_snapshot.router_manual_rid_connections.empty ();
-          node_options.mesh.metric_source =
-            _user_spot_store ? (manual ? "manual_and_redis" : "redis") : "manual";
-      })
-      .get ();
+    co_await _state->lane.run_task ([&] {
+        for (const auto &[name, _] : _state->channels)
+            node_options.mesh.metric_channel_names.push_back (name);
+        const bool manual = !_state->peer_connections.empty ()
+                            || !spot_snapshot.router_manual_connections.empty ()
+                            || !spot_snapshot.router_manual_rid_connections.empty ();
+        node_options.mesh.metric_source =
+          _user_spot_store ? (manual ? "manual_and_redis" : "redis") : "manual";
+    });
     const auto metric_provider = node_options.mesh.metric_provider;
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
     if (_delay_owner)
@@ -891,16 +879,14 @@ void mesh_node_runtime_t::start (
                                      std::move (relocation_resume));
     node->start ();
     if (_instance_spot_materializer)
-        (void) node->recover_instance_spot_activations ();
+        (void) co_await node->recover_instance_spot_activations ();
     const auto resolved_endpoint = node->status ().local_endpoint ();
     std::vector<mesh_peer_connection_t> peer_connections;
-    _state->lane
-      .run ([&] {
-          if (!resolved_endpoint.empty ())
-              _state->listen_endpoint = resolved_endpoint;
-          peer_connections = _state->peer_connections;
-      })
-      .get ();
+    co_await _state->lane.run_task ([&] {
+        if (!resolved_endpoint.empty ())
+            _state->listen_endpoint = resolved_endpoint;
+        peer_connections = _state->peer_connections;
+    });
     for (const auto &peer : peer_connections)
         node->transport ().connect_peer_intent (peer);
     _node = std::move (node);
@@ -968,17 +954,15 @@ void mesh_node_runtime_t::start (
         if (--callback_gate->active == 0)
             callback_gate->changed.notify_all ();
     };
-    _state->lane
-      .run ([&] {
-          _state->runtime_peer_connect = std::move (runtime_peer_connect);
-          _state->runtime_peer_disconnect = std::move (runtime_peer_disconnect);
-      })
-      .get ();
+    co_await _state->lane.run_task ([&] {
+        _state->runtime_peer_connect = std::move (runtime_peer_connect);
+        _state->runtime_peer_disconnect = std::move (runtime_peer_disconnect);
+    });
     spot_node_runtime_t spot_runtime (spot_state);
     spot_runtime.attach_native_node (_node);
     if (spot_snapshot.entry_spot_name) {
         auto native_entry = _node->entry_spot ();
-        (void) spot_runtime.get_or_create_spot (
+        (void) co_await spot_runtime.get_or_create_spot_async (
           *spot_snapshot.entry_spot_name, spot_id_t (native_entry.spot_id ()), zlink::message_t{},
           native_entry.status ().lifecycle_generation (), mesh_name);
     }

@@ -459,17 +459,15 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<authority_read_result_t> ();
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              const auto found = _authorities.find (key.value);
-              if (found == _authorities.end ())
-                  return completed (authority_read_result_t{authority_missing_t{now}});
-              auto snapshot = found->second;
-              snapshot.store_now = now;
-              return completed (authority_read_result_t{std::move (snapshot)});
-          })
-          .get ();
+        return _lane.run_task ([this, key = std::move (key)] () mutable {
+            const auto now = clock_t::now ();
+            const auto found = _authorities.find (key.value);
+            if (found == _authorities.end ())
+                return completed (authority_read_result_t{authority_missing_t{now}});
+            auto snapshot = found->second;
+            snapshot.store_now = now;
+            return completed (authority_read_result_t{std::move (snapshot)});
+        });
     }
 
     task_t<authority_compare_exchange_result_t>
@@ -480,153 +478,153 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<authority_compare_exchange_result_t> ();
-        return _lane
-          .run ([&] {
-              if (const auto *put = std::get_if<authority_put_t> (&mutation);
-                  put && put->operation_deadline
-                  && std::chrono::steady_clock::now () >= *put->operation_deadline)
-                  return task_t<authority_compare_exchange_result_t> (
-                    result_t<authority_compare_exchange_result_t>::failure (
-                      framework_error_kind_t::deadline_exceeded,
-                      "Actor membership operation deadline expired"));
-              const auto now = clock_t::now ();
-              auto found = _authorities.find (key.value);
-              if (found == _authorities.end ()
-                  || found->second.store_version != expected_store_version) {
-                  authority_read_result_t current =
-                    found == _authorities.end () ? authority_read_result_t{authority_missing_t{now}}
-                                                 : authority_read_result_t{found->second};
-                  return completed (
-                    authority_compare_exchange_result_t{authority_conflict_t{std::move (current)}});
-              }
+        return _lane.run_task ([this, key = std::move (key),
+                                expected_store_version = std::move (expected_store_version),
+                                mutation = std::move (mutation)] () mutable {
+            if (const auto *put = std::get_if<authority_put_t> (&mutation);
+                put && put->operation_deadline
+                && std::chrono::steady_clock::now () >= *put->operation_deadline)
+                return task_t<authority_compare_exchange_result_t> (
+                  result_t<authority_compare_exchange_result_t>::failure (
+                    framework_error_kind_t::deadline_exceeded,
+                    "Actor membership operation deadline expired"));
+            const auto now = clock_t::now ();
+            auto found = _authorities.find (key.value);
+            if (found == _authorities.end ()
+                || found->second.store_version != expected_store_version) {
+                authority_read_result_t current =
+                  found == _authorities.end () ? authority_read_result_t{authority_missing_t{now}}
+                                               : authority_read_result_t{found->second};
+                return completed (
+                  authority_compare_exchange_result_t{authority_conflict_t{std::move (current)}});
+            }
 
-              if (authority_mutation_locked_on_lane (key.value))
-                  return completed (
-                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+            if (authority_mutation_locked_on_lane (key.value))
+                return completed (
+                  authority_compare_exchange_result_t{authority_conflict_t{found->second}});
 
-              const auto old_member = decode_direct_actor_authority_payload (found->second.payload);
-              const auto member = std::visit (
-                [] (const auto &value) {
-                    if constexpr (requires { value.payload; })
-                        return decode_direct_actor_authority_payload (value.payload);
-                    else
-                        return std::optional<actor_authority_payload_t>{};
-                },
-                mutation);
-              if (const auto failure = user_membership_commit_failure (old_member, member, now))
-                  return completed (authority_compare_exchange_result_t{
-                    authority_conflict_t{found->second, failure}});
+            const auto old_member = decode_direct_actor_authority_payload (found->second.payload);
+            const auto member = std::visit (
+              [] (const auto &value) {
+                  if constexpr (requires { value.payload; })
+                      return decode_direct_actor_authority_payload (value.payload);
+                  else
+                      return std::optional<actor_authority_payload_t>{};
+              },
+              mutation);
+            if (const auto failure = user_membership_commit_failure (old_member, member, now))
+                return completed (authority_compare_exchange_result_t{
+                  authority_conflict_t{found->second, failure}});
 
-              if (std::holds_alternative<authority_delete_t> (mutation)) {
-                  if (found->second.allocation.state != placement_allocation_state_t::active
-                      || !owner_token_is_live (found->second.owner, now)
-                      || !capacity_bundle_present (_active_by_placement,
-                                                   found->second.allocation.target,
-                                                   found->second.allocation.capacity_bundle))
-                      return completed (
-                        authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-                  if (!store_revisions_available ())
-                      return completed (
-                        authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-                  const auto store_version = next_store_version ();
-                  apply_capacity_bundle (_active_by_placement, found->second.allocation.target,
-                                         found->second.allocation.capacity_bundle, false);
-                  _authorities.erase (found);
-                  return completed (
-                    authority_compare_exchange_result_t{authority_deleted_t{store_version, now}});
-              }
+            if (std::holds_alternative<authority_delete_t> (mutation)) {
+                if (found->second.allocation.state != placement_allocation_state_t::active
+                    || !owner_token_is_live (found->second.owner, now)
+                    || !capacity_bundle_present (_active_by_placement,
+                                                 found->second.allocation.target,
+                                                 found->second.allocation.capacity_bundle))
+                    return completed (
+                      authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+                if (!store_revisions_available ())
+                    return completed (
+                      authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
+                const auto store_version = next_store_version ();
+                apply_capacity_bundle (_active_by_placement, found->second.allocation.target,
+                                       found->second.allocation.capacity_bundle, false);
+                _authorities.erase (found);
+                return completed (
+                  authority_compare_exchange_result_t{authority_deleted_t{store_version, now}});
+            }
 
-              if (auto *restore = std::get_if<authority_restore_t> (&mutation)) {
-                  if (found->second.allocation.state != placement_allocation_state_t::active
-                      || !same_owner (found->second.owner, restore->expected_owner))
-                      return completed (
-                        authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-                  if (!store_revisions_available ())
-                      return completed (
-                        authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-                  auto snapshot = found->second;
-                  snapshot.store_version = next_store_version ();
-                  snapshot.payload = std::move (restore->payload);
-                  snapshot.store_now = now;
-                  _authorities[key.value] = snapshot;
-                  return completed (
-                    authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
-              }
+            if (auto *restore = std::get_if<authority_restore_t> (&mutation)) {
+                if (found->second.allocation.state != placement_allocation_state_t::active
+                    || !same_owner (found->second.owner, restore->expected_owner))
+                    return completed (
+                      authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+                if (!store_revisions_available ())
+                    return completed (
+                      authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
+                auto snapshot = found->second;
+                snapshot.store_version = next_store_version ();
+                snapshot.payload = std::move (restore->payload);
+                snapshot.store_now = now;
+                _authorities[key.value] = snapshot;
+                return completed (
+                  authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
+            }
 
-              if (auto *retarget = std::get_if<authority_retarget_t> (&mutation)) {
-                  if (found->second.allocation.state != placement_allocation_state_t::active
-                      || !capacity_bundle_present (_active_by_placement,
-                                                   found->second.allocation.target,
-                                                   found->second.allocation.capacity_bundle))
-                      return completed (
-                        authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-                  const auto target_descriptor =
-                    live_target_descriptor (retarget->target, found->second.allocation.object_kind,
-                                            found->second.allocation.stable_type, now, false);
-                  if (!target_descriptor
-                      || (!same_target (found->second.allocation.target, retarget->target)
-                          && !capacity_available (*target_descriptor, retarget->target,
-                                                  found->second.allocation.capacity_bundle)))
-                      return completed (
-                        authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-                  if (!store_revisions_available ()
-                      || !issue_generations ({{&_authority_owner_generation, 1}}))
-                      return completed (
-                        authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-                  auto snapshot = found->second;
-                  snapshot.store_version = next_store_version ();
-                  snapshot.payload = std::move (retarget->payload);
-                  snapshot.authority_owner_generation = _authority_owner_generation;
-                  snapshot.owner = retarget->target.owner;
-                  snapshot.store_now = now;
-                  const auto source_allocation = snapshot.allocation;
-                  snapshot.allocation.target = retarget->target;
-                  if (!same_target (source_allocation.target, snapshot.allocation.target)) {
-                      apply_capacity_bundle (_active_by_placement, source_allocation.target,
-                                             source_allocation.capacity_bundle, false);
-                      apply_capacity_bundle (_active_by_placement, snapshot.allocation.target,
-                                             snapshot.allocation.capacity_bundle, true);
-                  }
-                  _authorities[key.value] = snapshot;
-                  return completed (
-                    authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
-              }
+            if (auto *retarget = std::get_if<authority_retarget_t> (&mutation)) {
+                if (found->second.allocation.state != placement_allocation_state_t::active
+                    || !capacity_bundle_present (_active_by_placement,
+                                                 found->second.allocation.target,
+                                                 found->second.allocation.capacity_bundle))
+                    return completed (
+                      authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+                const auto target_descriptor =
+                  live_target_descriptor (retarget->target, found->second.allocation.object_kind,
+                                          found->second.allocation.stable_type, now, false);
+                if (!target_descriptor
+                    || (!same_target (found->second.allocation.target, retarget->target)
+                        && !capacity_available (*target_descriptor, retarget->target,
+                                                found->second.allocation.capacity_bundle)))
+                    return completed (
+                      authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+                if (!store_revisions_available ()
+                    || !issue_generations ({{&_authority_owner_generation, 1}}))
+                    return completed (
+                      authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
+                auto snapshot = found->second;
+                snapshot.store_version = next_store_version ();
+                snapshot.payload = std::move (retarget->payload);
+                snapshot.authority_owner_generation = _authority_owner_generation;
+                snapshot.owner = retarget->target.owner;
+                snapshot.store_now = now;
+                const auto source_allocation = snapshot.allocation;
+                snapshot.allocation.target = retarget->target;
+                if (!same_target (source_allocation.target, snapshot.allocation.target)) {
+                    apply_capacity_bundle (_active_by_placement, source_allocation.target,
+                                           source_allocation.capacity_bundle, false);
+                    apply_capacity_bundle (_active_by_placement, snapshot.allocation.target,
+                                           snapshot.allocation.capacity_bundle, true);
+                }
+                _authorities[key.value] = snapshot;
+                return completed (
+                  authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
+            }
 
-              if (found->second.allocation.state != placement_allocation_state_t::active)
-                  return completed (
-                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-              auto owner = found->second.owner;
-              auto object_generation = found->second.object_generation;
-              auto owner_generation = found->second.authority_owner_generation;
-              auto allocation = found->second.allocation;
-              if (!owner_token_is_live (found->second.owner, now))
-                  return completed (
-                    authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-              if (!store_revisions_available ())
-                  return completed (
-                    authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
+            if (found->second.allocation.state != placement_allocation_state_t::active)
+                return completed (
+                  authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+            auto owner = found->second.owner;
+            auto object_generation = found->second.object_generation;
+            auto owner_generation = found->second.authority_owner_generation;
+            auto allocation = found->second.allocation;
+            if (!owner_token_is_live (found->second.owner, now))
+                return completed (
+                  authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+            if (!store_revisions_available ())
+                return completed (
+                  authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
 
-              std::vector<std::byte> payload;
-              if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
-                  if (!issue_generations (
-                        {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
-                      return completed (
-                        authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-                  object_generation = _object_generation;
-                  owner_generation = _authority_owner_generation;
-                  payload = std::move (reincarnate->payload);
-              } else {
-                  payload = std::move (std::get<authority_put_t> (mutation).payload);
-              }
-              authority_snapshot_t snapshot{next_store_version (), std::move (payload),
-                                            object_generation,     owner_generation,
-                                            std::move (owner),     now,
-                                            std::move (allocation)};
-              _authorities[key.value] = snapshot;
-              return completed (
-                authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
-          })
-          .get ();
+            std::vector<std::byte> payload;
+            if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
+                if (!issue_generations (
+                      {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
+                    return completed (
+                      authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
+                object_generation = _object_generation;
+                owner_generation = _authority_owner_generation;
+                payload = std::move (reincarnate->payload);
+            } else {
+                payload = std::move (std::get<authority_put_t> (mutation).payload);
+            }
+            authority_snapshot_t snapshot{next_store_version (), std::move (payload),
+                                          object_generation,     owner_generation,
+                                          std::move (owner),     now,
+                                          std::move (allocation)};
+            _authorities[key.value] = snapshot;
+            return completed (
+              authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
+        });
     }
 
     task_t<authority_scan_result_t> list_authorities (std::string prefix,
@@ -638,61 +636,59 @@ class in_memory_location_repository_t : public location_repository_t
             return cancelled<authority_scan_result_t> ();
         if (limit == 0 || limit > location_page_item_limit)
             throw std::invalid_argument ("authority scan limit must be between 1 and 1000");
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              cleanup_scans (now);
+        return _lane.run_task ([this, prefix = std::move (prefix), cursor = std::move (cursor),
+                                limit] {
+            const auto now = clock_t::now ();
+            cleanup_scans (now);
 
-              std::string scan_id;
-              std::size_t offset = 0;
-              if (cursor) {
-                  const auto encoded = std::string (cursor->encoded ());
-                  const auto separator = encoded.find (':');
-                  if (separator == std::string::npos)
-                      return completed (authority_scan_result_t{authority_scan_expired_t{}});
-                  scan_id = encoded.substr (0, separator);
-                  try {
-                      offset =
-                        static_cast<std::size_t> (std::stoull (encoded.substr (separator + 1)));
-                  }
-                  catch (...) {
-                      return completed (authority_scan_result_t{authority_scan_expired_t{}});
-                  }
-              } else {
-                  scan_id = std::to_string (++_next_scan_id);
-                  authority_scan_state_t state;
-                  state.created_at = now;
-                  for (const auto &[authority_key, snapshot] : _authorities) {
-                      if (authority_key.starts_with (prefix))
-                          state.entries.push_back ({{authority_key}, snapshot});
-                  }
-                  _authority_scans.emplace (scan_id, std::move (state));
-              }
+            std::string scan_id;
+            std::size_t offset = 0;
+            if (cursor) {
+                const auto encoded = std::string (cursor->encoded ());
+                const auto separator = encoded.find (':');
+                if (separator == std::string::npos)
+                    return completed (authority_scan_result_t{authority_scan_expired_t{}});
+                scan_id = encoded.substr (0, separator);
+                try {
+                    offset =
+                      static_cast<std::size_t> (std::stoull (encoded.substr (separator + 1)));
+                }
+                catch (...) {
+                    return completed (authority_scan_result_t{authority_scan_expired_t{}});
+                }
+            } else {
+                scan_id = std::to_string (++_next_scan_id);
+                authority_scan_state_t state;
+                state.created_at = now;
+                for (const auto &[authority_key, snapshot] : _authorities) {
+                    if (authority_key.starts_with (prefix))
+                        state.entries.push_back ({{authority_key}, snapshot});
+                }
+                _authority_scans.emplace (scan_id, std::move (state));
+            }
 
-              const auto scan = _authority_scans.find (scan_id);
-              if (scan == _authority_scans.end () || offset > scan->second.entries.size ())
-                  return completed (authority_scan_result_t{authority_scan_expired_t{}});
+            const auto scan = _authority_scans.find (scan_id);
+            if (scan == _authority_scans.end () || offset > scan->second.entries.size ())
+                return completed (authority_scan_result_t{authority_scan_expired_t{}});
 
-              authority_page_t page;
-              std::size_t encoded_size = 0;
-              while (offset < scan->second.entries.size () && page.items.size () < limit) {
-                  const auto &entry = scan->second.entries[offset];
-                  const auto item_size = entry.key.value.size () + entry.snapshot.payload.size ();
-                  if (!page.items.empty () && encoded_size + item_size > 4u * 1024u * 1024u)
-                      break;
-                  page.items.push_back (entry);
-                  encoded_size += item_size;
-                  ++offset;
-              }
-              if (offset < scan->second.entries.size ()) {
-                  page.next_cursor =
-                    authority_scan_cursor_t{scan_id + ":" + std::to_string (offset)};
-              } else {
-                  _authority_scans.erase (scan);
-              }
-              return completed (authority_scan_result_t{std::move (page)});
-          })
-          .get ();
+            authority_page_t page;
+            std::size_t encoded_size = 0;
+            while (offset < scan->second.entries.size () && page.items.size () < limit) {
+                const auto &entry = scan->second.entries[offset];
+                const auto item_size = entry.key.value.size () + entry.snapshot.payload.size ();
+                if (!page.items.empty () && encoded_size + item_size > 4u * 1024u * 1024u)
+                    break;
+                page.items.push_back (entry);
+                encoded_size += item_size;
+                ++offset;
+            }
+            if (offset < scan->second.entries.size ()) {
+                page.next_cursor = authority_scan_cursor_t{scan_id + ":" + std::to_string (offset)};
+            } else {
+                _authority_scans.erase (scan);
+            }
+            return completed (authority_scan_result_t{std::move (page)});
+        });
     }
 
     task_t<std::optional<creation_terminal_record_t>>
@@ -801,8 +797,9 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             co_return co_await cancelled<bool> ();
-        co_return co_await _lane
-          .run ([&] {
+        co_return co_await _lane.run_task (
+          [this, key = std::move (key), expected_store_version = std::move (expected_store_version),
+           request = std::move (request)] () mutable {
               const auto current = _authorities.find (key.value);
               if (current == _authorities.end ()
                   || current->second.store_version != expected_store_version)
@@ -812,8 +809,7 @@ class in_memory_location_repository_t : public location_repository_t
                                                "Object type does not match the current authority");
               return completed (release_ended_reservation_on_lane (
                 key.value, current->second, clock_t::now (), request ? &*request : nullptr));
-          })
-          .get ();
+          });
     }
 
     task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
@@ -825,84 +821,81 @@ class in_memory_location_repository_t : public location_repository_t
             || request.intent.request_encoded_size > location_record_payload_limit)
             throw std::invalid_argument ("object reservation payload exceeds 1 MiB");
         try {
-            return _lane
-              .run ([&] {
-                  const auto now = clock_t::now ();
-                  if (request.operation_deadline != std::chrono::system_clock::time_point{}
-                      && std::chrono::system_clock::now () >= request.operation_deadline)
-                      throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
-                                                   "Object creation deadline expired");
-                  const auto key = object_key (request.key);
-                  if (request.key.kind != placement_object_kind_t::actor) {
-                      const auto claim = _entry_spot_id_claims.find (request.key.global_id);
-                      if (claim != _entry_spot_id_claims.end ()
-                          && owner_token_is_live (claim->second.owner, now))
-                          return completed (object_reserve_result_t{
-                            object_reserve_conflict_t{authority_missing_t{now}}});
-                  }
-                  auto authority = _authorities.find (key);
-                  if (authority != _authorities.end ()
-                      && !authority_matches_creation_type (authority->second, request))
-                      return completed (
-                        object_reserve_result_t{object_type_mismatch_t{authority->second}});
-                  if (authority != _authorities.end ()
-                      && release_ended_reservation_on_lane (key, authority->second, now, &request))
-                      authority = _authorities.end ();
-                  if (authority != _authorities.end ()) {
-                      if (authority->second.allocation.state
-                          == placement_allocation_state_t::reserved)
-                          return completed (
-                            object_reserve_result_t{object_reserve_conflict_t{authority->second}});
-                      return completed (
-                        object_reserve_result_t{object_already_exists_t{authority->second}});
-                  }
-                  const auto target_descriptor = live_target_descriptor (
-                    request.target, request.key.kind, request.intent.stable_type, now, true);
-                  if (!target_descriptor)
-                      return completed (object_reserve_result_t{
-                        object_reserve_conflict_t{authority_missing_t{now}}});
-                  if (!bundle_matches_object (request.capacity_bundle, request.key.kind,
-                                              request.intent.stable_type))
-                      throw std::invalid_argument (
-                        "object reservation capacity bundle does not match the object");
-                  if (!capacity_available (*target_descriptor, request.target,
-                                           request.capacity_bundle))
-                      return completed (
-                        object_reserve_result_t{object_placement_capacity_exhausted_t{}});
-                  if (!store_revisions_available ()
-                      || !issue_generations (
-                        {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
-                      return completed (
-                        object_reserve_result_t{authority_generation_exhausted_t{}});
+            return _lane.run_task ([this, request = std::move (request)] () mutable {
+                const auto now = clock_t::now ();
+                if (request.operation_deadline != std::chrono::system_clock::time_point{}
+                    && std::chrono::system_clock::now () >= request.operation_deadline)
+                    throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                                 "Object creation deadline expired");
+                const auto key = object_key (request.key);
+                if (request.key.kind != placement_object_kind_t::actor) {
+                    const auto claim = _entry_spot_id_claims.find (request.key.global_id);
+                    if (claim != _entry_spot_id_claims.end ()
+                        && owner_token_is_live (claim->second.owner, now))
+                        return completed (object_reserve_result_t{
+                          object_reserve_conflict_t{authority_missing_t{now}}});
+                }
+                auto authority = _authorities.find (key);
+                if (authority != _authorities.end ()
+                    && !authority_matches_creation_type (authority->second, request))
+                    return completed (
+                      object_reserve_result_t{object_type_mismatch_t{authority->second}});
+                if (authority != _authorities.end ()
+                    && release_ended_reservation_on_lane (key, authority->second, now, &request))
+                    authority = _authorities.end ();
+                if (authority != _authorities.end ()) {
+                    if (authority->second.allocation.state
+                        == placement_allocation_state_t::reserved)
+                        return completed (
+                          object_reserve_result_t{object_reserve_conflict_t{authority->second}});
+                    return completed (
+                      object_reserve_result_t{object_already_exists_t{authority->second}});
+                }
+                const auto target_descriptor = live_target_descriptor (
+                  request.target, request.key.kind, request.intent.stable_type, now, true);
+                if (!target_descriptor)
+                    return completed (
+                      object_reserve_result_t{object_reserve_conflict_t{authority_missing_t{now}}});
+                if (!bundle_matches_object (request.capacity_bundle, request.key.kind,
+                                            request.intent.stable_type))
+                    throw std::invalid_argument (
+                      "object reservation capacity bundle does not match the object");
+                if (!capacity_available (*target_descriptor, request.target,
+                                         request.capacity_bundle))
+                    return completed (
+                      object_reserve_result_t{object_placement_capacity_exhausted_t{}});
+                if (!store_revisions_available ()
+                    || !issue_generations (
+                      {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
+                    return completed (object_reserve_result_t{authority_generation_exhausted_t{}});
 
-                  const auto store_version = next_store_version ();
-                  object_reservation_fence_t fence{
-                    "reservation-" + store_version, store_version,  _object_generation,
-                    _authority_owner_generation,    request.target, request.capacity_bundle};
-                  authority_snapshot_t creating{
-                    store_version,
-                    request.creating_payload,
-                    _object_generation,
-                    _authority_owner_generation,
-                    request.target.owner,
-                    now,
-                    {placement_allocation_state_t::reserved, request.key.kind,
-                     request.intent.stable_type, request.target, request.capacity_bundle},
-                    pending_object_creation_t{
-                      fence.reservation_id, request.intent.request_content_reference,
-                      request.intent.request_sha256,
-                      static_cast<std::uint32_t> (request.intent.request_encoded_size)}};
-                  reservation_state_t reservation{request, fence, creating,
-                                                  reservation_status_t::prepared};
-                  _authorities[key] = creating;
-                  _object_types[key] = request.intent.stable_type;
-                  _reservations[key] = std::move (reservation);
-                  apply_capacity_bundle (_pending_by_placement, request.target,
-                                         request.capacity_bundle, true);
-                  return completed (object_reserve_result_t{
-                    object_reserved_t{std::move (fence), std::move (creating)}});
-              })
-              .get ();
+                const auto store_version = next_store_version ();
+                object_reservation_fence_t fence{
+                  "reservation-" + store_version, store_version,  _object_generation,
+                  _authority_owner_generation,    request.target, request.capacity_bundle};
+                authority_snapshot_t creating{
+                  store_version,
+                  request.creating_payload,
+                  _object_generation,
+                  _authority_owner_generation,
+                  request.target.owner,
+                  now,
+                  {placement_allocation_state_t::reserved, request.key.kind,
+                   request.intent.stable_type, request.target, request.capacity_bundle},
+                  pending_object_creation_t{
+                    fence.reservation_id, request.intent.request_content_reference,
+                    request.intent.request_sha256,
+                    static_cast<std::uint32_t> (request.intent.request_encoded_size)}};
+                reservation_state_t reservation{request, fence, creating,
+                                                reservation_status_t::prepared};
+                _authorities[key] = creating;
+                _object_types[key] = request.intent.stable_type;
+                _reservations[key] = std::move (reservation);
+                apply_capacity_bundle (_pending_by_placement, request.target,
+                                       request.capacity_bundle, true);
+                return completed (object_reserve_result_t{
+                  object_reserved_t{std::move (fence), std::move (creating)}});
+            });
         }
         catch (const framework_exception_t &error) {
             return task_t<object_reserve_result_t> (
@@ -920,62 +913,60 @@ class in_memory_location_repository_t : public location_repository_t
             return cancelled<object_commit_result_t> ();
         if (request.ready_payload.size () > location_record_payload_limit)
             throw std::invalid_argument ("object commit payload exceeds 1 MiB");
-        return _lane
-          .run ([&] {
-              const auto key = object_key (request.key);
-              const auto reservation = _reservations.find (key);
-              if (reservation == _reservations.end ())
-                  return completed (object_commit_result_t{object_commit_stale_t{}});
-              if (!same_fence (reservation->second.fence, request.fence))
-                  return completed (object_commit_result_t{object_commit_stale_t{}});
-              if (reservation->second.status == reservation_status_t::committed)
-                  return completed (object_commit_result_t{
-                    object_already_committed_t{reservation->second.snapshot}});
-              if (reservation->second.status == reservation_status_t::aborted)
-                  return completed (object_commit_result_t{object_commit_stale_t{}});
+        return _lane.run_task ([this, request = std::move (request),
+                                operation_deadline] () mutable {
+            const auto key = object_key (request.key);
+            const auto reservation = _reservations.find (key);
+            if (reservation == _reservations.end ())
+                return completed (object_commit_result_t{object_commit_stale_t{}});
+            if (!same_fence (reservation->second.fence, request.fence))
+                return completed (object_commit_result_t{object_commit_stale_t{}});
+            if (reservation->second.status == reservation_status_t::committed)
+                return completed (
+                  object_commit_result_t{object_already_committed_t{reservation->second.snapshot}});
+            if (reservation->second.status == reservation_status_t::aborted)
+                return completed (object_commit_result_t{object_commit_stale_t{}});
 
-              auto authority = _authorities.find (key);
-              if (authority == _authorities.end ()
-                  || authority->second.store_version != request.fence.expected_store_version)
-                  return completed (object_commit_result_t{object_commit_conflict_t{
-                    authority == _authorities.end ()
-                      ? authority_read_result_t{authority_missing_t{clock_t::now ()}}
-                      : authority_read_result_t{authority->second}}});
-              const auto now = clock_t::now ();
-              const auto descriptor =
-                live_target_descriptor (request.fence.target, reservation->second.request.key.kind,
-                                        reservation->second.request.intent.stable_type, now, false);
-              if (!descriptor
-                  || !capacity_bundle_present (_pending_by_placement, request.fence.target,
-                                               request.fence.capacity_bundle))
-                  return completed (
-                    object_commit_result_t{object_commit_conflict_t{authority->second}});
-              if (!store_revisions_available ())
-                  return completed (object_commit_result_t{authority_generation_exhausted_t{}});
+            auto authority = _authorities.find (key);
+            if (authority == _authorities.end ()
+                || authority->second.store_version != request.fence.expected_store_version)
+                return completed (object_commit_result_t{object_commit_conflict_t{
+                  authority == _authorities.end ()
+                    ? authority_read_result_t{authority_missing_t{clock_t::now ()}}
+                    : authority_read_result_t{authority->second}}});
+            const auto now = clock_t::now ();
+            const auto descriptor =
+              live_target_descriptor (request.fence.target, reservation->second.request.key.kind,
+                                      reservation->second.request.intent.stable_type, now, false);
+            if (!descriptor
+                || !capacity_bundle_present (_pending_by_placement, request.fence.target,
+                                             request.fence.capacity_bundle))
+                return completed (
+                  object_commit_result_t{object_commit_conflict_t{authority->second}});
+            if (!store_revisions_available ())
+                return completed (object_commit_result_t{authority_generation_exhausted_t{}});
 
-              if (authority->second.allocation.object_kind == placement_object_kind_t::actor
-                  && user_membership_commit_failure (
-                    std::nullopt, decode_direct_actor_authority_payload (request.ready_payload),
-                    now))
-                  return completed (
-                    object_commit_result_t{object_commit_conflict_t{authority->second}});
-              if (operation_deadline != std::chrono::system_clock::time_point{}
-                  && std::chrono::system_clock::now () >= operation_deadline)
-                  return task_t<object_commit_result_t> (result_t<object_commit_result_t>::failure (
-                    framework_error_kind_t::deadline_exceeded, "Object creation deadline expired"));
-              authority->second.store_version = next_store_version ();
-              authority->second.payload = std::move (request.ready_payload);
-              authority->second.store_now = now;
-              authority->second.allocation.state = placement_allocation_state_t::active;
-              authority->second.pending_creation.reset ();
-              reservation->second.snapshot = authority->second;
-              reservation->second.status = reservation_status_t::committed;
-              release_pending (reservation->second);
-              apply_capacity_bundle (_active_by_placement, request.fence.target,
-                                     request.fence.capacity_bundle, true);
-              return completed (object_commit_result_t{object_committed_t{authority->second}});
-          })
-          .get ();
+            if (authority->second.allocation.object_kind == placement_object_kind_t::actor
+                && user_membership_commit_failure (
+                  std::nullopt, decode_direct_actor_authority_payload (request.ready_payload), now))
+                return completed (
+                  object_commit_result_t{object_commit_conflict_t{authority->second}});
+            if (operation_deadline != std::chrono::system_clock::time_point{}
+                && std::chrono::system_clock::now () >= operation_deadline)
+                return task_t<object_commit_result_t> (result_t<object_commit_result_t>::failure (
+                  framework_error_kind_t::deadline_exceeded, "Object creation deadline expired"));
+            authority->second.store_version = next_store_version ();
+            authority->second.payload = std::move (request.ready_payload);
+            authority->second.store_now = now;
+            authority->second.allocation.state = placement_allocation_state_t::active;
+            authority->second.pending_creation.reset ();
+            reservation->second.snapshot = authority->second;
+            reservation->second.status = reservation_status_t::committed;
+            release_pending (reservation->second);
+            apply_capacity_bundle (_active_by_placement, request.fence.target,
+                                   request.fence.capacity_bundle, true);
+            return completed (object_commit_result_t{object_committed_t{authority->second}});
+        });
     }
 
     task_t<object_abort_result_t> abort (object_abort_request_t request,
@@ -984,33 +975,31 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<object_abort_result_t> ();
-        return _lane
-          .run ([&] {
-              const auto key = object_key (request.key);
-              const auto reservation = _reservations.find (key);
-              if (reservation == _reservations.end ())
-                  return completed (object_abort_result_t{object_abort_stale_t{}});
-              if (!same_fence (reservation->second.fence, request.fence))
-                  return completed (object_abort_result_t{object_abort_stale_t{}});
-              if (reservation->second.status == reservation_status_t::aborted)
-                  return completed (object_abort_result_t{object_already_aborted_t{}});
-              if (reservation->second.status == reservation_status_t::committed)
-                  return completed (object_abort_result_t{object_abort_stale_t{}});
+        return _lane.run_task ([this, request = std::move (request)] () mutable {
+            const auto key = object_key (request.key);
+            const auto reservation = _reservations.find (key);
+            if (reservation == _reservations.end ())
+                return completed (object_abort_result_t{object_abort_stale_t{}});
+            if (!same_fence (reservation->second.fence, request.fence))
+                return completed (object_abort_result_t{object_abort_stale_t{}});
+            if (reservation->second.status == reservation_status_t::aborted)
+                return completed (object_abort_result_t{object_already_aborted_t{}});
+            if (reservation->second.status == reservation_status_t::committed)
+                return completed (object_abort_result_t{object_abort_stale_t{}});
 
-              const auto authority = _authorities.find (key);
-              if (authority == _authorities.end ()
-                  || authority->second.store_version != request.fence.expected_store_version)
-                  return completed (object_abort_result_t{object_abort_conflict_t{
-                    authority == _authorities.end ()
-                      ? authority_read_result_t{authority_missing_t{clock_t::now ()}}
-                      : authority_read_result_t{authority->second}}});
-              _authorities.erase (authority);
-              _object_types.erase (key);
-              release_pending (reservation->second);
-              reservation->second.status = reservation_status_t::aborted;
-              return completed (object_abort_result_t{object_aborted_t{}});
-          })
-          .get ();
+            const auto authority = _authorities.find (key);
+            if (authority == _authorities.end ()
+                || authority->second.store_version != request.fence.expected_store_version)
+                return completed (object_abort_result_t{object_abort_conflict_t{
+                  authority == _authorities.end ()
+                    ? authority_read_result_t{authority_missing_t{clock_t::now ()}}
+                    : authority_read_result_t{authority->second}}});
+            _authorities.erase (authority);
+            _object_types.erase (key);
+            release_pending (reservation->second);
+            reservation->second.status = reservation_status_t::aborted;
+            return completed (object_abort_result_t{object_aborted_t{}});
+        });
     }
 
     task_t<aggregate_prepare_result_t>

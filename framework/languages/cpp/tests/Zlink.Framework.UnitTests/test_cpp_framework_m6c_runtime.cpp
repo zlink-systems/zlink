@@ -3703,7 +3703,7 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
       });
     target.configure_session_route_owner (
       [] { return std::optional<framework::location_owner_token_t>{{"target-owner", 9}}; });
-    target.start ();
+    target.start ().result ().value ();
     mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
       .descriptor = {"production-relocation-mesh",
                      text_bytes ("settlement-source"),
@@ -6179,9 +6179,9 @@ void test_application_relocation_remote_production_path (test_context_t &test,
                  return false;
              }});
     }
-    source.start ();
-    target.start ();
-    session_owner.start ();
+    source.start ().result ().value ();
+    target.start ().result ().value ();
+    session_owner.start ().result ().value ();
     if (missing_target_session_peer) {
         session_owner.native_node ().configure_peer_reconcile ([&] (const auto &rid) {
             if (rid == target.status ().routing_id ().to_bytes ())
@@ -6916,8 +6916,8 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
       [] { return std::optional<framework::location_owner_token_t>{{"source-owner", 1}}; });
     target.configure_session_route_owner (
       [] { return std::optional<framework::location_owner_token_t>{{"target-owner", 9}}; });
-    source.start ();
-    target.start ();
+    source.start ().result ().value ();
+    target.start ().result ().value ();
     const auto configure_materialization =
       [authority] (detail::mesh_node_runtime_t &node,
                    const std::shared_ptr<detail::spot_node_builder_state_t> &spot_state) {
@@ -8828,7 +8828,7 @@ void test_actor_join_wire_gate_records_target_authority (test_context_t &test)
     state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from ("gate-node");
     detail::mesh_node_runtime_t node (state);
-    node.start ();
+    node.start ().result ().value ();
 
     const auto target_rid = zlink::routing_id_t::from ("gate-target");
     test.require (!node.observed_spot_authority (target_rid, "gate-spot", 5).has_value (),

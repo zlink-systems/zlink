@@ -2655,7 +2655,7 @@ TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBefore
         }});
     ASSERT_TRUE (roots->exists);
     target->start ();
-    target->recover_instance_spot_activations ();
+    target->recover_instance_spot_activations ().result ().value ();
     EXPECT_FALSE (roots->exists);
 }
 

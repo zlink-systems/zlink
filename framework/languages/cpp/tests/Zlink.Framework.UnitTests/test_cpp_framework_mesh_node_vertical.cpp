@@ -371,7 +371,7 @@ void verify_object_client_registration_boundary ()
     client_state->object_role = zlink::framework::object_role_t::client;
     client_state->channels.clear ();
     zlink::framework::detail::mesh_node_runtime_t client (client_state);
-    client.start ();
+    client.start ().result ().value ();
     const auto descriptor = client.native_node ().transport ().topology ().local_descriptor ();
     assert (descriptor.object_role
             == zlink::framework::runtime::mesh::service_object_role_t::client);
@@ -384,7 +384,7 @@ void verify_object_client_registration_boundary ()
     zlink::framework::detail::mesh_node_runtime_t invalid (invalid_state);
     bool rejected = false;
     try {
-        invalid.start ();
+        invalid.start ().result ().value ();
     }
     catch (const zlink::framework::framework_exception_t &) {
         rejected = true;
@@ -862,7 +862,7 @@ void verify_local_join_timeout_releases_membership ()
     using namespace std::chrono_literals;
     auto state = make_node ("tcp://127.0.0.1:*", "join-timeout-owner");
     zlink::framework::detail::mesh_node_runtime_t node (state);
-    node.start ();
+    node.start ().result ().value ();
     auto &runtime = node.native_node ();
     auto actor = runtime.create_actor ("vertical.actor", "join-timeout-actor");
     auto target = runtime.get_or_create_spot_async ("join-timeout-spot").result ().value ();
@@ -1638,7 +1638,7 @@ void LocalPlacementIgnoresStaleStoreResult ()
         auto registration = make_node ("tcp://127.0.0.1:0", "stale-store-placement");
         registration->placement_weight = 100;
         auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
-        node->start ();
+        node->start ().result ().value ();
         const auto status = node->status ();
         fw::mesh_node_descriptor_t stale;
         stale.mesh_name = "vertical-mesh";
@@ -1724,7 +1724,7 @@ void LocalLifecycleIgnoresStaleStoreResult ()
          {fw::framework_runtime_state_t::serving, fw::framework_runtime_state_t::preparing}) {
         auto registration = make_node ("tcp://127.0.0.1:0", "stale-store-lifecycle");
         auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
-        node->start ();
+        node->start ().result ().value ();
         const auto status = node->status ();
         fw::mesh_node_descriptor_t stale;
         stale.mesh_name = "vertical-mesh";
@@ -1809,7 +1809,7 @@ void verify_local_host_lifecycle_uses_runtime_owner ()
     namespace fw = zlink::framework;
     auto registration = make_node ("tcp://127.0.0.1:0", "local-host-lifecycle");
     auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
     std::atomic host_state{fw::framework_runtime_state_t::serving};
     fw::runtime::route_mesh_runtime_service_t runtime ({node}, nullptr, nullptr, nullptr,
                                                        [&] { return host_state.load (); });
@@ -1836,7 +1836,7 @@ void verify_observation_starts_with_weight_changed_before_subscription ()
     auto registration = make_node ("tcp://127.0.0.1:0", "observe-initial-weight");
     registration->placement_weight = 100;
     auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
     monitoring_mesh_store_t monitoring_store;
     fw::runtime::route_mesh_runtime_service_t runtime ({node}, nullptr, &monitoring_store);
     runtime.start ();
@@ -1894,7 +1894,7 @@ void verify_public_runtime_surface ()
     registration->spot_state->activation_admission->set_limit (5);
     registration->placement_weight = 42;
     auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
     monitoring_mesh_store_t monitoring_store;
     const auto node_status = node->status ();
     zlink::framework::mesh_node_descriptor_t local_descriptor;
@@ -2190,10 +2190,10 @@ void verify_automatic_intent_respects_manual_peer ()
     auto local_state = make_node ("tcp://127.0.0.1:0", "A-auto-local");
     auto remote_state = make_node ("tcp://127.0.0.1:0", "Z-auto-remote");
     zlink::framework::detail::mesh_node_runtime_t local (local_state), remote (remote_state);
-    remote.start ();
+    remote.start ().result ().value ();
     const auto rid = remote.status ().routing_id ();
     local_state->peer_connections.push_back ({1, rid, "tcp://127.0.0.1:1"});
-    local.start ();
+    local.start ().result ().value ();
     // A manual intent at another endpoint owns the direction even before admission.
     assert (
       !local.native_node ().connect_peer (remote.listen_endpoint (), rid, 0, "default", true));
@@ -2212,8 +2212,8 @@ void verify_automatic_intent_respects_manual_peer ()
     auto outbound_state = make_node ("tcp://127.0.0.1:0", "Z-auto-outbound");
     zlink::framework::detail::mesh_node_runtime_t inbound (inbound_state),
       outbound (outbound_state);
-    inbound.start ();
-    outbound.start ();
+    inbound.start ().result ().value ();
+    outbound.start ().result ().value ();
     const auto outbound_rid = outbound.status ().routing_id ();
     assert (outbound.native_node ().connect_peer (inbound.listen_endpoint (),
                                                   inbound.status ().routing_id ()));
@@ -2259,8 +2259,8 @@ void verify_manual_peer_public_status ()
       std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (local_registration);
     auto remote =
       std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (remote_registration);
-    local->start ();
-    remote->start ();
+    local->start ().result ().value ();
+    remote->start ().result ().value ();
     const auto remote_endpoint = remote->listen_endpoint ();
     const auto remote_status = remote->status ();
     auto runtime = std::make_shared<zlink::framework::runtime::route_mesh_runtime_service_t> (
@@ -2318,7 +2318,7 @@ void verify_location_store_blocks_placement ()
     auto registration = make_node ("tcp://127.0.0.1:0", "placement-store-node");
     registration->placement_weight = 100;
     auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
 
     const auto node_status = node->status ();
     zlink::framework::mesh_node_descriptor_t descriptor;
@@ -2429,7 +2429,7 @@ void verify_monitor_pump_does_not_wait_for_spot_lane ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "monitor-pump-node");
     auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
 
     const auto status = node->status ();
     zlink::framework::mesh_node_descriptor_t descriptor;
@@ -2496,7 +2496,7 @@ void verify_slow_observer_does_not_block_stop ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "slow-observer");
     auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
     auto runtime = std::make_shared<zlink::framework::runtime::route_mesh_runtime_service_t> (
       std::vector<std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t>>{node}, nullptr);
     runtime->start ();
@@ -2561,7 +2561,7 @@ void verify_host_shutdown_seal_reaches_raw_mesh ()
     auto seal = std::make_shared<std::atomic_bool> (false);
     zlink::framework::detail::spot_node_runtime_t (registration->spot_state).bind_drain_flag (seal);
     zlink::framework::detail::mesh_node_runtime_t node (registration);
-    node.start ();
+    node.start ().result ().value ();
     auto remote_options = mesh::raw_mesh_node_options_t{
       .descriptor = node.native_node ().transport ().topology ().local_descriptor (),
       .runtime_failures =
@@ -2980,7 +2980,7 @@ int run_cross_process_delivery ()
         close (reciprocal_child_endpoint_pipe[1]);
         auto state = make_node ("tcp://127.0.0.1:*", "vertical-b");
         zlink::framework::detail::mesh_node_runtime_t node (state);
-        node.start ();
+        node.start ().result ().value ();
         auto target_spot = node.get_or_create_spot_async ("target-spot").result ().value ();
         auto target_actor = node.create_actor ("vertical.actor", "target-actor", {}, 5s);
         const std::uint64_t formal_descriptors[2]{target_spot.status ().lifecycle_generation (),
@@ -3104,7 +3104,7 @@ int run_cross_process_delivery ()
         reciprocal_state->peer_connections.push_back (zlink::framework::mesh_peer_connection_t{
           1, zlink::routing_id_t::from (std::string ("vertical-b")), endpoint});
         zlink::framework::detail::mesh_node_runtime_t reciprocal_node (reciprocal_state);
-        reciprocal_node.start ();
+        reciprocal_node.start ().result ().value ();
         const bool endpoint_sent = write_endpoint (reciprocal_child_endpoint_pipe[1],
                                                    reciprocal_node.status ().local_endpoint ());
         close (reciprocal_child_endpoint_pipe[1]);
@@ -3138,7 +3138,7 @@ int run_cross_process_delivery ()
     state->peer_connections.push_back (zlink::framework::mesh_peer_connection_t{1, {}, endpoint});
     zlink::framework::detail::mesh_node_runtime_t node (state);
     configure_vertical_route_fences (node);
-    node.start ();
+    node.start ().result ().value ();
     assert (wait_until_admitted (node));
     char reciprocal_ready = 0;
     assert (read_byte_while_dispatching (node, reciprocal_ready_pipe[0], reciprocal_ready));
@@ -3311,7 +3311,7 @@ int run_cross_process_delivery ()
     auto race_state = make_node ("tcp://127.0.0.1:*", "local-race");
     zlink::framework::detail::mesh_node_runtime_t race_node (race_state);
     configure_vertical_route_fences (race_node);
-    race_node.start ();
+    race_node.start ().result ().value ();
     auto race_source = race_node.get_or_create_spot_async ("race-source").result ().value ();
     auto race_target = race_node.get_or_create_spot_async ("race-target").result ().value ();
     const auto race_node_rid = race_node.status ().routing_id ();

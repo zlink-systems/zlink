@@ -664,8 +664,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
                                                            query.source_node_generation},
                                                           1};
       });
-    old_target->start ();
-    new_target->start ();
+    old_target->start ().result ().value ();
+    new_target->start ().result ().value ();
     auto target_spot = new_target->get_or_create_spot_async ("actor-send-spot").result ().value ();
 
     const auto publish_target = [&] (const detail::mesh_node_runtime_t &runtime,
@@ -717,7 +717,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
           }
           invalidated_route_count.fetch_add (1, std::memory_order_release);
       });
-    source->start ();
+    source->start ().result ().value ();
     const auto source_status = source->status ();
     const auto old_status = old_target->status ();
     const auto new_status = new_target->status ();
@@ -1366,8 +1366,8 @@ void verify_mesh_stop_drains_admitted_request_completion ()
 
     detail::mesh_node_runtime_t source (source_state);
     detail::mesh_node_runtime_t target (target_state);
-    target.start ();
-    source.start ();
+    target.start ().result ().value ();
+    source.start ().result ().value ();
     const auto target_status = target.status ();
     source.connect_peer (target_status.routing_id (), target_status.local_endpoint (),
                          target_status.lifecycle_generation ());
@@ -1477,7 +1477,7 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     target_state->routing_id = zlink::routing_id_t::from ("bound-session-reply-target");
     target_state->core_context = core_context;
     detail::mesh_node_runtime_t target (target_state);
-    target.start ();
+    target.start ().result ().value ();
     const auto target_descriptor =
       target.native_node ().transport ().topology ().local_descriptor ();
     const auto target_rid = target.status ().routing_id ();
@@ -1512,7 +1512,7 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
           ++invalidations;
           invalidated = route;
       });
-    source.start ();
+    source.start ().result ().value ();
     source.connect_peer (target_rid, target.status ().local_endpoint (),
                          target.status ().lifecycle_generation ());
 
@@ -8548,7 +8548,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                                      "injected startup recovery cursor Store failure");
     };
     try {
-        (void) target->recover_instance_spot_activations ();
+        (void) target->recover_instance_spot_activations ().result ().value ();
         assert (false);
     }
     catch (const framework_exception_t &error) {
@@ -8563,7 +8563,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         assert (recovery_barrier_finishes == 0 && recovery_accepted_finishes == 0);
     };
     store->clear_activation_recovery_writes ();
-    assert (target->recover_instance_spot_activations () == 1);
+    assert (target->recover_instance_spot_activations ().result ().value () == 1);
     store->activation_recovery_write_observer = {};
     assert (recovery_barrier_finishes == 1 && recovery_accepted_finishes == 1);
     assert (instance_relocations->size () == 0);
@@ -9636,7 +9636,7 @@ void verify_dispatch_callbacks_survive_suspension (bool through_mesh, bool dispa
        .replaced = [] (const auto &) {},
        .commit_relocation_route = [] (const auto &, const auto &, const auto &) { return false; },
        .prepare_relocation_target_route = [] (const auto &, std::uint64_t) { return false; }});
-    mesh_node.start ();
+    mesh_node.start ().result ().value ();
     auto &target = mesh_node.native_node ();
     const auto local = target.status ();
     const stateful::object_ref_t actor{

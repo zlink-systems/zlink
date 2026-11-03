@@ -2972,7 +2972,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   execute_actor_create_operation_target (node, store, registration, request,
                                                          completion);
               });
-            node->start (
+            co_await node->start (
               [registration] (const stateful::object_ref_t &participant)
                 -> task_t<std::shared_ptr<runtime::serial_execution_queue_t>> {
                   if (participant.kind == stateful::object_kind_t::actor)
@@ -3157,12 +3157,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   });
             }
             if (owner) {
-                const auto written = infrastructure_result ([&] {
-                                         return _location_runtime->descriptor_write_confirmed ([&] {
-                                             return _location_store->update_mesh_node (
-                                               descriptor, location_write_intent_t::new_claim);
-                                         });
-                                     }).value ();
+                const auto written = co_await _location_runtime->descriptor_write_confirmed ([&] {
+                    return _location_store->update_mesh_node (descriptor,
+                                                              location_write_intent_t::new_claim);
+                });
                 if (written)
                     _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
             }

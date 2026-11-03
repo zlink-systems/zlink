@@ -2172,7 +2172,7 @@ void check_auto_manual ()
     state->peer_connections.push_back (
       {.expected_routing_id = rid, .endpoint = "inproc://l4-manual"});
     detail::mesh_node_runtime_t node (state);
-    node.start ();
+    node.start ().result ().value ();
     auto &topology = node.native_node ().transport ().topology ();
     auto peer = topology.local_descriptor ();
     peer.node_routing_id = rid.to_bytes ();
@@ -2446,7 +2446,7 @@ void check_synchronous_auto_wrappers ()
     state->routing_id = zlink::routing_id_t::from ("local");
     state->core_context = std::make_shared<zlink::context_t> ();
     detail::mesh_node_runtime_t node (state);
-    node.start ();
+    node.start ().result ().value ();
     auto &host = node.native_node ();
     auto &raw = host.transport ();
     auto &raw_lane = auto_connect_owner_lane (raw);

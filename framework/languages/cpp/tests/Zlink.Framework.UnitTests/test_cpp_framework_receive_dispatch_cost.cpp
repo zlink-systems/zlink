@@ -103,7 +103,7 @@ int main ()
         state->listen_endpoint = "tcp://127.0.0.1:0";
         state->routing_id = zlink::routing_id_t::from ("receive-cost");
         detail::mesh_node_runtime_t node (state);
-        node.start ();
+        node.start ().result ().value ();
         const dispatch_t dispatch = [] (const auto &, const auto &, auto, auto) {
             throw std::runtime_error ("empty receive invoked an application handler");
         };
@@ -307,7 +307,7 @@ zlink_receive_dispatch_measure (std::size_t iterations,
         state->listen_endpoint = "tcp://127.0.0.1:0";
         state->routing_id = zlink::routing_id_t::from ("receive-cost-dso");
         detail::mesh_node_runtime_t node (state);
-        node.start ();
+        node.start ().result ().value ();
         const dispatch_t dispatch = [] (const auto &, const auto &, auto, auto) {
             throw std::runtime_error ("empty DSO rotation invoked a handler");
         };

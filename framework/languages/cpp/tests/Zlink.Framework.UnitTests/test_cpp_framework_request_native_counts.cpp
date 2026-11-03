@@ -114,7 +114,7 @@ TEST (RequestNativeCounts, WaitReadinessIsConsumedWithoutAnotherPollEvenAtPermit
     state->routing_id = zlink::routing_id_t::from ("readiness-owner");
     state->core_context = std::make_shared<zlink::context_t> ();
     fw::detail::mesh_node_runtime_t node (state);
-    node.start ();
+    node.start ().result ().value ();
     const auto discard = [] (const auto &, const auto &, auto, auto) {};
     {
         native_call_scope_t calls;
@@ -280,8 +280,8 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
     target_state->routing_id = zlink::routing_id_t::from ("count-target");
     source_state->core_context = target_state->core_context = context;
     fw::detail::mesh_node_runtime_t source (source_state), target (target_state);
-    target.start ();
-    source.start ();
+    target.start ().result ().value ();
+    source.start ().result ().value ();
     const auto target_status = target.status ();
     source.connect_peer (target_status.routing_id (), target_status.local_endpoint (),
                          target_status.lifecycle_generation ());

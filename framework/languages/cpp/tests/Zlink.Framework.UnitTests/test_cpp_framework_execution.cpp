@@ -7828,8 +7828,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
       [source_owner] { return std::optional<location_owner_token_t>{source_owner}; });
     target.configure_session_route_owner (
       [target_owner] { return std::optional<location_owner_token_t>{target_owner}; });
-    source.start ();
-    target.start ();
+    source.start ().result ().value ();
+    target.start ().result ().value ();
     const auto configure_materialization =
       [] (mesh_node_runtime_t &node, const std::shared_ptr<mesh_node_builder_state_t> &state) {
           auto &objects = node.native_node ().objects ();
