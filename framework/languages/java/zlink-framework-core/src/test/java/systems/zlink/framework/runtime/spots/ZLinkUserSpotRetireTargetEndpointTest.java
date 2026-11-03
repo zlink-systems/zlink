@@ -988,6 +988,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             }
             recoveredBackend.executor.drainUntil(publication);
             recoveredBackend.executor.drain();
+            if (!failHandler)
+                recoveredBackend.executor.drainUntil(
+                        CompletableFuture.allOf(
+                                recoveredBackend.queuedTerminals.toArray(
+                                        CompletableFuture[]::new)));
             if (eagerActorDrain)
                 assertFalse(
                         recoveredBackend.queuedTerminals.stream()
@@ -1088,11 +1093,9 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     recoveredBackend.admittedTurns,
                     "each saved, relay and temporary item owns one shared permit turn");
             assertEquals(
-                    failHandler ? 2 : 1,
-                    recoveredBackend.maxActiveTurns,
-                    failHandler
-                            ? "the independent Actor lane may run while the Spot handler terminal remains pending"
-                            : "synchronously completed replay turns must not overlap");
+                    1,
+                    recoveredBackend.maxActiveSpotTurns,
+                    "Spot replay turns must not overlap within their own gate");
             recoveredBackend.rawSession.assertFirstPush();
         } finally {
             recoveredBackend.restoreRelease.complete(null);
@@ -1688,8 +1691,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     .thenApply(ignored -> Optional.empty());
         }
 
-        private int activeTurns;
-        private int maxActiveTurns;
+        private int activeSpotTurns;
+        private int maxActiveSpotTurns;
 
         @Override
         public CompletionStage<Object> prepareSpot(
@@ -1754,12 +1757,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                     dispatch,
                                     () -> record,
                                     record.length,
-                                    () -> {
-                                        activeTurns++;
-                                        maxActiveTurns = Math.max(maxActiveTurns, activeTurns);
-                                        return turn.get()
-                                                .whenComplete((ignored, failure) -> activeTurns--);
-                                    },
+                                    turn,
                                     () -> {},
                                     admission);
                     queuedTerminals.add(terminal.toCompletableFuture());
@@ -1779,9 +1777,10 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             () -> record,
                             record.length,
                             () -> {
-                                activeTurns++;
-                                maxActiveTurns = Math.max(maxActiveTurns, activeTurns);
-                                return turn.get().whenComplete((ignored, failure) -> activeTurns--);
+                                activeSpotTurns++;
+                                maxActiveSpotTurns = Math.max(maxActiveSpotTurns, activeSpotTurns);
+                                return turn.get()
+                                        .whenComplete((ignored, failure) -> activeSpotTurns--);
                             },
                             () -> {},
                             admission);
