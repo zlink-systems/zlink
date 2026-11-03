@@ -1441,22 +1441,47 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             RoutingId routingId,
             ZLinkStreamHeader header,
             Message payload) {
-        if (payload.size() != 0) {
-            throw new IllegalArgumentException("STREAM control packet payload must be empty");
-        }
-        if (HEARTBEAT_PONG_NAME.equals(header.packetName())) {
+        String packetName = header.packetName();
+        if (HEARTBEAT_PING_NAME.equals(packetName)) {
+            if (payload.size() != 0) {
+                logIgnoredControl(packetName, payload.size(), routingId);
+            }
+            sendControlAsync(
+                    stream,
+                    routingId,
+                    HEARTBEAT_PONG_NAME,
+                    Message.from(new byte[0]),
+                    "STREAM heartbeat pong was not admitted by the transport: ");
             return;
         }
-        if (!HEARTBEAT_PING_NAME.equals(header.packetName())) {
-            throw new IllegalArgumentException(
-                    "unknown STREAM control packet: " + header.packetName());
+        if (HEARTBEAT_PONG_NAME.equals(packetName)) {
+            if (payload.size() != 0) {
+                logIgnoredControl(packetName, payload.size(), routingId);
+            }
+            return;
         }
-        sendControlAsync(
-                stream,
-                routingId,
-                HEARTBEAT_PONG_NAME,
-                Message.from(new byte[0]),
-                "STREAM heartbeat pong was not admitted by the transport: ");
+        if (ZLinkStreamActorControl.BOUND.equals(packetName)
+                || ZLinkStreamActorControl.UNBOUND.equals(packetName)) {
+            throw new IllegalArgumentException(
+                    "unexpected STREAM actor control packet: " + packetName);
+        }
+        if (packetName.startsWith("$zlink.")) {
+            logIgnoredControl(packetName, payload.size(), routingId);
+            return;
+        }
+        throw new IllegalArgumentException("unknown STREAM control packet: " + packetName);
+    }
+
+    private static void logIgnoredControl(String name, int payloadLength, RoutingId routingId) {
+        if (LOGGER.isLoggable(Level.FINE)) {
+            LOGGER.fine(
+                    "Ignored STREAM control name="
+                            + name
+                            + " payloadBytes="
+                            + payloadLength
+                            + " peerSessionRid="
+                            + routingId);
+        }
     }
 
     private SessionState removeSessionState(

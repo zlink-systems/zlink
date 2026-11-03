@@ -1,4 +1,6 @@
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
+using Zlink.Framework.Runtime.Diagnostics;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -78,22 +80,53 @@ internal static class ZLinkStreamControlFrames
     public static void Dispatch(
         ZLinkManagedStream stream,
         ZlinkStreamHeader header,
-        ReadOnlyMemory<byte> payload
+        ReadOnlyMemory<byte> payload,
+        ILogger logger
     )
     {
-        if (payload.Length != 0)
-            throw new InvalidOperationException("Stream control packet payload must be empty.");
-
         if (header.Name == ZlinkStreamControlProtocol.HeartbeatPingName)
         {
+            if (payload.Length != 0)
+                LogIgnoredControl(stream, header.Name, payload.Length, logger);
             SendHeartbeatPong(stream);
             return;
         }
 
         if (header.Name == ZlinkStreamControlProtocol.HeartbeatPongName)
+        {
+            if (payload.Length != 0)
+                LogIgnoredControl(stream, header.Name, payload.Length, logger);
             return;
+        }
+
+        if (
+            header.Name == ZlinkStreamControlProtocol.BoundControlName
+            || header.Name == ZlinkStreamControlProtocol.UnboundControlName
+        )
+            throw new InvalidOperationException("Unexpected stream actor control packet.");
+
+        if (header.Name.StartsWith("$zlink.", StringComparison.Ordinal))
+        {
+            LogIgnoredControl(stream, header.Name, payload.Length, logger);
+            return;
+        }
 
         throw new InvalidOperationException("Unknown stream control packet.");
+    }
+
+    private static void LogIgnoredControl(
+        ZLinkManagedStream stream,
+        string name,
+        int payloadLength,
+        ILogger logger
+    )
+    {
+        logger.LogDebug(
+            "Ignored STREAM control name={ControlName} payloadBytes={PayloadBytes} peerSessionRid={PeerSessionRid}",
+            name,
+            payloadLength,
+            stream.RoutingId?.ToString()
+        );
     }
 
     private static void SendHeartbeatPong(ZLinkManagedStream stream)
