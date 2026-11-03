@@ -2,9 +2,12 @@ package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -38,11 +41,16 @@ import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.logging.Handler;
 import java.util.logging.Level;
@@ -168,6 +176,145 @@ final class ZLinkMeshApplicationDispatcherTest {
         assertEquals("node-value@source-node", NodeHandler.received.get(2, TimeUnit.SECONDS));
         assertEquals(
                 Map.of("trace-id", "node-trace"), NodeHandler.metadata.get(2, TimeUnit.SECONDS));
+    }
+
+    @RepeatedTest(100)
+    void saturatedCallerRunsExecutorDoesNotBlockMeshReceiveThread() throws Exception {
+        var firstStarted = new CountDownLatch(1);
+        var firstRelease = new CountDownLatch(1);
+        var targetStarted = new CountDownLatch(1);
+        var targetRelease = new CountDownLatch(1);
+        var queuedSubmitted = new CountDownLatch(1);
+        var executorSubmissions = new AtomicInteger();
+        var targetThread = new AtomicReference<String>();
+        BlockingMeshHandler.firstStarted = firstStarted;
+        BlockingMeshHandler.firstRelease = firstRelease;
+        BlockingMeshHandler.targetStarted = targetStarted;
+        BlockingMeshHandler.targetRelease = targetRelease;
+        BlockingMeshHandler.targetThread = targetThread;
+
+        var executor =
+                new ThreadPoolExecutor(
+                        1,
+                        1,
+                        0,
+                        TimeUnit.MILLISECONDS,
+                        new ArrayBlockingQueue<>(1),
+                        new ThreadPoolExecutor.CallerRunsPolicy()) {
+                    @Override
+                    public void execute(Runnable command) {
+                        super.execute(command);
+                        if (executorSubmissions.incrementAndGet() == 2) {
+                            queuedSubmitted.countDown();
+                        }
+                    }
+                };
+        var dispatcher = blockingMeshDispatcher(executor);
+        var receiveReturned = new CountDownLatch(1);
+        var receiveFailure = new AtomicReference<Throwable>();
+        var ingress =
+                new Thread(
+                        () -> {
+                            try {
+                                dispatcher.accept(
+                                        record(RecordKind.CHANNEL_SEND, "target", "target"));
+                            } catch (Throwable failure) {
+                                receiveFailure.set(failure);
+                            } finally {
+                                receiveReturned.countDown();
+                            }
+                        },
+                        "mesh-ingress-caller-runs-test");
+        try {
+            dispatcher.accept(record(RecordKind.CHANNEL_SEND, "first", "first"));
+            assertTrue(firstStarted.await(2, TimeUnit.SECONDS));
+            dispatcher.accept(record(RecordKind.CHANNEL_SEND, "queued", "queued"));
+            assertTrue(queuedSubmitted.await(2, TimeUnit.SECONDS));
+            assertEquals(1, executor.getQueue().size());
+
+            ingress.start();
+            assertTrue(targetStarted.await(2, TimeUnit.SECONDS));
+            assertTrue(
+                    receiveReturned.await(2, TimeUnit.SECONDS),
+                    "Mesh receive must return while the handler is blocked");
+            assertNull(receiveFailure.get());
+            assertNotEquals(ingress.getName(), targetThread.get());
+        } finally {
+            firstRelease.countDown();
+            targetRelease.countDown();
+            if (ingress.isAlive()) ingress.join(TimeUnit.SECONDS.toMillis(2));
+            executor.shutdown();
+            executor.awaitTermination(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @RepeatedTest(100)
+    void inlineExecutorDoesNotBlockMeshReceiveThread() throws Exception {
+        var targetStarted = new CountDownLatch(1);
+        var targetRelease = new CountDownLatch(1);
+        var targetThread = new AtomicReference<String>();
+        BlockingMeshHandler.firstStarted = new CountDownLatch(1);
+        BlockingMeshHandler.firstRelease = new CountDownLatch(1);
+        BlockingMeshHandler.targetStarted = targetStarted;
+        BlockingMeshHandler.targetRelease = targetRelease;
+        BlockingMeshHandler.targetThread = targetThread;
+        assertMeshReceiveReturnsWhileHandlerIsBlocked(
+                Runnable::run, targetStarted, targetRelease, targetThread);
+    }
+
+    private static void assertMeshReceiveReturnsWhileHandlerIsBlocked(
+            Executor executor,
+            CountDownLatch targetStarted,
+            CountDownLatch targetRelease,
+            AtomicReference<String> targetThread)
+            throws Exception {
+        var dispatcher = blockingMeshDispatcher(executor);
+        var receiveReturned = new CountDownLatch(1);
+        var receiveFailure = new AtomicReference<Throwable>();
+        var ingress =
+                new Thread(
+                        () -> {
+                            try {
+                                dispatcher.accept(
+                                        record(RecordKind.CHANNEL_SEND, "target", "target"));
+                            } catch (Throwable failure) {
+                                receiveFailure.set(failure);
+                            } finally {
+                                receiveReturned.countDown();
+                            }
+                        },
+                        "mesh-ingress-inline-test");
+        try {
+            ingress.start();
+            assertTrue(targetStarted.await(2, TimeUnit.SECONDS));
+            assertTrue(
+                    receiveReturned.await(2, TimeUnit.SECONDS),
+                    "Mesh receive must return while the handler is blocked");
+            assertNull(receiveFailure.get());
+            assertNotEquals(ingress.getName(), targetThread.get());
+        } finally {
+            targetRelease.countDown();
+            if (ingress.isAlive()) ingress.join(TimeUnit.SECONDS.toMillis(2));
+        }
+    }
+
+    private static ZLinkMeshApplicationDispatcher blockingMeshDispatcher(Executor executor) {
+        var mesh = new MeshNodeRegistration("game");
+        mesh.listen("inproc://mesh-executor-handoff");
+        mesh.channelName("first").server().addSendHandler(BlockingMeshHandler.class, String.class);
+        mesh.channelName("queued").server().addSendHandler(BlockingMeshHandler.class, String.class);
+        mesh.channelName("target").server().addSendHandler(BlockingMeshHandler.class, String.class);
+        var options =
+                new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
+        options.useHandlerExecutor(executor);
+        return new ZLinkMeshApplicationDispatcher(
+                mesh,
+                new ZLinkStringMessageSerializer(),
+                options.registration(),
+                ZLinkHandlerActivator.reflection(),
+                (token, parts) -> {
+                    throw new AssertionError("send dispatch must not reply");
+                });
     }
 
     @Test
@@ -1207,6 +1354,41 @@ final class ZLinkMeshApplicationDispatcherTest {
             metadata.complete(context.metadata());
             contentType.complete(context.contentType().orElse(null));
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class BlockingMeshHandler implements ZLinkSendHandler<String> {
+        private static CountDownLatch firstStarted;
+        private static CountDownLatch firstRelease;
+        private static CountDownLatch targetStarted;
+        private static CountDownLatch targetRelease;
+        private static AtomicReference<String> targetThread;
+
+        @Override
+        public CompletionStage<Void> handle(String message, ZLinkMessageContext context) {
+            if (message.equals("first")) {
+                CountDownLatch started = firstStarted;
+                CountDownLatch release = firstRelease;
+                started.countDown();
+                awaitLatch(release);
+            } else if (message.equals("target")) {
+                AtomicReference<String> thread = targetThread;
+                CountDownLatch started = targetStarted;
+                CountDownLatch release = targetRelease;
+                thread.set(Thread.currentThread().getName());
+                started.countDown();
+                awaitLatch(release);
+            }
+            return CompletableFuture.completedFuture(null);
+        }
+
+        private static void awaitLatch(CountDownLatch latch) {
+            try {
+                latch.await();
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("handler latch was interrupted", failure);
+            }
         }
     }
 
