@@ -82,6 +82,61 @@ final class ZLinkBoundSessionSendCallContractTest {
     }
 
     @Test
+    void lateRetirementForPreviousRemoteSessionPreservesReplacementBinding() {
+        var available = new AtomicBoolean(true);
+        var node = spotNode(new AtomicInteger(), available);
+        var actors =
+                new ZLinkActorRuntime(
+                        node,
+                        Map.of("probe", ProbeFactory.class),
+                        Map.of(),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        new ZLinkJsonMessageSerializer(),
+                        ZLinkHandlerActivator.reflection(),
+                        ZLinkStreamCodec.RAW,
+                        unusedAdmission());
+        var actor =
+                actors.getOrCreateLocalActor("late-retirement-binding", ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        var ref = actors.currentRef(actor);
+        var previousRoute = node.boundSessionRoute(ref).orElseThrow();
+        RoutingId replacementSessionRid = RoutingId.from("replacement-native-session");
+
+        actors.bindNativeSession(
+                        actor,
+                        node,
+                        ref,
+                        previousRoute.sessionOwnerNodeRid(),
+                        previousRoute.sessionRid())
+                .toCompletableFuture()
+                .join();
+        actors.bindNativeSession(
+                        actor,
+                        node,
+                        ref,
+                        previousRoute.sessionOwnerNodeRid(),
+                        replacementSessionRid)
+                .toCompletableFuture()
+                .join();
+
+        assertTrue(actors.hasBoundSession(actor));
+        assertTrue(
+                actors.applyRemoteSessionBinding(
+                                node,
+                                ref,
+                                transition -> {
+                                    transition.retire(previousRoute);
+                                    return true;
+                                })
+                        .toCompletableFuture()
+                        .join());
+        assertTrue(actors.hasBoundSession(actor));
+    }
+
+    @Test
     void acceptedHandlerSendSurvivesRelocationSeal() throws Exception {
         acceptedHandlerSendSurvivesSeal(false);
     }
