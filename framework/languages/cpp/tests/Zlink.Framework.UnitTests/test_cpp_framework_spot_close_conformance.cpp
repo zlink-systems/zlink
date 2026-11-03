@@ -675,6 +675,7 @@ struct observation_t
     std::optional<zf::spot_closing_context_t> entry_closing_context;
     std::stop_token entry_cleanup_token;
     bool entry_stopped_at_invocation = false;
+    std::size_t entry_native_nodes_at_invocation = 0;
     std::atomic_bool entry_saw_cancellation{false};
     zf::task_completion_source_t<void> entry_closing_released;
     std::promise<void> closing_entered;
@@ -877,6 +878,9 @@ class close_entry_spot_t final : public zf::entry_spot_t<member_actor_t>
             observation.entry_closing_context = context;
             observation.entry_cleanup_token = cleanup;
             observation.entry_stopped_at_invocation = cleanup.stop_requested ();
+            const auto state = zf::detail::spot_context_access_t::state (_context);
+            observation.entry_native_nodes_at_invocation =
+              zf::detail::spot_node_runtime_t (state->node).native_node () ? 1 : 0;
         }
         std::stop_callback cancelled (cleanup, [&observation] {
             observation.entry_saw_cancellation.store (true);
@@ -1811,6 +1815,8 @@ class scenario_client_t final : public zf::hosted_service_t
                 actual["entrySharesCleanupToken"] =
                   current ().cleanup_token == current ().entry_cleanup_token;
                 actual["entryStoppedAtInvocation"] = current ().entry_stopped_at_invocation;
+                actual["entryNativeNodesAtInvocation"] =
+                  current ().entry_native_nodes_at_invocation;
                 actual["entryCleanupStopped"] = current ().entry_cleanup_token.stop_requested ();
                 actual["entrySawCancellation"] = current ().entry_saw_cancellation.load ();
             }
@@ -2770,6 +2776,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, EntryShutdownPreservesDeadlineAndClean
                                     {"entryShutdownReason", true},
                                     {"entrySharesCleanupToken", true},
                                     {"entryStoppedAtInvocation", false},
+                                    {"entryNativeNodesAtInvocation", 1},
                                     {"terminalObserved", true},
                                     {"deadlineExceeded", false}}}});
 }
@@ -2784,6 +2791,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, EntryShutdownDeadlineCancelsCleanup)
                                     {"entryShutdownReason", true},
                                     {"entrySharesCleanupToken", true},
                                     {"entryStoppedAtInvocation", false},
+                                    {"entryNativeNodesAtInvocation", 1},
                                     {"entryCleanupStopped", true},
                                     {"entrySawCancellation", true},
                                     {"terminalObserved", true},
