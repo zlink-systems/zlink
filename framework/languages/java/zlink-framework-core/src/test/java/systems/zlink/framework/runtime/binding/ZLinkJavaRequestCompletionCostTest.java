@@ -115,6 +115,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
                             admission,
                             java.util.function.Function.identity(),
                             Message::closeAll,
+                            java.util.function.Function.identity(),
                             result);
                     admission.get(1, TimeUnit.SECONDS);
                     assertEquals(1, fixture.submits.get());
@@ -159,6 +160,133 @@ public final class ZLinkJavaRequestCompletionCostTest {
                 }
             } finally {
                 meshOperations.close();
+            }
+        }
+    }
+
+    @Test
+    void remoteActorReceiverMapsBindingAndDecodeFailuresAfterPublicTimeout() throws Exception {
+        for (boolean late : List.of(false, true)) {
+            for (boolean decodeFailure : List.of(false, true)) {
+                try (var fixture = new Fixture(false)) {
+                    var local = RoutingId.from("actor-source");
+                    var remote = RoutingId.from("actor-target");
+                    var topology =
+                            new systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceTopologyRegistry(actorDescriptor(local));
+                    topology.admit(
+                            actorDescriptor(remote), "1", ServiceWireConstants.COMMAND_ADMIT);
+                    var mesh =
+                            ZLinkJavaRawMeshNodeTesting.create(
+                                    "actor-completion",
+                                    fixture.port,
+                                    fixture.router,
+                                    null,
+                                    topology,
+                                    java.util.Map.of(remote, 1L),
+                                    Runnable::run);
+                    mesh.setRoutingId(local);
+                    try {
+                        var reply = new CompletableFuture<List<Message>>();
+                        fixture.pending.set(
+                                new Pending(CompletableFuture.completedFuture(null), reply));
+                        var target =
+                                new systems.zlink.framework.runtime.internal.service
+                                        .ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                        new systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkBackendActorRef(remote, "actor", 1),
+                                        1,
+                                        1,
+                                        1);
+                        var result =
+                                ZLinkServiceOperationRegistry.<Integer>prepareOperation(
+                                        UUID.randomUUID());
+                        var calls = new AtomicInteger();
+                        var observed = new CompletableFuture<Void>();
+                        var mapped =
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.NOT_FOUND, "stale actor");
+                        var timeout =
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                        "public timeout");
+                        var admission = new CompletableFuture<Void>();
+                        try (var requestPart = Message.from(new byte[] {1})) {
+                            mesh.spotNode()
+                                    .requestToActor(
+                                            target,
+                                            List.of(requestPart),
+                                            systems.zlink.contracts.sockets.SendFlags.NONE,
+                                            TIMEOUT,
+                                            admission,
+                                            parts -> {
+                                                throw mapped;
+                                            },
+                                            ignored -> {},
+                                            failure -> {
+                                                calls.incrementAndGet();
+                                                observed.complete(null);
+                                                return mapped;
+                                            },
+                                            result);
+                            admission.get(1, TimeUnit.SECONDS);
+                            if (late) {
+                                assertTrue(
+                                        mesh.operationRegistry()
+                                                .completeExceptionally(result.id(), timeout));
+                                assertSame(
+                                        timeout,
+                                        assertThrows(
+                                                        java.util.concurrent.ExecutionException
+                                                                .class,
+                                                        () -> result.get(1, TimeUnit.SECONDS))
+                                                .getCause());
+                            }
+                            List<Message> frames = List.of();
+                            if (decodeFailure) {
+                                var wire =
+                                        new systems.zlink.framework.runtime.internal.service
+                                                .ZLinkServiceM6AWireCodec();
+                                var stateful =
+                                        new systems.zlink.framework.runtime.internal.service
+                                                .ZLinkServiceM6BWireCodec();
+                                long correlation =
+                                        stateful.decodeActorHeader(
+                                                        fixture.submittedMessages
+                                                                .get()
+                                                                .getFirst()
+                                                                .toByteArray())
+                                                .correlation();
+                                byte[] encoded;
+                                try (var body = Message.from(new byte[] {42})) {
+                                    encoded = wire.encodeFrameworkMultipartFrame(List.of(body));
+                                }
+                                frames =
+                                        List.of(
+                                                Message.from(
+                                                        wire.encodeReplyHeader(correlation, 0, 0)),
+                                                Message.from(encoded));
+                                reply.complete(frames);
+                            } else {
+                                reply.completeExceptionally(
+                                        new systems.zlink.contracts.errors.ZlinkRequestException(
+                                                systems.zlink.contracts.sockets.RequestResult
+                                                        .NOT_FOUND));
+                            }
+                            observed.get(1, TimeUnit.SECONDS);
+                            assertEquals(1, calls.get());
+                            assertSame(
+                                    late ? timeout : mapped,
+                                    assertThrows(
+                                                    java.util.concurrent.ExecutionException.class,
+                                                    () -> result.get(1, TimeUnit.SECONDS))
+                                            .getCause());
+                            assertTrue(frames.stream().allMatch(part -> part.size() == 0));
+                        }
+                    } finally {
+                        mesh.operationRegistry().close();
+                    }
+                }
             }
         }
     }

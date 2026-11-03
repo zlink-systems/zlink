@@ -3504,6 +3504,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 requestAdmission,
                 Function.identity(),
                 reply -> reply.forEach(Message::close),
+                Function.identity(),
                 completion);
         return completion;
     }
@@ -3515,6 +3516,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             CompletableFuture<Void> requestAdmission,
             Function<List<Message>, T> decodeReply,
             Consumer<T> discardReply,
+            Function<Throwable, Throwable> mapFailure,
             ZLinkServiceOperationRegistry.Operation<T> completion) {
         long startedAt = System.nanoTime();
         ZLinkBackendActorRef actor = target.actor();
@@ -3544,31 +3546,41 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                         .submitTerminal(
                                                 operationId,
                                                 remaining,
-                                                terminal ->
-                                                        admitRequest(
-                                                                actor.nodeRid(),
-                                                                operations,
-                                                                operationId,
-                                                                completion,
-                                                                terminal,
-                                                                frames,
-                                                                requestAdmission,
-                                                                admittedTimeout ->
-                                                                        port.requestMessagesTo(
-                                                                                current,
-                                                                                actor.nodeRid(),
-                                                                                frames,
-                                                                                admittedTimeout,
-                                                                                replyFrames ->
-                                                                                        decodeReply
-                                                                                                .apply(
-                                                                                                        decodeActorReply(
-                                                                                                                correlation,
-                                                                                                                replyFrames)),
-                                                                                null,
-                                                                                terminal,
-                                                                                null,
-                                                                                requestAdmission)),
+                                                terminal -> {
+                                                    BiConsumer<T, Throwable> receiver =
+                                                            (value, failure) ->
+                                                                    terminal.accept(
+                                                                            value,
+                                                                            failure == null
+                                                                                    ? null
+                                                                                    : mapFailure
+                                                                                            .apply(
+                                                                                                    failure));
+                                                    return admitRequest(
+                                                            actor.nodeRid(),
+                                                            operations,
+                                                            operationId,
+                                                            completion,
+                                                            receiver,
+                                                            frames,
+                                                            requestAdmission,
+                                                            admittedTimeout ->
+                                                                    port.requestMessagesTo(
+                                                                            current,
+                                                                            actor.nodeRid(),
+                                                                            frames,
+                                                                            admittedTimeout,
+                                                                            replyFrames ->
+                                                                                    decodeReply
+                                                                                            .apply(
+                                                                                                    decodeActorReply(
+                                                                                                            correlation,
+                                                                                                            replyFrames)),
+                                                                            null,
+                                                                            receiver,
+                                                                            null,
+                                                                            requestAdmission));
+                                                },
                                                 discardReply,
                                                 completion)
                                         .whenComplete(
@@ -3582,7 +3594,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             (ignored, failure) -> {
                                 if (failure != null) {
                                     Message.closeAll(frames);
-                                    completion.completeExceptionally(failure);
+                                    completion.completeExceptionally(mapFailure.apply(failure));
                                 }
                             });
         } catch (RuntimeException | Error failure) {

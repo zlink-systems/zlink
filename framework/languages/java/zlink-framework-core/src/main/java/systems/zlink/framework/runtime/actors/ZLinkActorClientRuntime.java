@@ -172,8 +172,6 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                         .ZLinkServiceOperationIds.next());
         result.whenComplete(
                 (ignored, error) -> {
-                    if (error != null && isStaleActorError(error))
-                        locations.invalidateActorRoute(actorId);
                     ZLinkRequestMetrics.complete(
                             metric,
                             started == ZLinkRequestMetrics.NO_START
@@ -282,15 +280,22 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                                     } catch (RuntimeException failure) {
                                                         closeAll(parts);
                                                         return CompletableFuture.failedFuture(
-                                                                failure);
+                                                                mapActorFailure(
+                                                                        actor,
+                                                                        failure,
+                                                                        "Actor send"));
                                                     }
-                                                    return ZLinkOneWayCalls.closeAfterAdmission(
-                                                            submission, parts);
+                                                    return ZLinkOneWayCalls.adaptOneWay(
+                                                            ZLinkOneWayCalls.closeAfterAdmission(
+                                                                    submission, parts),
+                                                            false,
+                                                            failure ->
+                                                                    mapActorFailure(
+                                                                            actor,
+                                                                            failure,
+                                                                            "Actor send"));
                                                 })),
-                false,
-                error -> {
-                    if (isStaleActorError(error)) locations.invalidateActorRoute(actorId);
-                });
+                false);
     }
 
     private CompletionStage<Void> awaitRuntimeReady(Duration timeout) {
@@ -373,13 +378,23 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                 }
                             },
                             ignored -> {},
-                            failure -> mapBackendException(failure, "Actor request"),
+                            failure -> mapActorFailure(actor, failure, "Actor request"),
                             completion);
         } catch (RuntimeException error) {
-            completion.completeExceptionally(mapBackendException(error, "Actor request"));
+            completion.completeExceptionally(mapActorFailure(actor, error, "Actor request"));
         } finally {
             closeAll(parts);
         }
+    }
+
+    private RuntimeException mapActorFailure(
+            ZLinkServiceM6BWireCodec.ActorRouteFence actor,
+            Throwable failure,
+            String operationName) {
+        RuntimeException mapped = mapBackendException(failure, operationName);
+        if (isStaleActorError(mapped))
+            locations.invalidateRouteIfMatches(ZLinkActorRuntime.messageFollowRoute(actor));
+        return mapped;
     }
 
     private List<Message> createPacketParts(
