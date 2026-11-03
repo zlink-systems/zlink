@@ -2121,10 +2121,10 @@ class spot_node_runtime_t
                                                                zlink::message_t transfer_state,
                                                                actor_context_t actor_context = {},
                                                                bool defer_joined_callback = false);
-    result_t<void> commit_remote_actor_authority (
-      const std::string &transfer_id,
-      const actor_ref_t &actor_ref,
-      const spot_id_t &target_spot_id,
+    task_t<result_t<void>> commit_remote_actor_authority (
+      std::string transfer_id,
+      actor_ref_t actor_ref,
+      spot_id_t target_spot_id,
       std::uint64_t target_spot_generation,
       std::uint64_t source_authority_owner_generation,
       std::string source_mesh_name,
