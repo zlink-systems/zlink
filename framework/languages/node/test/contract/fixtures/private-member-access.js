@@ -3,13 +3,18 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const ts = require('typescript');
 
+// TypeScript names source files with '/' on every platform; Windows path.join uses '\'.
+function compilerPath(file) {
+  return file.split(path.sep).join('/');
+}
+
 function sourceFiles(directory, extension) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const file = path.join(directory, entry.name);
     return entry.isDirectory()
       ? sourceFiles(file, extension)
       : extension.test(entry.name)
-        ? [file]
+        ? [compilerPath(file)]
         : [];
   });
 }
@@ -86,7 +91,10 @@ function compareAccesses(accesses, allowlist) {
 
 // Test imports resolve to sources; emitted declarations omit private member types.
 // A spelling shared with a public member is not sufficient evidence of a violation.
-function scanPrivateAccess(nodeRoot, additionalSources = new Map()) {
+function scanPrivateAccess(nodeRoot, additionalSourcesByPath = new Map()) {
+  const additionalSources = new Map(
+    [...additionalSourcesByPath].map(([file, text]) => [compilerPath(file), text])
+  );
   const packages = path.join(nodeRoot, 'packages');
   const sources = fs.readdirSync(packages).flatMap((name) => {
     const directory = path.join(packages, name, 'src');
