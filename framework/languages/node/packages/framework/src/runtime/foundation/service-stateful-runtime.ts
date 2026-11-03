@@ -2634,17 +2634,25 @@ export class ServiceStatefulRuntime {
               );
               return 'infrastructure';
             }
-            flowIfEnabled(reporter?.flow, ZLinkMessageFlowOutcome.Dropped)?.trace({
-              outcome: ZLinkMessageFlowOutcome.Dropped,
-              surface: ZLinkDispatchErrorSurface.StreamSession,
-              messageKind: ZLinkDispatchMessageKind.Send,
-              ...(this.dispatchErrorMeshName === undefined
-                ? {}
-                : { meshName: this.dispatchErrorMeshName }),
-              sourceRid: ingress.sourceRoutingId,
-              actorId: record.target.actor.actorId,
-              errorReason: ZLinkDispatchErrorReason.StaleTarget
-            });
+            const tracePoint = flowIfEnabled(reporter?.flow, ZLinkMessageFlowOutcome.Dropped);
+            if (tracePoint !== undefined) {
+              tracePoint.trace({
+                outcome: ZLinkMessageFlowOutcome.Dropped,
+                surface: ZLinkDispatchErrorSurface.StreamSession,
+                messageKind: ZLinkDispatchMessageKind.Send,
+                packetName: decodeApplicationPayloadView(payloadFrame!).packetName,
+                ...(this.dispatchErrorMeshName === undefined
+                  ? {}
+                  : { meshName: this.dispatchErrorMeshName }),
+                ...(record.correlation === undefined
+                  ? {}
+                  : { correlationId: record.correlation.toString() }),
+                sourceRid: ingress.sourceRoutingId,
+                actorId: record.target.actor.actorId,
+                streamSessionId: record.boundSession.sessionRid,
+                errorReason: ZLinkDispatchErrorReason.StaleTarget
+              });
+            }
             return 'application';
           }
         }

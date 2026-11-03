@@ -4577,6 +4577,70 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Equal("stream", sequenceRequestError.Surface);
             Assert.Equal("request", sequenceRequestError.MessageKind);
 
+            var clientDisconnectRequestHeader = new ZlinkStreamHeader(
+                ZlinkStreamMessageKind.Request,
+                ZlinkStreamCodec.Raw,
+                ZlinkStreamHeaderFlags.HasRequestSeq,
+                new ZlinkStreamRequestSeq(8),
+                ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName,
+                ZlinkStreamMetadata.Empty
+            );
+            var replyAttemptsBeforeDisconnectCollision = node.NodeSendAttempts.Count;
+            await runtime.DispatchRemoteActorFrameAsync(
+                actorRef.ActorId,
+                actorRef.Generation,
+                actorRef.NodeRid,
+                targetNodeGeneration: 1,
+                authorityOwnerGeneration: 3,
+                ownerLeaseGeneration: 0,
+                authenticatedRelayNodeRid: relayNode,
+                relayNodeRid: relayNode,
+                relayNodeGeneration: 1,
+                sourceNodeRid: relayNode,
+                sourceNodeGeneration: 1,
+                sourceSessionRid: sessionRid,
+                requestSource,
+                duplicateSequenceMetadata,
+                new MeshOperationId(81, 86),
+                messageFollowHopCount: 0,
+                replyRequestId: 8,
+                replyFlags: ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                replyCapability: "stale-reply",
+                deadlineUnixMs: ulong.MaxValue,
+                ZLinkStreamProtocolDefaults.EncodeHeader(clientDisconnectRequestHeader).ToArray(),
+                Encoding.UTF8.GetBytes("client-disconnect-request"),
+                CancellationToken.None
+            );
+            var disconnectCollisionReplyParts = Assert.Single(
+                node.NodeSendAttempts.Skip(replyAttemptsBeforeDisconnectCollision)
+            );
+            Assert.Equal(2, disconnectCollisionReplyParts.Count);
+            using var disconnectCollisionReplyHeader = Message.From(
+                disconnectCollisionReplyParts[0]
+            );
+            using var disconnectCollisionReplyBody = Message.From(disconnectCollisionReplyParts[1]);
+            var disconnectCollisionReply = Assert.IsType<ZLinkRemoteActorReplyRelay>(
+                ZLinkEnvelopeCodec.DecodeBody(
+                    [disconnectCollisionReplyHeader, disconnectCollisionReplyBody],
+                    typeof(ZLinkRemoteActorReplyRelay),
+                    runtime.Registration.Codecs
+                )
+            );
+            Assert.Equal((ulong)8, disconnectCollisionReply.RequestId);
+            Assert.Equal(
+                "invalid_operation",
+                DecodeReplyFrame<ZLinkStreamWireError>(disconnectCollisionReply.Frame).Payload.Code
+            );
+            var disconnectCollisionError = Assert.Single(
+                observer.Events.Where(flow =>
+                    flow.PacketName == ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName
+                    && flow.Outcome == "failed"
+                    && flow.Reason == "stale_target"
+                    && flow.Action == "reply_error"
+                )
+            );
+            Assert.Equal("request", disconnectCollisionError.MessageKind);
+
             await runtime.DispatchRemoteActorFrameAsync(
                 actorRef.ActorId,
                 actorRef.Generation,
@@ -4611,6 +4675,48 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             Assert.Equal("stream", sequenceSendDrop.Surface);
             Assert.Equal("send", sequenceSendDrop.MessageKind);
+
+            var increasingSequenceMetadata = ZLinkActorBoundSessionHandoffMetadata.Encode(
+                new ZLinkActorBoundSessionHandoffFence(
+                    actorRef.ActorId,
+                    actorRef.Generation,
+                    sessionRid,
+                    "live-binding",
+                    BindingGeneration: 2,
+                    SessionSequence: 2
+                )
+            );
+            await runtime.DispatchRemoteActorFrameAsync(
+                actorRef.ActorId,
+                actorRef.Generation,
+                actorRef.NodeRid,
+                targetNodeGeneration: 1,
+                authorityOwnerGeneration: 3,
+                ownerLeaseGeneration: 0,
+                authenticatedRelayNodeRid: relayNode,
+                relayNodeRid: relayNode,
+                relayNodeGeneration: 1,
+                sourceNodeRid: relayNode,
+                sourceNodeGeneration: 1,
+                sourceSessionRid: sessionRid,
+                requestSource,
+                increasingSequenceMetadata,
+                new MeshOperationId(81, 87),
+                messageFollowHopCount: 0,
+                replyRequestId: 0,
+                replyFlags: 0,
+                replyCapability: null,
+                deadlineUnixMs: ulong.MaxValue,
+                ZLinkStreamProtocolDefaults.EncodeHeader(oneWayHeader).ToArray(),
+                Encoding.UTF8.GetBytes("increasing-sequence-send"),
+                CancellationToken.None
+            );
+            Assert.True(
+                runtime
+                    .GetOrCreateActorState(actorRef.ActorId)
+                    .TryGetBoundSession(out var acceptedRoute)
+            );
+            Assert.Equal((ulong)2, acceptedRoute.AcceptedHighWater);
         }
         finally
         {

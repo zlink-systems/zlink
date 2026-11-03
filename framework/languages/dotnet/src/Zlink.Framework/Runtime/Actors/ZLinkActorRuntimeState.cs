@@ -560,7 +560,13 @@ internal sealed class ZLinkActorRuntimeState(
             {
                 if (SameBindingToken(current, replacement))
                 {
-                    _boundSession = replacement;
+                    _boundSession = replacement with
+                    {
+                        AcceptedHighWater = Math.Max(
+                            current.AcceptedHighWater,
+                            replacement.AcceptedHighWater
+                        ),
+                    };
                     return current;
                 }
                 RememberRetiredSessionBinding(current);

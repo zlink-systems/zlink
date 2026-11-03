@@ -93,6 +93,7 @@ public final class ZLinkDispatchErrorReporter {
                 actorId,
                 null,
                 null,
+                null,
                 errorDetails(error));
     }
 
@@ -125,6 +126,7 @@ public final class ZLinkDispatchErrorReporter {
                 error.actorId(),
                 error.meshName(),
                 error.targetRid(),
+                error.streamSessionId(),
                 details);
     }
 
@@ -143,9 +145,10 @@ public final class ZLinkDispatchErrorReporter {
             String actorId,
             String meshName,
             String targetRid,
+            String streamSessionId,
             ErrorDetails errorDetails) {
         reportedCount.incrementAndGet();
-        tracePoint.trace(
+        ZLinkMessageFlowEvent event =
                 failureEvent(
                         surface,
                         messageKind,
@@ -160,7 +163,9 @@ public final class ZLinkDispatchErrorReporter {
                         targetRid,
                         reason,
                         action,
-                        errorDetails));
+                        errorDetails);
+        tracePoint.trace(
+                streamSessionId == null ? event : event.withStreamSessionId(streamSessionId));
     }
 
     static ZLinkMessageFlowEvent failureEvent(

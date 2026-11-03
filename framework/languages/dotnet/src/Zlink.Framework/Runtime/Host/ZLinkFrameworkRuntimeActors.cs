@@ -4244,6 +4244,21 @@ internal sealed partial class ZLinkFrameworkRuntime
             deadlineUnixMs,
             IsBoundSessionRoute: hasBoundSessionFence
         );
+        var relayedHeader = routeContext.IsDirectRoute
+            ? null
+            : ZLinkStreamProtocolDefaults.DecodeHeader(header);
+        // Disconnect uses Request so the Session owner can receive its terminal reply. Its exact
+        // identity body and relay fence distinguish it from an application Request with this name.
+        var isSessionDisconnected =
+            hasBoundSessionFence
+            && relayedHeader is not null
+            && ZLinkActorBoundSessionRelay.IsSessionDisconnectedRelay(
+                relayedHeader,
+                body,
+                sourceNodeRid,
+                sourceNodeGeneration,
+                boundSessionFence.BindingGeneration
+            );
         ValidateRemoteActorFrameSource(
             actorId,
             routeContext,
@@ -4278,10 +4293,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     sourceNodeRid,
                     sourceSessionRid
                 )
-            )
-                && !ZLinkActorBoundSessionRelay.IsSessionDisconnectedPacket(
-                    ZLinkStreamProtocolDefaults.DecodeHeader(header)
-                )
+            ) && !isSessionDisconnected
         )
         {
             //  A replaced incarnation never comes back, so this is NotFound
@@ -4303,7 +4315,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     replyRequestId,
                     replyFlags,
                     replyCapability,
-                    ZLinkStreamProtocolDefaults.DecodeHeader(header),
+                    relayedHeader!,
                     staleIdentity,
                     cancellationToken
                 )
@@ -4344,9 +4356,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         };
         if (!routeContext.IsDirectRoute)
         {
-            var relayedHeader = ZLinkStreamProtocolDefaults.DecodeHeader(header);
-            var isSessionDisconnected =
-                relayedHeader.Name == ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName;
+            var inboundHeader = relayedHeader!;
             // Application frames carry the Session owner's sequence and
             // advance the route watermark before handoff capture. The
             // disconnect control record carries the last accepted sequence
@@ -4364,8 +4374,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     $"Actor '{actorId}' session relay sequence is stale."
                 );
                 if (
-                    relayedHeader.Kind == ZlinkStreamMessageKind.Request
-                    && relayedHeader.RequestSeq is not null
+                    inboundHeader.Kind == ZlinkStreamMessageKind.Request
+                    && inboundHeader.RequestSeq is not null
                 )
                 {
                     if (Flow.DispatchErrorsEnabled)
@@ -4375,10 +4385,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 ZLinkDispatchMessageKind.Request,
                                 ZLinkDispatchErrorReason.StaleTarget,
                                 ZLinkDispatchErrorAction.ReplyError,
-                                relayedHeader.Name,
+                                inboundHeader.Name,
                                 ActorId: actorId,
                                 SourceRid: sourceSessionRid.ToHex(),
-                                CorrelationId: relayedHeader.CorrelationId,
+                                CorrelationId: inboundHeader.CorrelationId,
                                 Exception: staleSequence,
                                 StreamSessionId: sourceSessionRid.ToHex()
                             )
@@ -4392,13 +4402,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                             replyRequestId,
                             replyFlags,
                             replyCapability,
-                            relayedHeader,
+                            inboundHeader,
                             staleSequence,
                             cancellationToken
                         )
                         .ConfigureAwait(false);
                 }
-                else if (relayedHeader.Kind == ZlinkStreamMessageKind.Send)
+                else if (inboundHeader.Kind == ZlinkStreamMessageKind.Send)
                 {
                     if (Flow.Enabled(ZLinkMessageFlowOutcome.Dropped))
                         Flow.Trace(
@@ -4406,8 +4416,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 ZLinkMessageFlowOutcome.Dropped,
                                 ZLinkDispatchErrorSurface.StreamSession,
                                 ZLinkDispatchMessageKind.Send,
-                                relayedHeader.Name,
-                                CorrelationId: relayedHeader.CorrelationId,
+                                inboundHeader.Name,
+                                CorrelationId: inboundHeader.CorrelationId,
                                 SourceRid: sourceSessionRid.ToHex(),
                                 ActorId: actorId,
                                 Result: ZLinkMessageFlowResult.Dropped,

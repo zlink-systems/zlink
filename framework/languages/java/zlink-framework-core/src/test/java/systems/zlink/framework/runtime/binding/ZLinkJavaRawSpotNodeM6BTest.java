@@ -1296,8 +1296,11 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 .anyMatch(
                                         record ->
                                                 record.contains("event_id=zlink.dispatch_error")
+                                                        && record.contains("packet=stale-request")
                                                         && record.contains(
-                                                                "packet=stale-request")));
+                                                                "source_rid=" + sessionRid)
+                                                        && record.contains(
+                                                                "session=" + sessionRid)));
                 assertEquals(5, stagingCalls.get());
                 assertEquals(List.of(24L, 24L, 24L, 23L, 25L), stagedSequences);
                 assertEquals(2, dispatches.get());

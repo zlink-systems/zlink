@@ -1777,6 +1777,9 @@ test('Actor owner admits only increasing relayed session sequences and reports s
     surface: string;
     messageKind: string;
     errorReason: string;
+    packetName?: string;
+    correlationId?: string;
+    streamSessionId?: string;
   }> = [];
   const raw = {
     mailbox: { tryEnqueue: (record: unknown) => (queued.push(record), true) },
@@ -1873,18 +1876,33 @@ test('Actor owner admits only increasing relayed session sequences and reports s
     ]
   );
   assert.deepEqual(
-    dropped.map(({ outcome, surface, messageKind, errorReason }) => ({
-      outcome,
-      surface,
-      messageKind,
-      errorReason
-    })),
+    dropped.map(
+      ({
+        outcome,
+        surface,
+        messageKind,
+        errorReason,
+        packetName,
+        correlationId,
+        streamSessionId
+      }) => ({
+        outcome,
+        surface,
+        messageKind,
+        errorReason,
+        ...(packetName === undefined ? {} : { packetName }),
+        ...(correlationId === undefined ? {} : { correlationId }),
+        ...(streamSessionId === undefined ? {} : { streamSessionId })
+      })
+    ),
     [
       {
         outcome: 'dropped',
         surface: 'streamSession',
         messageKind: 'send',
-        errorReason: 'stale_target'
+        errorReason: 'stale_target',
+        packetName: 'StaleRelaySend',
+        streamSessionId: 'session-rid'
       }
     ]
   );
