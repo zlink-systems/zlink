@@ -652,12 +652,10 @@ TEST (RequestCallAllocations, SpotFinalReceiverUsesFewerAllocationsThanTheConver
             const auto before = fw::tests::creation_counts ();
             const auto actual =
               sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
-#if defined(__GLIBCXX__)
-            // Spec-independent regression budget measured with libstdc++, not a spec property.
+            // Compare the public call with its components in the same process.
             EXPECT_LT (actual.total, encode.total + operation.total + selection.total
                                        + target_owner.total + projection.total
                                        + public_projection.total);
-#endif
             ASSERT_TRUE (pending.has_value ());
             const auto operation_admission =
               fw::detail::request_task_access_t::admission_source (*pending);

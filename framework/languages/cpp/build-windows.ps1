@@ -114,6 +114,10 @@ if (-not (Test-Path $Toolchain)) {
     throw "vcpkg toolchain was not found at $Toolchain. Set VCPKG_ROOT."
 }
 
+if ($IncludeTests -and $Install) {
+    throw "-IncludeTests enables test probes; use a separate build without -IncludeTests to install."
+}
+$InstallEnabled = if ($IncludeTests) { "OFF" } else { "ON" }
 $TestsEnabled = if ($IncludeTests) { "ON" } else { "OFF" }
 $ImportedConfigurationMaps = @("Debug", "Release", "RelWithDebInfo", "MinSizeRel") |
     Where-Object { $_ -ne $Configuration } |
@@ -132,9 +136,10 @@ $ConfigureArguments = @(
     "-DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=$CoreVersion",
     "-DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=$BindingVersion",
     "-DZLINK_FRAMEWORK_CPP_BUILD_TESTS=$TestsEnabled",
+    "-DZLINK_FRAMEWORK_CPP_TEST_PROBES=$TestsEnabled",
     "-DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=$TestsEnabled",
     "-DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=ON",
-    "-DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON"
+    "-DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=$InstallEnabled"
 ) + $ImportedConfigurationMaps
 Invoke-ZlinkCMake -FailureMessage "C++ Framework configure failed" -Arguments $ConfigureArguments
 

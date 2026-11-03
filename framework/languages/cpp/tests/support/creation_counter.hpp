@@ -1,6 +1,11 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#if !defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+#error                                                                                             \
+  "Allocation tests require ZLINK_FRAMEWORK_CPP_TEST_PROBES=ON and ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF"
+#endif
+
 #include <zlink/framework/detail/test_creation_probe.hpp>
 #include "runtime/mesh/service_mailbox.hpp"
 #include <type_traits>

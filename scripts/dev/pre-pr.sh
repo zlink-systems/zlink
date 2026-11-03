@@ -144,6 +144,8 @@ for lang in $langs; do
         echo "- C++ Core $CPP_CORE_PREFIX, binding $CPP_BINDING_PREFIX" >> "$out"
         wait_cpp_slot
         (cd "$d" && cmake --preset linux-ninja-release -DCMAKE_TOOLCHAIN_FILE="$CPP_TOOLCHAIN" \
+            -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
+            -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
             -DZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT="$CPP_LOCAL_PACKAGE_ROOT" \
             -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION="$core_ver" \
             -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION="$binding_ver" \
