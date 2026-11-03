@@ -278,7 +278,30 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
             assertEquals(
                     ZLinkObjectAbortResult.STALE,
                     store.abort(first.reservation(), () -> false).toCompletableFuture().get());
+            assertEquals(
+                    1,
+                    store.listMeshNodes("game", ZLinkPageRequest.firstPage())
+                            .toCompletableFuture()
+                            .get()
+                            .items()
+                            .getFirst()
+                            .capacity()
+                            .actors()
+                            .reserved());
             assertEquals(1L, store.removeAllByOwner(owner).toCompletableFuture().get());
+            assertInstanceOf(
+                    systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing.class,
+                    store.read(firstKey, () -> false).toCompletableFuture().get());
+            assertEquals(
+                    0,
+                    store.listMeshNodes("game", ZLinkPageRequest.firstPage())
+                            .toCompletableFuture()
+                            .get()
+                            .items()
+                            .getFirst()
+                            .capacity()
+                            .actors()
+                            .reserved());
             // removeAllByOwner only reclaims authority rows (reservations
             // and active allocations); mesh node descriptors are a
             // separate lifecycle removed only through removeMeshNode.

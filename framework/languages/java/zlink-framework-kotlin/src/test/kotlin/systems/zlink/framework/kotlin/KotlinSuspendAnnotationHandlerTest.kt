@@ -562,6 +562,8 @@ final class KotlinSuspendAnnotationHandlerTest {
             override fun metadata() = emptyMap<String, String>()
 
             override fun correlationId() = Optional.empty<String>()
+
+            override fun receivedAt(): java.time.Instant = java.time.Instant.EPOCH
         }
 }
 

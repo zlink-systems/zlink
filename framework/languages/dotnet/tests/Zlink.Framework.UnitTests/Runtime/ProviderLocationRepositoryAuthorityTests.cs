@@ -16,6 +16,44 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ProviderLocationRepositoryAuthorityTests
 {
+    [Fact]
+    public async Task OwnerSweepReleasesEndedLifecycleReservation()
+    {
+        var repository = new ZLinkProviderLocationRepository(
+            new ZLinkInMemoryProviderLocationStore()
+        );
+        var owner = await ClaimAsync(repository, "sweep-owner");
+        var descriptor = Descriptor("sweep-node", owner);
+        await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("sweep-actor", descriptor, owner);
+        Assert.IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(request));
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            await repository.RemoveMeshNodeAsync(new(descriptor.MeshName, descriptor.Rid), owner)
+        );
+        descriptor = descriptor with { LifecycleGeneration = descriptor.LifecycleGeneration + 1 };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)
+            ).Status
+        );
+        Assert.Equal(
+            1,
+            Assert
+                .Single((await repository.ListMeshNodesAsync("play", default)).Items)
+                .Capacity.Actors.Reserved
+        );
+        Assert.Equal(1, await repository.RemoveAllByOwnerAsync(owner));
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
+            await repository.ReadAuthorityAsync(request.Key)
+        );
+        var after = Assert.Single((await repository.ListMeshNodesAsync("play", default)).Items);
+        Assert.Equal(descriptor.LifecycleGeneration, after.LifecycleGeneration);
+        Assert.Equal(0, after.Capacity.Actors.Reserved);
+        Assert.Equal(0, await repository.RemoveAllByOwnerAsync(owner));
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

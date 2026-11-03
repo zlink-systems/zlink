@@ -2363,6 +2363,67 @@ TEST_P (CreationTerminalTest, DescriptorLifecycleReplacementReleasesReservedCapa
     ASSERT_TRUE (std::holds_alternative<object_reserved_t> (replacement));
 }
 
+TEST_P (CreationTerminalTest, OwnerSweepReleasesEndedLifecycleReservation)
+{
+    ASSERT_EQ (
+      repository.remove_mesh_node ({descriptor.mesh_name, descriptor.rid}, fence.target.owner)
+        .result ()
+        .value (),
+      location_write_status_t::stored);
+    descriptor.lifecycle_generation = 2;
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    EXPECT_EQ (repository.list_mesh_nodes (descriptor.mesh_name)
+                 .result ()
+                 .value ()
+                 .items.front ()
+                 .capacity.actors.reserved,
+               1u);
+    EXPECT_EQ (repository.remove_all_by_owner (fence.target.owner).result ().value (), 1);
+    EXPECT_TRUE (std::holds_alternative<authority_missing_t> (
+      repository.read_authority (actor_authority_key (reserve_request.key.global_id))
+        .result ()
+        .value ()));
+    const auto after = repository.list_mesh_nodes (descriptor.mesh_name).result ().value ();
+    ASSERT_EQ (after.items.size (), 1u);
+    EXPECT_EQ (after.items.front ().lifecycle_generation, 2u);
+    EXPECT_EQ (after.items.front ().capacity.actors.reserved, 0u);
+    EXPECT_EQ (repository.remove_all_by_owner (fence.target.owner).result ().value (), 0);
+}
+
+TEST_P (CreationTerminalTest, OwnerSweepRetainsReservationWhenLeaseChangesDuringEndedRelease)
+{
+    ASSERT_EQ (
+      repository.remove_mesh_node ({descriptor.mesh_name, descriptor.rid}, fence.target.owner)
+        .result ()
+        .value (),
+      location_write_status_t::stored);
+    descriptor.lifecycle_generation = 2;
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    provider.before_next_write = [&] () -> task_t<void> {
+        co_await repository.release_owner_lease (fence.target.owner);
+        const auto replacement = co_await repository.claim_owner_lease (descriptor.owner_id, 30s);
+        EXPECT_TRUE (std::holds_alternative<owner_lease_claimed_t> (replacement));
+    };
+    EXPECT_EQ (repository.remove_all_by_owner (fence.target.owner).result ().value (), 0);
+    EXPECT_TRUE (std::holds_alternative<authority_snapshot_t> (
+      repository.read_authority (actor_authority_key (reserve_request.key.global_id))
+        .result ()
+        .value ()));
+    const auto owner = repository.read_owner_lease (descriptor.owner_id).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<owner_lease_found_t> (owner));
+    EXPECT_NE (std::get<owner_lease_found_t> (owner).token.lease_generation,
+               fence.target.owner.lease_generation);
+    EXPECT_EQ (capacity_record (provider.inner, descriptor)["pending"]["actors"], 1);
+}
+
 TEST_P (CreationTerminalTest, CreationTransitionsFenceOwnerLeaseAndDescriptorVersion)
 {
     verify_creation_conditions (false);
