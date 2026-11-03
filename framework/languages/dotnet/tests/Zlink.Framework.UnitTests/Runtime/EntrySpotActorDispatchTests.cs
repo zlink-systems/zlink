@@ -9674,6 +9674,69 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task Actor_Route_Invalidation_DoesNotBlock_AnotherLaneTurn()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        await using var callerLane = new ZLinkStateLane();
+        try
+        {
+            var rows = runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+            var key = new ZLinkActorLocationKey(actor.ActorId);
+            var route = Assert.IsType<ZLinkResolvedActorLocation>(
+                await rows.ResolveActorRowAsync(key)
+            );
+            var resolverLane = Assert.IsType<ZLinkStateLane>(
+                typeof(ZLinkStoreLocationResolvers)
+                    .GetField(
+                        "_lane",
+                        System.Reflection.BindingFlags.Instance
+                            | System.Reflection.BindingFlags.NonPublic
+                    )!
+                    .GetValue(rows)
+            );
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var resolverTurn = resolverLane.RunAsync(async () =>
+            {
+                entered.TrySetResult();
+                await release.Task.ConfigureAwait(false);
+            });
+            await entered.Task;
+            try
+            {
+                await callerLane
+                    .RunAsync(() =>
+                        rows.InvalidateActorRoute(
+                            key,
+                            route.ActorRef,
+                            route.OwnerNodeGeneration,
+                            route.AuthorityOwnerGeneration,
+                            (ulong)route.LeaseGeneration
+                        )
+                    )
+                    .AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally
+            {
+                release.TrySetResult();
+                await resolverTurn;
+            }
+
+            Assert.False(rows.HasCachedActorRoute(key));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Actor_Request_Late_Stale_Physical_Failure_Preserves_Newer_Route()
     {
         IZLinkLocationRepository? locationStore = null;

@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
@@ -300,15 +301,18 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         AwaitStateLane(_lane.RunAsync(() => _actorRoutes.Remove(key)));
     }
 
-    internal bool InvalidateActorRoute(
+    internal void InvalidateActorRoute(
         ZLinkActorLocationKey key,
         ActorRef actorRef,
         ulong ownerNodeGeneration,
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration
-    ) =>
-        AwaitStateLane(
-            _lane.RunAsync(() =>
+    )
+    {
+        ValueTask<bool> invalidation;
+        try
+        {
+            invalidation = _lane.RunAsync(() =>
             {
                 if (!_actorRoutes.TryGetValue(key, out var cached))
                     return false;
@@ -322,8 +326,28 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 )
                     return false;
                 return _actorRoutes.Remove(key);
-            })
-        );
+            });
+        }
+        catch (Exception failure)
+            when (failure is ObjectDisposedException or InvalidOperationException)
+        {
+            ZLinkFrameworkDebugLog.TaskFailure("actor-route-invalidation", failure);
+            return;
+        }
+        _ = ObserveActorRouteInvalidationAsync(invalidation);
+    }
+
+    private static async Task ObserveActorRouteInvalidationAsync(ValueTask<bool> invalidation)
+    {
+        try
+        {
+            await invalidation.ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            ZLinkFrameworkDebugLog.TaskFailure("actor-route-invalidation", failure);
+        }
+    }
 
     internal bool InvalidateMessageFollowRoute(ZLinkServiceWireCodec.MessageFollowRecord record)
     {
