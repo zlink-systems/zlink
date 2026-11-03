@@ -1,4 +1,6 @@
 import { requireOneWayCompletion } from '../messaging/submission-result';
+import { logs, SeverityNumber } from '@opentelemetry/api-logs';
+import { ZlinkStreamControlPacket } from '@zlink-systems/stream-wire';
 import type { RoutingId, ZLinkMessageSerializer, ZLinkSession } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
@@ -31,6 +33,7 @@ import type {
 import type { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
 import { ZLinkDispatchErrorReporter, ZLinkRouteDisconnectedError } from '../channels';
 import { type ZLinkRuntimeMetrics, flowIfEnabled } from '../diagnostics';
+import { TELEMETRY_INSTRUMENTATION_NAME } from '../diagnostics/message-flow-record';
 
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import { ZLinkSocketNativeEventType } from '../diagnostics/internal-event-contracts';
@@ -88,6 +91,7 @@ interface ZLinkStreamLivenessOptions {
 }
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const STREAM_RUNTIME_LOGGER = logs.getLogger(TELEMETRY_INSTRUMENTATION_NAME);
 
 const systemLivenessClock: ZLinkStreamLivenessClock = {
   now: () => performance.now(),
@@ -583,19 +587,33 @@ export class ZLinkStreamSessionRuntime {
   }
 
   private async handleControl(header: ZLinkStreamFrameHeader, payload: Message): Promise<void> {
-    if (messageToBytes(payload).length !== 0) {
-      await this.closeForLiveness(
-        ZLinkStreamCloseReasonCode.ProtocolError,
-        'protocol_error',
-        'Control heartbeat payload must be empty.'
-      );
+    const payloadBytes = messageToBytes(payload);
+    if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
+      if (payloadBytes.length !== 0) {
+        this.logIgnoredControl(header.name, payloadBytes.length);
+      }
+      await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG);
       return;
     }
     if (header.name === ZLINK_STREAM_HEARTBEAT_PONG) {
+      if (payloadBytes.length !== 0) {
+        this.logIgnoredControl(header.name, payloadBytes.length);
+      }
       return;
     }
-    if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
-      await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG);
+    if (
+      header.name === ZlinkStreamControlPacket.ActorBound ||
+      header.name === ZlinkStreamControlPacket.ActorUnbound
+    ) {
+      await this.closeForLiveness(
+        ZLinkStreamCloseReasonCode.ProtocolError,
+        'protocol_error',
+        `Unexpected stream actor control frame: ${header.name}`
+      );
+      return;
+    }
+    if (header.name.startsWith('$zlink.')) {
+      this.logIgnoredControl(header.name, payloadBytes.length);
       return;
     }
     await this.closeForLiveness(
@@ -603,6 +621,21 @@ export class ZLinkStreamSessionRuntime {
       'protocol_error',
       `Unknown stream control frame: ${header.name}`
     );
+  }
+
+  private logIgnoredControl(name: string, payloadLength: number): void {
+    STREAM_RUNTIME_LOGGER.emit({
+      eventName: 'zlink.stream.control_ignored',
+      timestamp: new Date(),
+      severityNumber: SeverityNumber.DEBUG,
+      severityText: 'DEBUG',
+      body: `Ignored STREAM control name=${name} payloadBytes=${payloadLength} peerSessionRid=${this.stream.sessionId}`,
+      attributes: {
+        control_name: name,
+        payload_bytes: payloadLength,
+        peer_session_rid: this.stream.sessionId
+      }
+    });
   }
 
   private scheduleLivenessCheck(): void {

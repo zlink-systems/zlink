@@ -2951,6 +2951,10 @@ var ZlinkStreamConnectorBundle = (() => {
       }
     }
     async dispatch(connection, header, payload, signal) {
+      if (header.kind === 5 /* Control */) {
+        await this.dispatchControl(connection, header, payload, signal);
+        return;
+      }
       const actor = header.actorSlot === void 0 ? void 0 : this.actors.resolve(header.actorSlot);
       if (header.kind === 3 /* Response */ && header.requestSeq !== void 0) {
         try {
@@ -2992,10 +2996,6 @@ var ZlinkStreamConnectorBundle = (() => {
         }
         return;
       }
-      if (header.kind === 5 /* Control */) {
-        await this.dispatchControl(connection, header, payload, signal);
-        return;
-      }
       if (header.kind === 1 /* Send */) {
         this.receivedMessages.enqueue(
           {
@@ -3019,14 +3019,14 @@ var ZlinkStreamConnectorBundle = (() => {
         await ((_a = this.serverClosing) == null ? void 0 : _a.call(this, closing.closeReason));
         return;
       }
-      if (payload.length !== 0) {
-        throw connectorError(
-          "frameDecodeFailed" /* FrameDecodeFailed */,
-          "Control packet payload must be empty."
-        );
-      }
       if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
         await this.frameSender.sendControl(connection, ZLINK_STREAM_HEARTBEAT_PONG);
+        return;
+      }
+      if (header.name === ZLINK_STREAM_HEARTBEAT_PONG) {
+        return;
+      }
+      if (header.name.startsWith("$zlink.")) {
         return;
       }
       if (header.name !== ZLINK_STREAM_HEARTBEAT_PONG) {

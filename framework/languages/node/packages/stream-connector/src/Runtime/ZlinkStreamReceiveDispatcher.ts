@@ -144,6 +144,10 @@ export class ZlinkStreamReceiveDispatcher {
     payload: Uint8Array,
     signal: AbortSignal | undefined
   ): Promise<void> {
+    if (header.kind === ZlinkStreamMessageKind.Control) {
+      await this.dispatchControl(connection, header, payload, signal);
+      return;
+    }
     const actor =
       header.actorSlot === undefined ? undefined : this.actors.resolve(header.actorSlot);
     if (header.kind === ZlinkStreamMessageKind.Response && header.requestSeq !== undefined) {
@@ -189,10 +193,6 @@ export class ZlinkStreamReceiveDispatcher {
       }
       return;
     }
-    if (header.kind === ZlinkStreamMessageKind.Control) {
-      await this.dispatchControl(connection, header, payload, signal);
-      return;
-    }
     if (header.kind === ZlinkStreamMessageKind.Send) {
       this.receivedMessages.enqueue(
         {
@@ -223,17 +223,17 @@ export class ZlinkStreamReceiveDispatcher {
       await this.serverClosing?.(closing.closeReason);
       return;
     }
-    if (payload.length !== 0) {
-      throw connectorError(
-        ZlinkStreamErrorCode.FrameDecodeFailed,
-        'Control packet payload must be empty.'
-      );
-    }
     if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
       // The pong answers on the connection the ping was read from. A failed
       // write ends that connection through the write queue (§9); a connection
       // that has already ended writes nothing.
       await this.frameSender.sendControl(connection, ZLINK_STREAM_HEARTBEAT_PONG);
+      return;
+    }
+    if (header.name === ZLINK_STREAM_HEARTBEAT_PONG) {
+      return;
+    }
+    if (header.name.startsWith('$zlink.')) {
       return;
     }
     if (header.name !== ZLINK_STREAM_HEARTBEAT_PONG) {

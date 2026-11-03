@@ -206,6 +206,23 @@ flag가 없다. `$zlink.actor.bound`와 `$zlink.actor.unbound`의 slot도 contro
 | `$zlink.actor.bound` | **비어 있지 않다** — 아래 참조 |
 | `$zlink.actor.unbound` | **비어 있지 않다** — 아래 참조 |
 
+위 표는 현재 정의된 payload 형식이다. 수신자는 §4.5의 헤더 검사와 §4.7의
+payload 크기 검사를 먼저 적용한다. 검사를 통과한 control 이름이 위 목록에 없더라도
+`$zlink.`로 시작하면 향후 확장용 control로 취급한다. 수신자는 payload를 해석하거나
+동작을 실행하지 않고 frame을 무시하며 연결을 유지한다. 서버는 runtime의 기존 로그에 debug
+수준으로 control 이름, payload 길이, 상대 session RID를 남긴다. 이 기록은 message-flow event가
+아니다. connector는 기존 로그 경로가 있으면 같은 수준으로 이름과 길이를
+남긴다. `$zlink.`로 시작하지 않는 미정의 control 이름은 decode error다.
+
+현재 정의된 heartbeat ping/pong payload 형식은 빈 payload뿐이다. 비어 있지 않은 ping
+payload의 첫 바이트는 version이다. 구현이 알지 못하는 version이면 payload를 해석하지
+않고 빈 pong으로 답한다. 비어 있지 않은 pong payload의 첫 바이트도 version이다.
+비어 있지 않은 pong payload도 알지 못하는 version이면 payload를 해석하거나
+상태를 바꾸지 않고 무시하며 같은 기록 규칙을 적용한다. 알려진 version의
+payload 길이나 형식이 그 version의 정의와 맞지 않으면 decode error로 연결을 끝낸다.
+현재 비어 있지 않은 heartbeat version은 정의되어 있지 않으므로, 비어 있지 않은 ping/pong
+payload는 알 수 없는 version이다.
+
 `session-closing`은 서버가 세션을 닫기 직전에 보내는 control packet이며, client는 이를 읽어
 `closeReason`을 확정한다
 ([Host relocation 전체 흐름 §9](../server/05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다)).
