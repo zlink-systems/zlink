@@ -924,7 +924,7 @@ struct route_send_fixture_t
 };
 
 // Hot path E4 and Submit/completion §11: ready send results remain inline.
-// Encoding owns the only allocation above this ready transport.
+// Encoding owns the required storage above this ready transport.
 TEST (RoutePayloadOwnership, NodeSendKeepsReadyResultsInline)
 {
     int delivered = 0;
@@ -951,6 +951,18 @@ TEST (RoutePayloadOwnership, NodeSendKeepsReadyResultsInline)
         auto call = fixture.send ();
         call.async ().result ().value ();
     }
+    // Calibrate the codec's required storage, including this STL's empty
+    // metadata map. A ready public send must add no result state to it.
+    runtime::messaging::client_call_codec_t codec;
+    const route_send_call_t::metadata_map_t metadata;
+    const dispatch_options_t dispatch;
+    const auto reference = tests::count_allocations ([&] {
+        (void) codec.encode_node_send_parts (
+          "m", "p", fixture.rid, metadata, dispatch, fixture.serializers,
+          [] (serializer_registry_t &registry) {
+              return registry.get<send_payload_t> ().serialize_with_content_type (send_payload_t{});
+          });
+    });
     auto call = fixture.send ();
     std::array<tests::allocation_event_t, 256> events{};
     tests::allocation_event_log_t log{events.data (), events.size ()};
@@ -958,10 +970,10 @@ TEST (RoutePayloadOwnership, NodeSendKeepsReadyResultsInline)
     const auto total = tests::count_allocations ([&] { call.async ().result ().value (); });
     tests::allocation_event_log = nullptr;
     ASSERT_FALSE (log.overflow);
-    // Identify the codec vector by its address; no task storage is needed before submit.
+    // Identify the codec vector by its address and calibrate other required codec storage.
     ASSERT_EQ (1u, codec_buffers);
-    ASSERT_EQ (before_transport, codec_buffers);
-    const auto public_states = before_transport - codec_buffers;
+    ASSERT_EQ (before_transport, reference);
+    const auto public_states = before_transport - reference;
     std::ostringstream sizes;
     for (std::size_t index = 0; index < log.count; ++index)
         sizes << events[index].size << ' ';
@@ -970,7 +982,7 @@ TEST (RoutePayloadOwnership, NodeSendKeepsReadyResultsInline)
     EXPECT_EQ (5, delivered);
     EXPECT_EQ (0u, public_states);
     EXPECT_EQ (0u, transport_states);
-    EXPECT_EQ (1u, total);
+    EXPECT_EQ (reference, total);
 }
 
 // Hot path E4: a deferred transport exception becomes internal_failure at the transport

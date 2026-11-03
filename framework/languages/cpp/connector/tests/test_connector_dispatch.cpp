@@ -12,6 +12,34 @@
 
 using namespace zlink::stream_connector;
 
+namespace
+{
+// Only value ownership and callback invocation form this reference. Arrival
+// order, registration validity and cursor decisions remain in the connector.
+std::optional<detail::selected_packet_t> select_reference (detail::connector_state_t &state,
+                                                           detail::dispatch_envelope_t &envelope)
+{
+    auto handlers = detail::select_packet_handlers (state, envelope);
+    if (handlers.empty ())
+        return std::nullopt;
+    detail::selected_packet_t selected{std::move (envelope), std::move (handlers)};
+    return selected;
+}
+
+void dispatch_reference (detail::connector_state_t &state, detail::dispatch_envelope_t &envelope)
+{
+    std::optional<detail::selected_packet_t> cursor;
+    cursor = select_reference (state, envelope);
+    for (auto &entry : cursor->handlers) {
+        auto handler = std::move (entry.handler);
+        handler (cursor->envelope);
+    }
+    std::optional<detail::selected_packet_t> completed;
+    completed = std::move (cursor);
+    cursor.reset ();
+}
+} // namespace
+
 int main (int argc, char **argv)
 {
     int failures = 0;
@@ -80,14 +108,17 @@ int main (int argc, char **argv)
         check (count_allocations ([&] { probe = ::operator new (64); }) == 1,
                "allocation counter positive control");
         ::operator delete (probe);
-        // Handler selection already copies the registration snapshot. Measure that
-        // existing cost separately; the Manual cursor must add no allocations.
-        detail::dispatch_envelope_t envelope{packet_t{"push"}};
-        const auto selection = count_allocations (
-          [&] { auto handlers = detail::select_packet_handlers (*state, envelope); });
+        // Include the packet metadata moves and typed callback arguments in
+        // required ownership costs; empty map heads allocate on MSVC too.
+        packet_t packet{"push"};
+        packet.payload.assign (4096, 0x37);
+        detail::dispatch_envelope_t envelope{packet};
+        const auto selection = count_allocations ([&] { dispatch_reference (*state, envelope); });
+        check (calls == 2, "reference invokes both typed callbacks");
+        calls = 0;
         std::size_t extra = 0;
         for (std::size_t i = 0; i < 64; ++i) {
-            detail::connector_runtime_t::from (connector).receive_packet (packet_t{"push"});
+            detail::connector_runtime_t::from (connector).receive_packet (packet);
             const auto allocated = count_allocations ([&] {
                 connector.dispatch ();
                 connector.dispatch ();
