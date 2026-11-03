@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+#include <zlink/framework/detail/test_creation_probe.hpp>
+#endif
+
 #include <zlink/json_profile.hpp>
 
 #include <zlink/Contracts/Messaging/message.hpp>
@@ -55,12 +59,18 @@ class encoded_payload_t
     encoded_payload_t (const encoded_payload_t &other) :
         encoded_payload_t (zlink::message_t::from (other.bytes ()))
     {
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        detail::test_creation_probe::payload_copies.fetch_add (1, std::memory_order_relaxed);
+#endif
     }
 
     encoded_payload_t &operator= (const encoded_payload_t &other)
     {
         if (this == &other)
             return *this;
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        detail::test_creation_probe::payload_copies.fetch_add (1, std::memory_order_relaxed);
+#endif
         const auto source = other.bytes ();
         auto owned = zlink::message_t::from (source);
         if (!owned.valid ())
@@ -146,6 +156,9 @@ class encoded_payload_t
 
     zlink::message_t to_raw () const
     {
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        detail::test_creation_probe::payload_copies.fetch_add (1, std::memory_order_relaxed);
+#endif
         if (const auto *message = std::get_if<zlink::message_t> (&_storage))
             return message->copy ();
         return zlink::message_t::from (bytes ());
