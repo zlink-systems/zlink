@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include <nlohmann/json.hpp>
 #include <zlink/json.hpp>
 
@@ -1701,6 +1702,8 @@ int main (int test_argc, char **test_argv)
       .add_channel_check ("games.channel")
       .add_hosted_service_check ("http.host");
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.services ().add_singleton<http_name_prefix_t> ();
         options.services ().add_singleton<auth_policy_t> ();
         options.services ().add_scoped<scoped_http_counter_t> ();

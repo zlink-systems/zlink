@@ -149,6 +149,8 @@ TEST (CppFrameworkChannelNoEligibleMember, PublicClientServerReadyWaitHasNoSendD
 {
     auto app = fw::app_t::create ();
     app.add_zlink_framework ([] (fw::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.add_client_server_channel ("selection-client-missing").client ();
     });
     auto provider = app.advanced ().services ().build_provider ();

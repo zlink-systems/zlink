@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include "allocation_counter.hpp"
 #include <zlink/framework.hpp>
 #include "runtime/client_server/client_server_location_runtime.hpp"
@@ -353,6 +354,7 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
     namespace cs = fw::runtime::client_server;
     auto app = fw::app_t::create ();
     app.add_zlink_framework ([] (fw::zlink_framework_options_t &options) {
+        options.add_location_store (std::make_shared<fw::runtime::in_memory_location_store_t> ());
         options.handlers ().group ("receive").add_send<receive_handler_t> ();
         options.add_client_server_channel ("receive").server ().listen ().add_handler_group (
           "receive");
