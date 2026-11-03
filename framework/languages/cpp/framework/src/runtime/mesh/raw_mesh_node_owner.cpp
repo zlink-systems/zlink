@@ -1038,14 +1038,12 @@ void raw_mesh_node_owner_t::disconnect_peer_intent (const std::string &endpoint)
 {
     std::vector<std::function<void ()>> notifications;
     try {
-        _lane
-          .run ([this, endpoint, &notifications] {
-              const auto found = _peer_connection_intents.find (endpoint);
-              disconnect_peer_endpoint_owned (endpoint, notifications);
-              if (found != _peer_connection_intents.end ())
-                  _peer_connection_intents.erase (found);
-          })
-          .get ();
+        _lane.run_sync ([this, endpoint, &notifications] {
+            const auto found = _peer_connection_intents.find (endpoint);
+            disconnect_peer_endpoint_owned (endpoint, notifications);
+            if (found != _peer_connection_intents.end ())
+                _peer_connection_intents.erase (found);
+        });
     }
     catch (...) {
         std::rethrow_exception (
@@ -1060,12 +1058,9 @@ void raw_mesh_node_owner_t::disconnect_peer_intent (const zlink::routing_id_t &e
 {
     std::vector<std::function<void ()>> notifications;
     try {
-        _lane
-          .run ([this, expected_routing_id, endpoint, automatic, &notifications] {
-              disconnect_peer_intent_owned (expected_routing_id, endpoint, automatic,
-                                            notifications);
-          })
-          .get ();
+        _lane.run_sync ([this, expected_routing_id, endpoint, automatic, &notifications] {
+            disconnect_peer_intent_owned (expected_routing_id, endpoint, automatic, notifications);
+        });
     }
     catch (...) {
         std::rethrow_exception (
@@ -1178,9 +1173,8 @@ raw_mesh_node_owner_t::local_accepted_source (const std::vector<std::uint8_t> &r
 void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_routing_id,
                                          const std::string &endpoint)
 {
-    _lane
-      .run ([this, &node_routing_id, &endpoint] { forget_peer_owned (node_routing_id, endpoint); })
-      .get ();
+    _lane.run_sync (
+      [this, &node_routing_id, &endpoint] { forget_peer_owned (node_routing_id, endpoint); });
 }
 
 task_t<void> raw_mesh_node_owner_t::forget_peer_async (std::vector<std::uint8_t> node_routing_id,

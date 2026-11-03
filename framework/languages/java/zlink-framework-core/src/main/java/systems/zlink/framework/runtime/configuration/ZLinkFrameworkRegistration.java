@@ -27,6 +27,7 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.stream.Collectors;
 
 public final class ZLinkFrameworkRegistration {
@@ -240,6 +241,14 @@ public final class ZLinkFrameworkRegistration {
     void useHandlerExecutor(Executor executor) {
         if (executor == null) {
             throw new ZLinkConfigurationException("handler executor is required");
+        }
+        if (executor instanceof ThreadPoolExecutor pool) {
+            var rejectionHandler = pool.getRejectedExecutionHandler();
+            if (rejectionHandler instanceof ThreadPoolExecutor.DiscardPolicy
+                    || rejectionHandler instanceof ThreadPoolExecutor.DiscardOldestPolicy) {
+                throw new ZLinkConfigurationException(
+                        "handler executor rejection policy must not discard tasks");
+            }
         }
         closeOwnedHandlerExecutor();
         handlerExecutor = executor;

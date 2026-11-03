@@ -2039,12 +2039,9 @@ void mesh_node_runtime_t::disconnect_peer (const zlink::routing_id_t &expected_r
         return;
     const auto node = _node;
     (void) _state->spot_state->runtime_failures ()->capture ([&] {
-        const bool manual =
-          automatic
-          && _state->lane
-               .run (
-                 [&] { return retains_manual_peer_owned (*_state, expected_routing_id, endpoint); })
-               .get ();
+        const bool manual = automatic && _state->lane.run_sync ([&] {
+            return retains_manual_peer_owned (*_state, expected_routing_id, endpoint);
+        });
         if (!manual)
             node->transport ().disconnect_peer_intent (expected_routing_id, endpoint, automatic);
     });
