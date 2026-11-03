@@ -3355,7 +3355,6 @@ void mesh_node_host_service_t::visit_relocation_nodes (
 
 bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state_t state) noexcept
 {
-    std::lock_guard lock (_descriptor_publish_mutex);
     try {
         if (state == framework_runtime_state_t::draining) {
             for (const auto &node : _nodes) {
@@ -3363,6 +3362,10 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
                 node->native_node ().transport ().publish_draining ().result ().value ();
             }
         }
+        // Native publication belongs to the raw owner. Take the Store publication
+        // mutex only after that executor completes, before reading any descriptor
+        // state, so recovery can progress while native draining is pending.
+        std::lock_guard lock (_descriptor_publish_mutex);
         const auto owner = current_location_owner ();
         if (!_location_store || !owner)
             return _published_mesh_descriptors.empty ();
