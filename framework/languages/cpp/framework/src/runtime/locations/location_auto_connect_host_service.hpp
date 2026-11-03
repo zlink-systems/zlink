@@ -683,9 +683,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 }
                 released_endpoints.insert (it->second.endpoint);
                 co_await disconnect (state, it->second);
+                it = loop.active.erase (it);
                 if (_stop_requested.stop_requested ())
                     co_return;
-                it = loop.active.erase (it);
             } else {
                 ++it;
             }
@@ -717,6 +717,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                        || current->second.original->owner_id != target.original->owner_id
                        || current->second.lifecycle_generation != target.lifecycle_generation) {
                 co_await disconnect (state, current->second);
+                loop.active.erase (current);
                 /* A descriptor replacement is a two-phase lifecycle change.
                  * The disconnect command only schedules physical pipe
                  * teardown in the binding runtime. Connecting the new
@@ -726,7 +727,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                  * the replacement after the teardown has progressed. */
                 if (_stop_requested.stop_requested ())
                     co_return;
-                loop.active.erase (current);
             } else {
                 /* A connect submission can be rejected while the previous
                  * same-endpoint RID is still closing. Keep reconciling the
