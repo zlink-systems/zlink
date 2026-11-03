@@ -37,6 +37,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
     private readonly ZLinkLocationOptions _options;
     private readonly IZLinkLocationRepository _store;
     private readonly TimeProvider _time;
+    internal TimeProvider TimeProvider => _time;
     private readonly IReadOnlyList<KeyValuePair<string, string>> _metricScopes;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly ZLinkStateLane _lane = new();
@@ -476,7 +477,8 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                     ZLinkDescriptorPublicationUnconfirmedException.WriteAsync(
                         token => _store.UpdateMeshNodeAsync(stamped, intent, token),
                         _options.OwnerLeaseRenewTimeout,
-                        cancellationToken
+                        cancellationToken,
+                        _time
                     ),
                 ZLinkLocationKind.MeshNode,
                 ZLinkLocationKeyCodec.EncodeMeshNodeKey(

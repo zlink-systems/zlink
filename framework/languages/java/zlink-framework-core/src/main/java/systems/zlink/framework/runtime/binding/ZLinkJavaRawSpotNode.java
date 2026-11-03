@@ -10,6 +10,7 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.actors.ZLinkActorCallbackCancellation;
 import systems.zlink.framework.actors.ZLinkSessionBindingIdentity;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
@@ -1041,6 +1042,18 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         new ZlinkSubmitException(SubmitResult.NOT_FOUND));
             }
             case STALE_SEQUENCE -> {
+                var failure =
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                "STREAM bound-session sequence is stale");
+                owner.reportStaleBoundSessionRelay(
+                        actor.actorId(),
+                        routingId(),
+                        sourceSessionRid,
+                        streamHeader == null ? null : streamHeader.name(),
+                        streamHeader == null ? null : streamHeader.correlationId().orElse(null),
+                        false,
+                        failure);
                 return CompletableFuture.failedFuture(
                         new ZlinkSubmitException(SubmitResult.NOT_ADMITTED));
             }
@@ -1117,8 +1130,19 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         new IllegalStateException("STREAM session binding is no longer current"));
             }
             case STALE_SEQUENCE -> {
-                return CompletableFuture.failedFuture(
-                        new IllegalStateException("STREAM bound-session sequence is stale"));
+                var failure =
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                "STREAM bound-session sequence is stale");
+                owner.reportStaleBoundSessionRelay(
+                        actor.actorId(),
+                        routingId(),
+                        sourceSessionRid,
+                        streamHeader.name(),
+                        streamHeader.correlationId().orElse(null),
+                        true,
+                        failure);
+                return CompletableFuture.failedFuture(failure);
             }
             case ADMITTED -> {}
         }
@@ -1823,12 +1847,35 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure,
             Runnable terminalRelease) {
+        return enqueueRemoteActor(
+                source,
+                header,
+                acceptedJournalRecord,
+                parts,
+                contentType,
+                null,
+                reply,
+                failure,
+                terminalRelease);
+    }
+
+    boolean enqueueRemoteActor(
+            ZLinkInternalMeshNode.PeerAuthorityFence source,
+            ZLinkServiceM6BWireCodec.ActorMessage header,
+            Supplier<byte[]> acceptedJournalRecord,
+            List<Message> parts,
+            String contentType,
+            String packetName,
+            Consumer<List<Message>> reply,
+            Consumer<Throwable> failure,
+            Runnable terminalRelease) {
         return dispatchActorIngress(
                         source,
                         header,
                         acceptedJournalRecord,
                         parts,
                         contentType,
+                        packetName,
                         reply,
                         failure,
                         terminalRelease,
@@ -1843,6 +1890,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             Supplier<byte[]> acceptedJournalRecord,
             List<Message> parts,
             String contentType,
+            String packetName,
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure,
             Runnable terminalRelease,
@@ -1909,9 +1957,28 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     sourceNodeRid,
                                     header.boundSession().sourceSessionRid(),
                                     header.boundSession().sourceBindingGeneration())
-                    || current.binding().sessionOwnerNodeGeneration() != sourceNodeGeneration
-                    || !current.accept(header.boundSession().sourceSessionSequence())) {
+                    || current.binding().sessionOwnerNodeGeneration() != sourceNodeGeneration) {
                 return null;
+            }
+            if (!current.accept(header.boundSession().sourceSessionSequence())) {
+                var staleSequence =
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                "Actor bound-session relay sequence is stale");
+                owner.reportStaleBoundSessionRelay(
+                        actor.actorId(),
+                        sourceNodeRid,
+                        header.boundSession().sourceSessionRid(),
+                        packetName,
+                        header.correlation() == null
+                                ? null
+                                : Long.toUnsignedString(header.correlation()),
+                        header.request(),
+                        staleSequence);
+                parts.forEach(Message::close);
+                if (terminalRelease != null) terminalRelease.run();
+                if (header.request() && failure != null) failure.accept(staleSequence);
+                return CompletableFuture.completedFuture(null);
             }
         }
         String targetSpotId = nativeStay.spotId();
@@ -3208,6 +3275,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             () -> acceptedRecord,
                             copied,
                             ZLinkChannelContentTypeFrame.decode(parts),
+                            null,
                             requestId == 0
                                     ? null
                                     : replies -> {

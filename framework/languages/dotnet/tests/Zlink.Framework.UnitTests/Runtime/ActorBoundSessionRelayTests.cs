@@ -332,6 +332,49 @@ public sealed class ActorBoundSessionRelayTests
     }
 
     [Fact]
+    public void RelayedSessionSequence_AdmitsOnlyIncreasingHighWaterValues()
+    {
+        var state = new ZLinkActorRuntimeState("actor-relay-sequence");
+        _ = state.BindSession(
+            RoutingId.From("session-node"),
+            RoutingId.From("session-a"),
+            "binding-a",
+            bindingGeneration: 1,
+            objectGeneration: 7,
+            authorityOwnerGeneration: 1,
+            meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
+            targetNodeGeneration: 1,
+            ownerLeaseGeneration: 1,
+            sessionOwnerNodeGeneration: 1,
+            acceptedHighWater: 3
+        );
+
+        Assert.False(state.RecordRelocatedSessionAccepted(RoutingId.From("session-a"), 3));
+        Assert.False(state.RecordRelocatedSessionAccepted(RoutingId.From("session-a"), 2));
+        Assert.True(state.RecordRelocatedSessionAccepted(RoutingId.From("session-a"), 4));
+        Assert.True(state.TryGetBoundSession(out var current));
+        Assert.Equal((ulong)4, current.AcceptedHighWater);
+    }
+
+    [Fact]
+    public void BindSessionSameBindingToken_DoesNotLowerAcceptedHighWater()
+    {
+        var state = new ZLinkActorRuntimeState("actor-rebind-high-water");
+        _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1, acceptedHighWater: 5);
+        Assert.True(state.RecordRelocatedSessionAccepted(RoutingId.From("session-a"), 6));
+
+        _ = Bind(state, "binding-a", "session-a", authorityGeneration: 1, acceptedHighWater: 5);
+
+        Assert.True(state.TryGetBoundSession(out var sameBinding));
+        Assert.Equal((ulong)6, sameBinding.AcceptedHighWater);
+
+        _ = Bind(state, "binding-b", "session-b", authorityGeneration: 2, acceptedHighWater: 2);
+
+        Assert.True(state.TryGetBoundSession(out var nextBinding));
+        Assert.Equal((ulong)2, nextBinding.AcceptedHighWater);
+    }
+
+    [Fact]
     public async Task Previous_Session_Unbind_Cannot_Invalidate_The_Replacement_Turn()
     {
         var state = new ZLinkActorRuntimeState("actor-previous-unbind-race");
@@ -559,7 +602,8 @@ public sealed class ActorBoundSessionRelayTests
         ZLinkActorRuntimeState state,
         string token,
         string session,
-        ulong authorityGeneration
+        ulong authorityGeneration,
+        ulong acceptedHighWater = 0
     )
     {
         return state.BindSession(
@@ -573,7 +617,7 @@ public sealed class ActorBoundSessionRelayTests
             targetNodeGeneration: 1,
             ownerLeaseGeneration: 1,
             sessionOwnerNodeGeneration: 1,
-            acceptedHighWater: 0
+            acceptedHighWater: acceptedHighWater
         );
     }
 

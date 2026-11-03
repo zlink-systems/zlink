@@ -207,7 +207,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
             .WriteAsync(
                 token => _store.UpdateClientServerAsync(descriptor, intent, token),
                 _options.OwnerLeaseRenewTimeout,
-                cancellationToken
+                cancellationToken,
+                _locationRuntime.TimeProvider
             )
             .ConfigureAwait(false);
         if (
@@ -223,7 +224,8 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                             token
                         ),
                     _options.OwnerLeaseRenewTimeout,
-                    cancellationToken
+                    cancellationToken,
+                    _locationRuntime.TimeProvider
                 )
                 .ConfigureAwait(false);
         if (result.Status != ZLinkLocationWriteStatus.Stored)
