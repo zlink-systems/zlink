@@ -17,6 +17,30 @@ internal static class ZLinkActorBoundSessionRelay
         );
     }
 
+    internal static bool IsSessionDisconnectedRelay(
+        ZlinkStreamHeader header,
+        ReadOnlySpan<byte> payload,
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration,
+        ulong bindingGeneration
+    )
+    {
+        return string.Equals(
+                header.Name,
+                ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName,
+                StringComparison.Ordinal
+            )
+            && TryDecodeSessionDisconnected(
+                payload,
+                out var sessionOwnerNodeRid,
+                out var sessionOwnerNodeGeneration,
+                out var payloadBindingGeneration
+            )
+            && sessionOwnerNodeRid == sourceNodeRid
+            && sessionOwnerNodeGeneration == sourceNodeGeneration
+            && payloadBindingGeneration == bindingGeneration;
+    }
+
     private const int DisconnectedGenerationBytes = sizeof(ulong) * 2;
 
     internal static bool MatchesRelaySource(

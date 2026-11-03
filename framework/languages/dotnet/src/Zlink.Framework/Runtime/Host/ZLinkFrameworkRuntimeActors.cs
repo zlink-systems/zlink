@@ -6,6 +6,8 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Spots;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
@@ -4242,6 +4244,21 @@ internal sealed partial class ZLinkFrameworkRuntime
             deadlineUnixMs,
             IsBoundSessionRoute: hasBoundSessionFence
         );
+        var relayedHeader = routeContext.IsDirectRoute
+            ? null
+            : ZLinkStreamProtocolDefaults.DecodeHeader(header);
+        // Disconnect uses Request so the Session owner can receive its terminal reply. Its exact
+        // identity body and relay fence distinguish it from an application Request with this name.
+        var isSessionDisconnected =
+            hasBoundSessionFence
+            && relayedHeader is not null
+            && ZLinkActorBoundSessionRelay.IsSessionDisconnectedRelay(
+                relayedHeader,
+                body,
+                sourceNodeRid,
+                sourceNodeGeneration,
+                boundSessionFence.BindingGeneration
+            );
         ValidateRemoteActorFrameSource(
             actorId,
             routeContext,
@@ -4276,10 +4293,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     sourceNodeRid,
                     sourceSessionRid
                 )
-            )
-                && !ZLinkActorBoundSessionRelay.IsSessionDisconnectedPacket(
-                    ZLinkStreamProtocolDefaults.DecodeHeader(header)
-                )
+            ) && !isSessionDisconnected
         )
         {
             //  A replaced incarnation never comes back, so this is NotFound
@@ -4301,7 +4315,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     replyRequestId,
                     replyFlags,
                     replyCapability,
-                    ZLinkStreamProtocolDefaults.DecodeHeader(header),
+                    relayedHeader!,
                     staleIdentity,
                     cancellationToken
                 )
@@ -4342,16 +4356,84 @@ internal sealed partial class ZLinkFrameworkRuntime
         };
         if (!routeContext.IsDirectRoute)
         {
-            // The Session owner assigned this sequence before the frame
-            // entered the relay. Apply it before handoff capture so a frame
-            // held for replay also advances the target route watermark.
-            state.RecordRelocatedSessionAccepted(
-                sourceSessionRid,
-                boundSessionFence.SessionSequence
-            );
-            Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"session_route_watermark actor={actorId} session={sourceSessionRid} accepted={boundSessionFence.SessionSequence}"
-            );
+            var inboundHeader = relayedHeader!;
+            // Application frames carry the Session owner's sequence and
+            // advance the route watermark before handoff capture. The
+            // disconnect control record carries the last accepted sequence
+            // as its binding fence and has no application sequence of its own.
+            if (
+                !isSessionDisconnected
+                && !state.RecordRelocatedSessionAccepted(
+                    sourceSessionRid,
+                    boundSessionFence.SessionSequence
+                )
+            )
+            {
+                var staleSequence = new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    $"Actor '{actorId}' session relay sequence is stale."
+                );
+                if (
+                    inboundHeader.Kind == ZlinkStreamMessageKind.Request
+                    && inboundHeader.RequestSeq is not null
+                )
+                {
+                    if (Flow.DispatchErrorsEnabled)
+                        Flow.TraceDispatchError(
+                            new ZLinkDispatchFailure(
+                                ZLinkDispatchErrorSurface.StreamSession,
+                                ZLinkDispatchMessageKind.Request,
+                                ZLinkDispatchErrorReason.StaleTarget,
+                                ZLinkDispatchErrorAction.ReplyError,
+                                inboundHeader.Name,
+                                ActorId: actorId,
+                                SourceRid: sourceSessionRid.ToHex(),
+                                CorrelationId: inboundHeader.CorrelationId,
+                                Exception: staleSequence,
+                                StreamSessionId: sourceSessionRid.ToHex()
+                            )
+                        );
+                    await ZLinkActorBoundSessionRelay
+                        .ReplyStaleActorAsync(
+                            this,
+                            actorRef,
+                            sourceNodeRid,
+                            sourceSessionRid,
+                            replyRequestId,
+                            replyFlags,
+                            replyCapability,
+                            inboundHeader,
+                            staleSequence,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                }
+                else if (inboundHeader.Kind == ZlinkStreamMessageKind.Send)
+                {
+                    if (Flow.Enabled(ZLinkMessageFlowOutcome.Dropped))
+                        Flow.Trace(
+                            new ZLinkMessageFlowEvent(
+                                ZLinkMessageFlowOutcome.Dropped,
+                                ZLinkDispatchErrorSurface.StreamSession,
+                                ZLinkDispatchMessageKind.Send,
+                                inboundHeader.Name,
+                                CorrelationId: inboundHeader.CorrelationId,
+                                SourceRid: sourceSessionRid.ToHex(),
+                                ActorId: actorId,
+                                Result: ZLinkMessageFlowResult.Dropped,
+                                Reason: ZLinkMessageFlowReason.StaleTarget
+                            )
+                            {
+                                StreamSessionId = sourceSessionRid.ToHex(),
+                            }
+                        );
+                }
+                return;
+            }
+            if (!isSessionDisconnected)
+                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"session_route_watermark actor={actorId} session={sourceSessionRid} accepted={boundSessionFence.SessionSequence}"
+                );
         }
         var batch = ZLinkActorHandoffIngress.CaptureMovingFrames(
             Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobOrigin.Remote,

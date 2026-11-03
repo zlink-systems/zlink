@@ -2599,6 +2599,62 @@ export class ServiceStatefulRuntime {
           ) {
             throw new ServiceStaleGenerationError('binding', record.target.actor.actorId);
           }
+          if (
+            !this.registry.acceptBoundSessionSequence(
+              record.target.actor,
+              record.boundSession.bindingGeneration,
+              record.boundSession.sequence
+            )
+          ) {
+            const error = new ZLinkFrameworkException(
+              ZLinkFrameworkErrorKind.InvalidOperation,
+              'Bound Session relay sequence does not increase.'
+            );
+            const reporter = this.dispatchErrors;
+            if (record.kind === 'actorRequest') {
+              if (reporter?.captureEnabled() === true) {
+                reporter.report({
+                  surface: ZLinkDispatchErrorSurface.StreamSession,
+                  messageKind: ZLinkDispatchMessageKind.Request,
+                  reason: ZLinkDispatchErrorReason.StaleTarget,
+                  action: ZLinkDispatchErrorAction.ReplyError,
+                  meshName: this.dispatchErrorMeshName,
+                  sourceRid: ingress.sourceRoutingId,
+                  actorId: record.target.actor.actorId,
+                  correlationId: record.correlation?.toString(),
+                  error
+                });
+              }
+              const result = failure(error);
+              this.replyWire(
+                ingress,
+                record.correlation!,
+                result.terminalResult,
+                result.failureCode
+              );
+              return 'infrastructure';
+            }
+            const tracePoint = flowIfEnabled(reporter?.flow, ZLinkMessageFlowOutcome.Dropped);
+            if (tracePoint !== undefined) {
+              tracePoint.trace({
+                outcome: ZLinkMessageFlowOutcome.Dropped,
+                surface: ZLinkDispatchErrorSurface.StreamSession,
+                messageKind: ZLinkDispatchMessageKind.Send,
+                packetName: decodeApplicationPayloadView(payloadFrame!).packetName,
+                ...(this.dispatchErrorMeshName === undefined
+                  ? {}
+                  : { meshName: this.dispatchErrorMeshName }),
+                ...(record.correlation === undefined
+                  ? {}
+                  : { correlationId: record.correlation.toString() }),
+                sourceRid: ingress.sourceRoutingId,
+                actorId: record.target.actor.actorId,
+                streamSessionId: record.boundSession.sessionRid,
+                errorReason: ZLinkDispatchErrorReason.StaleTarget
+              });
+            }
+            return 'application';
+          }
         }
         return this.enqueueApplicationFrame(
           ingress,
