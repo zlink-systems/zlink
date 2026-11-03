@@ -935,7 +935,8 @@ class provider_location_repository_t final : public location_repository_t
                                           store_found_t stored_authority,
                                           authority_snapshot_t current,
                                           const object_reserve_request_t *request = nullptr,
-                                          std::stop_token cancellation = {})
+                                          std::stop_token cancellation = {},
+                                          const location_owner_token_t *required_owner = nullptr)
     {
         const bool active = current.allocation.state == placement_allocation_state_t::active;
         if (active && !request)
@@ -956,6 +957,8 @@ class provider_location_repository_t final : public location_repository_t
             owner_live = owner_lease_is_live (lease, current.owner);
             stale_owner_condition = version_condition (owner_key, found->value.version);
         }
+        if (required_owner && (!owner_live || !same_owner (current.owner, *required_owner)))
+            co_return stale_authority_reclaim_result_t::recovery_required;
         std::vector<authority_entry_t> members;
         std::optional<store_condition_t> authority_lock_condition;
         std::vector<store_condition_t> member_lock_conditions;
@@ -1167,6 +1170,17 @@ class provider_location_repository_t final : public location_repository_t
       std::stop_token cancellation = {},
       std::optional<object_reserve_request_t> request = std::nullopt) override
     {
+        return release_ended_reservation (std::move (key), std::move (expected_store_version),
+                                          cancellation, std::move (request), std::nullopt);
+    }
+
+  private:
+    task_t<bool> release_ended_reservation (authority_key_t key,
+                                            std::string expected_store_version,
+                                            std::stop_token cancellation,
+                                            std::optional<object_reserve_request_t> request,
+                                            std::optional<location_owner_token_t> required_owner)
+    {
         const auto row_key = key_authority (key.value);
         for (;;) {
             if (cancellation.stop_requested ())
@@ -1190,7 +1204,8 @@ class provider_location_repository_t final : public location_repository_t
                     co_return false;
             }
             const auto reclaimed = co_await try_reclaim_reserved_authority_async (
-              row_key, *found, current, request ? &*request : nullptr, cancellation);
+              row_key, *found, current, request ? &*request : nullptr, cancellation,
+              required_owner ? &*required_owner : nullptr);
             if (reclaimed == stale_authority_reclaim_result_t::conflict)
                 continue;
             co_return reclaimed == stale_authority_reclaim_result_t::reclaimed;
@@ -2336,6 +2351,12 @@ class provider_location_repository_t final : public location_repository_t
                 auto result = co_await abort (std::move (request), {}, nullptr, {}, {}, deadline);
                 if (std::holds_alternative<object_aborted_t> (result))
                     ++removed;
+                else if (std::holds_alternative<object_abort_conflict_t> (result)) {
+                    const auto released = co_await release_ended_reservation (
+                      *logical, snapshot.store_version, {}, std::nullopt, owner);
+                    if (released)
+                        ++removed;
+                }
             }
         }
         co_return removed;

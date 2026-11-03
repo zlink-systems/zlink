@@ -1329,11 +1329,18 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
     signal?: AbortSignal,
-    request?: ZLinkEndedOwnerReleaseIntent
+    request?: ZLinkEndedOwnerReleaseIntent,
+    requiredOwner?: ZLinkLocationOwnerToken
   ): Promise<boolean> {
     return (
-      (await this.tryReleaseEndedReservation(key, expectedStoreVersion, signal, request)) ===
-      'reclaimed'
+      (await this.tryReleaseEndedReservation(
+        key,
+        expectedStoreVersion,
+        signal,
+        request,
+        undefined,
+        requiredOwner
+      )) === 'reclaimed'
     );
   }
 
@@ -1342,7 +1349,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     expectedStoreVersion: string,
     signal?: AbortSignal,
     request?: ZLinkEndedOwnerReleaseIntent,
-    deadlineUnixMs?: bigint
+    deadlineUnixMs?: bigint,
+    requiredOwner?: ZLinkLocationOwnerToken
   ): Promise<'notReclaimable' | 'conflict' | 'reclaimed'> {
     for (;;) {
       throwIfOperationExpired(signal, deadlineUnixMs);
@@ -1377,6 +1385,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         this.provider.read(capacityRowKey, signal)
       ]);
       const ownerLive = sameLiveOwner(lease, snapshot);
+      if (
+        requiredOwner !== undefined &&
+        (!ownerLive ||
+          requiredOwner.ownerId !== snapshot.ownerId ||
+          requiredOwner.leaseGeneration !== snapshot.ownerLeaseGeneration)
+      )
+        return 'notReclaimable';
       let members: EndedSpotMember[] = [];
       if (snapshot.allocation.state === 'active') {
         if (ownerLive) return 'notReclaimable';
@@ -2929,6 +2944,18 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         signal
       );
       if (aborted.kind === 'aborted') removed += 1n;
+      else if (aborted.kind === 'stale') {
+        if (
+          await this.releaseEndedReservationRequest(
+            { value: encodedAuthority } as ZLinkAuthorityKey,
+            current.value.version.value,
+            signal,
+            undefined,
+            owner
+          )
+        )
+          removed += 1n;
+      }
     }
     return removed;
   }
