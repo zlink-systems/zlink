@@ -2828,8 +2828,24 @@ void spot_context_state_t::run_local_close_steps (
                                       next.authority_owner_generation, self->serial_queue, nullptr,
                                       operation);
                                 }();
-                                const auto created = co_await creating;
-                                co_return created->state == spot_create_state_t::created;
+                                try {
+                                    const auto created = co_await creating;
+                                    co_return created->state == spot_create_state_t::created;
+                                }
+                                catch (const framework_exception_t &) {
+                                    throw;
+                                }
+                                catch (const std::exception &error) {
+                                    // Async creation bypasses run_blocking_step's synchronous
+                                    // catch; Close consumers require the same Framework failure.
+                                    throw framework_exception_t (
+                                      framework_error_kind_t::internal_failure, error.what ());
+                                }
+                                catch (...) {
+                                    throw framework_exception_t (
+                                      framework_error_kind_t::internal_failure,
+                                      "Spot creation failed");
+                                }
                             },
                             resume),
                           resume,
