@@ -228,7 +228,8 @@ void verify_timer_waits_for_creation (zlink::framework::user_spot_execution_mode
     }
 }
 
-TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilLateCompletion)
+void verify_cancelled_creation_callback_lifetime (
+  const std::shared_ptr<zlink::framework::test::manual_internal_scheduler_t> &late_completion = {})
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -242,6 +243,8 @@ TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilL
     node->spot_factories.emplace ("preparing", std::type_index (typeid (int)));
     std::shared_ptr<spot_context_state_t> context;
     std::weak_ptr<void> instance;
+    auto instance_released = std::make_shared<task_completion_source_t<void>> ();
+    auto released = instance_released->task ();
     std::promise<void> entered;
     auto started = entered.get_future ();
     task_completion_source_t<spot_create_response_t> release;
@@ -249,12 +252,21 @@ TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilL
     lifecycle.create_spot_context_instance = [&] (spot_context_t value,
                                                   service_provider_t &) -> std::shared_ptr<void> {
         context = spot_context_access_t::state (value);
-        auto created = std::make_shared<int> (1);
+        auto created = std::shared_ptr<int> (new int (1), [instance_released] (int *value) {
+            delete value;
+            instance_released->complete (result_t<void>::success ());
+        });
         instance = created;
         return created;
     };
     lifecycle.on_create = [&] (void *, const zlink::message_t &, serializer_registry_t &) {
         entered.set_value ();
+        if (late_completion)
+            return detail::with_task_resume_scheduler (
+              release.task (), [late_completion] (std::function<void ()> work) {
+                  if (!late_completion->try_submit_internal (std::move (work)))
+                      throw std::runtime_error ("late creation completion scheduler stopped");
+              });
         return release.task ();
     };
     node->spot_lifecycles.emplace ("preparing", std::move (lifecycle));
@@ -269,6 +281,8 @@ TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilL
         }
     });
     started.get ();
+    if (late_completion)
+        observe_scheduled_expiry (node->worker_executor);
     const auto barrier = context->spot_serial_executor->preparation_lifecycle ();
     auto terminal = barrier->terminal ();
     std::atomic_int terminal_count{0};
@@ -285,10 +299,26 @@ TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilL
     node->worker_executor->drain ();
     node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
     context.reset ();
+    // The cancelled barrier terminal and worker drain do not join the callback frame.
+    // Observe the instance's release before checking its weak reference.
+    if (late_completion)
+        late_completion->run_until (released);
+    released.result ().value ();
     EXPECT_TRUE (cancelled);
     EXPECT_TRUE (callback_retained);
     EXPECT_EQ (terminal_count.load (), 1);
     EXPECT_TRUE (instance.expired ());
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilLateCompletion)
+{
+    verify_cancelled_creation_callback_lifetime ();
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationAwaitsDeferredCallbackRelease)
+{
+    verify_cancelled_creation_callback_lifetime (
+      std::make_shared<zlink::framework::test::manual_internal_scheduler_t> ());
 }
 
 TEST (ZLinkFrameworkSpotCloseConformance, SpotWideTimerWaitsForCreationPreparation)
