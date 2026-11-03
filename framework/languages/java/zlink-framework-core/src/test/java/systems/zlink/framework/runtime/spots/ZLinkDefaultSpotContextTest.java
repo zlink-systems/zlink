@@ -832,6 +832,41 @@ final class ZLinkDefaultSpotContextTest {
     }
 
     @Test
+    void instanceAdmissionFenceIsCompleteBeforeCloseStarts() {
+        TestHost host = new TestHost();
+        try (var workers = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(1))) {
+            var context = host.instanceContext(workers);
+            systems.zlink.framework.spots.ZLinkInstanceSpot spot = () -> context;
+            var activation =
+                    new ZLinkInstanceSpotActivation(null, null, spot, host.backendSpot, context);
+            var expected =
+                    new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence(
+                            context.nodeRid(),
+                            Long.MIN_VALUE,
+                            context.spotId(),
+                            context.objectGeneration(),
+                            "owner",
+                            7,
+                            2,
+                            "ready-version");
+            activation.setAuthorityFence(expected);
+
+            assertNull(activation.sealedStoreVersion());
+            var route = activation.authorityRouteFence();
+            assertEquals("owner", route.ownerId());
+            assertEquals(Long.MIN_VALUE, route.targetNodeGeneration());
+            assertEquals(7, route.authorityOwnerGeneration());
+            assertEquals(2, route.leaseGeneration());
+            assertSame(expected, route);
+            assertEquals("ready-version", route.storeVersion());
+            activation.markSealedStoreVersion("closing-version");
+            assertEquals("closing-version", activation.sealedStoreVersion());
+            assertSame(expected, activation.authorityRouteFence());
+        }
+    }
+
+    @Test
     void instanceClosingWaitsForAcceptedApplicationAndInfrastructureTurns() throws Exception {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try (ZLinkWorkerPool workerPool =
@@ -1130,7 +1165,17 @@ final class ZLinkDefaultSpotContextTest {
             systems.zlink.framework.spots.ZLinkInstanceSpot spot = () -> context;
             var activation =
                     new ZLinkInstanceSpotActivation(null, null, spot, backendSpot, context);
-            activation.setAuthorityFence("owner", 1, 1, 1);
+            activation.setAuthorityFence(
+                    new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence(
+                            context.nodeRid(),
+                            1,
+                            context.spotId(),
+                            context.objectGeneration(),
+                            "owner",
+                            1,
+                            1,
+                            "store-version"));
             activation.closeCoordinator(
                     () ->
                             new ZLinkSpotCloseCoordinator(
