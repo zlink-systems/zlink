@@ -258,6 +258,11 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     @Test
+    void readyRouteCapturedBeforeCloseAdmitsOnPublishedSuccessor() throws Exception {
+        verifyCloseFailure(CloseScenario.CREATING_CAPTURED_ADMISSION);
+    }
+
+    @Test
     void creatingIntentCrossingClosePendingCutRetainsPayloadUntilSuccessorCompletes()
             throws Exception {
         verifyCloseFailure(CloseScenario.CREATING_RETAINED);
@@ -325,6 +330,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         CREATING_RELEASED,
         CREATING_REPLACED,
         CREATING_RETAINED,
+        CREATING_CAPTURED_ADMISSION,
         CREATING_ADMISSION_BEFORE_CLOSE,
         CREATING_ADMISSION_AFTER_CLOSE,
         CREATING_AUTHORITY_AFTER_CLOSE,
@@ -342,6 +348,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         boolean creating =
                 failureStage == CloseScenario.CREATING
                         || failureStage == CloseScenario.CREATING_RETAINED
+                        || failureStage == CloseScenario.CREATING_CAPTURED_ADMISSION
                         || failureStage == CloseScenario.CREATING_ADMISSION_BEFORE_CLOSE
                         || failureStage == CloseScenario.CREATING_ADMISSION_AFTER_CLOSE
                         || failureStage == CloseScenario.CREATING_AUTHORITY_AFTER_CLOSE
@@ -352,8 +359,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                 failureStage == CloseScenario.CREATING_ADMISSION_BEFORE_CLOSE
                         || failureStage == CloseScenario.CREATING_ADMISSION_AFTER_CLOSE
                         || failureStage == CloseScenario.CREATING_AUTHORITY_AFTER_CLOSE;
+        boolean capturedAdmission = failureStage == CloseScenario.CREATING_CAPTURED_ADMISSION;
         boolean retainedBoundary =
-                failureStage == CloseScenario.CREATING_RETAINED || admissionBoundary;
+                failureStage == CloseScenario.CREATING_RETAINED
+                        || capturedAdmission
+                        || admissionBoundary;
         boolean replacedBoundary = failureStage == CloseScenario.CREATING_REPLACED;
         boolean releasedBoundary = failureStage == CloseScenario.CREATING_RELEASED;
         boolean sealedBoundary = failureStage == CloseScenario.CREATING_SEALED || releasedBoundary;
@@ -543,7 +553,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                         return;
                     }
                     if (retainedBoundary || sealedBoundary) {
-                        if (retainedBoundary && !admissionBoundary)
+                        if (retainedBoundary && !admissionBoundary && !capturedAdmission)
                             SourceEntrySpot.afterCloseStart.complete(null);
                         SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
                         try (var boundary =
@@ -601,6 +611,43 @@ final class InstanceSpotRuntimeIntegrationTest {
                             boundary.resumeAdmission.complete(null);
                             boundary.admitted.get(5, TimeUnit.SECONDS);
                             assertEquals(0, boundary.releases.get());
+                            if (capturedAdmission) {
+                                backend.beforeInstanceAdmission = new CompletableFuture<>();
+                                try {
+                                    SourceEntrySpot.afterCloseStart.complete(null);
+                                    var captured =
+                                            backend.beforeInstanceAdmission.get(
+                                                    5, TimeUnit.SECONDS);
+                                    assertFalse(captured.ownerId().isBlank());
+                                    assertFalse(captured.storeVersion().isBlank());
+                                    assertEquals(
+                                            EchoInstanceSpot.generations.getFirst(),
+                                            captured.objectGeneration());
+                                    boundary.resumeClose.complete(null);
+                                    assertEquals(
+                                            "echo:retained",
+                                            boundary.reply.get(5, TimeUnit.SECONDS));
+                                    assertTrue(
+                                            EchoInstanceSpot.closeCompleted.get(
+                                                    5, TimeUnit.SECONDS));
+                                    assertNotEquals(
+                                            captured.objectGeneration(),
+                                            EchoInstanceSpot.generations.getLast());
+                                    assertEquals(
+                                            List.of(EchoInstanceSpot.generations.getLast()),
+                                            EchoInstanceSpot.retainedCalls);
+                                    backend.resumeInstanceAdmission.complete(null);
+                                    assertEquals(
+                                            "echo:hello|echo:again|echo:after-close",
+                                            awaitSourceReplyWithDiagnostics(
+                                                    spotId, requestFlowCapture));
+                                    boundary.released.get(5, TimeUnit.SECONDS);
+                                    assertEquals(1, boundary.releases.get());
+                                } finally {
+                                    backend.resumeInstanceAdmission.complete(null);
+                                }
+                                return;
+                            }
                             if (admissionBoundary) {
                                 try (var readBoundary =
                                         new InstanceAdmissionReadBoundary(
@@ -1208,6 +1255,11 @@ final class InstanceSpotRuntimeIntegrationTest {
                 new java.util.concurrent.ConcurrentHashMap<>();
         private volatile ZLinkInternalSpotNode spotNode;
         private volatile ZLinkInternalSpotNode.SpotAdmissionResolver resolver;
+        private volatile CompletableFuture<
+                        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                                .InstanceRouteFence>
+                beforeInstanceAdmission;
+        private final CompletableFuture<Void> resumeInstanceAdmission = new CompletableFuture<>();
 
         private ZLinkInternalSpotNode observe(ZLinkInternalSpotNode node) {
             spotNode = node;
@@ -1237,6 +1289,14 @@ final class InstanceSpotRuntimeIntegrationTest {
                     ZLinkInternalMeshNode.InstanceSpotActivationHandler.class,
                     handler,
                     (method, args) -> {
+                        if (method.getName().equals("admitExisting")
+                                && beforeInstanceAdmission != null) {
+                            beforeInstanceAdmission.complete(
+                                    (systems.zlink.framework.runtime.internal.service
+                                                    .ZLinkServiceM6BWireCodec.InstanceRouteFence)
+                                            args[0]);
+                            resumeInstanceAdmission.orTimeout(5, TimeUnit.SECONDS).join();
+                        }
                         if (method.getName().equals("activate")) {
                             args = args.clone();
                             var original = (ZLinkBackendSpot) args[2];
