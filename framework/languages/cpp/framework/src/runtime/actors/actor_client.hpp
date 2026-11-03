@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/actors/actor.hpp>
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 #include <zlink/framework/contracts/locations/options.hpp>
 #include <zlink/framework/contracts/locations/stores.hpp>
@@ -32,6 +33,17 @@ make_actor_client (live_location_reader_t &store,
                    std::shared_ptr<actor_location_observer_t> actor_locations,
                    location_options_t options,
                    detail::delay_owner_t &delays);
+
+// Internal fixture access to the production cache and prepared receiver.
+struct actor_client_test_access_t
+{
+    static void cache (actor_client_t &client, const protocol::actor_route_fence_t &fence);
+    static bool cached (actor_client_t &client, const std::string &actor_id);
+    static detail::request_receiver_t<result_t<messaging::message_parts_t>>
+    prepare (actor_client_t &client,
+             const protocol::actor_route_fence_t &fence,
+             detail::request_receiver_t<result_t<message_t>> receiver);
+};
 
 // Internal transport fixture used by relocation process tests. It preserves
 // the supplied ActorRef route while still applying the current authority

@@ -842,6 +842,11 @@ Records whose deletion was not confirmed may remain and follow owner lease expir
 the existing conditional release rules in
 [Location runtime §11](01-location-runtime.en.md#11-cleaning-up-store-records-when-a-host-shuts-down).
 
+Resources used by the prepared final consumer in
+[Submit and Completion §9](../01-execution/01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget)
+are released after the consumer has finished processing. Even during forced shutdown, processing is
+completed or cancelled and cleaned up, and resources are released only after confirming that no further access can occur.
+
 When a listener and transport are cleaned up, already-accepted transport callbacks and
 in-flight read/write operations are completed or cancelled first. In particular,
 TLS/WebSocket resources and a per-connection write queue aren't destroyed until

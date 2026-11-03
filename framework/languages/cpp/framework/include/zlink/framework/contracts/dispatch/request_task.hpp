@@ -32,6 +32,7 @@ template <typename T> struct request_receiver_t
 {
     std::shared_ptr<task_completion_source_t<void>> admitted;
     std::function<void (const result_t<T> &)> complete;
+    std::function<void (std::exception_ptr)> fail_public;
 
     template <typename TInput, typename TProject>
     request_receiver_t<TInput> project (TProject &&project)
@@ -48,7 +49,8 @@ template <typename T> struct request_receiver_t
                         }
                     }();
                     deliver (projected);
-                }};
+                },
+                std::move (fail_public)};
     }
 
     void observe (request_task_t<T> selected);
@@ -60,6 +62,7 @@ template <typename T> struct request_submission_t
 {
     task_t<T> reply;
     task_t<void> admitted;
+    task_t<T> public_reply;
 };
 
 template <typename T> std::exception_ptr request_failure (const result_t<T> &result)
@@ -91,7 +94,10 @@ template <typename TReply> class request_task_t : public task_t<TReply>
     {
         request_task_t get_return_object ()
         {
-            return request_task_t (task_t<TReply>::promise_type::get_return_object (), _admitted);
+            auto pending =
+              request_task_t (task_t<TReply>::promise_type::get_return_object (), _admitted);
+            _public_reply = pending.shared_state ();
+            return pending;
         }
 
         std::suspend_never await_transform (detail::request_admitted_t)
@@ -122,10 +128,24 @@ template <typename TReply> class request_task_t : public task_t<TReply>
             detail::observe_task_terminal (
               submission.admitted,
               [source = _admitted] (const result_t<void> &result) { source->complete (result); });
+            detail::observe_task_terminal (
+              submission.public_reply,
+              [reply = _public_reply,
+               physical = submission.reply.shared_state ()] (const auto &result) {
+                  if (auto failure = detail::request_failure (result)) {
+                      // A physical failure still belongs to the caller's codec/error mapping.
+                      // Forward only a public terminal that preceded that physical result.
+                      if (!physical->is_ready ()
+                          || detail::request_failure (physical->result ()) != failure)
+                          reply->complete (
+                            detail::result_access_t::failure<TReply> (std::move (failure)));
+                  }
+              });
             return std::move (submission.reply);
         }
 
       private:
+        std::shared_ptr<detail::task_shared_state_t<TReply>> _public_reply;
         std::shared_ptr<task_completion_source_t<void>> _admitted =
           std::make_shared<task_completion_source_t<void>> ();
     };
@@ -240,6 +260,9 @@ template <typename TReply> class request_task_t : public task_t<TReply>
               }();
               physical->complete (projected);
               reply->complete (std::move (projected));
+          },
+          [reply = this->shared_state ()] (std::exception_ptr failure) {
+              reply->complete (detail::result_access_t::failure<TReply> (std::move (failure)));
           }};
     }
 
@@ -298,6 +321,8 @@ template <typename TReply> class request_task_t : public task_t<TReply>
         });
     }
 
+    task_t<TReply> public_reply () { return task_t<TReply> (this->shared_state ()); }
+
     task_t<TReply> physical_reply () const
     {
         return detail::with_task_resume_scheduler (task_t<TReply> (_physical_reply.shared_state ()),
@@ -318,6 +343,11 @@ struct request_task_access_t
     template <typename T> static auto physical_reply (const request_task_t<T> &task)
     {
         return task.physical_reply ();
+    }
+
+    template <typename T> static auto public_reply (request_task_t<T> &task)
+    {
+        return task.public_reply ();
     }
 
     template <typename T> static auto admission_source (const request_task_t<T> &task)
@@ -420,7 +450,8 @@ template <typename T> void request_receiver_t<T>::observe (request_task_t<T> sel
 template <typename T> request_submission_t<T> request_submission (request_task_t<T> pending)
 {
     auto admitted = pending.admitted ();
-    return {request_task_access_t::physical_reply (pending), std::move (admitted)};
+    return {request_task_access_t::physical_reply (pending), std::move (admitted),
+            request_task_access_t::public_reply (pending)};
 }
 
 /* Projects the selected request's physical terminal into another reply type

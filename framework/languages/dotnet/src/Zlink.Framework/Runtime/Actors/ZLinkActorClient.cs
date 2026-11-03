@@ -84,14 +84,17 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                 .SendToActorAsync(actor.ToBackend(), parts, cancellationToken)
                 .ConfigureAwait(false);
             if (result.Status == ZLinkOneWaySubmitStatus.TargetNotFound)
-                InvalidateActorRoute(actorId);
+                DecideActorRouteInvalidation(
+                    actorId,
+                    route,
+                    ZLinkSubmitFailureMapper.CreateException(SubmitResult.NotFound, "Actor send")
+                );
             return result;
         }
         catch (ZLinkFrameworkException failure)
             when (ZLinkMeshCallSupport.TryMapSubmitFailure(failure, out var failed))
         {
-            if (IsStaleRoute(failure))
-                InvalidateActorRoute(actorId);
+            DecideActorRouteInvalidation(actorId, route, failure);
             return failed;
         }
     }
@@ -159,6 +162,8 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
                         parts,
                         remainingTimeout,
                         cancellationToken,
+                        actorId,
+                        route,
                         requestAdmission: requestAdmission
                     )
                     .ConfigureAwait(false);
@@ -169,12 +174,6 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             }
             terminal?.Succeeded();
             return reply;
-        }
-        catch (ZLinkFrameworkException failure) when (IsStaleRoute(failure))
-        {
-            InvalidateActorRoute(actorId);
-            terminal?.Failed(failure);
-            throw;
         }
         catch (Exception failure)
         {
@@ -242,15 +241,6 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         return remaining;
     }
 
-    private void InvalidateActorRoute(string actorId)
-    {
-        if (
-            runtime.Services.GetService(typeof(ZLinkStoreLocationResolvers))
-            is ZLinkStoreLocationResolvers rows
-        )
-            rows.InvalidateActorRoute(new ZLinkActorLocationKey(actorId));
-    }
-
     // Stale-route judgement (C++ channel_runtime route reply contract): a
     // remote error reply is a stale-route signal only when the framework
     // produced it (zlink.origin=framework marker, carried here as
@@ -290,6 +280,8 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
         CancellationToken cancellationToken,
+        string actorId,
+        ResolvedActorRoute route,
         ZLinkRequestAdmission? requestAdmission = null
     )
     {
@@ -300,19 +292,48 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             timeout,
             cancellationToken,
             reply => ZLinkActorReplyDecoder.Decode<TReply>(reply, captureFlow),
-            static failure =>
-                failure switch
-                {
-                    ZlinkSubmitException error => MapSubmitException(error, "Actor request"),
-                    ZLinkRequestTerminalException terminal => MapRequestException(
-                        terminal,
-                        "Actor request"
-                    ),
-                    ZlinkRequestException error => MapRequestException(error, "Actor request"),
-                    _ => failure,
-                },
-            requestAdmission
+            MapActorRequestFailure,
+            requestAdmission,
+            failure => DecideActorRouteInvalidation(actorId, route, failure)
         );
+    }
+
+    private static Exception MapActorRequestFailure(Exception failure) =>
+        failure switch
+        {
+            ZlinkSubmitException error => MapSubmitException(error, "Actor request"),
+            ZLinkRequestTerminalException terminal => MapRequestException(
+                terminal,
+                "Actor request"
+            ),
+            ZlinkRequestException error => MapRequestException(error, "Actor request"),
+            _ => failure,
+        };
+
+    private void DecideActorRouteInvalidation(
+        string actorId,
+        ResolvedActorRoute route,
+        Exception failure
+    )
+    {
+        var mappedFailure = MapActorRequestFailure(failure);
+        if (
+            mappedFailure is not ZLinkFrameworkException frameworkFailure
+            || !IsStaleRoute(frameworkFailure)
+        )
+            return;
+
+        if (
+            runtime.Services.GetService(typeof(ZLinkStoreLocationResolvers))
+            is ZLinkStoreLocationResolvers rows
+        )
+            rows.InvalidateActorRoute(
+                new ZLinkActorLocationKey(actorId),
+                route.ActorRef,
+                route.TargetNodeGeneration,
+                route.AuthorityOwnerGeneration,
+                route.OwnerLeaseGeneration
+            );
     }
 
     private async ValueTask<ZLinkSpotNodeRuntime> GetActorSpotNodeAsync(
