@@ -3215,7 +3215,8 @@ public sealed partial class EntrySpotActorDispatchTests
         RoutingId sessionNode,
         string session,
         ulong generation,
-        List<(RequestResult Result, uint Code, string? Message)> replies
+        List<(RequestResult Result, uint Code, string? Message)> replies,
+        CancellationToken cancellationToken = default
     ) =>
         await runtime.ApplyBoundSessionBindAsync(
             actorRef.NodeRid,
@@ -3223,7 +3224,7 @@ public sealed partial class EntrySpotActorDispatchTests
             61,
             CanonicalBind(actorRef, session, generation),
             (result, code, message) => replies.Add((result, code, message)),
-            CancellationToken.None
+            cancellationToken
         );
 
     [Fact]
@@ -3409,6 +3410,127 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         finally
         {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteSessionBind_WithoutDuplicateCallback_DoesNotWaitForPreviousSessionDisconnect()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            )
+        );
+        var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+        state.BindNativeActorRef(actorRef);
+        var actorCreation = await state.GetOrStartActorCreationAsync(
+            "probe",
+            failIfExists: false,
+            () =>
+            {
+                var context = state.GetOrCreateContext(() =>
+                    new ZLinkActorContext(
+                        runtime,
+                        state,
+                        "entry",
+                        actorRef.Generation,
+                        spotId: null,
+                        new ZLinkBoundSessionService(runtime)
+                    )
+                );
+                return Task.FromResult<IZLinkActor>(new CreationProbeActor(context));
+            },
+            CancellationToken.None
+        );
+        state.BindActorInstance(await actorCreation.Task);
+        var sessionNode = RoutingId.From("session-node-duplicate-bind");
+        node.AdmittedMeshPeers.Add(
+            new MeshNodePeer(
+                1,
+                MeshPeerSource.Discovery,
+                MeshPeerState.Admitted,
+                sessionNode,
+                61,
+                1,
+                "inproc://session-node-duplicate-bind",
+                1,
+                0,
+                1
+            )
+        );
+        node.SetLocalActorAuthorityFence(actorRef, 41, 51);
+
+        var replies = new List<(RequestResult Result, uint Code, string? Message)>();
+        var releaseDisconnect = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var disconnectStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Task? disconnectTask = null;
+        try
+        {
+            await BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-current",
+                1,
+                replies
+            );
+
+            // Model the prior Session's disconnect callback holding the Actor turn.
+            disconnectTask = state
+                .ExecuteDispatchAsync(
+                    async _ =>
+                    {
+                        disconnectStarted.TrySetResult();
+                        await releaseDisconnect.Task.ConfigureAwait(false);
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            await disconnectStarted.Task;
+
+            using var bindDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            var deadlineReached = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            using var deadlineRegistration = bindDeadline.Token.Register(() =>
+                deadlineReached.TrySetResult()
+            );
+            var bindTask = BindDuplicateSessionAsync(
+                runtime,
+                actorRef,
+                sessionNode,
+                "session-incoming",
+                2,
+                replies,
+                bindDeadline.Token
+            );
+
+            var completion = await Task.WhenAny(bindTask, deadlineReached.Task);
+            if (completion == deadlineReached.Task)
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => bindTask);
+            Assert.Same(bindTask, completion);
+            await bindTask;
+
+            Assert.False(disconnectTask.IsCompleted);
+            Assert.Equal(RequestResult.Ok, replies[^1].Result);
+            Assert.True(state.TryGetBoundSession(out var bound));
+            Assert.Equal(RoutingId.From("session-incoming"), bound.SessionRid);
+        }
+        finally
+        {
+            releaseDisconnect.TrySetResult();
+            if (disconnectTask is not null)
+                await disconnectTask;
             await runtime.StopAsync(CancellationToken.None);
         }
     }
