@@ -639,6 +639,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                       std::uint64_t expected_lifecycle_generation,
                       std::string security_identity);
     void forget_peer (const std::string &endpoint, const zlink::routing_id_t &expected);
+    task_t<void> expect_peer_async (std::string endpoint,
+                                    zlink::routing_id_t expected,
+                                    std::uint64_t expected_lifecycle_generation,
+                                    std::string security_identity);
+    task_t<void> forget_peer_async (std::string endpoint, zlink::routing_id_t expected);
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
                           const std::string &endpoint) noexcept;
@@ -903,6 +908,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                     mesh::service_mailbox_t::application_dispatch_t resume = {});
 
   private:
+    mesh::service_node_descriptor_t
+    expected_peer_descriptor (const std::string &endpoint,
+                              const zlink::routing_id_t &expected,
+                              std::uint64_t expected_lifecycle_generation,
+                              std::string security_identity) const;
+
     // Relocation flow §4.2 cut S of a source seal (stateful_object_runtime_t
     // relocation_source_cut_t), run in the first participant's execution queue.
     task_t<std::optional<std::vector<std::vector<stateful::turn_record_t>>>>

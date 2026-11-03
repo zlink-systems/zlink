@@ -57,6 +57,8 @@ class route_channel_runtime_t
 
     bool connect (std::string endpoint);
     bool connect (zlink::routing_id_t peer_rid, std::string endpoint);
+    task_t<bool> connect_async (zlink::routing_id_t peer_rid, std::string endpoint);
+    task_t<bool> disconnect_async (zlink::routing_id_t peer_rid, std::string endpoint);
     bool disconnect (const std::string &endpoint);
     bool disconnect (const zlink::routing_id_t &peer_rid, const std::string &endpoint);
     std::vector<std::string> list_connections () const;
@@ -130,10 +132,13 @@ class route_channel_runtime_t
     std::size_t pending_request_count () const;
 
   private:
+    friend runtime::state_lane_t &auto_connect_owner_lane (route_channel_runtime_t &owner);
     struct state_t;
     struct removed_route_t;
     struct ready_observer_t;
     bool disconnect_endpoint (std::optional<zlink::routing_id_t> peer_rid, std::string endpoint);
+    task_t<bool> disconnect_endpoint_async (std::optional<zlink::routing_id_t> peer_rid,
+                                            std::string endpoint);
     static result_t<void> submit_send_unlocked (const std::shared_ptr<state_t> &state,
                                                 const zlink::routing_id_t &target,
                                                 std::optional<std::string> spot,
@@ -160,5 +165,7 @@ class route_channel_runtime_t
                     const std::optional<removed_route_t> *send_change = nullptr);
     std::shared_ptr<state_t> _state;
 };
+
+runtime::state_lane_t &auto_connect_owner_lane (route_channel_runtime_t &owner);
 
 } // namespace zlink::framework::detail
