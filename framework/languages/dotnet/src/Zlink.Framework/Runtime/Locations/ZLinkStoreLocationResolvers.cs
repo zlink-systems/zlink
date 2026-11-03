@@ -300,6 +300,31 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         AwaitStateLane(_lane.RunAsync(() => _actorRoutes.Remove(key)));
     }
 
+    internal bool InvalidateActorRoute(
+        ZLinkActorLocationKey key,
+        ActorRef actorRef,
+        ulong ownerNodeGeneration,
+        ulong authorityOwnerGeneration,
+        ulong ownerLeaseGeneration
+    ) =>
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (!_actorRoutes.TryGetValue(key, out var cached))
+                    return false;
+                var row = cached.Row;
+                if (
+                    row.ActorRef != actorRef
+                    || row.OwnerNodeGeneration != ownerNodeGeneration
+                    || row.AuthorityOwnerGeneration != authorityOwnerGeneration
+                    || row.LeaseGeneration <= 0
+                    || (ulong)row.LeaseGeneration != ownerLeaseGeneration
+                )
+                    return false;
+                return _actorRoutes.Remove(key);
+            })
+        );
+
     internal bool InvalidateMessageFollowRoute(ZLinkServiceWireCodec.MessageFollowRecord record)
     {
         var source = record.Source;

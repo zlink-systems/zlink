@@ -9356,6 +9356,66 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task Actor_Send_TargetNotFound_Preserves_Replaced_Route()
+    {
+        IZLinkLocationRepository? locationStore = null;
+        var node = new CapturingSpotNode { ActorSendResult = SubmitResult.NotFound };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            includeActorFactory: false,
+            locationStoreCapture: store => locationStore = store
+        );
+        try
+        {
+            var client = new ZLinkActorClient(runtime);
+            var rows = runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+            var key = new ZLinkActorLocationKey(actor.ActorId);
+            var oldRoute = Assert.IsType<ZLinkResolvedActorLocation>(
+                await rows.ResolveActorRowAsync(key)
+            );
+            node.BeforeActorSendAsync = async () =>
+            {
+                rows.InvalidateActorRoute(key);
+                var replacementRid = RoutingId.From("replacement-send-node");
+                Assert.NotNull(
+                    await AuthorityLocationTestFixture.PublishActorAsync(
+                        locationStore!,
+                        oldRoute with
+                        {
+                            ActorRef = new ActorRef(
+                                actor.ActorId,
+                                oldRoute.ActorRef.ObjectGeneration + 1,
+                                oldRoute.MeshName,
+                                replacementRid
+                            ),
+                            OwnerNodeRid = replacementRid,
+                            OwnerNodeGeneration = oldRoute.OwnerNodeGeneration + 1,
+                        },
+                        replace: true
+                    )
+                );
+                Assert.NotNull(await rows.ResolveActorRowAsync(key));
+            };
+
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                client.SendToActor(actor.ActorId, new ProbeRouteMessage("stale")).Async().AsTask()
+            );
+
+            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+            Assert.True(rows.HasCachedActorRoute(key));
+            Assert.Equal(
+                oldRoute.ActorRef.ObjectGeneration + 1,
+                (await rows.ResolveActorRowAsync(key))!.ActorRef.ObjectGeneration
+            );
+            Assert.Single(node.ActorSends);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Diagnostics_Off_Actor_Send_Creates_Neither_Wire_Flow_Nor_Activity()
     {
         var node = new CapturingSpotNode { ActorSendAccepted = true };
@@ -9575,6 +9635,127 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             await runtime.StopAsync(CancellationToken.None);
         }
+    }
+
+    [Fact]
+    public async Task Actor_Request_Late_Stale_Physical_Failure_Invalidates_Matching_Route()
+    {
+        Message? delivered = null;
+        var node = new CapturingSpotNode
+        {
+            LateActorReplyFactory = () => delivered = CreateStaleActorReply(),
+        };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            var rows = runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+            var key = new ZLinkActorLocationKey(actor.ActorId);
+            Assert.NotNull(await rows.ResolveActorRowAsync(key));
+
+            var timeout = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await new ZLinkActorClient(runtime)
+                    .RequestToActor(actor.ActorId, new ProbeRouteMessage("request"))
+                    .Timeout(TimeSpan.FromSeconds(1))
+                    .Async<ProbeReply>()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, timeout.Kind);
+            Assert.True(rows.HasCachedActorRoute(key));
+
+            node.DeliverLateActorReply();
+
+            Assert.True(delivered is not null);
+            Assert.Throws<ObjectDisposedException>(() => delivered!.AsReadOnlySpan());
+            Assert.False(rows.HasCachedActorRoute(key));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task Actor_Request_Late_Stale_Physical_Failure_Preserves_Newer_Route()
+    {
+        IZLinkLocationRepository? locationStore = null;
+        Message? delivered = null;
+        var node = new CapturingSpotNode
+        {
+            LateActorReplyFactory = () => delivered = CreateStaleActorReply(),
+        };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            locationStoreCapture: store => locationStore = store
+        );
+        try
+        {
+            var rows = runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+            var key = new ZLinkActorLocationKey(actor.ActorId);
+            var oldRoute = Assert.IsType<ZLinkResolvedActorLocation>(
+                await rows.ResolveActorRowAsync(key)
+            );
+
+            var timeout = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await new ZLinkActorClient(runtime)
+                    .RequestToActor(actor.ActorId, new ProbeRouteMessage("request"))
+                    .Timeout(TimeSpan.FromSeconds(1))
+                    .Async<ProbeReply>()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, timeout.Kind);
+
+            rows.InvalidateActorRoute(key);
+            var replacementRid = RoutingId.From("replacement-node");
+            Assert.NotNull(
+                await AuthorityLocationTestFixture.PublishActorAsync(
+                    locationStore!,
+                    oldRoute with
+                    {
+                        ActorRef = new ActorRef(
+                            actor.ActorId,
+                            oldRoute.ActorRef.ObjectGeneration + 1,
+                            oldRoute.MeshName,
+                            replacementRid
+                        ),
+                        OwnerNodeRid = replacementRid,
+                        OwnerNodeGeneration = oldRoute.OwnerNodeGeneration + 1,
+                    },
+                    replace: true
+                )
+            );
+            Assert.NotNull(await rows.ResolveActorRowAsync(key));
+            Assert.True(rows.HasCachedActorRoute(key));
+
+            node.DeliverLateActorReply();
+
+            Assert.True(delivered is not null);
+            Assert.Throws<ObjectDisposedException>(() => delivered!.AsReadOnlySpan());
+            Assert.True(rows.HasCachedActorRoute(key));
+            Assert.Equal(
+                oldRoute.ActorRef.ObjectGeneration + 1,
+                (await rows.ResolveActorRowAsync(key))!.ActorRef.ObjectGeneration
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static Message CreateStaleActorReply()
+    {
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Error,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.HasRequestSeq,
+            new ZlinkStreamRequestSeq(1),
+            string.Empty,
+            ZlinkStreamMetadata.Empty
+        );
+        return Message.From(
+            ZLinkStreamFrameCodec.Encode(
+                ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
+                "{\"code\":\"not_found\",\"message\":\"actor route is stale\"}"u8
+            )
+        );
     }
 
     [Theory]
@@ -12821,6 +13002,7 @@ public sealed partial class EntrySpotActorDispatchTests
         Action<ZLinkLocationRuntime>? locationRuntimeCapture = null,
         Func<IZLinkMeshNodeLocationResolver, IZLinkMeshNodeLocationResolver>? meshResolverWrapper =
             null,
+        Action<IZLinkLocationRepository>? locationStoreCapture = null,
         AcceptedSendProbe? acceptedSendProbe = null,
         ILoggerFactory? loggerFactory = null,
         TimeProvider? joinTimeProvider = null,
@@ -12833,6 +13015,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var runtimeLocationProvider =
             locationStoreWrapper?.Invoke(locationProvider) ?? locationProvider;
         var locationStore = new ZLinkProviderLocationRepository(locationProvider);
+        locationStoreCapture?.Invoke(locationStore);
         var runtimeLocationStore = new ZLinkProviderLocationRepository(runtimeLocationProvider);
         await locationStore.ClaimLiveOwnerAsync(locationOwnerId, TimeSpan.FromMinutes(5));
         var locationOptions = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
@@ -15591,6 +15774,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public bool ActorSendAccepted { get; set; }
 
+        public Func<Task>? BeforeActorSendAsync { get; set; }
+
         public SubmitResult? ActorSendResult { get; set; }
 
         public List<(ZLinkBackendActorRef Actor, IReadOnlyList<byte[]> Parts)> ActorSends { get; } =
@@ -15641,6 +15826,16 @@ public sealed partial class EntrySpotActorDispatchTests
             CancellationToken,
             ValueTask<IReadOnlyList<Message>>
         >? ActorRequestSubmissionHandler { get; set; }
+
+        public Func<Message>? LateActorReplyFactory { get; set; }
+
+        private Action? LateActorRequestDelivery { get; set; }
+
+        public void DeliverLateActorReply() =>
+            (
+                LateActorRequestDelivery
+                ?? throw new InvalidOperationException("No late Actor reply is prepared.")
+            )();
 
         public ConcurrentBag<ZLinkBackendActorRef> DestroyedActors { get; } = [];
 
@@ -16268,7 +16463,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 ?? (ActorSendAccepted ? SubmitResult.Ok : SubmitResult.Backpressured);
         }
 
-        public ValueTask SendToActorAsync(
+        public async ValueTask SendToActorAsync(
             ZLinkBackendActorRef actor,
             IReadOnlyList<Message> parts,
             SendFlags flags,
@@ -16278,12 +16473,11 @@ public sealed partial class EntrySpotActorDispatchTests
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (BeforeActorSendAsync is not null)
+                    await BeforeActorSendAsync().WaitAsync(cancellationToken);
                 var result = SendToActor(actor, parts, flags);
-                return result == SubmitResult.Ok
-                    ? ValueTask.CompletedTask
-                    : ValueTask.FromException(
-                        new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result)
-                    );
+                if (result != SubmitResult.Ok)
+                    throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
             }
             finally
             {
@@ -16300,7 +16494,8 @@ public sealed partial class EntrySpotActorDispatchTests
             CancellationToken cancellationToken,
             Func<IReadOnlyList<Message>, TReply> decodeReply,
             Func<Exception, Exception> mapFailure,
-            Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null
+            Zlink.Framework.Runtime.Messaging.ZLinkRequestAdmission? requestAdmission = null,
+            Action<Exception>? physicalFailure = null
         )
         {
             if (ActorRequestNode is not null)
@@ -16311,7 +16506,8 @@ public sealed partial class EntrySpotActorDispatchTests
                     cancellationToken,
                     decodeReply,
                     mapFailure,
-                    requestAdmission
+                    requestAdmission,
+                    physicalFailure
                 );
             LastActorRequestTimeout = timeout;
             IReadOnlyList<Message> reply;
@@ -16319,7 +16515,27 @@ public sealed partial class EntrySpotActorDispatchTests
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 ActorRequests.Add((actor, CopyParts(parts)));
-                if (ActorRequestSubmissionHandler is not null)
+                if (LateActorReplyFactory is not null)
+                {
+                    var lateReply = new[] { LateActorReplyFactory() };
+                    LateActorRequestDelivery = () =>
+                    {
+                        try
+                        {
+                            _ = decodeReply(lateReply);
+                        }
+                        catch (Exception failure)
+                        {
+                            physicalFailure?.Invoke(failure);
+                        }
+                        finally
+                        {
+                            ZLinkMessageParts.DisposeAll(lateReply);
+                        }
+                    };
+                    throw new ZlinkRequestException(ZlinkRequestException.ErrorCode.TimedOut);
+                }
+                else if (ActorRequestSubmissionHandler is not null)
                     reply = await ActorRequestSubmissionHandler(
                         requestAdmission,
                         cancellationToken
@@ -16332,11 +16548,17 @@ public sealed partial class EntrySpotActorDispatchTests
             }
             catch (Exception failure)
             {
+                physicalFailure?.Invoke(failure);
                 throw mapFailure(failure);
             }
             try
             {
                 return decodeReply(reply);
+            }
+            catch (Exception failure)
+            {
+                physicalFailure?.Invoke(failure);
+                throw mapFailure(failure);
             }
             finally
             {

@@ -3737,7 +3737,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken,
         Func<IReadOnlyList<Message>, TReply> decodeReply,
         Func<Exception, Exception> mapFailure,
-        ZLinkRequestAdmission? requestAdmission
+        ZLinkRequestAdmission? requestAdmission,
+        Action<Exception>? physicalFailure = null
     )
     {
         TReply Decode(ManagedRequestCompletion completion)
@@ -3770,21 +3771,30 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     }
                     catch (Exception error)
                     {
+                        physicalFailure?.Invoke(error);
                         FailNativeDeadline(operation, error);
                     }
                 }
-                var result = SubmitActor(
-                    actor,
-                    parts,
-                    request: true,
-                    operation,
-                    SendFlags.None,
-                    out _,
-                    requestAdmission: requestAdmission,
-                    physicalCompletion: CompletePhysical
-                );
-                if (result != SubmitResult.Ok)
-                    throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
+                try
+                {
+                    var result = SubmitActor(
+                        actor,
+                        parts,
+                        request: true,
+                        operation,
+                        SendFlags.None,
+                        out _,
+                        requestAdmission: requestAdmission,
+                        physicalCompletion: CompletePhysical
+                    );
+                    if (result != SubmitResult.Ok)
+                        throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
+                }
+                catch (Exception error)
+                {
+                    physicalFailure?.Invoke(error);
+                    throw;
+                }
             },
             mapFailure: mapFailure,
             requestAdmission: requestAdmission
@@ -11748,11 +11758,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Action<ManagedRequestCompletion>? physicalCompletion = null
     )
     {
+        void CompleteTerminal(
+            RequestResult terminalResult,
+            int failureCode,
+            IReadOnlyList<Message> terminalParts
+        )
+        {
+            if (physicalCompletion is not null)
+                physicalCompletion(
+                    new ManagedRequestCompletion(terminalResult, terminalParts, failureCode)
+                );
+            else
+                CompleteManagedOperation(pending, terminalResult, failureCode, terminalParts);
+        }
+
         try
         {
             if (result != RequestResult.Ok)
             {
-                CompleteManagedOperation(pending, result, 0, Array.Empty<Message>());
+                CompleteTerminal(result, 0, Array.Empty<Message>());
                 return;
             }
 
@@ -11766,8 +11790,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 || reply.Correlation != pending.OperationId.Low
             )
             {
-                CompleteManagedOperation(
-                    pending,
+                CompleteTerminal(
                     RequestResult.ProtocolError,
                     (int)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
                     Array.Empty<Message>()
@@ -11785,8 +11808,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                 )
                 {
-                    CompleteManagedOperation(
-                        pending,
+                    CompleteTerminal(
                         RequestResult.ProtocolError,
                         (int)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
                         Array.Empty<Message>()
@@ -11823,8 +11845,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 return;
             }
 
-            CompleteManagedOperation(
-                pending,
+            CompleteTerminal(
                 (RequestResult)reply.TerminalResult,
                 checked((int)reply.FailureCode),
                 Array.Empty<Message>()
