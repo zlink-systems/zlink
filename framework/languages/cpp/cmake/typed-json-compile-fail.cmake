@@ -1,5 +1,11 @@
-execute_process(COMMAND "${COMPILER}" -std=c++20 -fsyntax-only "-DCASE=${CASE}"
-  "-I${COMMON_INCLUDE}" "-I${JSON_INCLUDE}" "${SOURCE}"
+if(MSVC)
+  set(arguments /nologo /std:c++20 /EHsc /Zs "/DCASE=${CASE}"
+    "/I${COMMON_INCLUDE}" "/I${JSON_INCLUDE}")
+else()
+  set(arguments -std=c++20 -fsyntax-only "-DCASE=${CASE}"
+    "-I${COMMON_INCLUDE}" "-I${JSON_INCLUDE}")
+endif()
+execute_process(COMMAND "${COMPILER}" ${arguments} "${SOURCE}"
   RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
 file(WRITE "${LOG}" "${output}")
 if(result EQUAL 0)

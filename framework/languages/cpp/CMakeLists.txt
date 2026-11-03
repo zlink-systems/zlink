@@ -958,7 +958,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   foreach(_case RANGE 0 11)
     add_test(NAME test_cpp_framework_typed_json_compile_fail_${_case}
       COMMAND ${CMAKE_COMMAND}
-        -DCOMPILER=${CMAKE_CXX_COMPILER} -DCASE=${_case}
+        -DCOMPILER=${CMAKE_CXX_COMPILER} -DMSVC=${MSVC} -DCASE=${_case}
         -DCOMMON_INCLUDE=${CMAKE_CURRENT_SOURCE_DIR}/common/include
         -DJSON_INCLUDE=${_typed_json_include}
         -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/Zlink.Framework.UnitTests/typed_json_compile_fail.cpp
