@@ -131,6 +131,10 @@ jobs:
           package-manager-cache: false
           node-version: 22
 
+      - name: Verify framework relocation conformance inventory
+        if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'linux-')) }}
+        run: bash scripts/ci/verify-framework-relocation-conformance.sh
+
       - name: Fetch Core and build the checkout Java binding package on Linux
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'linux-')) }}
         shell: bash
