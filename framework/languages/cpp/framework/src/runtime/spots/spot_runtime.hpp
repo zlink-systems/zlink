@@ -2519,7 +2519,7 @@ class spot_node_runtime_t
                                         std::stop_token cancellation);
     void end_relocation_activation_admissions (
       const std::vector<runtime::stateful::object_ref_t> &targets) noexcept;
-    local_spot_create_result_t create_spot_context (
+    task_t<std::shared_ptr<local_spot_create_result_t>> create_spot_context (
       std::string spot_name,
       spot_id_t spot_id,
       zlink::message_t request,

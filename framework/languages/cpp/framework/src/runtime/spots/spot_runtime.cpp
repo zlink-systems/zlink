@@ -2808,27 +2808,28 @@ void spot_context_state_t::run_local_close_steps (
                         const auto next = snapshot.value ();
                         service::after_close_step (
                           run_close_step<bool> (
-                            [self, owner, next, original, operation] {
-                                const auto command =
-                                  std::static_pointer_cast<const instance_spot_retained_message_t> (
-                                    original);
-                                auto flow = runtime::flow_context_t::enter (
-                                  command->original_activation->application_payload.flow_id,
-                                  command->original_activation->application_payload.flow_origin,
-                                  message_flow_tracer_t (owner->dispatch).mode (),
-                                  flow_origin_t::inbound, std::nullopt);
-                                const auto created =
-                                  spot_node_runtime_t (owner).create_spot_context (
-                                    command->original_activation->activation.target.stable_type,
-                                    self->spot_id,
-                                    zlink::message_t::from (
-                                      command->original_activation->application_payload
-                                        .payload_bytes ()),
-                                    next.object_generation, next.allocation.target.mesh_name, {},
-                                    next.authority_owner_generation, self->serial_queue, nullptr,
-                                    operation);
-                                return task_t<bool> (result_t<bool>::success (
-                                  created.state == spot_create_state_t::created));
+                            [self, owner, next, original, operation] () -> task_t<bool> {
+                                spot_node_runtime_t node (owner);
+                                auto creating = [&] {
+                                    const auto command = std::static_pointer_cast<
+                                      const instance_spot_retained_message_t> (original);
+                                    auto flow = runtime::flow_context_t::enter (
+                                      command->original_activation->application_payload.flow_id,
+                                      command->original_activation->application_payload.flow_origin,
+                                      message_flow_tracer_t (owner->dispatch).mode (),
+                                      flow_origin_t::inbound, std::nullopt);
+                                    return node.create_spot_context (
+                                      command->original_activation->activation.target.stable_type,
+                                      self->spot_id,
+                                      zlink::message_t::from (
+                                        command->original_activation->application_payload
+                                          .payload_bytes ()),
+                                      next.object_generation, next.allocation.target.mesh_name, {},
+                                      next.authority_owner_generation, self->serial_queue, nullptr,
+                                      operation);
+                                }();
+                                const auto created = co_await creating;
+                                co_return created->state == spot_create_state_t::created;
                             },
                             resume),
                           resume,
@@ -7869,9 +7870,13 @@ bool spot_node_runtime_t::restore_spot_relocation_state (
                              .get ();
         if (!owned)
             throw std::logic_error ("Relocation Spot reservation ownership was lost");
-        auto materialized = create_spot_context (
-          frozen.stable_type, spot_id_t (target.key), zlink::message_t{}, target.object_generation,
-          target.mesh_name, std::move (staged_restore), target.authority_owner_generation);
+        auto materialization =
+          create_spot_context (frozen.stable_type, spot_id_t (target.key), zlink::message_t{},
+                               target.object_generation, target.mesh_name,
+                               std::move (staged_restore), target.authority_owner_generation)
+            .result ()
+            .value ();
+        auto materialized = std::move (*materialization);
         const auto created = materialized.state == spot_create_state_t::created;
         if (created && materialized.context._state
             && materialized.context._state->execution_mode == user_spot_execution_mode_t::spot_wide
@@ -13421,7 +13426,7 @@ local_spot_create_result_t spot_node_runtime_t::create_spot (std::string spot_na
     return create_spot (std::move (spot_name), zlink::message_t{});
 }
 
-local_spot_create_result_t spot_node_runtime_t::create_spot_context (
+task_t<std::shared_ptr<local_spot_create_result_t>> spot_node_runtime_t::create_spot_context (
   std::string spot_name,
   spot_id_t spot_id,
   zlink::message_t request,
@@ -13534,8 +13539,8 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
     std::shared_ptr<service::spot_t> staged_native;
     // Barrier cancellation can settle this caller while the creation turn still runs, so
     // the turn's coroutine frame owns its inputs and outputs; parameters live in the frame,
-    // unlike lambda captures. It is declared before the preparation scope so a failed
-    // creation aborts the preparation while the staged native Spot is still alive.
+    // unlike lambda captures. Keep the turn alive until asynchronous preparation
+    // cleanup completes, including the staged native Spot on failed creation.
     struct creation_turn_t
     {
         spot_lifecycle_callbacks_t lifecycle;
@@ -13551,172 +13556,184 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
     const auto preparation = inherited_operation
                                ? inherited_operation
                                : context_state->spot_serial_executor->begin_preparation ();
-    auto abort = inherited_operation
-                   ? std::function<void ()>{[context_state, preparation] {
-                         preparation->lifecycle
-                           ->run ([context_state, native = context_state->native_spot.lock ()] {
-                               return context_state->discard_preparation (native);
-                           })
-                           .result ()
-                           .value ();
-                     }}
-                   : std::function<void ()>{[context_state] {
-                         context_state->complete_preparation (false).result ().value ();
-                     }};
-    auto preparation_scope = std::unique_ptr<void, std::function<void (void *)>> (
-      context_state.get (),
-      [abort = std::move (abort), context_state, owner = _state] (void *) noexcept {
-          try {
-              abort ();
-          }
-          catch (...) {
-              report_spot_close_diagnostic (owner, std::string (context_state->spot_id),
-                                            "preparation_terminal_failed",
-                                            std::current_exception ());
-          }
-      });
-    // The barrier may keep this callable after the turn, so it holds only weak references
-    // and the running frame alone owns the turn; a failed creation then releases the
-    // staged native Spot when this caller returns.
-    preparation->lifecycle
-      ->run ([weak_turn = std::weak_ptr (turn), weak_preparation = std::weak_ptr (preparation),
-              inherited = static_cast<bool> (inherited_operation),
-              weak_context = std::weak_ptr (context_state)] {
-          auto turn = weak_turn.lock ();
-          auto preparation = weak_preparation.lock ();
-          auto context_state = weak_context.lock ();
-          if (!turn || !preparation || !context_state)
-              return task_t<void> (result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                                            "Spot creation caller has returned"));
-          return [] (std::shared_ptr<creation_turn_t> turn,
-                     std::shared_ptr<spot_serial_executor_t::preparation_t> preparation,
-                     bool inherited,
-                     std::shared_ptr<spot_context_state_t> context_state) -> task_t<void> {
-              auto &plan = *turn;
-              auto &request = turn->request;
-              auto &staged_restore = turn->staged_restore;
-              auto &response = turn->response;
-              auto &create_reply = turn->create_reply;
-              auto &staged_native = turn->staged_native;
-              if (inherited)
-                  context_state->spot_serial_executor->attach_preparation (preparation);
-              if (plan.lifecycle.create_entry_context_instance
-                  || plan.lifecycle.create_instance_context_instance
-                  || plan.lifecycle.create_spot_context_instance) {
-                  service_provider_t empty_services;
-                  auto &activation_services = context_state->activation_scope
-                                                ? context_state->activation_scope->provider ()
-                                                : empty_services;
-                  if (plan.lifecycle.create_entry_context_instance) {
-                      context_state->spot_instance = plan.lifecycle.create_entry_context_instance (
-                        entry_spot_context_t (context_state), activation_services);
-                  } else if (plan.lifecycle.create_instance_context_instance) {
-                      context_state->spot_instance =
-                        plan.lifecycle.create_instance_context_instance (
-                          instance_spot_context_t (context_state), activation_services);
-                  } else {
-                      context_state->spot_instance = plan.lifecycle.create_spot_context_instance (
-                        spot_context_t (context_state), activation_services);
-                  }
-                  if (!context_state->spot_instance)
-                      throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                                   "SPOT factory returned null");
-              }
-              if (context_state->spot_instance) {
-                  if (staged_restore) {
-                      co_await staged_restore (context_state->spot_instance.get ());
-                  } else {
-                      staged_native = attach_native_spot (context_state, false, false);
-                      if (!context_state->is_instance_spot () && plan.lifecycle.on_create)
-                          response = co_await plan.lifecycle.on_create (
-                            context_state->spot_instance.get (), request,
-                            *context_state->channel_runtime->serializers);
-                  }
-                  if (!response.accepted)
+    const auto abort = [&] {
+        if (inherited_operation)
+            return preparation->lifecycle->run (
+              [context_state, native = context_state->native_spot.lock ()] {
+                  return context_state->discard_preparation (native);
+              });
+        return context_state->complete_preparation (false);
+    };
+    std::exception_ptr creation_failure;
+    std::optional<local_spot_create_result_t> created;
+    try {
+        // The barrier may keep this callable after the turn, so it holds only weak references
+        // and the running frame alone owns the turn; a failed creation then releases the
+        // staged native Spot when this caller returns.
+        created.emplace ([&] () -> local_spot_create_result_t {
+            preparation->lifecycle
+              ->run ([weak_turn = std::weak_ptr (turn),
+                      weak_preparation = std::weak_ptr (preparation),
+                      inherited = static_cast<bool> (inherited_operation),
+                      weak_context = std::weak_ptr (context_state)] {
+                  auto turn = weak_turn.lock ();
+                  auto preparation = weak_preparation.lock ();
+                  auto context_state = weak_context.lock ();
+                  if (!turn || !preparation || !context_state)
+                      return task_t<void> (
+                        result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                 "Spot creation caller has returned"));
+                  return [] (std::shared_ptr<creation_turn_t> turn,
+                             std::shared_ptr<spot_serial_executor_t::preparation_t> preparation,
+                             bool inherited,
+                             std::shared_ptr<spot_context_state_t> context_state) -> task_t<void> {
+                      auto &plan = *turn;
+                      auto &request = turn->request;
+                      auto &staged_restore = turn->staged_restore;
+                      auto &response = turn->response;
+                      auto &create_reply = turn->create_reply;
+                      auto &staged_native = turn->staged_native;
+                      if (inherited)
+                          context_state->spot_serial_executor->attach_preparation (preparation);
+                      if (plan.lifecycle.create_entry_context_instance
+                          || plan.lifecycle.create_instance_context_instance
+                          || plan.lifecycle.create_spot_context_instance) {
+                          service_provider_t empty_services;
+                          auto &activation_services =
+                            context_state->activation_scope
+                              ? context_state->activation_scope->provider ()
+                              : empty_services;
+                          if (plan.lifecycle.create_entry_context_instance) {
+                              context_state->spot_instance =
+                                plan.lifecycle.create_entry_context_instance (
+                                  entry_spot_context_t (context_state), activation_services);
+                          } else if (plan.lifecycle.create_instance_context_instance) {
+                              context_state->spot_instance =
+                                plan.lifecycle.create_instance_context_instance (
+                                  instance_spot_context_t (context_state), activation_services);
+                          } else {
+                              context_state->spot_instance =
+                                plan.lifecycle.create_spot_context_instance (
+                                  spot_context_t (context_state), activation_services);
+                          }
+                          if (!context_state->spot_instance)
+                              throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                                           "SPOT factory returned null");
+                      }
+                      if (context_state->spot_instance) {
+                          if (staged_restore) {
+                              co_await staged_restore (context_state->spot_instance.get ());
+                          } else {
+                              staged_native = attach_native_spot (context_state, false, false);
+                              if (!context_state->is_instance_spot () && plan.lifecycle.on_create)
+                                  response = co_await plan.lifecycle.on_create (
+                                    context_state->spot_instance.get (), request,
+                                    *context_state->channel_runtime->serializers);
+                          }
+                          if (!response.accepted)
+                              co_return;
+                          create_reply = response.reply;
+                          if (!staged_restore && plan.lifecycle.on_initialize)
+                              co_await plan.lifecycle.on_initialize (
+                                context_state->spot_instance.get ());
+                          if (staged_restore)
+                              staged_native = attach_native_spot (context_state, true, false);
+                      } else {
+                          staged_native = attach_native_spot (context_state, false, false);
+                      }
                       co_return;
-                  create_reply = response.reply;
-                  if (!staged_restore && plan.lifecycle.on_initialize)
-                      co_await plan.lifecycle.on_initialize (context_state->spot_instance.get ());
-                  if (staged_restore)
-                      staged_native = attach_native_spot (context_state, true, false);
-              } else {
-                  staged_native = attach_native_spot (context_state, false, false);
-              }
-              co_return;
-          }(std::move (turn), std::move (preparation), inherited, std::move (context_state));
-      })
-      .result ()
-      .value ();
-    auto &response = turn->response;
-    create_reply = turn->create_reply;
-    staged_native = turn->staged_native;
-    if (!response.accepted) {
-        return local_spot_create_result_t{spot_id, spot_create_state_t::rejected, response.reply,
-                                          std::move (context)};
-    }
-
-    bool location_claimed = false;
-    if (plan.location_lifecycle && plan.location) {
-        auto location = std::move (*plan.location);
-        if (const auto native = context_state->native_spot.lock ())
-            location.spot_generation = native->status ().lifecycle_generation ();
-        const auto claimed = plan.location_lifecycle->claim_spot (std::move (location));
-        if (claimed.status != location_write_status_t::stored) {
-            return local_spot_create_result_t{spot_id, spot_create_state_t::rejected, std::nullopt,
-                                              std::move (context)};
-        }
-        location_claimed = true;
-    }
-
-    const auto native = staged_native ? staged_native : context_state->native_spot.lock ();
-    const auto published =
-      _state->lane
-        .run ([&] {
-            const auto previous = _state->spot_contexts_by_id.find (id_value);
-            if ((previous != _state->spot_contexts_by_id.end ()
-                 && (!retained_queue || !previous->second._state->closed))
-                || (_state->native_spots_by_id.contains (id_value)
-                    && _state->native_spots_by_id.at (id_value) != native)) {
-                return false;
+                  }(std::move (turn), std::move (preparation), inherited,
+                                                                                  std::move (
+                                                                                    context_state));
+              })
+              .result ()
+              .value ();
+            auto &response = turn->response;
+            create_reply = turn->create_reply;
+            staged_native = turn->staged_native;
+            if (!response.accepted) {
+                return local_spot_create_result_t{spot_id, spot_create_state_t::rejected,
+                                                  response.reply, std::move (context)};
             }
-            _state->spot_contexts_by_id.erase (id_value);
-            _state->spot_contexts_by_id.emplace (id_value, spot_context_t (context_state));
-            _state->spot_ids_by_name[spot_name] = spot_id;
-            _state->spot_names_by_id[id_value] = spot_name;
-            if (native)
-                _state->native_spots_by_id[id_value] = native;
-            return true;
-        })
-        .get ();
-    if (!published) {
-        if (location_claimed && plan.location_lifecycle)
-            (void) plan.location_lifecycle->release_spot (spot_location_key_t{id_value});
-        return local_spot_create_result_t{spot_id, spot_create_state_t::rejected, std::nullopt,
-                                          std::move (context)};
+
+            bool location_claimed = false;
+            if (plan.location_lifecycle && plan.location) {
+                auto location = std::move (*plan.location);
+                if (const auto native = context_state->native_spot.lock ())
+                    location.spot_generation = native->status ().lifecycle_generation ();
+                const auto claimed = plan.location_lifecycle->claim_spot (std::move (location));
+                if (claimed.status != location_write_status_t::stored) {
+                    return local_spot_create_result_t{spot_id, spot_create_state_t::rejected,
+                                                      std::nullopt, std::move (context)};
+                }
+                location_claimed = true;
+            }
+
+            const auto native = staged_native ? staged_native : context_state->native_spot.lock ();
+            const auto published =
+              _state->lane
+                .run ([&] {
+                    const auto previous = _state->spot_contexts_by_id.find (id_value);
+                    if ((previous != _state->spot_contexts_by_id.end ()
+                         && (!retained_queue || !previous->second._state->closed))
+                        || (_state->native_spots_by_id.contains (id_value)
+                            && _state->native_spots_by_id.at (id_value) != native)) {
+                        return false;
+                    }
+                    _state->spot_contexts_by_id.erase (id_value);
+                    _state->spot_contexts_by_id.emplace (id_value, spot_context_t (context_state));
+                    _state->spot_ids_by_name[spot_name] = spot_id;
+                    _state->spot_names_by_id[id_value] = spot_name;
+                    if (native)
+                        _state->native_spots_by_id[id_value] = native;
+                    return true;
+                })
+                .get ();
+            if (!published) {
+                if (location_claimed && plan.location_lifecycle)
+                    (void) plan.location_lifecycle->release_spot (spot_location_key_t{id_value});
+                return local_spot_create_result_t{spot_id, spot_create_state_t::rejected,
+                                                  std::nullopt, std::move (context)};
+            }
+
+            if (plan.monitoring) {
+                runtime::runtime_metrics_t metrics (plan.monitoring);
+                if (metrics.enabled ()) {
+                    const auto kind = plan.entry_spot                      ? "entry"
+                                      : context_state->is_instance_spot () ? "instance"
+                                                                           : "user";
+
+                    metrics.updown ("zlink.spot.count", "{spot}", 1,
+                                    {{"mesh_name", _state->snapshot.name}, {"spot_kind", kind}});
+                }
+            }
+            if (!inherited_operation) {
+                if (preparation_terminal)
+                    *preparation_terminal = [context_state] (bool ready) {
+                        return context_state->complete_preparation (ready);
+                    };
+                else if (!staged_restore)
+                    context_state->complete_preparation (true);
+            }
+            return local_spot_create_result_t{spot_id, spot_create_state_t::created, create_reply,
+                                              std::move (context)};
+        }());
     }
-
-    if (plan.monitoring) {
-        runtime::runtime_metrics_t metrics (plan.monitoring);
-        if (metrics.enabled ()) {
-            const auto kind = plan.entry_spot                      ? "entry"
-                              : context_state->is_instance_spot () ? "instance"
-                                                                   : "user";
-
-            metrics.updown ("zlink.spot.count", "{spot}", 1,
-                            {{"mesh_name", _state->snapshot.name}, {"spot_kind", kind}});
+    catch (...) {
+        creation_failure = std::current_exception ();
+    }
+    if (!created || created->state != spot_create_state_t::created) {
+        try {
+            co_await abort ();
+        }
+        catch (...) {
+            report_spot_close_diagnostic (_state, std::string (context_state->spot_id),
+                                          "preparation_terminal_failed", std::current_exception ());
         }
     }
-    if (!inherited_operation) {
-        if (preparation_terminal)
-            *preparation_terminal = [context_state] (bool ready) {
-                return context_state->complete_preparation (ready);
-            };
-        else if (!staged_restore)
-            context_state->complete_preparation (true);
-    }
-    (void) preparation_scope.release ();
-    return local_spot_create_result_t{spot_id, spot_create_state_t::created, create_reply,
-                                      std::move (context)};
+    if (creation_failure)
+        std::rethrow_exception (creation_failure);
+    co_return std::make_shared<local_spot_create_result_t> (std::move (*created));
 }
 
 local_spot_create_result_t spot_node_runtime_t::create_spot (std::string spot_name,
@@ -13829,9 +13846,13 @@ spot_node_runtime_t::get_or_create_spot (std::string spot_name,
     }
 
     try {
-        auto result = create_spot_context (
-          std::move (spot_name), std::move (spot_id), std::move (request), object_generation,
-          std::move (mesh_name), {}, authority_owner_generation, {}, preparation_terminal);
+        auto creation =
+          create_spot_context (std::move (spot_name), std::move (spot_id), std::move (request),
+                               object_generation, std::move (mesh_name), {},
+                               authority_owner_generation, {}, preparation_terminal)
+            .result ()
+            .value ();
+        auto result = std::move (*creation);
         const auto owned = _state->lane
                              .run ([&] {
                                  const auto found =
