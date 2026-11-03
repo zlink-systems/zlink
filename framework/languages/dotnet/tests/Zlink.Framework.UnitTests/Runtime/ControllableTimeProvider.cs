@@ -28,12 +28,12 @@ internal sealed class ControllableTimeProvider : TimeProvider
 
     private event Action<TimeSpan>? TimerCreated;
 
-    internal Task WaitForNextTimerAsync(TimeSpan dueTime)
+    internal Task WaitForNextTimerAsync(TimeSpan dueTime, int occurrences = 1)
     {
         var created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnTimerCreated(TimeSpan scheduledDueTime)
         {
-            if (scheduledDueTime != dueTime)
+            if (scheduledDueTime != dueTime || --occurrences > 0)
                 return;
             TimerCreated -= OnTimerCreated;
             created.TrySetResult();
