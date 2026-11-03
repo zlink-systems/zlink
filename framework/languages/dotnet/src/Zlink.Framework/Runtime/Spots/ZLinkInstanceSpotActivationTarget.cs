@@ -473,9 +473,11 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
     // Read when an activation runs: a host without an owner lease builds the
     // target before the lease is claimed (location runtime §5).
     Func<ZLinkLocationOwnerToken> owner,
-    ZLinkMessageFlowTracer? flow = null
+    ZLinkMessageFlowTracer? flow = null,
+    TimeProvider? timeProvider = null
 ) : IInstanceSpotActivationTarget
 {
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private const int RecoveryScanPageSize = 128;
     private static readonly TimeSpan RecoveryRetention = TimeSpan.FromHours(24);
     private readonly ZLinkInstanceSpotOperationGate<
@@ -534,14 +536,19 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
 
         async Task<Task<InstanceSpotActivationTerminal>> ActivateBeforeDeadlineAsync()
         {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var remaining =
                 DateTimeOffset.FromUnixTimeMilliseconds(checked((long)operation.DeadlineUnixMs))
-                - DateTimeOffset.UtcNow;
+                - _time.GetUtcNow();
+            using var timeout = new CancellationTokenSource(
+                remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero,
+                _time
+            );
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeout.Token
+            );
             if (remaining <= TimeSpan.Zero)
                 deadline.Cancel();
-            else
-                deadline.CancelAfter(remaining);
             try
             {
                 deadline.Token.ThrowIfCancellationRequested();
