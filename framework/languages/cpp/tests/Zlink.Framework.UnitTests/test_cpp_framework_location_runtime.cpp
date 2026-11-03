@@ -2963,13 +2963,25 @@ void check_synchronous_stop (bool mesh, bool raw_owner)
     node->start ();
     production_auto_fixture_t fixture ({node});
     detail::route_channel_runtime_t route ("l4-mesh");
-    route.connect (zlink::routing_id_t::from ("remote"), "inproc://l4-peer");
+    const auto rid = zlink::routing_id_t::from ("remote");
+    route.connect (rid, "inproc://l4-peer");
+    auto &raw = node->native_node ().transport ();
+    node->connect_peer (rid, "inproc://l4-peer", 1, "default", true);
+    auto peer = raw.topology ().local_descriptor ();
+    peer.node_routing_id = rid.to_bytes ();
+    peer.advertised_endpoint = "inproc://l4-peer";
+    peer.state = mesh::service_node_state_t::serving;
+    ASSERT_EQ (mesh::peer_admission_result_t::admitted,
+               raw.admit_peer (peer, {1}, mesh::service_liveness_registry_t::clock_t::now ()));
+    ASSERT_NE (nullptr, raw.topology ().peer (rid.to_bytes ()));
     location_auto_connect_test_access_t::register_stop_probe (fixture.service, route, node, mesh);
     auto &lane = raw_owner ? auto_connect_owner_lane (node->native_node ().transport ())
                            : (mesh ? state->lane : auto_connect_owner_lane (route));
     check_sync_owner_wait ("auto-connect.stop", lane, [&] { fixture.service.stop (); });
     if (!mesh)
         EXPECT_TRUE (route.list_connections ().empty ());
+    else
+        EXPECT_EQ (nullptr, raw.topology ().peer (rid.to_bytes ()));
     fixture.failures->rethrow_if_failed ();
     node->stop ();
 }
