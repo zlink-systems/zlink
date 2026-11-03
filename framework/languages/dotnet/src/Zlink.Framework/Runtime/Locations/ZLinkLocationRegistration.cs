@@ -3,7 +3,7 @@ namespace Zlink.Framework.Runtime.Locations;
 /// <summary>
 /// Raw location store registration collected by the options builder.
 /// </summary>
-internal sealed class ZLinkLocationRegistration
+internal sealed class ZLinkLocationRegistration(Func<TimeProvider>? timeProvider = null)
 {
     private ZLinkInMemoryProviderLocationStore? _inMemoryStore;
     internal IZLinkLocationRepository? _repository;
@@ -37,11 +37,17 @@ internal sealed class ZLinkLocationRegistration
         if (_repository is not null)
             return _repository;
         if (StoreInstance is not null)
-            return _repository ??= new ZLinkProviderLocationRepository(StoreInstance);
+            return _repository ??= new ZLinkProviderLocationRepository(
+                StoreInstance,
+                timeProvider?.Invoke()
+            );
         if (!UseInMemoryStores)
             return null;
         _inMemoryStore ??= new ZLinkInMemoryProviderLocationStore();
-        return _repository ??= new ZLinkProviderLocationRepository(_inMemoryStore);
+        return _repository ??= new ZLinkProviderLocationRepository(
+            _inMemoryStore,
+            timeProvider?.Invoke()
+        );
     }
 
     internal IZLinkRelocationRepository? ResolveRelocationStore()

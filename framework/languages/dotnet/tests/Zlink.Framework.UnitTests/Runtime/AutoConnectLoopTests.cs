@@ -388,6 +388,30 @@ public sealed class AutoConnectLoopTests
         );
     }
 
+    [Fact]
+    public async Task Descriptor_publication_uses_runtime_clock_for_its_deadline()
+    {
+        await using var fixture = await PublicationFixture.CreateAsync(
+            TimeSpan.FromMilliseconds(100)
+        );
+        fixture.Store.HoldWrites = true;
+        var write = fixture
+            .Runtime.WriteDescriptorAsync(
+                InMemoryLocationStoreTests.MeshNode("clock", "tcp://l:1", "local"),
+                ZLinkLocationWriteIntent.NewClaim
+            )
+            .AsTask();
+        var pending = await fixture.Store.NextWriteAsync();
+
+        Assert.False(write.IsCompleted);
+        Assert.Equal(1, fixture.Time.ActiveTimerCount);
+        fixture.Time.Advance(fixture.Options.OwnerLeaseRenewTimeout);
+        Assert.True(pending.Token.IsCancellationRequested);
+        await Assert.ThrowsAsync<ZLinkDescriptorPublicationUnconfirmedException>(() => write);
+        Assert.Equal(0, fixture.Time.ActiveTimerCount);
+        Assert.False(pending.Result.Task.IsCompleted);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -406,6 +430,9 @@ public sealed class AutoConnectLoopTests
         var tick = fixture.Loop.TickAsync().AsTask();
         var pending = await fixture.Store.NextWriteAsync();
 
+        Assert.False(tick.IsCompleted);
+        fixture.Time.Advance(fixture.Options.OwnerLeaseRenewTimeout);
+        Assert.True(pending.Token.IsCancellationRequested);
         await tick.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(pending.Token.IsCancellationRequested);
@@ -508,7 +535,8 @@ public sealed class AutoConnectLoopTests
     private sealed class PublicationFixture : IAsyncDisposable
     {
         internal ZLinkLocationOptions Options { get; }
-        internal ControlledPublicationStore Store { get; } = new();
+        internal ControllableTimeProvider Time { get; } = new();
+        internal ControlledPublicationStore Store { get; }
         internal OrderedPeerResolver Peers { get; } = new();
         internal RecordingAutoConnectExecutor Executor { get; } = new();
         internal ZLinkLocationRuntime Runtime { get; }
@@ -517,12 +545,13 @@ public sealed class AutoConnectLoopTests
 
         private PublicationFixture(TimeSpan timeout)
         {
+            Store = new ControlledPublicationStore(Time);
             Options = new ZLinkLocationOptions
             {
                 OwnerLeaseRenewTimeout = timeout,
                 PollingInterval = TimeSpan.FromHours(1),
             };
-            Runtime = new ZLinkLocationRuntime(Options, Store);
+            Runtime = new ZLinkLocationRuntime(Options, Store, Time);
             var local = new ZLinkAutoConnectLocal(
                 ZLinkLocationAutoConnectType.ClientServer,
                 Mesh("play"),
@@ -536,14 +565,16 @@ public sealed class AutoConnectLoopTests
                 Runtime,
                 Peers,
                 Executor,
-                Options
+                Options,
+                Time
             );
             Loop = new ZLinkAutoConnectLoop(
                 new ZLinkRuntimeErrorSink(),
                 Reconciler,
                 local,
                 Options,
-                Store
+                Store,
+                timeProvider: Time
             );
         }
 
@@ -607,9 +638,10 @@ public sealed class AutoConnectLoopTests
         }
     }
 
-    private sealed class ControlledPublicationStore : ZLinkLocationStoreTestDouble
+    private sealed class ControlledPublicationStore(TimeProvider time)
+        : ZLinkLocationStoreTestDouble
     {
-        private readonly ZLinkInMemoryLocationStore _inner = new();
+        private readonly ZLinkInMemoryLocationStore _inner = new(time);
         private readonly System.Threading.Channels.Channel<PendingPublication> _writes =
             System.Threading.Channels.Channel.CreateUnbounded<PendingPublication>();
         internal System.Collections.Concurrent.ConcurrentBag<PendingPublication> Pending { get; } =
